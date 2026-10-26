@@ -1,0 +1,274 @@
+package host
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/labstack/echo/v4"
+	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/service"
+)
+
+type Handler struct {
+	hosts   domain.HostStore
+	jobs    domain.JobStore
+	service service.HostService
+}
+
+func NewHandler(hosts domain.HostStore, jobs domain.JobStore, hostService service.HostService) *Handler {
+	return &Handler{hosts: hosts, jobs: jobs, service: hostService}
+}
+
+type HostPayload struct {
+	EnvironmentID       int               `json:"environmentId" example:"1"`
+	Name                string            `json:"name" binding:"required" example:"web-01"`
+	Hostname            string            `json:"hostname,omitempty" example:"web-01.example.com"`
+	IP                  string            `json:"ip,omitempty" example:"192.0.2.10"`
+	Connection          string            `json:"connection,omitempty" example:"SSH"`
+	Labels              map[string]string `json:"labels,omitempty"`
+	Port                int               `json:"port,omitempty" example:"22"`
+	Username            string            `json:"username" binding:"required" example:"deploy"`
+	AuthMethod          string            `json:"authMethod" binding:"required" enums:"PASSWORD,PRIVATE_KEY" example:"PRIVATE_KEY"`
+	SecretData          string            `json:"secretData" binding:"required" example:"-----BEGIN OPENSSH PRIVATE KEY-----"`
+	Passphrase          string            `json:"passphrase,omitempty" example:"key-passphrase"`
+	ExpectedFingerprint string            `json:"expectedFingerprint" binding:"required" example:"SHA256:..."`
+}
+
+type HostJobsResponse struct {
+	HostID int           `json:"hostId"`
+	Data   []*domain.Job `json:"data"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
+// Create registers a host and verifies its pinned SSH host key.
+// @Summary Register a host
+// @Description Registers a host after validating SSH connectivity and the expected host-key fingerprint. SecretData contains the SSH password or private key and is never returned.
+// @Tags Hosts
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body HostPayload true "Host connection details; provide either ip or hostname. SecretData is the SSH password or private key and is never returned."
+// @Success 201 {object} domain.Host
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 412 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts [post]
+func (h *Handler) Create(c echo.Context) error {
+	var payload HostPayload
+	if err := c.Bind(&payload); err != nil {
+		return badRequest(c, "invalid request body")
+	}
+
+	host, err := payload.host("")
+	if err != nil {
+		return badRequest(c, err.Error())
+	}
+	if err := h.service.RegisterHost(c.Request().Context(), host); err != nil {
+		return hostServiceError(c, err)
+	}
+	return c.JSON(http.StatusCreated, host)
+}
+
+// List returns registered hosts without SSH credentials.
+// @Summary List hosts
+// @Tags Hosts
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} domain.Host
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts [get]
+func (h *Handler) List(c echo.Context) error {
+	hosts, err := h.hosts.ListAllHosts(c.Request().Context())
+	if err != nil {
+		return internalError(c)
+	}
+	return c.JSON(http.StatusOK, hosts)
+}
+
+// Update replaces a host's SSH connection details.
+// @Summary Update a host
+// @Description Updates host metadata and credentials. SecretData contains the SSH password or private key and is never returned.
+// @Tags Hosts
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Host ID"
+// @Param request body HostPayload true "Updated host details"
+// @Success 200 {object} domain.Host
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts/{id} [put]
+func (h *Handler) Update(c echo.Context) error {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		return badRequest(c, "invalid host ID")
+	}
+	var payload HostPayload
+	if err := c.Bind(&payload); err != nil {
+		return badRequest(c, "invalid request body")
+	}
+	host, err := payload.host(strconv.Itoa(id))
+	if err != nil {
+		return badRequest(c, err.Error())
+	}
+	if err := host.SSHValidate(); err != nil {
+		return badRequest(c, err.Error())
+	}
+	if err := h.hosts.UpdateHost(c.Request().Context(), host); err != nil {
+		if errors.Is(err, domain.ErrHostNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "host not found"})
+		}
+		return internalError(c)
+	}
+	return c.JSON(http.StatusOK, host)
+}
+
+// Delete removes a host.
+// @Summary Delete a host
+// @Tags Hosts
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Host ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts/{id} [delete]
+func (h *Handler) Delete(c echo.Context) error {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		return badRequest(c, "invalid host ID")
+	}
+	if err := h.hosts.DeleteHost(c.Request().Context(), strconv.Itoa(id)); err != nil {
+		if errors.Is(err, domain.ErrHostNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "host not found"})
+		}
+		return internalError(c)
+	}
+	return c.JSON(http.StatusOK, map[string]string{"message": "host deleted"})
+}
+
+// ListJobsForHost returns paginated jobs for a host.
+// @Summary List jobs for a host
+// @Tags Hosts
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Host ID"
+// @Param limit query int false "Page size (1-100)" default(10)
+// @Param offset query int false "Number of rows to skip" default(0)
+// @Success 200 {object} HostJobsResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts/{id}/jobs [get]
+func (h *Handler) ListJobsForHost(c echo.Context) error {
+	hostID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || hostID < 1 {
+		return badRequest(c, "invalid host ID")
+	}
+	limit, err := queryInt(c, "limit", 10)
+	if err != nil || limit < 1 || limit > 100 {
+		return badRequest(c, "limit must be between 1 and 100")
+	}
+	offset, err := queryInt(c, "offset", 0)
+	if err != nil || offset < 0 {
+		return badRequest(c, "offset must be non-negative")
+	}
+	jobs, total, err := h.jobs.ListJobs(c.Request().Context(), domain.JobFilter{
+		HostID: hostID,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		return internalError(c)
+	}
+	return c.JSON(http.StatusOK, HostJobsResponse{
+		HostID: hostID, Data: jobs, Total: total, Limit: limit, Offset: offset,
+	})
+}
+
+func (p HostPayload) host(id string) (*domain.Host, error) {
+	name := strings.TrimSpace(p.Name)
+	address := strings.TrimSpace(p.IP)
+	if address == "" {
+		address = strings.TrimSpace(p.Hostname)
+	}
+	username := strings.TrimSpace(p.Username)
+	if name == "" || address == "" || username == "" {
+		return nil, errors.New("name, host address, and SSH username are required")
+	}
+	method, err := domain.ParseAuthType(p.AuthMethod)
+	if err != nil {
+		return nil, err
+	}
+	auth := domain.SSHAuthType{Method: method, Passphrase: p.Passphrase, ExpectedFingerprint: p.ExpectedFingerprint}
+	if method == domain.AuthTypePassword {
+		auth.Password = p.SecretData
+	} else {
+		auth.PrivateKey = p.SecretData
+	}
+	connection := domain.ConnectionMethod(strings.ToUpper(strings.TrimSpace(p.Connection)))
+	if connection == "" {
+		connection = domain.MethodSSH
+	}
+	return &domain.Host{
+		ID:            id,
+		EnvironmentID: p.EnvironmentID,
+		Name:          name,
+		Hostname:      strings.TrimSpace(p.Hostname),
+		IPAddress:     address,
+		Connection:    connection,
+		Labels:        p.Labels,
+		SSH: &domain.SSHAccess{
+			Username: username,
+			Port:     p.Port,
+			AuthType: auth,
+		},
+	}, nil
+}
+
+func queryInt(c echo.Context, name string, fallback int) (int, error) {
+	value := c.QueryParam(name)
+	if value == "" {
+		return fallback, nil
+	}
+	return strconv.Atoi(value)
+}
+
+func hostServiceError(c echo.Context, err error) error {
+	var unknownKey *domain.ErrHostKeyUnknown
+	switch {
+	case errors.As(err, &unknownKey):
+		return c.JSON(http.StatusPreconditionFailed, map[string]string{
+			"error": "untrusted SSH host key", "algorithm": unknownKey.Algorithm,
+			"fingerprint": unknownKey.Fingerprint,
+		})
+	case errors.Is(err, domain.ErrAuthenticationFailed):
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "SSH authentication failed"})
+	case errors.Is(err, domain.ErrInvalidInput):
+		return badRequest(c, err.Error())
+	case errors.Is(err, domain.ErrServiceBusy):
+		c.Response().Header().Set(echo.HeaderRetryAfter, "1")
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "host verification capacity is temporarily full"})
+	default:
+		return internalError(c)
+	}
+}
+
+func badRequest(c echo.Context, message string) error {
+	return c.JSON(http.StatusBadRequest, map[string]string{"error": message})
+}
+
+func internalError(c echo.Context) error {
+	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+}

@@ -1,0 +1,988 @@
+basePath: /
+definitions:
+  auth.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  auth.LoginRequest:
+    properties:
+      email:
+        example: operator@example.com
+        type: string
+      password:
+        example: account-password
+        type: string
+      username:
+        example: operator
+        type: string
+    required:
+    - password
+    type: object
+  auth.MessageResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  auth.SignUpRequest:
+    properties:
+      email:
+        example: operator@example.com
+        type: string
+      password:
+        example: use-a-secret-with-12+-bytes
+        type: string
+      username:
+        example: operator
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  domain.AuthTokenResponse:
+    properties:
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/domain.UserResponse'
+    type: object
+  domain.ConnectionMethod:
+    enum:
+    - SSH
+    - AGENT_PULL
+    - AGENT_PUSH
+    type: string
+    x-enum-varnames:
+    - MethodSSH
+    - MethodAgentPull
+    - MethodAgentPush
+  domain.DataPoint:
+    properties:
+      cpuPercent:
+        type: number
+      created_at:
+        type: string
+      memPercent:
+        type: number
+      timestamp:
+        type: string
+    type: object
+  domain.Environment:
+    properties:
+      createdAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+    type: object
+  domain.Host:
+    properties:
+      connection:
+        $ref: '#/definitions/domain.ConnectionMethod'
+      created_at:
+        type: string
+      environmentId:
+        type: integer
+      hostname:
+        type: string
+      id:
+        type: string
+      ip_address:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      ssh:
+        $ref: '#/definitions/domain.SSHAccess'
+      updated_at:
+        type: string
+    type: object
+  domain.HostStatus:
+    enum:
+    - PENDING
+    - ACTIVE
+    - SUBJUGATED
+    - DISCONNECTED
+    type: string
+    x-enum-varnames:
+    - HostStatusPending
+    - HostStatusActive
+    - HostStatusSubjugated
+    - HostStatusDisconnected
+  domain.Job:
+    properties:
+      command:
+        type: string
+      finishedAt:
+        type: string
+      hostId:
+        type: integer
+      id:
+        type: integer
+      resultLog:
+        type: string
+      startedAt:
+        type: string
+      status:
+        $ref: '#/definitions/domain.JobStatus'
+      triggeredBy:
+        type: string
+    type: object
+  domain.JobStatus:
+    enum:
+    - PENDING
+    - RUNNING
+    - COMPLETED
+    - FAILED
+    type: string
+    x-enum-varnames:
+    - JobStatusPending
+    - JobStatusRunning
+    - JobStatusCompleted
+    - JobStatusFailed
+  domain.SSHAccess:
+    properties:
+      last_check_at:
+        type: string
+      last_check_duration_ms:
+        type: integer
+      last_check_message:
+        type: string
+      port:
+        type: integer
+      status:
+        $ref: '#/definitions/domain.HostStatus'
+      username:
+        type: string
+    type: object
+  domain.UserResponse:
+    properties:
+      email:
+        type: string
+      id:
+        type: integer
+      username:
+        type: string
+    type: object
+  environments.EnvSavePayload:
+    properties:
+      description:
+        example: Primary cluster management environment
+        type: string
+      name:
+        example: production
+        type: string
+    required:
+    - name
+    type: object
+  host.HostJobsResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.Job'
+        type: array
+      hostId:
+        type: integer
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
+  host.HostPayload:
+    properties:
+      authMethod:
+        enum:
+        - PASSWORD
+        - PRIVATE_KEY
+        example: PRIVATE_KEY
+        type: string
+      connection:
+        example: SSH
+        type: string
+      environmentId:
+        example: 1
+        type: integer
+      expectedFingerprint:
+        example: SHA256:...
+        type: string
+      hostname:
+        example: web-01.example.com
+        type: string
+      ip:
+        example: 192.0.2.10
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        example: web-01
+        type: string
+      passphrase:
+        example: key-passphrase
+        type: string
+      port:
+        example: 22
+        type: integer
+      secretData:
+        example: '-----BEGIN OPENSSH PRIVATE KEY-----'
+        type: string
+      username:
+        example: deploy
+        type: string
+    required:
+    - authMethod
+    - expectedFingerprint
+    - name
+    - secretData
+    - username
+    type: object
+  job.ListResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.Job'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
+info:
+  contact: {}
+  description: HTTP API for managing Machinarchy environments, SSH hosts, and job
+    history.
+  termsOfService: https://github.com/machinarchy/machinarchy
+  title: Machinarchy API
+  version: "1.0"
+paths:
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates an account, returns a JWT, and sets the auth_token
+        cookie.
+      parameters:
+      - description: Credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.AuthTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+      summary: Log in
+      tags:
+      - Authentication
+  /api/auth/logout:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+      summary: Log out
+      tags:
+      - Authentication
+  /api/auth/signup:
+    post:
+      consumes:
+      - application/json
+      description: Creates an account, returns a JWT, and sets the auth_token cookie.
+      parameters:
+      - description: Account details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.SignUpRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.AuthTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+      summary: Create an account
+      tags:
+      - Authentication
+  /api/v1/environments:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Environment'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List environments
+      tags:
+      - Environments
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Environment details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/environments.EnvSavePayload'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.Environment'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create an environment
+      tags:
+      - Environments
+  /api/v1/environments/{id}:
+    delete:
+      parameters:
+      - description: Environment ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete an environment
+      tags:
+      - Environments
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Environment ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated environment details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/environments.EnvSavePayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Environment'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update an environment
+      tags:
+      - Environments
+  /api/v1/history:
+    get:
+      parameters:
+      - default: 1h
+        description: 'Supported time ranges: 1h, 5h, or 24h'
+        in: query
+        name: range
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.DataPoint'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get historical metrics
+      tags:
+      - Metrics
+  /api/v1/hosts:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Host'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List hosts
+      tags:
+      - Hosts
+    post:
+      consumes:
+      - application/json
+      description: Registers a host after validating SSH connectivity and the expected
+        host-key fingerprint. SecretData contains the SSH password or private key
+        and is never returned.
+      parameters:
+      - description: Host connection details; provide either ip or hostname. SecretData
+          is the SSH password or private key and is never returned.
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/host.HostPayload'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.Host'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "412":
+          description: Precondition Failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Register a host
+      tags:
+      - Hosts
+  /api/v1/hosts/{id}:
+    delete:
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete a host
+      tags:
+      - Hosts
+    put:
+      consumes:
+      - application/json
+      description: Updates host metadata and credentials. SecretData contains the
+        SSH password or private key and is never returned.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated host details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/host.HostPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Host'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update a host
+      tags:
+      - Hosts
+  /api/v1/hosts/{id}/jobs:
+    get:
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - default: 10
+        description: Page size (1-100)
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Number of rows to skip
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/host.HostJobsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List jobs for a host
+      tags:
+      - Hosts
+  /api/v1/jobs:
+    get:
+      parameters:
+      - description: Filter by host ID
+        in: query
+        name: hostId
+        type: integer
+      - default: 10
+        description: Page size (1-100)
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Number of rows to skip
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/job.ListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List jobs
+      tags:
+      - Jobs
+  /api/v1/jobs/{id}:
+    get:
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Job'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a job
+      tags:
+      - Jobs
+  /api/v1/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.UserResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/auth.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get current user
+      tags:
+      - Authentication
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness check
+      tags:
+      - Operations
+  /healthz/live:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness check
+      tags:
+      - Operations
+  /healthz/ready:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Readiness check
+      tags:
+      - Operations
+  /metrics:
+    get:
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Prometheus exposition format
+          schema:
+            type: string
+      summary: Prometheus metrics
+      tags:
+      - Operations
+securityDefinitions:
+  BearerAuth:
+    description: Supply a JWT as `Bearer <token>`. The API also accepts the auth_token
+      cookie.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
