@@ -33,6 +33,7 @@ type Stores struct {
 	DB           *sql.DB
 	engine       string
 	Users        domain.UserStore
+	Access       domain.AccessStore
 	Metrics      domain.MetricsStore
 	Hosts        domain.HostStore
 	Jobs         domain.JobStore
@@ -121,6 +122,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		}
 
 		stores.Users = storeInstance
+		stores.Access = storeInstance
 		stores.Metrics = storeInstance
 		stores.Hosts = storeInstance
 		stores.Jobs = storeInstance
@@ -131,6 +133,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 			return fail(err)
 		}
 		stores.Users = storeInstance
+		stores.Access = storeInstance
 		stores.Metrics = storeInstance
 		stores.Hosts = storeInstance
 		stores.Jobs = storeInstance

@@ -13,26 +13,38 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const userColumns = `id, username, COALESCE(email, ''), password_hash,
-	COALESCE(reset_token, ''), reset_token_expires, created_at`
+const userColumns = `users.id, users.username, COALESCE(users.email, ''), users.password_hash,
+	COALESCE(users.reset_token, ''), users.reset_token_expires, users.created_at,
+	workspace_memberships.workspace_id, workspace_memberships.role`
 
 func (s *SQLiteStore) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
-	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE username = ?`, strings.TrimSpace(username)))
+	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
+		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
+		WHERE users.username = ?`, strings.TrimSpace(username)))
 }
 
 func (s *SQLiteStore) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE email = ?`, strings.TrimSpace(email)))
+	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
+		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
+		WHERE users.email = ?`, strings.TrimSpace(email)))
 }
 
 func (s *SQLiteStore) GetUserByIdentifier(ctx context.Context, identifier string) (*domain.User, error) {
 	identifier = strings.TrimSpace(identifier)
-	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE username = ? OR email = ?`, identifier, identifier))
+	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
+		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
+		WHERE users.username = ? OR users.email = ?`, identifier, identifier))
 }
 
 func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
 	username, email = strings.TrimSpace(username), strings.TrimSpace(email)
 	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, `INSERT INTO users (username, email, password_hash, created_at)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin create user transaction: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `INSERT INTO users (username, email, password_hash, created_at)
 		VALUES (?, NULLIF(?, ''), ?, ?)`, username, email, passwordHash, now.Format(time.RFC3339Nano))
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
@@ -45,7 +57,44 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordH
 	if err != nil {
 		return nil, fmt.Errorf("read inserted user ID: %w", err)
 	}
-	return &domain.User{ID: int(id), Username: username, Email: email, PasswordHash: passwordHash, CreatedAt: now}, nil
+	workspaceID, err := createUserWorkspace(ctx, tx, int(id), username)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create user transaction: %w", err)
+	}
+	return &domain.User{ID: int(id), WorkspaceID: workspaceID, Role: domain.RoleOwner,
+		Username: username, Email: email, PasswordHash: passwordHash, CreatedAt: now}, nil
+}
+
+func createUserWorkspace(ctx context.Context, tx *sql.Tx, userID int, username string) (int, error) {
+	result, err := tx.ExecContext(ctx, `UPDATE workspaces SET owner_user_id = ?, name = ?
+		WHERE id = 1 AND owner_user_id IS NULL`, userID, "workspace-"+username)
+	if err != nil {
+		return 0, fmt.Errorf("claim initial workspace: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("check initial workspace claim: %w", err)
+	}
+	workspaceID := int64(1)
+	if count == 0 {
+		result, err = tx.ExecContext(ctx, `INSERT INTO workspaces (name, owner_user_id, created_at)
+			VALUES (?, ?, ?)`, "workspace-"+username, userID, time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return 0, fmt.Errorf("create user workspace: %w", err)
+		}
+		workspaceID, err = result.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("read workspace ID: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_memberships (workspace_id, user_id, role)
+		VALUES (?, ?, ?)`, workspaceID, userID, string(domain.RoleOwner)); err != nil {
+		return 0, fmt.Errorf("create workspace membership: %w", err)
+	}
+	return int(workspaceID), nil
 }
 
 func (s *SQLiteStore) SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error {
@@ -70,8 +119,9 @@ func (s *SQLiteStore) scanUserRow(row *sql.Row) (*domain.User, error) {
 	user := new(domain.User)
 	var expires sql.NullString
 	var createdAt string
+	var role string
 	if err := row.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.ResetToken, &expires, &createdAt); err != nil {
+		&user.ResetToken, &expires, &createdAt, &user.WorkspaceID, &role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
 		}
@@ -85,6 +135,7 @@ func (s *SQLiteStore) scanUserRow(row *sql.Row) (*domain.User, error) {
 		user.ResetTokenExpires = parsed
 	}
 	var err error
+	user.Role = domain.Role(role)
 	if user.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 		return nil, fmt.Errorf("parse user creation time: %w", err)
 	}

@@ -29,10 +29,20 @@ SQLite and PostgreSQL adapters
 
 - HTTP handlers use narrow domain interfaces for storage and services. `internal/bootstrap` constructs shared infrastructure once and assembles role-specific components. The API and control-manager remain separate process entry points, while monolith mode composes both without coupling their application roles.
 - The API has job read/list routes, but no command submission/execution route. The `cmd/agent` runtime is a placeholder, so job execution should not be described as available.
+- JWT authentication reloads the user's workspace role on each request. Host, environment, job, and metrics-history operations are scoped in storage; host-to-environment references are checked within the same workspace. Workspace owners can issue hash-only operator/reader API tokens; token permissions cannot exceed the current membership role and revocation is checked on every request.
+- Each account currently owns one workspace. Invitations, workspace member administration, workspace switching, a dedicated owner bootstrap flow, and durable audit events are not implemented. Production signup remains disabled by default; enable it only during a controlled bootstrap process.
 - The control-manager subscription currently logs host-reconnected events; its reconciliation/state-machine behavior remains a TODO.
 - Host persistence and event publication are separate operations. A database write can succeed while event publication fails. Use a transactional outbox before relying on those events as a guaranteed delivery mechanism.
 - SQLite is configured with one open connection by default. It is suitable for local monolith mode. For independently deployed or horizontally scaled API and control-manager processes, use PostgreSQL and a shared NATS JetStream deployment.
 - The current readiness checks cover the database, NATS, and the control-manager subscription where applicable. Add dependency-specific checks for any new required backend and keep liveness independent of transient backend failures.
+
+## Architectural direction
+
+Keep the current modular monolith and ports-and-adapters boundaries while inventory, identity, authorization, and execution contracts are made reliable. Separate API and control-manager binaries already exist for independent deployment; do not split them into more services until measured load, fault isolation, or ownership requires it. Treat SQLite as a single-instance/local option and PostgreSQL as the shared multi-process database.
+
+The workspace authorization baseline is implemented in migration 000003. Existing rows are assigned to workspace 1; the earliest existing account becomes its owner and later existing accounts receive empty private workspaces. Verify the intended legacy owner and take a database backup before upgrading. See the [security assessment](SECURITY.md) and [roadmap](ROADMAP.md) for migration recovery, token handling, and remaining work.
+
+Use the existing NATS JetStream integration only for its current durable event flow. Do not turn it into a general job queue until job submission, delivery guarantees, deduplication, retry policy, and cancellation semantics are specified.
 
 ## API contract
 

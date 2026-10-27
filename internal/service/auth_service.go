@@ -102,13 +102,14 @@ func (s *authService) VerifySession(ctx context.Context, username string) (*doma
 }
 
 func (s *authService) generateSessionToken(user *domain.User) (*domain.AuthTokenResponse, error) {
-	if user == nil {
-		return nil, errors.New("cannot create a session for a nil user")
+	if user == nil || user.WorkspaceID <= 0 {
+		return nil, errors.New("cannot create a session for a user without a workspace")
 	}
 	now := time.Now()
 	claims := &domain.JWTCustomClaims{
-		UserID:   user.ID,
-		Username: user.Username,
+		UserID:      user.ID,
+		WorkspaceID: user.WorkspaceID,
+		Username:    user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "machinarchy",
 			Subject:   fmt.Sprintf("%d", user.ID),

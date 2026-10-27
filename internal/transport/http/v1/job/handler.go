@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -38,12 +39,16 @@ func NewHandler(jobs domain.JobStore) *Handler {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/jobs/{id} [get]
 func (h *Handler) GetByID(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid URL request job ID format"})
 	}
 
-	job, err := h.jobs.GetJobByID(c.Request().Context(), id)
+	job, err := h.jobs.GetJobByID(c.Request().Context(), principal.WorkspaceID, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Target execution job record could not be found"})
@@ -68,6 +73,10 @@ func (h *Handler) GetByID(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/jobs [get]
 func (h *Handler) List(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	hostID, err := queryInt(c, "hostId", 0)
 	if err != nil || hostID < 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "hostId must be a non-negative integer"})
@@ -82,9 +91,10 @@ func (h *Handler) List(c echo.Context) error {
 	}
 
 	filter := domain.JobFilter{
-		HostID: hostID,
-		Limit:  limit,
-		Offset: offset,
+		WorkspaceID: principal.WorkspaceID,
+		HostID:      hostID,
+		Limit:       limit,
+		Offset:      offset,
 	}
 
 	data, total, err := h.jobs.ListJobs(c.Request().Context(), filter)

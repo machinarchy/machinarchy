@@ -12,6 +12,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/history"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/tokens"
 )
 
 // Repositories groups the domain ports required by the v1 HTTP transport.
@@ -22,6 +23,7 @@ type Repositories struct {
 	Hosts        domain.HostStore
 	Jobs         domain.JobStore
 	Environments domain.EnvironmentStore
+	Access       domain.AccessStore
 }
 
 // RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
@@ -33,13 +35,16 @@ func RegisterRoutes(
 	hostServ service.HostService,
 	jwtSecret []byte,
 	secureCookies bool,
+	signupEnabled bool,
+	tokenService domain.APITokenService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
-	authHandler := auth.NewHandler(authServ, secureCookies)
+	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
 	envHandler := environments.NewHandler(repos.Environments)
 	historyHandler := history.NewHandler(metricsServ, repos.Hosts)
-	hostHandler := host.NewHandler(repos.Hosts, repos.Jobs, hostServ)
+	hostHandler := host.NewHandler(repos.Hosts, repos.Jobs, repos.Environments, hostServ)
 	jobHandler := job.NewHandler(repos.Jobs)
+	tokenHandler := tokens.NewHandler(tokenService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -50,26 +55,34 @@ func RegisterRoutes(
 	// ==========================================
 	// PROTECTED API ROUTES
 	// ==========================================
-	apiv1 := g.Group("/v1", middleware.JWTAuth(jwtSecret))
+	apiv1 := g.Group("/v1", middleware.JWTAuth(jwtSecret, repos.Access))
 	{
 		// User Profile
 		apiv1.GET("/me", authHandler.GetMe)
 
 		// Environment Sub-domain Group
-		envGroup := apiv1.Group("/environments")
-		environments.RegisterRoutes(envGroup, envHandler)
+		readRoutes := apiv1.Group("", middleware.RequirePermission(domain.PermissionInventoryRead))
+		writeRoutes := apiv1.Group("", middleware.RequirePermission(domain.PermissionInventoryWrite))
+		envReadGroup := readRoutes.Group("/environments")
+		envWriteGroup := writeRoutes.Group("/environments")
+		environments.RegisterRoutes(envReadGroup, envWriteGroup, envHandler)
 
 		// Host management routes.
-		hostGroup := apiv1.Group("/hosts")
-		host.RegisterRoutes(hostGroup, hostHandler)
+		hostReadGroup := readRoutes.Group("/hosts")
+		hostWriteGroup := writeRoutes.Group("/hosts")
+		host.RegisterRoutes(hostReadGroup, hostWriteGroup, hostHandler)
 
-		// /api/v1/jobs (Global job logs & tracking)
-		jobGroup := apiv1.Group("/jobs")
+		// /api/v1/jobs (workspace-scoped job logs and tracking)
+		jobGroup := apiv1.Group("/jobs", middleware.RequirePermission(domain.PermissionOperationsRead))
 		job.RegisterRoutes(jobGroup, jobHandler)
 
 		// History & Job Tracking Sub-domain Group
-		historyGroup := apiv1.Group("/history")
+		historyGroup := apiv1.Group("/history", middleware.RequirePermission(domain.PermissionOperationsRead))
 		history.RegisterRoutes(historyGroup, historyHandler)
+
+		tokenGroup := apiv1.Group("/tokens",
+			middleware.RequirePermission(domain.PermissionTokenManage), middleware.RequireHuman())
+		tokens.RegisterRoutes(tokenGroup, tokenHandler)
 
 	}
 }

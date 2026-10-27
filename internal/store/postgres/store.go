@@ -39,8 +39,8 @@ func NewStore(db *sql.DB, secret string) (*Store, error) {
 }
 
 func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil {
-		return fmt.Errorf("%w: host and SSH access settings are required", domain.ErrInvalidInput)
+	if host == nil || host.SSH == nil || host.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: host, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
 	labels := host.Labels
 	if labels == nil {
@@ -54,14 +54,22 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create host transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	err = s.db.QueryRowContext(ctx, `INSERT INTO hosts (
-		id, environment_id, name, hostname, ip_address, connection, labels, port,
+	err = tx.QueryRowContext(ctx, `INSERT INTO hosts (
+		id, workspace_id, environment_id, name, hostname, ip_address, connection, labels, port,
 		username, password, private_key, passphrase, expected_fingerprint,
 		status, created_at, updated_at
-	) VALUES (nextval('hosts_id_seq')::TEXT, $1, $2, $3, $4, $5, $6, $7, $8,
-		$9, $10, $11, $12, $13, $14, $15) RETURNING id`,
-		host.EnvironmentID, host.Name, host.Hostname, host.IPAddress,
+	) VALUES (nextval('hosts_id_seq')::TEXT, $1, $2, $3, $4, $5, $6, $7, $8, $9,
+		$10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+		host.WorkspaceID, host.EnvironmentID, host.Name, host.Hostname, host.IPAddress,
 		string(host.Connection), string(labelsJSON), host.SSH.Port, host.SSH.Username,
 		password, privateKey, passphrase, host.SSH.AuthType.ExpectedFingerprint,
 		string(host.SSH.Status), now, now,
@@ -69,23 +77,42 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return fmt.Errorf("insert PostgreSQL host: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create host transaction: %w", err)
+	}
 	host.Labels = labels
 	host.CreatedAt, host.UpdatedAt = now, now
 	return nil
 }
 
 func (s *Store) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
-	const query = `SELECT id, environment_id, name, hostname, ip_address, connection,
+	return s.getHostByID(ctx, 0, id)
+}
+
+func (s *Store) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	return s.getHostByID(ctx, workspaceID, id)
+}
+
+func (s *Store) getHostByID(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+	query := `SELECT id, workspace_id, environment_id, name, hostname, ip_address, connection,
 		labels, port, username, password, private_key, passphrase,
 		expected_fingerprint, status, created_at, updated_at
 		FROM hosts WHERE id = $1`
+	args := []any{strconv.Itoa(id)}
+	if workspaceID > 0 {
+		query += ` AND workspace_id = $2`
+		args = append(args, workspaceID)
+	}
 	var host domain.Host
 	host.SSH = &domain.SSHAccess{}
 	var connection, status string
 	var labelsJSON []byte
 	var password, privateKey, passphrase string
-	err := s.db.QueryRowContext(ctx, query, strconv.Itoa(id)).Scan(
-		&host.ID, &host.EnvironmentID, &host.Name, &host.Hostname, &host.IPAddress,
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&host.ID, &host.WorkspaceID, &host.EnvironmentID, &host.Name, &host.Hostname, &host.IPAddress,
 		&connection, &labelsJSON, &host.SSH.Port, &host.SSH.Username,
 		&password, &privateKey, &passphrase, &host.SSH.AuthType.ExpectedFingerprint,
 		&status, &host.CreatedAt, &host.UpdatedAt,
@@ -117,10 +144,13 @@ func (s *Store) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
 	return &host, nil
 }
 
-func (s *Store) ListAllHosts(ctx context.Context) ([]*domain.Host, error) {
+func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, environment_id, name, hostname,
 		ip_address, connection, labels, port, username, status, created_at, updated_at
-		FROM hosts ORDER BY id::BIGINT DESC`)
+		FROM hosts WHERE workspace_id = $1 ORDER BY id::BIGINT DESC`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list PostgreSQL hosts: %w", err)
 	}
@@ -166,8 +196,11 @@ func (s *Store) UpdateHostStatusWithGuard(ctx context.Context, id int, expected,
 	return affected(result, domain.ErrConcurrentConflict)
 }
 
-func (s *Store) DeleteHost(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM hosts WHERE id = $1`, id)
+func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) error {
+	if workspaceID <= 0 {
+		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM hosts WHERE id = $1 AND workspace_id = $2`, id, workspaceID)
 	if err != nil {
 		return fmt.Errorf("delete PostgreSQL host %s: %w", id, err)
 	}
@@ -175,8 +208,8 @@ func (s *Store) DeleteHost(ctx context.Context, id string) error {
 }
 
 func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil || host.ID == "" {
-		return fmt.Errorf("%w: host ID and SSH access settings are required", domain.ErrInvalidInput)
+	if host == nil || host.SSH == nil || host.ID == "" || host.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: host ID, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
 	labels := host.Labels
 	if labels == nil {
@@ -190,21 +223,51 @@ func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update host transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE hosts SET environment_id = $1, name = $2,
+	result, err := tx.ExecContext(ctx, `UPDATE hosts SET environment_id = $1, name = $2,
 		hostname = $3, ip_address = $4, connection = $5, labels = $6, port = $7,
 		username = $8, password = $9, private_key = $10, passphrase = $11,
-		expected_fingerprint = $12, status = $13, updated_at = $14 WHERE id = $15`,
+		expected_fingerprint = $12, status = $13, updated_at = $14
+		WHERE id = $15 AND workspace_id = $16`,
 		host.EnvironmentID, host.Name, host.Hostname, host.IPAddress, string(host.Connection),
 		string(labelsJSON), host.SSH.Port, host.SSH.Username, password, privateKey, passphrase,
-		host.SSH.AuthType.ExpectedFingerprint, string(host.SSH.Status), now, host.ID)
+		host.SSH.AuthType.ExpectedFingerprint, string(host.SSH.Status), now, host.ID, host.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("update PostgreSQL host %s: %w", host.ID, err)
 	}
 	if err := affected(result, domain.ErrHostNotFound); err != nil {
 		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update host transaction: %w", err)
+	}
 	host.Labels, host.UpdatedAt = labels, now
+	return nil
+}
+
+func validateHostEnvironment(ctx context.Context, tx *sql.Tx, workspaceID, environmentID int) error {
+	if environmentID < 0 {
+		return fmt.Errorf("%w: environment ID must be non-negative", domain.ErrInvalidInput)
+	}
+	if environmentID == 0 {
+		return nil
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM environments
+		WHERE id = $1 AND workspace_id = $2)`, environmentID, workspaceID).Scan(&exists); err != nil {
+		return fmt.Errorf("validate host environment scope: %w", err)
+	}
+	if !exists {
+		return domain.ErrEnvironmentNotFound
+	}
 	return nil
 }
 

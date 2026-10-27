@@ -9,16 +9,18 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
 type Handler struct {
-	hosts   domain.HostStore
-	jobs    domain.JobStore
-	service service.HostService
+	hosts        domain.HostStore
+	jobs         domain.JobStore
+	environments domain.EnvironmentStore
+	service      service.HostService
 }
 
-func NewHandler(hosts domain.HostStore, jobs domain.JobStore, hostService service.HostService) *Handler {
-	return &Handler{hosts: hosts, jobs: jobs, service: hostService}
+func NewHandler(hosts domain.HostStore, jobs domain.JobStore, environments domain.EnvironmentStore, hostService service.HostService) *Handler {
+	return &Handler{hosts: hosts, jobs: jobs, environments: environments, service: hostService}
 }
 
 type HostPayload struct {
@@ -60,6 +62,10 @@ type HostJobsResponse struct {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts [post]
 func (h *Handler) Create(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	var payload HostPayload
 	if err := c.Bind(&payload); err != nil {
 		return badRequest(c, "invalid request body")
@@ -68,6 +74,10 @@ func (h *Handler) Create(c echo.Context) error {
 	host, err := payload.host("")
 	if err != nil {
 		return badRequest(c, err.Error())
+	}
+	host.WorkspaceID = principal.WorkspaceID
+	if err := h.validateEnvironment(c, principal.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
 	}
 	if err := h.service.RegisterHost(c.Request().Context(), host); err != nil {
 		return hostServiceError(c, err)
@@ -85,7 +95,11 @@ func (h *Handler) Create(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts [get]
 func (h *Handler) List(c echo.Context) error {
-	hosts, err := h.hosts.ListAllHosts(c.Request().Context())
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+	hosts, err := h.hosts.ListAllHosts(c.Request().Context(), principal.WorkspaceID)
 	if err != nil {
 		return internalError(c)
 	}
@@ -108,6 +122,10 @@ func (h *Handler) List(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts/{id} [put]
 func (h *Handler) Update(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
 		return badRequest(c, "invalid host ID")
@@ -120,12 +138,19 @@ func (h *Handler) Update(c echo.Context) error {
 	if err != nil {
 		return badRequest(c, err.Error())
 	}
+	host.WorkspaceID = principal.WorkspaceID
+	if err := h.validateEnvironment(c, principal.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
+	}
 	if err := host.SSHValidate(); err != nil {
 		return badRequest(c, err.Error())
 	}
 	if err := h.hosts.UpdateHost(c.Request().Context(), host); err != nil {
 		if errors.Is(err, domain.ErrHostNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "host not found"})
+		}
+		if errors.Is(err, domain.ErrEnvironmentNotFound) {
+			return badRequest(c, "environment not found in this workspace")
 		}
 		return internalError(c)
 	}
@@ -145,11 +170,15 @@ func (h *Handler) Update(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts/{id} [delete]
 func (h *Handler) Delete(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
 		return badRequest(c, "invalid host ID")
 	}
-	if err := h.hosts.DeleteHost(c.Request().Context(), strconv.Itoa(id)); err != nil {
+	if err := h.hosts.DeleteHost(c.Request().Context(), principal.WorkspaceID, strconv.Itoa(id)); err != nil {
 		if errors.Is(err, domain.ErrHostNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "host not found"})
 		}
@@ -172,6 +201,10 @@ func (h *Handler) Delete(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts/{id}/jobs [get]
 func (h *Handler) ListJobsForHost(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	hostID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || hostID < 1 {
 		return badRequest(c, "invalid host ID")
@@ -185,9 +218,10 @@ func (h *Handler) ListJobsForHost(c echo.Context) error {
 		return badRequest(c, "offset must be non-negative")
 	}
 	jobs, total, err := h.jobs.ListJobs(c.Request().Context(), domain.JobFilter{
-		HostID: hostID,
-		Limit:  limit,
-		Offset: offset,
+		WorkspaceID: principal.WorkspaceID,
+		HostID:      hostID,
+		Limit:       limit,
+		Offset:      offset,
 	})
 	if err != nil {
 		return internalError(c)
@@ -245,6 +279,25 @@ func queryInt(c echo.Context, name string, fallback int) (int, error) {
 	return strconv.Atoi(value)
 }
 
+func (h *Handler) validateEnvironment(c echo.Context, workspaceID, environmentID int) error {
+	if environmentID < 0 {
+		return badRequest(c, "environment ID must be non-negative")
+	}
+	if environmentID == 0 {
+		return nil
+	}
+	if h.environments == nil {
+		return internalError(c)
+	}
+	if _, err := h.environments.GetEnvironmentByID(c.Request().Context(), workspaceID, environmentID); err != nil {
+		if errors.Is(err, domain.ErrEnvironmentNotFound) {
+			return badRequest(c, "environment not found in this workspace")
+		}
+		return internalError(c)
+	}
+	return nil
+}
+
 func hostServiceError(c echo.Context, err error) error {
 	var unknownKey *domain.ErrHostKeyUnknown
 	switch {
@@ -257,6 +310,8 @@ func hostServiceError(c echo.Context, err error) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "SSH authentication failed"})
 	case errors.Is(err, domain.ErrInvalidInput):
 		return badRequest(c, err.Error())
+	case errors.Is(err, domain.ErrEnvironmentNotFound):
+		return badRequest(c, "environment not found in this workspace")
 	case errors.Is(err, domain.ErrServiceBusy):
 		c.Response().Header().Set(echo.HeaderRetryAfter, "1")
 		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "host verification capacity is temporarily full"})

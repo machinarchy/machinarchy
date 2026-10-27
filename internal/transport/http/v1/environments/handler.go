@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -38,12 +39,16 @@ type EnvSavePayload struct {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/environments [post]
 func (h *Handler) Create(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	var body EnvSavePayload
 	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Name) == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid environment metadata parameters"})
 	}
 
-	env := &domain.Environment{Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
+	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.CreateEnvironment(c.Request().Context(), env); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
 			return c.JSON(http.StatusConflict, map[string]string{"error": "Environment name is already registered"})
@@ -63,7 +68,11 @@ func (h *Handler) Create(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/environments [get]
 func (h *Handler) List(c echo.Context) error {
-	list, err := h.repo.ListEnvironments(c.Request().Context())
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+	list, err := h.repo.ListEnvironments(c.Request().Context(), principal.WorkspaceID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Unable to retrieve environments"})
 	}
@@ -86,6 +95,10 @@ func (h *Handler) List(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/environments/{id} [put]
 func (h *Handler) Update(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid URL request ID format"})
@@ -96,7 +109,7 @@ func (h *Handler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid mutation updates layout"})
 	}
 
-	env := &domain.Environment{ID: id, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
+	env := &domain.Environment{ID: id, WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.UpdateEnvironment(c.Request().Context(), env); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Environment not found"})
@@ -122,12 +135,16 @@ func (h *Handler) Update(c echo.Context) error {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/environments/{id} [delete]
 func (h *Handler) Delete(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid URL delete parameters ID target"})
 	}
 
-	if err := h.repo.DeleteEnvironment(c.Request().Context(), id); err != nil {
+	if err := h.repo.DeleteEnvironment(c.Request().Context(), principal.WorkspaceID, id); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "Environment not found"})
 		}

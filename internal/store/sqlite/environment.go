@@ -13,12 +13,12 @@ import (
 )
 
 func (s *SQLiteStore) CreateEnvironment(ctx context.Context, environment *domain.Environment) error {
-	if environment == nil {
-		return fmt.Errorf("%w: environment is required", domain.ErrInvalidInput)
+	if environment == nil || environment.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
 	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, `INSERT INTO environments (name, description, created_at)
-		VALUES (?, ?, ?)`, environment.Name, environment.Description, now.Format(time.RFC3339Nano))
+	result, err := s.DB.ExecContext(ctx, `INSERT INTO environments (workspace_id, name, description, created_at)
+		VALUES (?, ?, ?, ?)`, environment.WorkspaceID, environment.Name, environment.Description, now.Format(time.RFC3339Nano))
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
 		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
@@ -34,12 +34,15 @@ func (s *SQLiteStore) CreateEnvironment(ctx context.Context, environment *domain
 	return nil
 }
 
-func (s *SQLiteStore) GetEnvironmentByID(ctx context.Context, id int) (*domain.Environment, error) {
+func (s *SQLiteStore) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*domain.Environment, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	environment := new(domain.Environment)
 	var createdAt string
-	err := s.DB.QueryRowContext(ctx, `SELECT id, name, description, created_at
-		FROM environments WHERE id = ?`, id).Scan(
-		&environment.ID, &environment.Name, &environment.Description, &createdAt)
+	err := s.DB.QueryRowContext(ctx, `SELECT id, workspace_id, name, description, created_at
+		FROM environments WHERE id = ? AND workspace_id = ?`, id, workspaceID).Scan(
+		&environment.ID, &environment.WorkspaceID, &environment.Name, &environment.Description, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrEnvironmentNotFound
 	}
@@ -52,9 +55,12 @@ func (s *SQLiteStore) GetEnvironmentByID(ctx context.Context, id int) (*domain.E
 	return environment, nil
 }
 
-func (s *SQLiteStore) ListEnvironments(ctx context.Context) ([]*domain.Environment, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, description, created_at
-		FROM environments ORDER BY id ASC`)
+func (s *SQLiteStore) ListEnvironments(ctx context.Context, workspaceID int) ([]*domain.Environment, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, workspace_id, name, description, created_at
+		FROM environments WHERE workspace_id = ? ORDER BY id ASC`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
 	}
@@ -64,7 +70,7 @@ func (s *SQLiteStore) ListEnvironments(ctx context.Context) ([]*domain.Environme
 	for rows.Next() {
 		environment := new(domain.Environment)
 		var createdAt string
-		if err := rows.Scan(&environment.ID, &environment.Name,
+		if err := rows.Scan(&environment.ID, &environment.WorkspaceID, &environment.Name,
 			&environment.Description, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan environment row: %w", err)
 		}
@@ -80,19 +86,27 @@ func (s *SQLiteStore) ListEnvironments(ctx context.Context) ([]*domain.Environme
 }
 
 func (s *SQLiteStore) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
-	if environment == nil {
-		return fmt.Errorf("%w: environment is required", domain.ErrInvalidInput)
+	if environment == nil || environment.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE environments SET name = ?, description = ? WHERE id = ?`,
-		environment.Name, environment.Description, environment.ID)
+	result, err := s.DB.ExecContext(ctx, `UPDATE environments SET name = ?, description = ?
+		WHERE id = ? AND workspace_id = ?`,
+		environment.Name, environment.Description, environment.ID, environment.WorkspaceID)
 	if err != nil {
+		var sqliteErr *sqliteDriver.Error
+		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
+			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+		}
 		return fmt.Errorf("update environment %d: %w", environment.ID, err)
 	}
 	return requireRowsAffected(result, domain.ErrEnvironmentNotFound)
 }
 
-func (s *SQLiteStore) DeleteEnvironment(ctx context.Context, id int) error {
-	result, err := s.DB.ExecContext(ctx, `DELETE FROM environments WHERE id = ?`, id)
+func (s *SQLiteStore) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
+	if workspaceID <= 0 {
+		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	result, err := s.DB.ExecContext(ctx, `DELETE FROM environments WHERE id = ? AND workspace_id = ?`, id, workspaceID)
 	if err != nil {
 		return fmt.Errorf("delete environment %d: %w", id, err)
 	}

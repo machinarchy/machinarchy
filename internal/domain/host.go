@@ -52,6 +52,7 @@ const (
 
 type Host struct {
 	ID            string            `json:"id"`
+	WorkspaceID   int               `json:"-"`
 	EnvironmentID int               `json:"environmentId"`
 	Name          string            `json:"name"`
 	Hostname      string            `json:"hostname"`
@@ -165,9 +166,10 @@ func (h *Host) SSHValidate() error {
 type HostStore interface {
 	CreateHost(ctx context.Context, host *Host) error
 	GetHostByID(ctx context.Context, id int) (*Host, error)
-	ListAllHosts(ctx context.Context) ([]*Host, error)
+	GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*Host, error)
+	ListAllHosts(ctx context.Context, workspaceID int) ([]*Host, error)
 	UpdateHostStatus(ctx context.Context, id string, status HostStatus) error
 	UpdateHostStatusWithGuard(ctx context.Context, id int, expectedCurrent, newStatus HostStatus) error
-	DeleteHost(ctx context.Context, id string) error
+	DeleteHost(ctx context.Context, workspaceID int, id string) error
 	UpdateHost(ctx context.Context, host *Host) error
 }

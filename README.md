@@ -37,7 +37,7 @@ docker run --rm -p 4222:4222 nats:2-alpine -js
 cp .env.example .env
 ```
 
-Set `MACHINARCHY_OPERATOR_TOKEN` to a random value of at least 32 characters. For production, also set a separate `MACHINARCHY_ENCRYPTION_SECRET` and `CORS_ALLOWED_ORIGINS`. The encryption secret must remain stable: stored SSH credentials cannot be decrypted after it changes.
+Set `MACHINARCHY_OPERATOR_TOKEN` to a random value of at least 32 characters. For production, also set a separate `MACHINARCHY_ENCRYPTION_SECRET` and `CORS_ALLOWED_ORIGINS`. The encryption secret must remain stable: stored SSH credentials cannot be decrypted after it changes. Self-registration is disabled by default in production; use `MACHINARCHY_SIGNUP_ENABLED=true` only when account registration is intentionally available.
 
 Load the environment and start both application components together:
 
@@ -81,8 +81,11 @@ The interactive reference is rendered by Scalar. The generated API contract is a
 | Hosts | `GET`, `POST /api/v1/hosts`; `PUT`, `DELETE /api/v1/hosts/{id}`; `GET /api/v1/hosts/{id}/jobs` |
 | Jobs | `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}` |
 | Metrics history | `GET /api/v1/history?range=1h` |
+| API tokens | `GET`, `POST /api/v1/tokens`; `DELETE /api/v1/tokens/{id}` |
 
-Protected routes accept either an `Authorization: Bearer <token>` header or the `auth_token` cookie returned by signup/login. In Scalar, enter `Bearer <token>` in the Authorization field.
+Each account receives its own workspace. Existing databases assign legacy rows to the earliest account and give later accounts empty workspaces; review [the migration guidance](docs/SECURITY.md#existing-database-migration) and take a backup before upgrading. Workspace owners can issue operator or reader API tokens. The plaintext is returned once; use an `Authorization: Bearer <token>` header and store it in a secret manager. Token details and examples are in the [security guide](docs/SECURITY.md#workspace-authorization-and-api-tokens).
+
+Human protected routes accept an `Authorization: Bearer <JWT>` header or the `auth_token` cookie returned by signup/login. API tokens are bearer-only and are not accepted as cookies. In Scalar, enter `Bearer <credential>` in the Authorization field.
 
 ## Configuration
 
@@ -93,6 +96,7 @@ All settings use environment variables; the application does not load `.env` fil
 | `MACHINARCHY_OPERATOR_TOKEN` | JWT signing secret; required, at least 32 characters, no whitespace. |
 | `MACHINARCHY_ENCRYPTION_SECRET` | Secret for at-rest SSH credential encryption. Required in production and independent of the JWT secret. |
 | `MACHINARCHY_ENVIRONMENT` | `development` or `production`. |
+| `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `true` in development and `false` in production. |
 | `MACHINARCHY_LISTEN_ADDR` | HTTP bind address, default `:8080`. |
 | `MACHINARCHY_DATABASE_ENGINE` | `sqlite` (default) or `postgres`. |
 | `MACHINARCHY_DATABASE_PATH` | SQLite file path, default `./data/machinarchy.db`. |
@@ -101,7 +105,7 @@ All settings use environment variables; the application does not load `.env` fil
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; required in production. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP/HTTP collector endpoint. |
 
-Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL.
+Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL. Keep signup disabled except during controlled onboarding. Workspace scoping is implemented, while invitations, human member roles, durable audit events, and PostgreSQL integration coverage remain future work. See [the security assessment](docs/SECURITY.md) and [roadmap](docs/ROADMAP.md).
 
 ## Operations
 

@@ -14,8 +14,8 @@ import (
 )
 
 func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil {
-		return fmt.Errorf("%w: host and SSH access settings are required", domain.ErrInvalidInput)
+	if host == nil || host.SSH == nil || host.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: host, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
 
 	labels := host.Labels
@@ -33,19 +33,22 @@ func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
 
 	now := time.Now().UTC()
 	const query = `INSERT INTO hosts (
-		environment_id, name, hostname, ip_address, connection, labels, port,
+		workspace_id, environment_id, name, hostname, ip_address, connection, labels, port,
 		username, password, private_key, passphrase, expected_fingerprint,
 		status, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin create host transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(ctx, query,
-		host.EnvironmentID, host.Name, host.Hostname, host.IPAddress,
+		host.WorkspaceID, host.EnvironmentID, host.Name, host.Hostname, host.IPAddress,
 		string(host.Connection), labelsJSON, host.SSH.Port, host.SSH.Username,
 		password, privateKey, passphrase, host.SSH.AuthType.ExpectedFingerprint,
 		string(host.SSH.Status), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
@@ -76,18 +79,34 @@ func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
 }
 
 func (s *SQLiteStore) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
-	const query = `SELECT id, environment_id, name, hostname, ip_address, connection,
+	return s.getHostByID(ctx, 0, id)
+}
+
+func (s *SQLiteStore) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	return s.getHostByID(ctx, workspaceID, id)
+}
+
+func (s *SQLiteStore) getHostByID(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+	query := `SELECT id, workspace_id, environment_id, name, hostname, ip_address, connection,
 		labels, port, username, password, private_key, passphrase,
 		expected_fingerprint, status, created_at, updated_at
 		FROM hosts WHERE id = ?`
+	args := []any{strconv.Itoa(id)}
+	if workspaceID > 0 {
+		query += ` AND workspace_id = ?`
+		args = append(args, workspaceID)
+	}
 
 	var host domain.Host
 	host.SSH = &domain.SSHAccess{}
 	var connection, status, createdAt, updatedAt string
 	var labelsJSON []byte
 	var password, privateKey, passphrase string
-	err := s.DB.QueryRowContext(ctx, query, strconv.Itoa(id)).Scan(
-		&host.ID, &host.EnvironmentID, &host.Name, &host.Hostname, &host.IPAddress,
+	err := s.DB.QueryRowContext(ctx, query, args...).Scan(
+		&host.ID, &host.WorkspaceID, &host.EnvironmentID, &host.Name, &host.Hostname, &host.IPAddress,
 		&connection, &labelsJSON, &host.SSH.Port, &host.SSH.Username,
 		&password, &privateKey, &passphrase, &host.SSH.AuthType.ExpectedFingerprint,
 		&status, &createdAt, &updatedAt,
@@ -129,11 +148,14 @@ func (s *SQLiteStore) GetHostByID(ctx context.Context, id int) (*domain.Host, er
 	return &host, nil
 }
 
-func (s *SQLiteStore) ListAllHosts(ctx context.Context) ([]*domain.Host, error) {
+func (s *SQLiteStore) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	const query = `SELECT id, environment_id, name, hostname, ip_address, connection,
 		labels, port, username, status, created_at, updated_at
-		FROM hosts ORDER BY CAST(id AS INTEGER) DESC`
-	rows, err := s.DB.QueryContext(ctx, query)
+		FROM hosts WHERE workspace_id = ? ORDER BY CAST(id AS INTEGER) DESC`
+	rows, err := s.DB.QueryContext(ctx, query, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list hosts: %w", err)
 	}
@@ -194,8 +216,11 @@ func (s *SQLiteStore) UpdateHostStatusWithGuard(ctx context.Context, id int, exp
 	return requireRowsAffected(result, domain.ErrConcurrentConflict)
 }
 
-func (s *SQLiteStore) DeleteHost(ctx context.Context, id string) error {
-	result, err := s.DB.ExecContext(ctx, `DELETE FROM hosts WHERE id = ?`, id)
+func (s *SQLiteStore) DeleteHost(ctx context.Context, workspaceID int, id string) error {
+	if workspaceID <= 0 {
+		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	result, err := s.DB.ExecContext(ctx, `DELETE FROM hosts WHERE id = ? AND workspace_id = ?`, id, workspaceID)
 	if err != nil {
 		return fmt.Errorf("delete host %s: %w", id, err)
 	}
@@ -203,8 +228,8 @@ func (s *SQLiteStore) DeleteHost(ctx context.Context, id string) error {
 }
 
 func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil || host.ID == "" {
-		return fmt.Errorf("%w: host ID and SSH access settings are required", domain.ErrInvalidInput)
+	if host == nil || host.SSH == nil || host.ID == "" || host.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: host ID, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
 	labels := host.Labels
 	if labels == nil {
@@ -219,16 +244,24 @@ func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
 		return err
 	}
 
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update host transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	result, err := s.DB.ExecContext(ctx, `UPDATE hosts SET
+	result, err := tx.ExecContext(ctx, `UPDATE hosts SET
 		environment_id = ?, name = ?, hostname = ?, ip_address = ?, connection = ?,
 		labels = ?, port = ?, username = ?, password = ?, private_key = ?,
 		passphrase = ?, expected_fingerprint = ?, status = ?, updated_at = ?
-		WHERE id = ?`,
+		WHERE id = ? AND workspace_id = ?`,
 		host.EnvironmentID, host.Name, host.Hostname, host.IPAddress, string(host.Connection),
 		labelsJSON, host.SSH.Port, host.SSH.Username, password, privateKey,
 		passphrase, host.SSH.AuthType.ExpectedFingerprint, string(host.SSH.Status),
-		now.Format(time.RFC3339Nano), host.ID,
+		now.Format(time.RFC3339Nano), host.ID, host.WorkspaceID,
 	)
 	if err != nil {
 		return fmt.Errorf("update host %s: %w", host.ID, err)
@@ -236,8 +269,29 @@ func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if err := requireRowsAffected(result, domain.ErrHostNotFound); err != nil {
 		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update host transaction: %w", err)
+	}
 	host.Labels = labels
 	host.UpdatedAt = now
+	return nil
+}
+
+func validateHostEnvironment(ctx context.Context, tx *sql.Tx, workspaceID, environmentID int) error {
+	if environmentID < 0 {
+		return fmt.Errorf("%w: environment ID must be non-negative", domain.ErrInvalidInput)
+	}
+	if environmentID == 0 {
+		return nil
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM environments
+		WHERE id = ? AND workspace_id = ?)`, environmentID, workspaceID).Scan(&exists); err != nil {
+		return fmt.Errorf("validate host environment scope: %w", err)
+	}
+	if !exists {
+		return domain.ErrEnvironmentNotFound
+	}
 	return nil
 }
 

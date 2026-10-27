@@ -24,6 +24,7 @@ import (
 	custommw "github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 	v1 "github.com/machinarchy/machinarchy/internal/transport/http/v1"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -76,8 +77,13 @@ func NewServer(
 	dependencies ...ReadinessChecker,
 ) (*Server, error) {
 	if database == nil || repositories.Users == nil || repositories.Metrics == nil || repositories.Hosts == nil ||
-		repositories.Jobs == nil || repositories.Environments == nil || authService == nil || hostService == nil || metricsService == nil || sshCapacity == nil {
+		repositories.Jobs == nil || repositories.Environments == nil || repositories.Access == nil ||
+		authService == nil || hostService == nil || metricsService == nil || sshCapacity == nil {
 		return nil, errors.New("HTTP server dependencies are required")
+	}
+	tokenService, err := service.NewAPITokenService(repositories.Access)
+	if err != nil {
+		return nil, fmt.Errorf("configure API token service: %w", err)
 	}
 	origins, err := allowedOrigins(cfg.Environment)
 	if err != nil {
@@ -103,7 +109,7 @@ func NewServer(
 	e.Use(custommw.CORS(origins))
 
 	registry := prometheus.NewRegistry()
-	registry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	e.Use(registerHTTPMetrics(registry, database.DatabaseStats, sshCapacity))
 
 	metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
@@ -126,7 +132,7 @@ func NewServer(
 	api := e.Group("/api", limiter.Middleware())
 	v1.RegisterRoutes(api, repositories, authService,
 		metricsService, hostService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production)
+		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",
@@ -161,8 +167,8 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
-		prometheus.NewGoCollector(),
-		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Namespace: "machinarchy", Name: "db_connections_open",
 			Help: "Open database connections.",

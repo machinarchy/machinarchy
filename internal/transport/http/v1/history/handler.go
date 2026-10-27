@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	"github.com/labstack/echo/v4"
 )
@@ -35,6 +36,10 @@ func NewHandler(ms domain.MetricsService, hs domain.HostStore) *Handler {
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/history [get]
 func (h *Handler) GetHistory(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
 	// 1. Extract inputs from delivery layer
 	timeRange := c.QueryParam("range")
 	if timeRange == "" {
@@ -43,7 +48,7 @@ func (h *Handler) GetHistory(c echo.Context) error {
 
 	// 2. Delegate data gathering down to the service interface
 	ctx := c.Request().Context()
-	data, err := h.metricsService.GetHistory(ctx, timeRange)
+	data, err := h.metricsService.GetHistory(ctx, principal.WorkspaceID, timeRange)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidInput) {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "unsupported metrics range"})

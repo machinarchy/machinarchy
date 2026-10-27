@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -e
+
+echo "➡ Running go fmt..."
+if [ -n "$(gofmt -l .)" ]; then
+  echo "❌ go fmt failed. Fix formatting first."
+  gofmt -l .
+  exit 1
+fi
+
+echo "➡ Running go vet..."
+go vet ./...
+
+if command -v staticcheck >/dev/null 2>&1; then
+  echo "➡ Running staticcheck..."
+  staticcheck ./...
+fi
+
+echo "➡ Running go test..."
+go test -v ./...
+
+# echo "➡ Running go build..."
+# go build ./...
+
+# # Optional docker build test
+# if docker version >/dev/null 2>&1; then
+#   echo "➡ Checking Dockerfile builds..."
+#   docker build -q -f Dockerfile .
+# fi
+
+echo "✔ Pre-commit checks passed."

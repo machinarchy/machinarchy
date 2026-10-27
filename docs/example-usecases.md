@@ -1,4 +1,4 @@
-# Machinarchy use cases: SSH hosts and remote commands
+# Machinarchy use cases: workspaces, API tokens, and SSH hosts
 
 This guide walks through creating an environment, registering an SSH host through the API, and inspecting it from the API and CLI.
 
@@ -7,12 +7,14 @@ This guide walks through creating an environment, registering an SSH host throug
 ## Prerequisites
 
 - A running Machinarchy API, for example `http://localhost:8080` in local development.
-- A valid user JWT from the API's signup or login endpoint. Do not use `MACHINARCHY_OPERATOR_TOKEN`; that is the server's signing secret, not an API user token.
+- A human owner JWT from the API's signup or login endpoint for setup and token management. Do not use `MACHINARCHY_OPERATOR_TOKEN`; that is the server's signing secret, not an API user token.
 - `curl` and `jq` for the API examples.
 - Network access from the API server to the SSH host on the configured port.
 - SSH credentials with permission to log in to the host.
 
-Set the API endpoint, user token, and host details in your current shell. Replace these sample values:
+Each account currently owns a private workspace. Signup does not invite other users, provide workspace switching, or create shared team access. In production, signup is disabled by default; have an operator bootstrap the owner account deliberately. Set the API endpoint and temporary owner JWT for setup. Supply long-lived automation credentials from a secret manager at runtime rather than saving them in project files or shell startup scripts.
+
+Replace these sample values:
 
 ```sh
 export API_URL='http://localhost:8080'
@@ -26,7 +28,23 @@ export SSH_PORT=22
 
 Use HTTPS for remote or production deployments. Do not paste real secrets into shared terminals, tickets, or shell scripts committed to source control.
 
-## 1. Create an environment through the API
+## 1. Issue an API token for automation
+
+Use the human owner JWT to create an `operator` token for inventory updates or a `reader` token for read-only inventory and operational data. Tokens cannot have the owner role, and their effective access is capped by the issuer's current workspace membership. The plaintext is returned once and stored server-side only as a SHA-256 hash. The default lifetime is 30 days; the maximum is 365 days.
+
+Create a short-lived read-only token and copy the `token` value from the response directly into your secret manager:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/tokens" \
+  --header "Authorization: Bearer $API_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"host-inventory-read","role":"reader","expiresInHours":168}' | jq .
+```
+
+Use that provisioned token for API/CLI automation, while retaining the human JWT for token administration. `GET /api/v1/tokens` lists the current user's token metadata; `DELETE /api/v1/tokens/{id}` revokes a token. Send secrets only in an HTTPS `Authorization: Bearer` header. Do not put them in URLs, committed files, shell history, or logs.
+
+## 2. Create an environment through the API
 
 Host registration accepts an `environmentId`. Create an environment and capture the ID from its response:
 
@@ -49,7 +67,7 @@ curl --silent --show-error --fail-with-body \
   --header "Authorization: Bearer $API_TOKEN" | jq .
 ```
 
-## 2. Verify the SSH host key
+## 3. Verify the SSH host key
 
 Registration requires the host's expected SHA-256 SSH host-key fingerprint. Obtain the fingerprint through a trusted channel, such as your cloud provider's console or the host administrator. You can inspect the key presented over the network with:
 
@@ -65,7 +83,7 @@ Set the verified value, including the `SHA256:` prefix:
 export SSH_HOST_FINGERPRINT='SHA256:replace-with-verified-fingerprint'
 ```
 
-## 3. Register the SSH host through the API
+## 4. Register the SSH host through the API
 
 The API accepts either an IP address or hostname, an SSH username, an authentication method, its secret, and the expected host-key fingerprint. This example reads a private key from a file and streams the generated JSON request to `curl`, so the private-key contents are not placed in command arguments or printed in the terminal:
 
@@ -107,7 +125,7 @@ Common failures:
 - `401 Unauthorized`: the API JWT is invalid, or the SSH login was rejected. Check the response body to distinguish API authentication from SSH authentication failure.
 - `503 Service Unavailable`: the bounded SSH verification capacity is exhausted or unavailable; retry after the service recovers.
 
-## 4. Inspect the registered host through the API
+## 5. Inspect the registered host through the API
 
 List registered hosts. The response omits SSH passwords and private keys:
 
@@ -119,9 +137,9 @@ curl --silent --show-error --fail-with-body \
 
 The current API does not implement `GET /api/v1/hosts/{id}`. Use the collection response to find a host by `id` or `name`.
 
-## 5. Configure the CLI and list hosts
+## 6. Configure the CLI and list hosts
 
-The current CLI can list hosts, but it does not create hosts or run remote commands. Configure a context with the same API base URL and user JWT:
+The current CLI can list hosts, but it does not create hosts or run remote commands. Configure a context with the API base URL and a `reader` or `operator` API token. Keep the owner JWT for token administration rather than routine CLI use:
 
 ```sh
 go run ./cmd/machinarchy config set-cluster local --server "$API_URL"
@@ -138,9 +156,9 @@ go run ./cmd/machinarchy get hosts "$HOST_NAME"
 go run ./cmd/machinarchy get hosts -n production -o json | jq .
 ```
 
-See [CLI configuration](docs/cli/configuration.md) for named contexts and credential handling.
+See [CLI configuration](cli/configuration.md) for named contexts and credential handling.
 
-## 6. Run a command directly with OpenSSH
+## 7. Run a command directly with OpenSSH
 
 Until Machinarchy adds a command-submission feature, use the local `ssh` client directly. Before connecting, ensure the host's verified key is in your OpenSSH `known_hosts` file. Keep strict host-key checking enabled:
 

@@ -13,6 +13,7 @@ var ErrEnvironmentAlreadyExists = errors.New("environment name is already regist
 
 type Environment struct {
 	ID          int       `json:"id"`
+	WorkspaceID int       `json:"-"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -20,8 +21,8 @@ type Environment struct {
 
 type EnvironmentStore interface {
 	CreateEnvironment(ctx context.Context, env *Environment) error
-	GetEnvironmentByID(ctx context.Context, id int) (*Environment, error)
-	ListEnvironments(ctx context.Context) ([]*Environment, error)
+	GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*Environment, error)
+	ListEnvironments(ctx context.Context, workspaceID int) ([]*Environment, error)
 	UpdateEnvironment(ctx context.Context, env *Environment) error
-	DeleteEnvironment(ctx context.Context, id int) error
+	DeleteEnvironment(ctx context.Context, workspaceID, id int) error
 }

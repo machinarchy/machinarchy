@@ -17,6 +17,8 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 
 type User struct {
 	ID                int       `json:"id"`
+	WorkspaceID       int       `json:"-"`
+	Role              Role      `json:"-"`
 	Username          string    `json:"username"`
 	Email             string    `json:"email"`
 	PasswordHash      string    `json:"-"`
@@ -26,8 +28,9 @@ type User struct {
 }
 
 type JWTCustomClaims struct {
-	UserID   int    `json:"id"`
-	Username string `json:"username"`
+	UserID      int    `json:"id"`
+	WorkspaceID int    `json:"workspace_id"`
+	Username    string `json:"username"`
 	jwt.RegisteredClaims
 }
 

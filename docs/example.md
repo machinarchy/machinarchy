@@ -68,7 +68,9 @@ go run ./cmd/machinarchy config set-context local --cluster local --user local
 go run ./cmd/machinarchy config use-context local
 ~~~
 
-Set MACHINARCHY_USER_TOKEN to a token returned by the API's signup or login endpoint. To add another deployment, create another cluster, credential, and context, then switch with config use-context:
+For initial setup, create a context with a human JWT returned by signup or login. For routine CLI use, prefer a workspace-scoped API token with the `reader` or `operator` role; create it with a human owner JWT as described in [the SSH and API token use cases](example-usecases.md). API tokens are returned once and should be injected from a secret manager rather than stored in `.env` or shell startup files. Signup creates a private workspace per account; it does not support invitations or shared team workspaces. In production, signup is disabled by default.
+
+Set MACHINARCHY_USER_TOKEN to the human JWT for initial setup, or to the provisioned API token for routine CLI use. To add another deployment, create another cluster, credential, and context, then switch with `config use-context`:
 
 ~~~sh
 go run ./cmd/machinarchy config set-cluster staging --server https://api.staging.example.com

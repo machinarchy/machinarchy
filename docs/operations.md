@@ -6,6 +6,8 @@ The API, control-manager, and monolith read configuration from environment varia
 
 Set `MACHINARCHY_OPERATOR_TOKEN` to a cryptographically random value of at least 32 characters. In production, set `MACHINARCHY_ENCRYPTION_SECRET` to an independently generated value and keep it stable across restarts and upgrades. Back it up securely: changing or losing it makes persisted encrypted SSH credentials unusable. Production also requires explicit `CORS_ALLOWED_ORIGINS`; wildcard origins are rejected. PostgreSQL URLs in production must use `sslmode=verify-full`.
 
+Self-registration is enabled by default in development and disabled by default in production. Set `MACHINARCHY_SIGNUP_ENABLED=true` only when new account registration is intended. This controls account creation only; it does not provide per-user authorization for hosts, environments, or jobs. Until resource authorization is implemented, expose the API only to trusted operators. See [the security assessment](SECURITY.md).
+
 SQLite migrations run at startup, and its parent directory is created with restrictive permissions. Use a durable mounted volume for the database file. The default SQLite pool is intentionally limited to one connection. PostgreSQL pool sizes, connection lifetime, and connect timeout can be configured with the `MACHINARCHY_DATABASE_*` variables shown in `.env.example`.
 
 The event broker requires NATS JetStream. At startup Machinarchy creates the `MACHINARCHY` stream or validates that an existing stream has compatible subjects and bounded retention. Provision persistent NATS storage in environments where retained events matter.

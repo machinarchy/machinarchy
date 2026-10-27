@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+if [[ $# -ne 1 || ! -f $1 ]]; then
+  echo "Usage: $0 <commit-message-file>" >&2
+  exit 2
+fi
+
+commit_msg_file="$1"
+commit_msg=$(head -n 1 "$commit_msg_file")
+
+# Conventional Commits header; supports scoped and breaking-change subjects.
+pattern="^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_./-]+\))?(!)?: .+"
+
+if [[ ! $commit_msg =~ $pattern ]]; then
+  echo "❌ Commit message does not follow Conventional Commits!"
+  echo ""
+  echo "Examples:"
+  echo "  feat: add host info endpoint"
+  echo "  fix(server): panic on nil pointer"
+  echo "  docs: update README"
+  echo "  chore: bump dependencies"
+  echo "  feat(api)!: remove legacy endpoint"
+  echo ""
+  echo "Your commit message:"
+  echo "  $commit_msg"
+  echo ""
+  exit 1
+fi
+
+echo "✔ Commit message format OK."

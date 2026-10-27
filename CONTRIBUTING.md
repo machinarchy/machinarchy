@@ -11,6 +11,7 @@ Read [the architecture notes](docs/architecture.md) and inspect the existing int
 3. Keep API annotations beside the handlers and regenerate the checked-in contract with `make api-docs` when API behavior changes.
 4. Format Go code with `gofmt` and run the relevant checks below.
 5. Document configuration changes in `.env.example` and the README or operations guide.
+6. Update [`ChangeLogAI.md`](ChangeLogAI.md) in the same change for every modification, feature, fix, or documentation/configuration update. Record only checks that were actually run and distinguish implemented work from planned work.
 
 ## Local checks
 

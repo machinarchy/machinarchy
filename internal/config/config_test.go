@@ -10,6 +10,7 @@ func setCommonEnv(t *testing.T) {
 	envs := map[string]string{
 		"MACHINARCHY_LISTEN_ADDR":                "",
 		"MACHINARCHY_ENVIRONMENT":                "development",
+		"MACHINARCHY_SIGNUP_ENABLED":             "",
 		"MACHINARCHY_DATABASE_ENGINE":            "sqlite",
 		"MACHINARCHY_DATABASE_PATH":              "",
 		"MACHINARCHY_DATABASE_URL":               "",
@@ -27,6 +28,54 @@ func setCommonEnv(t *testing.T) {
 	for key, value := range envs {
 		t.Setenv(key, value)
 	}
+}
+
+func TestLoadSignupDefaults(t *testing.T) {
+	t.Run("enabled in development", func(t *testing.T) {
+		setCommonEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.SignupEnabled {
+			t.Fatal("signup should default to enabled in development")
+		}
+	})
+
+	t.Run("disabled in production", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_ENVIRONMENT", "production")
+		t.Setenv("MACHINARCHY_ENCRYPTION_SECRET", "abcdef0123456789abcdef0123456789")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.SignupEnabled {
+			t.Fatal("signup should default to disabled in production")
+		}
+	})
+
+	t.Run("explicit override", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_ENVIRONMENT", "production")
+		t.Setenv("MACHINARCHY_ENCRYPTION_SECRET", "abcdef0123456789abcdef0123456789")
+		t.Setenv("MACHINARCHY_SIGNUP_ENABLED", "true")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.SignupEnabled {
+			t.Fatal("explicit signup setting was ignored")
+		}
+	})
+
+	t.Run("reject invalid value", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_SIGNUP_ENABLED", "sometimes")
+		if _, err := Load(); err == nil {
+			t.Fatal("expected an invalid signup setting to be rejected")
+		}
+	})
 }
 
 func TestLoadSQLiteDefaults(t *testing.T) {

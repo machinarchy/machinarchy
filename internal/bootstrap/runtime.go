@@ -104,7 +104,7 @@ func (r *Runtime) NewAPIServer(
 	}
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Metrics: r.stores.Metrics, Hosts: r.stores.Hosts,
-		Jobs: r.stores.Jobs, Environments: r.stores.Environments,
+		Jobs: r.stores.Jobs, Environments: r.stores.Environments, Access: r.stores.Access,
 	}
 
 	readiness := make([]httpserver.ReadinessChecker, 0, 1+len(additionalReadiness))

@@ -9,7 +9,10 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
-func (s *Store) SaveMetricPoint(ctx context.Context, cpuPercent, memoryPercent float64) error {
+func (s *Store) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent, memoryPercent float64) error {
+	if workspaceID <= 0 {
+		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	if math.IsNaN(cpuPercent) || math.IsInf(cpuPercent, 0) || cpuPercent < 0 || cpuPercent > 100 ||
 		math.IsNaN(memoryPercent) || math.IsInf(memoryPercent, 0) || memoryPercent < 0 || memoryPercent > 100 {
 		return fmt.Errorf("%w: CPU and memory percentages must be finite values from 0 to 100", domain.ErrInvalidInput)
@@ -20,12 +23,13 @@ func (s *Store) SaveMetricPoint(ctx context.Context, cpuPercent, memoryPercent f
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO metrics_history
-		(timestamp, cpu_percent, mem_percent) VALUES ($1, $2, $3)`,
-		time.Now().UTC(), cpuPercent, memoryPercent); err != nil {
+		(workspace_id, timestamp, cpu_percent, mem_percent) VALUES ($1, $2, $3, $4)`,
+		workspaceID, time.Now().UTC(), cpuPercent, memoryPercent); err != nil {
 		return fmt.Errorf("save metric point: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM metrics_history WHERE id NOT IN
-		(SELECT id FROM metrics_history ORDER BY id DESC LIMIT 1440)`); err != nil {
+		(SELECT id FROM metrics_history WHERE workspace_id = $1 ORDER BY id DESC LIMIT 1440)
+		AND workspace_id = $1`, workspaceID); err != nil {
 		return fmt.Errorf("prune metric history: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -34,12 +38,15 @@ func (s *Store) SaveMetricPoint(ctx context.Context, cpuPercent, memoryPercent f
 	return nil
 }
 
-func (s *Store) GetStoredHistory(ctx context.Context, limit int) ([]domain.DataPoint, error) {
+func (s *Store) GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]domain.DataPoint, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	if limit < 1 || limit > 10000 {
 		return nil, fmt.Errorf("%w: metric history limit must be between 1 and 10000", domain.ErrInvalidInput)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT timestamp, cpu_percent, mem_percent
-		FROM metrics_history ORDER BY timestamp DESC LIMIT $1`, limit)
+		FROM metrics_history WHERE workspace_id = $1 ORDER BY timestamp DESC LIMIT $2`, workspaceID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query metric history: %w", err)
 	}

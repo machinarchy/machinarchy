@@ -24,8 +24,10 @@ func (s *Store) GetUserByIdentifier(ctx context.Context, identifier string) (*do
 }
 
 func (s *Store) getUser(ctx context.Context, predicate, value string) (*domain.User, error) {
-	query := `SELECT id, username, COALESCE(email, ''), password_hash,
-		COALESCE(reset_token, ''), reset_token_expires, created_at FROM users ` + predicate
+	query := `SELECT users.id, users.username, COALESCE(users.email, ''), users.password_hash,
+		COALESCE(users.reset_token, ''), users.reset_token_expires, users.created_at,
+		workspace_memberships.workspace_id, workspace_memberships.role
+		FROM users JOIN workspace_memberships ON workspace_memberships.user_id = users.id ` + predicate
 	user, err := scanUser(s.db.QueryRowContext(ctx, query, value))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
@@ -39,7 +41,12 @@ func (s *Store) getUser(ctx context.Context, predicate, value string) (*domain.U
 func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
 	username, email = strings.TrimSpace(username), strings.TrimSpace(email)
 	user := &domain.User{}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO users (username, email, password_hash)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin create user transaction: %w", err)
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `INSERT INTO users (username, email, password_hash)
 		VALUES ($1, NULLIF($2, ''), $3)
 		RETURNING id, username, COALESCE(email, ''), password_hash, created_at`,
 		username, email, passwordHash,
@@ -49,6 +56,23 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 			return nil, fmt.Errorf("%w: %v", domain.ErrUserAlreadyExists, err)
 		}
 		return nil, fmt.Errorf("insert user: %w", err)
+	}
+	err = tx.QueryRowContext(ctx, `UPDATE workspaces SET owner_user_id = $1, name = $2
+		WHERE id = 1 AND owner_user_id IS NULL RETURNING id`, user.ID, "workspace-"+username).Scan(&user.WorkspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `INSERT INTO workspaces (name, owner_user_id)
+			VALUES ($1, $2) RETURNING id`, "workspace-"+username, user.ID).Scan(&user.WorkspaceID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	user.Role = domain.RoleOwner
+	if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_memberships (workspace_id, user_id, role)
+		VALUES ($1, $2, $3)`, user.WorkspaceID, user.ID, string(domain.RoleOwner)); err != nil {
+		return nil, fmt.Errorf("create workspace membership: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create user transaction: %w", err)
 	}
 	return user, nil
 }
@@ -76,7 +100,7 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 	var resetToken sql.NullString
 	var resetExpiry sql.NullTime
 	if err := row.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash,
-		&resetToken, &resetExpiry, &user.CreatedAt); err != nil {
+		&resetToken, &resetExpiry, &user.CreatedAt, &user.WorkspaceID, &user.Role); err != nil {
 		return nil, err
 	}
 	user.ResetToken = resetToken.String

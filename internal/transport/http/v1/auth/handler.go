@@ -10,12 +10,13 @@ import (
 )
 
 type Handler struct {
-	authService  domain.AuthService
-	secureCookie bool
+	authService   domain.AuthService
+	secureCookie  bool
+	signupEnabled bool
 }
 
-func NewHandler(as domain.AuthService, secureCookie bool) *Handler {
-	return &Handler{authService: as, secureCookie: secureCookie}
+func NewHandler(as domain.AuthService, secureCookie, signupEnabled bool) *Handler {
+	return &Handler{authService: as, secureCookie: secureCookie, signupEnabled: signupEnabled}
 }
 
 type SignUpRequest struct {
@@ -74,10 +75,15 @@ func clearAuthCookie(c echo.Context, secure bool) {
 // @Param request body SignUpRequest true "Account details"
 // @Success 201 {object} domain.AuthTokenResponse
 // @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
 // @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /api/auth/signup [post]
 func (h *Handler) SignUp(c echo.Context) error {
+	if !h.signupEnabled {
+		return c.JSON(http.StatusForbidden, ErrorResponse{Error: "Account registration is disabled"})
+	}
+
 	var req SignUpRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Invalid request payload"})
@@ -160,13 +166,13 @@ func (h *Handler) Login(c echo.Context) error {
 // @Failure 500 {object} ErrorResponse
 // @Router /api/v1/me [get]
 func (h *Handler) GetMe(c echo.Context) error {
-	claims, ok := c.Get("user").(*domain.JWTCustomClaims)
-	if !ok || claims == nil {
+	username, ok := c.Get("username").(string)
+	if !ok || username == "" {
 		return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Unauthorized session configuration"})
 	}
 
 	ctx := c.Request().Context()
-	userResp, err := h.authService.VerifySession(ctx, claims.Username)
+	userResp, err := h.authService.VerifySession(ctx, username)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
 			return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Session user is no longer active"})

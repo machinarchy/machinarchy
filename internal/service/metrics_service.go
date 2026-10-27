@@ -38,9 +38,12 @@ func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, 
 	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity}, nil
 }
 
-func (s *metricsService) GetHistory(ctx context.Context, timeRange string) ([]domain.DataPoint, error) {
+func (s *metricsService) GetHistory(ctx context.Context, workspaceID int, timeRange string) ([]domain.DataPoint, error) {
 	if ctx == nil {
 		return nil, errors.New("metrics history context is required")
+	}
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
 	if s.metricStore == nil {
 		return nil, errors.New("metrics store is not configured")
@@ -59,10 +62,10 @@ func (s *metricsService) GetHistory(ctx context.Context, timeRange string) ([]do
 		return nil, fmt.Errorf("%w: unsupported metrics range %q", domain.ErrInvalidInput, timeRange)
 	}
 
-	return s.metricStore.GetStoredHistory(ctx, limit)
+	return s.metricStore.GetStoredHistory(ctx, workspaceID, limit)
 }
 
-func (s *metricsService) GetLiveDiagnostics(ctx context.Context, hostID int) (result *domain.HostRuntimeDiagnostics, retErr error) {
+func (s *metricsService) GetLiveDiagnostics(ctx context.Context, workspaceID, hostID int) (result *domain.HostRuntimeDiagnostics, retErr error) {
 	if ctx == nil {
 		return nil, errors.New("diagnostics context is required")
 	}
@@ -80,7 +83,7 @@ func (s *metricsService) GetLiveDiagnostics(ctx context.Context, hostID int) (re
 		span.End()
 	}()
 	// 1. Fetch host entity configuration records from DB
-	host, err := s.hostStore.GetHostByID(ctx, hostID)
+	host, err := s.hostStore.GetHostByIDInWorkspace(ctx, workspaceID, hostID)
 	if err != nil {
 		return nil, fmt.Errorf("host record inaccessible: %w", err)
 	}

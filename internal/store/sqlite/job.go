@@ -5,14 +5,23 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
 func (s *SQLiteStore) CreateJob(ctx context.Context, job *domain.Job) error {
-	if job == nil {
-		return fmt.Errorf("%w: job is required", domain.ErrInvalidInput)
+	if job == nil || job.WorkspaceID <= 0 || job.HostID <= 0 {
+		return fmt.Errorf("%w: job, workspace, and positive host ID are required", domain.ErrInvalidInput)
+	}
+	var hostExists bool
+	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM hosts
+		WHERE id = ? AND workspace_id = ?)`, strconv.Itoa(job.HostID), job.WorkspaceID).Scan(&hostExists); err != nil {
+		return fmt.Errorf("validate job host scope: %w", err)
+	}
+	if !hostExists {
+		return domain.ErrHostNotFound
 	}
 	status := job.Status
 	if status == "" {
@@ -23,8 +32,8 @@ func (s *SQLiteStore) CreateJob(ctx context.Context, job *domain.Job) error {
 		startedAt = job.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
 	result, err := s.DB.ExecContext(ctx, `INSERT INTO jobs
-		(host_id, command, status, triggered_by, started_at)
-		VALUES (?, ?, ?, ?, ?)`, job.HostID, job.Command, string(status), job.TriggeredBy, startedAt)
+		(workspace_id, host_id, command, status, triggered_by, started_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, job.WorkspaceID, job.HostID, job.Command, string(status), job.TriggeredBy, startedAt)
 	if err != nil {
 		return fmt.Errorf("insert job: %w", err)
 	}
@@ -46,12 +55,15 @@ func (s *SQLiteStore) UpdateJobResult(ctx context.Context, id int, status, resul
 	return requireRowsAffected(result, sql.ErrNoRows)
 }
 
-func (s *SQLiteStore) GetJobByID(ctx context.Context, id int) (*domain.Job, error) {
+func (s *SQLiteStore) GetJobByID(ctx context.Context, workspaceID, id int) (*domain.Job, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	var job domain.Job
 	var startedAt, finishedAt sql.NullString
-	err := s.DB.QueryRowContext(ctx, `SELECT id, host_id, command, status, result_log,
-		triggered_by, started_at, finished_at FROM jobs WHERE id = ?`, id).Scan(
-		&job.ID, &job.HostID, &job.Command, &job.Status, &job.ResultLog,
+	err := s.DB.QueryRowContext(ctx, `SELECT id, workspace_id, host_id, command, status, result_log,
+		triggered_by, started_at, finished_at FROM jobs WHERE id = ? AND workspace_id = ?`, id, workspaceID).Scan(
+		&job.ID, &job.WorkspaceID, &job.HostID, &job.Command, &job.Status, &job.ResultLog,
 		&job.TriggeredBy, &startedAt, &finishedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -70,15 +82,15 @@ func (s *SQLiteStore) GetJobByID(ctx context.Context, id int) (*domain.Job, erro
 }
 
 func (s *SQLiteStore) ListJobs(ctx context.Context, filter domain.JobFilter) ([]*domain.Job, int, error) {
-	if filter.Limit < 1 || filter.Limit > 100 || filter.Offset < 0 || filter.HostID < 0 {
+	if filter.WorkspaceID <= 0 || filter.Limit < 1 || filter.Limit > 100 || filter.Offset < 0 || filter.HostID < 0 {
 		return nil, 0, fmt.Errorf("%w: invalid job pagination filter", domain.ErrInvalidInput)
 	}
 	var total int
 	var err error
 	if filter.HostID == 0 {
-		err = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&total)
+		err = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE workspace_id = ?`, filter.WorkspaceID).Scan(&total)
 	} else {
-		err = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE host_id = ?`, filter.HostID).Scan(&total)
+		err = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE workspace_id = ? AND host_id = ?`, filter.WorkspaceID, filter.HostID).Scan(&total)
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("count jobs: %w", err)
@@ -86,13 +98,13 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter domain.JobFilter) ([]
 
 	var rows *sql.Rows
 	if filter.HostID == 0 {
-		rows, err = s.DB.QueryContext(ctx, `SELECT id, host_id, command, status, result_log,
-			triggered_by, started_at, finished_at FROM jobs ORDER BY id DESC LIMIT ? OFFSET ?`,
-			filter.Limit, filter.Offset)
+		rows, err = s.DB.QueryContext(ctx, `SELECT id, workspace_id, host_id, command, status, result_log,
+			triggered_by, started_at, finished_at FROM jobs WHERE workspace_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+			filter.WorkspaceID, filter.Limit, filter.Offset)
 	} else {
-		rows, err = s.DB.QueryContext(ctx, `SELECT id, host_id, command, status, result_log,
-			triggered_by, started_at, finished_at FROM jobs WHERE host_id = ?
-			ORDER BY id DESC LIMIT ? OFFSET ?`, filter.HostID, filter.Limit, filter.Offset)
+		rows, err = s.DB.QueryContext(ctx, `SELECT id, workspace_id, host_id, command, status, result_log,
+			triggered_by, started_at, finished_at FROM jobs WHERE workspace_id = ? AND host_id = ?
+			ORDER BY id DESC LIMIT ? OFFSET ?`, filter.WorkspaceID, filter.HostID, filter.Limit, filter.Offset)
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("list jobs: %w", err)
@@ -103,7 +115,7 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter domain.JobFilter) ([]
 	for rows.Next() {
 		job := new(domain.Job)
 		var startedAt, finishedAt sql.NullString
-		if err := rows.Scan(&job.ID, &job.HostID, &job.Command, &job.Status,
+		if err := rows.Scan(&job.ID, &job.WorkspaceID, &job.HostID, &job.Command, &job.Status,
 			&job.ResultLog, &job.TriggeredBy, &startedAt, &finishedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan job row: %w", err)
 		}

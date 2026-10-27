@@ -32,19 +32,18 @@ type HostRuntimeDiagnostics struct {
 	DiskUsagePct float64   `json:"diskUsagePct"`
 }
 
-
 type TelemetryReader interface {
 	ReadCurrentStats() SystemStats
 }
 
 // MetricsRepository defines how your app queries and stores metrics in SQLite
 type MetricsStore interface {
-	SaveMetricPoint(ctx context.Context, cpuPct, memPct float64) error
-	GetStoredHistory(ctx context.Context, limit int) ([]DataPoint, error)
+	SaveMetricPoint(ctx context.Context, workspaceID int, cpuPct, memPct float64) error
+	GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]DataPoint, error)
 }
 
 // MetricsService handles your time-range conversion logic
 type MetricsService interface {
-	GetHistory(ctx context.Context, timeRange string) ([]DataPoint, error)
-	GetLiveDiagnostics(ctx context.Context, hostID int) (*HostRuntimeDiagnostics, error)
+	GetHistory(ctx context.Context, workspaceID int, timeRange string) ([]DataPoint, error)
+	GetLiveDiagnostics(ctx context.Context, workspaceID, hostID int) (*HostRuntimeDiagnostics, error)
 }

@@ -57,6 +57,7 @@ type DatabaseConfig struct {
 type Config struct {
 	ListenAddr       string
 	Environment      Environment
+	SignupEnabled    bool
 	OperatorToken    string
 	EncryptionSecret string
 	LogLevel         string
@@ -89,6 +90,20 @@ func Load() (Config, error) {
 	if err := cfg.Environment.Validate(); err != nil {
 		return Config{}, err
 	}
+
+	// Public self-registration is useful for local development, but a new
+	// account currently has the same API access as every existing account.
+	// Require an explicit production opt-in until resource-level authorization
+	// is implemented.
+	signupDefault := "true"
+	if cfg.Environment == Production {
+		signupDefault = "false"
+	}
+	signupEnabled, err := strconv.ParseBool(GetEnv("MACHINARCHY_SIGNUP_ENABLED", signupDefault))
+	if err != nil {
+		return Config{}, errors.New("MACHINARCHY_SIGNUP_ENABLED must be true or false")
+	}
+	cfg.SignupEnabled = signupEnabled
 
 	if err := cfg.Database.Engine.Validate(); err != nil {
 		return Config{}, err

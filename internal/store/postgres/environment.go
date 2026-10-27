@@ -10,11 +10,11 @@ import (
 )
 
 func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Environment) error {
-	if environment == nil {
-		return fmt.Errorf("%w: environment is required", domain.ErrInvalidInput)
+	if environment == nil || environment.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO environments (name, description)
-		VALUES ($1, $2) RETURNING id, created_at`, environment.Name, environment.Description).
+	err := s.db.QueryRowContext(ctx, `INSERT INTO environments (workspace_id, name, description)
+		VALUES ($1, $2, $3) RETURNING id, created_at`, environment.WorkspaceID, environment.Name, environment.Description).
 		Scan(&environment.ID, &environment.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -25,11 +25,14 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 	return nil
 }
 
-func (s *Store) GetEnvironmentByID(ctx context.Context, id int) (*domain.Environment, error) {
+func (s *Store) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*domain.Environment, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
 	environment := new(domain.Environment)
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, description, created_at
-		FROM environments WHERE id = $1`, id).Scan(
-		&environment.ID, &environment.Name, &environment.Description, &environment.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, name, description, created_at
+		FROM environments WHERE id = $1 AND workspace_id = $2`, id, workspaceID).Scan(
+		&environment.ID, &environment.WorkspaceID, &environment.Name, &environment.Description, &environment.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrEnvironmentNotFound
 	}
@@ -39,9 +42,12 @@ func (s *Store) GetEnvironmentByID(ctx context.Context, id int) (*domain.Environ
 	return environment, nil
 }
 
-func (s *Store) ListEnvironments(ctx context.Context) ([]*domain.Environment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, description, created_at
-		FROM environments ORDER BY id`)
+func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domain.Environment, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, name, description, created_at
+		FROM environments WHERE workspace_id = $1 ORDER BY id`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
 	}
@@ -50,7 +56,7 @@ func (s *Store) ListEnvironments(ctx context.Context) ([]*domain.Environment, er
 	environments := make([]*domain.Environment, 0)
 	for rows.Next() {
 		environment := new(domain.Environment)
-		if err := rows.Scan(&environment.ID, &environment.Name,
+		if err := rows.Scan(&environment.ID, &environment.WorkspaceID, &environment.Name,
 			&environment.Description, &environment.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan environment row: %w", err)
 		}
@@ -63,19 +69,26 @@ func (s *Store) ListEnvironments(ctx context.Context) ([]*domain.Environment, er
 }
 
 func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
-	if environment == nil {
-		return fmt.Errorf("%w: environment is required", domain.ErrInvalidInput)
+	if environment == nil || environment.WorkspaceID <= 0 {
+		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE environments SET name = $1,
-		description = $2 WHERE id = $3`, environment.Name, environment.Description, environment.ID)
+		description = $2 WHERE id = $3 AND workspace_id = $4`,
+		environment.Name, environment.Description, environment.ID, environment.WorkspaceID)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+		}
 		return fmt.Errorf("update environment %d: %w", environment.ID, err)
 	}
 	return affected(result, domain.ErrEnvironmentNotFound)
 }
 
-func (s *Store) DeleteEnvironment(ctx context.Context, id int) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM environments WHERE id = $1`, id)
+func (s *Store) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
+	if workspaceID <= 0 {
+		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM environments WHERE id = $1 AND workspace_id = $2`, id, workspaceID)
 	if err != nil {
 		return fmt.Errorf("delete environment %d: %w", id, err)
 	}
