@@ -231,48 +231,75 @@ func (h *Handler) ListJobsForHost(c echo.Context) error {
 	})
 }
 
-// BulkRegisterHosts handles POST /api/v1/hosts/bulk requests with partial-failure reporting.
+// BulkHostsRequest is the body of a bulk registration request.
+type BulkHostsRequest struct {
+	Hosts []HostPayload `json:"hosts"`
+	// ValidateOnly checks records and duplicates without contacting hosts or
+	// storing anything.
+	ValidateOnly bool `json:"validate_only,omitempty"`
+}
+
+// BulkCreate registers up to 100 hosts with per-record results.
 // @Summary Bulk register hosts
-// @Description Register multiple managed hosts in a single batch with partial-failure isolation.
-// @Tags hosts
+// @Description Registers many hosts in one request with partial-success semantics: each record is validated, checked for duplicates (name or address:port, against the inventory and earlier records), SSH-verified against its pinned fingerprint, and stored independently. The response is 200 whenever the request itself is valid; inspect each result's status. Set validate_only to check records without contacting hosts or storing anything. SecretData is never returned. No commands are executed.
+// @Tags Hosts
 // @Accept json
 // @Produce json
-// @Param request body object true "Batch of host objects"
+// @Security BearerAuth
+// @Param request body BulkHostsRequest true "Up to 100 host records"
 // @Success 200 {object} domain.BulkImportResponse
-// @Failure 400 {object} map[string]string "Invalid payload or batch size limit exceeded"
-// @Failure 500 {object} map[string]string "Internal server error"
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts/bulk [post]
 func (h *Handler) BulkCreate(c echo.Context) error {
-	var req struct {
-		Hosts []domain.Host `json:"hosts"`
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	}
-
+	var req BulkHostsRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "invalid request body format",
-		})
+		return badRequest(c, "invalid request body")
 	}
-
 	if len(req.Hosts) == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "hosts list cannot be empty",
-		})
+		return badRequest(c, "hosts list cannot be empty")
+	}
+	if len(req.Hosts) > service.MaxBulkRegisterHosts {
+		return badRequest(c, "maximum batch size exceeded (limit: "+strconv.Itoa(service.MaxBulkRegisterHosts)+" hosts per request)")
 	}
 
-	// Enforce strict upper bound to prevent memory exhaustion and connection pool starvation
-	if len(req.Hosts) > 100 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "maximum batch size exceeded (limit: 100 hosts per request)",
-		})
+	// Each record is converted and checked independently; a bad record becomes a
+	// per-record failure instead of rejecting the batch. Environment lookups are
+	// cached so a large batch does not repeat them.
+	environments := make(map[int]error)
+	entries := make([]domain.BulkHostEntry, len(req.Hosts))
+	for i, payload := range req.Hosts {
+		host, err := payload.host("")
+		if err != nil {
+			entries[i] = domain.BulkHostEntry{PreError: err}
+			continue
+		}
+		host.WorkspaceID = principal.WorkspaceID
+		envErr, cached := environments[host.EnvironmentID]
+		if !cached {
+			envErr = h.checkEnvironment(c, principal.WorkspaceID, host.EnvironmentID)
+			environments[host.EnvironmentID] = envErr
+		}
+		if envErr != nil {
+			entries[i] = domain.BulkHostEntry{Host: host, PreError: envErr}
+			continue
+		}
+		entries[i] = domain.BulkHostEntry{Host: host}
 	}
 
-	res, err := h.service.BulkRegisterHosts(c.Request().Context(), req.Hosts)
+	res, err := h.service.BulkRegisterHosts(c.Request().Context(), principal.WorkspaceID, entries,
+		service.BulkRegisterOptions{ValidateOnly: req.ValidateOnly})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": err.Error(),
-		})
+		if errors.Is(err, domain.ErrInvalidInput) {
+			return badRequest(c, err.Error())
+		}
+		return internalError(c)
 	}
-
 	return c.JSON(http.StatusOK, res)
 }
 
@@ -325,20 +352,37 @@ func queryInt(c echo.Context, name string, fallback int) (int, error) {
 }
 
 func (h *Handler) validateEnvironment(c echo.Context, workspaceID, environmentID int) error {
+	if err := h.checkEnvironment(c, workspaceID, environmentID); err != nil {
+		if errors.Is(err, errEnvironmentLookup) {
+			return internalError(c)
+		}
+		return badRequest(c, err.Error())
+	}
+	return nil
+}
+
+// errEnvironmentLookup marks an infrastructure failure, as opposed to a bad
+// reference supplied by the client.
+var errEnvironmentLookup = errors.New("environment lookup failed")
+
+// checkEnvironment verifies an environment reference without writing a response.
+// Client mistakes return a safe message; infrastructure errors wrap
+// errEnvironmentLookup.
+func (h *Handler) checkEnvironment(c echo.Context, workspaceID, environmentID int) error {
 	if environmentID < 0 {
-		return badRequest(c, "environment ID must be non-negative")
+		return errors.New("environment ID must be non-negative")
 	}
 	if environmentID == 0 {
 		return nil
 	}
 	if h.environments == nil {
-		return internalError(c)
+		return errEnvironmentLookup
 	}
 	if _, err := h.environments.GetEnvironmentByID(c.Request().Context(), workspaceID, environmentID); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
-			return badRequest(c, "environment not found in this workspace")
+			return errors.New("environment not found in this workspace")
 		}
-		return internalError(c)
+		return errEnvironmentLookup
 	}
 	return nil
 }

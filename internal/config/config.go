@@ -63,6 +63,16 @@ type Config struct {
 	LogLevel         string
 	Database         DatabaseConfig
 	EventBroker      EventBrokerConfig
+	BootstrapAdmin   BootstrapAdminConfig
+}
+
+// BootstrapAdminConfig describes the optional first owner account. The account is
+// only created when the default workspace has no owner, so leaving the password
+// configured after the first start is harmless but unnecessary.
+type BootstrapAdminConfig struct {
+	Username string
+	Email    string
+	Password string
 }
 
 type EventBrokerConfig struct {
@@ -130,6 +140,20 @@ func Load() (Config, error) {
 	}
 	if len([]byte(cfg.EncryptionSecret)) < 32 || strings.ContainsAny(cfg.EncryptionSecret, " \t\r\n") {
 		return Config{}, errors.New("MACHINARCHY_ENCRYPTION_SECRET must be at least 32 bytes with no whitespace")
+	}
+
+	cfg.BootstrapAdmin = BootstrapAdminConfig{
+		Username: strings.ToLower(GetEnv("MACHINARCHY_BOOTSTRAP_ADMIN_USERNAME", "admin")),
+		Email:    strings.ToLower(GetEnv("MACHINARCHY_BOOTSTRAP_ADMIN_EMAIL")),
+		Password: GetEnv("MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD"),
+	}
+	if cfg.BootstrapAdmin.Password != "" {
+		if n := len([]byte(cfg.BootstrapAdmin.Password)); n < 12 || n > 72 {
+			return Config{}, errors.New("MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD must be between 12 and 72 bytes")
+		}
+		if strings.ContainsAny(cfg.BootstrapAdmin.Username, " \t\r\n") {
+			return Config{}, errors.New("MACHINARCHY_BOOTSTRAP_ADMIN_USERNAME must not contain whitespace")
+		}
 	}
 
 	// Log System Levels Check

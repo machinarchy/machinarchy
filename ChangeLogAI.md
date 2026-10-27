@@ -2,6 +2,28 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — Single shared workspace, bootstrap owner, and hardened bulk host registration
+
+### Changes in this update
+
+- Replaced the per-signup workspace logic with one shared workspace: `CreateUser` (SQLite and PostgreSQL) now inserts the user and a `reader` membership in `domain.DefaultWorkspaceID` and creates no workspace rows. This also fixes the PostgreSQL path that stored the `owner` role while returning `reader`.
+- Removed the hardcoded `admin`/default-password seeding and the user-label table/queries. The first owner is now created only from `MACHINARCHY_BOOTSTRAP_ADMIN_*` configuration via `service.BootstrapOwner`, only while the workspace has no owner, with an explicit error if the username already exists as a non-owner. A startup warning is logged when no owner exists.
+- Added `UserStore.UpdateWorkspaceMemberRole` and `CountWorkspaceOwners` for both engines. No migration changes: the earlier in-place edit of SQLite migration `000002` was reverted.
+- Reworked `POST /api/v1/hosts/bulk`: it now accepts `HostPayload` records (credentials and fingerprint can be supplied), sets the workspace from the authenticated principal, validates environments per record, supports `validate_only`, detects duplicates (name or address:port, in the inventory and in the batch), uses a bounded worker pool, preserves request order, reports every record, and returns sanitized errors.
+- Made the unwired fleet placeholder safe: it now reports `ErrExecutionNotImplemented` instead of success, takes the caller's workspace, and no longer records the command in trace attributes.
+- Restored the workspace-isolation and API-token integration test (adapted to a second workspace created directly) and added tests for bulk registration, bootstrap owner, shared-workspace signups, and bootstrap config.
+- Updated `.env.example` (bootstrap variables and `MACHINARCHY_BROKER_URL`), `docs/architecture.md`, and `docs/ROADMAP.md`.
+
+### Known limitations
+
+- Existing databases keep their per-account workspaces; only new signups join workspace 1. There is still no API to promote members.
+- Duplicate detection is read-then-write; the schema has no uniqueness constraint for hosts.
+- `docs/swagger.json` and `docs/swagger.yaml` were not regenerated; run `make api-docs`.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `gofmt`/`make fmt`, `make vet`, `make test`, and `make api-docs` before merging.
+
 ## 2026-10-27 — Roadmap: build artifact checksums
 
 ### Changes in this update

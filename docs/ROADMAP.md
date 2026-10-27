@@ -46,7 +46,7 @@ Preserve the later multi-tenant idea: organizations may eventually have separate
 - Workspaces currently have one account owner each; there is no member invitation, workspace switching, or administrator workflow for assigning human operator/reader roles. API tokens provide the current non-owner automation identities.
 - Public account signup defaults off in production and on in development. When deliberately enabled, each new account receives an isolated workspace.
 - Workspace authorization is covered by SQLite integration tests, but PostgreSQL migration/repository integration and exhaustive HTTP denial-path coverage are still outstanding.
-- Host listing and environment listing are unpaginated. Host registration tests one SSH connection synchronously. Bulk import and per-item result reporting do not exist.
+- Host listing and environment listing are unpaginated. Single registration tests one SSH connection synchronously. Bounded synchronous batch registration with per-record results exists (`POST /api/v1/hosts/bulk`); YAML/CSV import, asynchronous/resumable imports, and a database uniqueness constraint for hosts do not.
 - No public API submits remote commands. The agent process is a placeholder; job routes read existing rows only.
 - The control-manager currently logs reconnection events rather than reconciling host state. Host persistence and event publishing do not share an outbox transaction.
 - The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Target address policy, DNS rebinding protection, audit records, and credential rotation/secret references need explicit designs.
@@ -116,7 +116,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** A malformed or unreachable record does not erase successes unless atomic mode is explicitly selected; repeated imports produce documented outcomes; cancellation stops queued work and reports completed/in-flight items; maximum concurrency and memory are bounded; no command executes during registration.
 - **Security considerations:** Enforce body/file size limits, reject unsafe YAML features, sanitize errors, constrain egress, and audit who imported which records.
 - **Tests required:** Table-driven malformed/duplicate/partial-failure tests, cancellation and concurrency-limit tests, parser fuzzing, and representative 100-host import benchmark.
-- **Status:** Planned.
+- **Status:** In progress. Bounded synchronous batch registration (max 100, partial success, `validate_only`, duplicate detection, bounded workers, sanitized per-record errors) is implemented. Not done: YAML/CSV parsing, audit of who imported what, parser fuzzing, a 100-host benchmark, resumable asynchronous imports, and a database uniqueness constraint.
 
 ### Phase 3 — Secure SSH connectivity
 

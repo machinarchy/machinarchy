@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -17,9 +18,16 @@ type FleetStore interface {
 	ListHosts(ctx context.Context) ([]domain.Host, error)
 }
 
+// FleetService runs operations across selected hosts.
+//
+// Not wired into the API yet: remote execution is not implemented, so
+// ExecuteOnFleet reports ErrExecutionNotImplemented for every selected host.
 type FleetService interface {
-	ExecuteOnFleet(ctx context.Context, selector domain.HostSelector, command string) (*domain.FleetExecutionResult, error)
+	ExecuteOnFleet(ctx context.Context, workspaceID int, selector domain.HostSelector, command string) (*domain.FleetExecutionResult, error)
 }
+
+// ErrExecutionNotImplemented is returned until an SSH execution transport exists.
+var ErrExecutionNotImplemented = errors.New("remote command execution is not implemented")
 
 type fleetService struct {
 	repo     domain.HostStore
@@ -41,14 +49,15 @@ type FleetExecutionResult struct {
 	Results       []domain.HostJobResult `json:"results"`
 }
 
-func (s *fleetService) ExecuteOnFleet(ctx context.Context, selector domain.HostSelector, command string) (*domain.FleetExecutionResult, error) {
+func (s *fleetService) ExecuteOnFleet(ctx context.Context, workspaceID int, selector domain.HostSelector, command string) (*domain.FleetExecutionResult, error) {
+	// The command text is deliberately not recorded: it may contain secrets.
 	ctx, span := otel.Tracer("machinarchy/internal/service").Start(ctx, "fleet.execute",
-		trace.WithAttributes(attribute.String("command", command)),
+		trace.WithAttributes(attribute.Int("workspace.id", workspaceID)),
 	)
 	defer span.End()
 
 	// 1. Fetch all hosts from inventory (or query via optimized store method if available)
-	hosts, err := s.repo.ListAllHosts(ctx, domain.DefaultWorkspaceID)
+	hosts, err := s.repo.ListAllHosts(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list inventory for fleet execution: %w", err)
 	}
@@ -126,5 +135,6 @@ func (s *fleetService) ExecuteOnFleet(ctx context.Context, selector domain.HostS
 
 func runRemoteCommand(ctx context.Context, h domain.Host, command string) error {
 	// Reuses existing dial parameters and sshclient execution logic safely
-	return nil // Placeholder for transport execution binding
+	// A placeholder must never report success for work that did not happen.
+	return ErrExecutionNotImplemented
 }

@@ -184,3 +184,39 @@ func TestSQLiteConnectionLifetimeDefaultsToDisabled(t *testing.T) {
 		t.Fatalf("SQLite connection lifetime = %s, want 0s", cfg.Database.ConnMaxLifetime)
 	}
 }
+
+func TestLoadBootstrapAdmin(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.BootstrapAdmin.Password != "" {
+			t.Fatal("a bootstrap password must never have a built-in default")
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BOOTSTRAP_ADMIN_USERNAME", " Root ")
+		t.Setenv("MACHINARCHY_BOOTSTRAP_ADMIN_EMAIL", "Root@Example.test")
+		t.Setenv("MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD", "a-long-test-password")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.BootstrapAdmin.Username != "root" || cfg.BootstrapAdmin.Email != "root@example.test" {
+			t.Fatalf("bootstrap identity not normalized: %+v", cfg.BootstrapAdmin)
+		}
+	})
+
+	t.Run("rejects a short password", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD", "short")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() accepted a bootstrap password shorter than 12 bytes")
+		}
+	})
+}

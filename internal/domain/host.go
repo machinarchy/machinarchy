@@ -168,27 +168,75 @@ func (h *Host) SSHValidate() error {
 	return nil
 }
 
+// HostResultStatus is the outcome of one record in a bulk host operation.
 type HostResultStatus string
 
 const (
-	StatusSuccess   HostResultStatus = "success"
-	StatusFailed    HostResultStatus = "failed"
+	// StatusSuccess means the host passed SSH verification and was persisted.
+	StatusSuccess HostResultStatus = "success"
+	// StatusValid means a validate-only run accepted the record; nothing was
+	// contacted or stored.
+	StatusValid HostResultStatus = "valid"
+	// StatusFailed means the record was rejected or could not be verified.
+	StatusFailed HostResultStatus = "failed"
+	// StatusDuplicate means the name or address:port already exists in the
+	// inventory or earlier in the same batch.
 	StatusDuplicate HostResultStatus = "duplicate"
 )
 
+// HostOperationResult reports one record of a bulk operation. Index is the
+// zero-based position of the record in the request.
 type HostOperationResult struct {
+	Index    int              `json:"index"`
+	Name     string           `json:"name"`
 	Hostname string           `json:"hostname"`
 	Address  string           `json:"address"`
 	Status   HostResultStatus `json:"status"`
+	ID       string           `json:"id,omitempty"`
 	Error    string           `json:"error,omitempty"`
 }
 
+// BulkHostEntry is one candidate record. PreError carries a failure found
+// while decoding or pre-validating the record so it is still reported at its
+// position instead of failing the whole request.
+type BulkHostEntry struct {
+	Host     *Host
+	PreError error
+}
+
+// BulkImportResponse aggregates per-record results. Results is always in
+// request order and has one element per submitted record.
 type BulkImportResponse struct {
+	ValidateOnly   bool                  `json:"validate_only"`
 	TotalProcessed int                   `json:"total_processed"`
 	SuccessCount   int                   `json:"success_count"`
+	ValidCount     int                   `json:"valid_count"`
 	FailureCount   int                   `json:"failure_count"`
 	DuplicateCount int                   `json:"duplicate_count"`
 	Results        []HostOperationResult `json:"results"`
+}
+
+// NewBulkImportResponse derives the counters from results so they can never
+// disagree with the per-record outcomes.
+func NewBulkImportResponse(validateOnly bool, results []HostOperationResult) *BulkImportResponse {
+	response := &BulkImportResponse{
+		ValidateOnly:   validateOnly,
+		TotalProcessed: len(results),
+		Results:        results,
+	}
+	for _, result := range results {
+		switch result.Status {
+		case StatusSuccess:
+			response.SuccessCount++
+		case StatusValid:
+			response.ValidCount++
+		case StatusDuplicate:
+			response.DuplicateCount++
+		default:
+			response.FailureCount++
+		}
+	}
+	return response
 }
 
 // HostStore defines the persistence contract required by Machinarchy.

@@ -13,6 +13,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/broker"
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/controlmanager"
+	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/service"
 	"github.com/machinarchy/machinarchy/internal/store"
 	httpserver "github.com/machinarchy/machinarchy/internal/transport/http"
@@ -94,9 +95,7 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("configure SSH concurrency limit: %w", err)
 	}
 	authService := service.NewAuthService(r.stores.Users, cfg.OperatorToken, 24*time.Hour)
-	// Seed the admin account
-	err = authService.EnsureAdminUser()
-	if err != nil {
+	if err := r.ensureOwner(cfg); err != nil {
 		return nil, err
 	}
 
@@ -153,4 +152,32 @@ func wrapCloseError(operation string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+// ensureOwner creates the configured bootstrap owner when the default workspace
+// has none. Without bootstrap credentials it only warns, because every
+// self-registered account starts as a read-only member.
+func (r *Runtime) ensureOwner(cfg config.Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	admin := cfg.BootstrapAdmin
+	if admin.Password != "" {
+		created, err := service.BootstrapOwner(ctx, r.stores.Users, admin.Username, admin.Email, admin.Password)
+		if err != nil {
+			return fmt.Errorf("bootstrap workspace owner: %w", err)
+		}
+		if created {
+			slog.Info("bootstrap workspace owner created", "username", admin.Username)
+		}
+		return nil
+	}
+	owners, err := r.stores.Users.CountWorkspaceOwners(ctx, domain.DefaultWorkspaceID)
+	if err != nil {
+		return fmt.Errorf("check workspace owners: %w", err)
+	}
+	if owners == 0 {
+		slog.Warn("no workspace owner exists; set MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD to create one")
+	}
+	return nil
 }

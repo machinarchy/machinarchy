@@ -7,13 +7,6 @@ CREATE TABLE IF NOT EXISTS users (
     reset_token_expires TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS user_labels (
-    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    key VARCHAR(255) NOT NULL,
-    value VARCHAR(255) NOT NULL,
-    PRIMARY KEY (user_id, key)
-);
-
 
 CREATE TABLE IF NOT EXISTS environments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,5 +35,3 @@ CREATE TABLE IF NOT EXISTS metrics_history (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_host_id_started_at ON jobs(host_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_metrics_history_timestamp ON metrics_history(timestamp DESC);
--- Index to make finding users by label lightning fast
-CREATE INDEX IF NOT EXISTS idx_user_labels_key_value ON user_labels(key, value);

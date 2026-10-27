@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,13 +41,11 @@ func (s *Store) getUser(ctx context.Context, predicate, value string) (*domain.U
 func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
 	username, email = strings.TrimSpace(username), strings.TrimSpace(email)
 	user := &domain.User{}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin create user transaction: %w", err)
 	}
 	defer tx.Rollback()
-
 	err = tx.QueryRowContext(ctx, `INSERT INTO users (username, email, password_hash)
 		VALUES ($1, NULLIF($2, ''), $3)
 		RETURNING id, username, COALESCE(email, ''), password_hash, created_at`,
@@ -60,30 +57,37 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 		}
 		return nil, fmt.Errorf("insert user: %w", err)
 	}
-
-	err = tx.QueryRowContext(ctx, `UPDATE workspaces SET owner_user_id = $1, name = $2
-		WHERE id = 1 AND owner_user_id IS NULL RETURNING id`, user.ID, "workspace-"+username).Scan(&user.WorkspaceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `INSERT INTO workspaces (name, owner_user_id)
-			VALUES ($1, $2) RETURNING id`, "workspace-"+username, user.ID).Scan(&user.WorkspaceID)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("create user workspace: %w", err)
-	}
-
-	// [hard fix] Force every user to belong to Workspace ID 1 (Default Workspace)
-	user.WorkspaceID = 1
-	// user.Role = domain.RoleOwner
+	// Single shared workspace: every new account joins the default workspace with
+	// the least-privileged role. Owners are created by the bootstrap flow or
+	// promoted with UpdateWorkspaceMemberRole.
+	user.WorkspaceID = domain.DefaultWorkspaceID
 	user.Role = domain.RoleReader
-
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_memberships (workspace_id, user_id, role)
-		VALUES ($1, $2, $3)`, user.WorkspaceID, user.ID, string(domain.RoleOwner)); err != nil {
+		VALUES ($1, $2, $3)`, user.WorkspaceID, user.ID, string(user.Role)); err != nil {
 		return nil, fmt.Errorf("create workspace membership: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create user transaction: %w", err)
 	}
 	return user, nil
+}
+
+func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspace_memberships SET role = $1
+		WHERE workspace_id = $2 AND user_id = $3`, string(role), workspaceID, userID)
+	if err != nil {
+		return fmt.Errorf("update workspace member role: %w", err)
+	}
+	return affected(result, domain.ErrUserNotFound)
+}
+
+func (s *Store) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspace_memberships
+		WHERE workspace_id = $1 AND role = $2`, workspaceID, string(domain.RoleOwner)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count workspace owners: %w", err)
+	}
+	return count, nil
 }
 
 func (s *Store) SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error {
@@ -117,106 +121,4 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 		user.ResetTokenExpires = resetExpiry.Time
 	}
 	return user, nil
-}
-
-const userColumns = `
-	users.id, 
-	users.username, 
-	COALESCE(users.email, ''), 
-	users.password_hash,
-	COALESCE(users.reset_token, ''), 
-	users.reset_token_expires, 
-	users.created_at,
-	workspace_memberships.workspace_id, 
-	workspace_memberships.role,
-	COALESCE((SELECT jsonb_object_agg(key, value)::text FROM user_labels WHERE user_labels.user_id = users.id), '{}')
-`
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func (s *Store) scanUserRow(scanner rowScanner) (*domain.User, error) {
-	user := new(domain.User)
-	var expires sql.NullString
-	var createdAt string
-	var role string
-	var labelsJSON string
-
-	if err := scanner.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash,
-		&user.ResetToken, &expires, &createdAt, &user.WorkspaceID, &role, &labelsJSON); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, sql.ErrNoRows
-		}
-		return nil, fmt.Errorf("scan user row: %w", err)
-	}
-
-	// Parse JSON labels string into map[string]string
-	if labelsJSON != "" && labelsJSON != "{}" {
-		if err := json.Unmarshal([]byte(labelsJSON), &user.Labels); err != nil {
-			return nil, fmt.Errorf("parse user labels json: %w", err)
-		}
-	}
-
-	if expires.Valid && expires.String != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, expires.String)
-		if err != nil {
-			return nil, fmt.Errorf("parse user reset token expiry: %w", err)
-		}
-		user.ResetTokenExpires = parsed
-	}
-
-	var err error
-	user.Role = domain.Role(role)
-	if user.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
-		return nil, fmt.Errorf("parse user creation time: %w", err)
-	}
-
-	return user, nil
-}
-
-// GetUsersByLabel queries all users matching a specific label key-value pair in Postgres.
-func (s *Store) GetUsersByLabel(ctx context.Context, key, value string) ([]*domain.User, error) {
-	query := `
-		SELECT ` + userColumns + ` 
-		FROM users
-		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
-		JOIN user_labels ON user_labels.user_id = users.id
-		WHERE user_labels.key = $1 AND user_labels.value = $2 AND workspace_memberships.workspace_id = 1`
-
-	rows, err := s.db.QueryContext(ctx, query, strings.TrimSpace(key), strings.TrimSpace(value))
-	if err != nil {
-		return nil, fmt.Errorf("query users by label: %w", err)
-	}
-	defer rows.Close()
-
-	var users []*domain.User
-	for rows.Next() {
-		user, err := s.scanUserRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, user)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate users by label rows: %w", err)
-	}
-
-	return users, nil
-}
-
-// SetUserLabel assigns or updates a key-value label on a user in Postgres.
-func (s *Store) SetUserLabel(ctx context.Context, userID int, key, value string) error {
-	query := `
-		INSERT INTO user_labels (user_id, key, value)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (user_id, key) 
-		DO UPDATE SET value = EXCLUDED.value`
-
-	_, err := s.db.ExecContext(ctx, query, userID, strings.TrimSpace(key), strings.TrimSpace(value))
-	if err != nil {
-		return fmt.Errorf("set user label: %w", err)
-	}
-	return nil
 }
