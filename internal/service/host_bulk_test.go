@@ -151,11 +151,11 @@ func TestBulkRegisterDetectsDuplicatesInBatchAndInventory(t *testing.T) {
 
 	entries := []domain.BulkHostEntry{
 		bulkHost("web-01", "10.0.0.1"),
-		bulkHost("WEB-01", "10.0.0.2"),  // same name, different case
-		bulkHost("web-02", "10.0.0.1"),  // same address:port as the first record
-		bulkHost("db-new", "10.0.1.1"),  // same address:port as an existing host
-		bulkHost("db-01", "10.0.1.99"),  // same name as an existing host
-		bulkHost("web-03", "10.0.0.1"),  // same address again, but...
+		bulkHost("WEB-01", "10.0.0.2"), // same name, different case
+		bulkHost("web-02", "10.0.0.1"), // same address:port as the first record
+		bulkHost("db-new", "10.0.1.1"), // same address:port as an existing host
+		bulkHost("db-01", "10.0.1.99"), // same name as an existing host
+		bulkHost("web-03", "10.0.0.1"), // same address again, but...
 	}
 	entries[5].Host.SSH.Port = 2222 // ...a different port is a different target
 
