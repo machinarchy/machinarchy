@@ -231,6 +231,51 @@ func (h *Handler) ListJobsForHost(c echo.Context) error {
 	})
 }
 
+// BulkRegisterHosts handles POST /api/v1/hosts/bulk requests with partial-failure reporting.
+// @Summary Bulk register hosts
+// @Description Register multiple managed hosts in a single batch with partial-failure isolation.
+// @Tags hosts
+// @Accept json
+// @Produce json
+// @Param request body object true "Batch of host objects"
+// @Success 200 {object} domain.BulkImportResponse
+// @Failure 400 {object} map[string]string "Invalid payload or batch size limit exceeded"
+// @Failure 500 {object} map[string]string "Internal server error"
+// @Router /api/v1/hosts/bulk [post]
+func (h *Handler) BulkCreate(c echo.Context) error {
+	var req struct {
+		Hosts []domain.Host `json:"hosts"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid request body format",
+		})
+	}
+
+	if len(req.Hosts) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "hosts list cannot be empty",
+		})
+	}
+
+	// Enforce strict upper bound to prevent memory exhaustion and connection pool starvation
+	if len(req.Hosts) > 100 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "maximum batch size exceeded (limit: 100 hosts per request)",
+		})
+	}
+
+	res, err := h.service.BulkRegisterHosts(c.Request().Context(), req.Hosts)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, res)
+}
+
 func (p HostPayload) host(id string) (*domain.Host, error) {
 	name := strings.TrimSpace(p.Name)
 	address := strings.TrimSpace(p.IP)

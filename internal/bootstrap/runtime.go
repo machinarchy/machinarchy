@@ -94,6 +94,12 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("configure SSH concurrency limit: %w", err)
 	}
 	authService := service.NewAuthService(r.stores.Users, cfg.OperatorToken, 24*time.Hour)
+	// Seed the admin account
+	err = authService.EnsureAdminUser()
+	if err != nil {
+		return nil, err
+	}
+
 	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("construct host service: %w", err)

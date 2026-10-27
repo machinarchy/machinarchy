@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+const (
+	// DefaultWorkspaceID ensures single-tenant operations work automatically
+	// while keeping multi-tenant database structures intact for future phases.
+	DefaultWorkspaceID = 1
+)
+
 // Security Architecture Custom Domain Errors
 var (
 	ErrInvalidInput          = errors.New("host validation constraint failed")
@@ -160,6 +166,29 @@ func (h *Host) SSHValidate() error {
 	}
 
 	return nil
+}
+
+type HostResultStatus string
+
+const (
+	StatusSuccess   HostResultStatus = "success"
+	StatusFailed    HostResultStatus = "failed"
+	StatusDuplicate HostResultStatus = "duplicate"
+)
+
+type HostOperationResult struct {
+	Hostname string           `json:"hostname"`
+	Address  string           `json:"address"`
+	Status   HostResultStatus `json:"status"`
+	Error    string           `json:"error,omitempty"`
+}
+
+type BulkImportResponse struct {
+	TotalProcessed int                   `json:"total_processed"`
+	SuccessCount   int                   `json:"success_count"`
+	FailureCount   int                   `json:"failure_count"`
+	DuplicateCount int                   `json:"duplicate_count"`
+	Results        []HostOperationResult `json:"results"`
 }
 
 // HostStore defines the persistence contract required by Machinarchy.

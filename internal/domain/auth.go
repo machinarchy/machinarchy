@@ -24,4 +24,5 @@ type AuthService interface {
 	SignUp(ctx context.Context, req AuthSignUpRequest) (*AuthTokenResponse, error)
 	Login(ctx context.Context, req AuthLoginRequest) (*AuthTokenResponse, error)
 	VerifySession(ctx context.Context, username string) (*UserResponse, error)
+	EnsureAdminUser() error
 }

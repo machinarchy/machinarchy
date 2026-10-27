@@ -299,3 +299,26 @@ func isUniqueViolation(err error) bool {
 	var postgresErr *pq.Error
 	return errors.As(err, &postgresErr) && postgresErr.Code == "23505"
 }
+
+// UpdateWorkspaceMemberRole updates a user's role in a workspace in Postgres.
+func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role string) error {
+	query := `
+		UPDATE workspace_memberships 
+		SET role = $1 
+		WHERE workspace_id = $2 AND user_id = $3`
+
+	result, err := s.db.ExecContext(ctx, query, role, workspaceID, userID)
+	if err != nil {
+		return fmt.Errorf("update workspace member role: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if rows == 0 {
+		return errors.New("workspace membership not found for role update")
+	}
+
+	return nil
+}

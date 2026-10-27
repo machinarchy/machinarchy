@@ -20,6 +20,7 @@ import (
 // HostService contains the application use cases for managed hosts.
 type HostService interface {
 	RegisterHost(ctx context.Context, host *domain.Host) error
+	BulkRegisterHosts(ctx context.Context, hosts []domain.Host) (*domain.BulkImportResponse, error)
 }
 
 type hostService struct {
@@ -152,4 +153,69 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 		}
 	}
 	return nil
+}
+
+func (s *hostService) BulkRegisterHosts(ctx context.Context, hosts []domain.Host) (*domain.BulkImportResponse, error) {
+	if ctx == nil {
+		return nil, errors.New("bulk registration context is required")
+	}
+
+	ctx, span := otel.Tracer("machinarchy/internal/service").Start(ctx, "host.bulk_register",
+		trace.WithAttributes(attribute.Int("host.batch_size", len(hosts))),
+	)
+	defer span.End()
+
+	response := &domain.BulkImportResponse{
+		TotalProcessed: len(hosts),
+		Results:        make([]domain.HostOperationResult, 0, len(hosts)),
+	}
+
+	for i := range hosts {
+		h := &hosts[i]
+
+		// 1. Validate individual host input
+		if err := h.SSHValidate(); err != nil {
+			response.FailureCount++
+			response.Results = append(response.Results, domain.HostOperationResult{
+				Hostname: h.Hostname,
+				Address:  h.IPAddress,
+				Status:   domain.StatusFailed,
+				Error:    err.Error(),
+			})
+			continue
+		}
+
+		// 2. Delegate to RegisterHost to reuse connection testing, bulkhead limits, DB persistence, and event publishing
+		err := s.RegisterHost(ctx, h)
+		if err != nil {
+			// Distinguish duplicates or check underlying error type if needed
+			status := domain.StatusFailed
+			if errors.Is(err, domain.ErrInvalidInput) { // or duplicate check from store
+				status = domain.StatusFailed
+			}
+
+			response.FailureCount++
+			response.Results = append(response.Results, domain.HostOperationResult{
+				Hostname: h.Hostname,
+				Address:  h.IPAddress,
+				Status:   status,
+				Error:    err.Error(),
+			})
+			continue
+		}
+
+		response.SuccessCount++
+		response.Results = append(response.Results, domain.HostOperationResult{
+			Hostname: h.Hostname,
+			Address:  h.IPAddress,
+			Status:   domain.StatusSuccess,
+		})
+	}
+
+	span.SetAttributes(
+		attribute.Int("host.success_count", response.SuccessCount),
+		attribute.Int("host.failure_count", response.FailureCount),
+	)
+
+	return response, nil
 }
