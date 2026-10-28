@@ -9,6 +9,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// MaxWorkspaceMembers bounds a member listing.
+const MaxWorkspaceMembers = 1000
+
 var ErrUserAlreadyExists = errors.New("username or email is already registered")
 
 var ErrUserNotFound = errors.New("user not found")
@@ -48,8 +51,12 @@ type UserStore interface {
 	SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error
 	UpdateUserPassword(ctx context.Context, userID int, newPasswordHash string) error
 	// UpdateWorkspaceMemberRole changes an existing membership's role. It returns
-	// ErrUserNotFound when the user is not a member of the workspace.
+	// ErrUserNotFound when the user is not a member of the workspace and
+	// ErrLastOwner, without changing anything, when it would remove the
+	// workspace's only owner. The check is atomic with the update.
 	UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role Role) error
+	// ListWorkspaceMembers returns up to MaxWorkspaceMembers members ordered by user ID.
+	ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]WorkspaceMember, error)
 	// CountWorkspaceOwners returns how many members hold the owner role.
 	CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error)
 }

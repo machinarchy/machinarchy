@@ -12,6 +12,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/history"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/tokens"
 )
 
@@ -37,6 +38,7 @@ func RegisterRoutes(
 	secureCookies bool,
 	signupEnabled bool,
 	tokenService domain.APITokenService,
+	memberService domain.MemberService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
@@ -45,6 +47,7 @@ func RegisterRoutes(
 	hostHandler := host.NewHandler(repos.Hosts, repos.Jobs, repos.Environments, hostServ)
 	jobHandler := job.NewHandler(repos.Jobs)
 	tokenHandler := tokens.NewHandler(tokenService)
+	memberHandler := members.NewHandler(memberService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -83,6 +86,11 @@ func RegisterRoutes(
 		tokenGroup := apiv1.Group("/tokens",
 			middleware.RequirePermission(domain.PermissionTokenManage), middleware.RequireHuman())
 		tokens.RegisterRoutes(tokenGroup, tokenHandler)
+
+		// Owner-only member administration; API tokens are refused.
+		memberGroup := apiv1.Group("/members",
+			middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
+		members.RegisterRoutes(memberGroup, memberHandler)
 
 	}
 }

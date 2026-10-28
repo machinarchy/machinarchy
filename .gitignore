@@ -15,6 +15,7 @@
 *.prof
 *.s
 *.zip
+*.patch
 
 # 2. Databases & Local Runtime Data
 /data/

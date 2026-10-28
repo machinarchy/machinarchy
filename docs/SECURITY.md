@@ -16,8 +16,8 @@ Trust boundaries are the public HTTP listener, authenticated API routes, databas
 
 | Threat | Current control | Remaining gap |
 | --- | --- | --- |
-| Unauthenticated API use | Protected `/api/v1` routes validate JWT signature, issuer, age, expiry, and algorithm. Signup defaults off in production and can be explicitly enabled with `MACHINARCHY_SIGNUP_ENABLED=true`. | An operator must bootstrap the first trusted owner deliberately; an enabled signup endpoint creates isolated workspaces but does not replace an invitation/account lifecycle. |
-| Broken object-level authorization | Authenticated users have workspace membership; host, environment, job, and metrics-history storage queries are scoped to the principal's workspace. Cross-workspace host/environment references are rejected. | Human membership management is not implemented. Each account currently owns its own workspace. PostgreSQL integration and complete HTTP denial-path coverage remain outstanding. |
+| Unauthenticated API use | Protected `/api/v1` routes validate JWT signature, issuer, age, expiry, and algorithm. Signup defaults off in production and can be explicitly enabled with `MACHINARCHY_SIGNUP_ENABLED=true`. | An operator must bootstrap the first trusted owner deliberately; an enabled signup endpoint creates read-only accounts in the shared workspace and does not replace an invitation/account lifecycle. |
+| Broken object-level authorization | Authenticated users have workspace membership; host, environment, job, and metrics-history storage queries are scoped to the principal's workspace. Cross-workspace host/environment references are rejected. | Owners can list members and change roles (`/api/v1/members`); there are no invitations or member removal. All new accounts share one workspace. PostgreSQL integration and complete HTTP denial-path coverage remain outstanding. |
 | Over-privileged automation credentials | API tokens are workspace-bound, limited to `operator` or `reader`, and effective permissions are intersected with the issuing user's current workspace role. Token management requires a human owner session. | No service-account/member lifecycle or per-token permission customization exists. Tokens inherit the issuer's identity for audit attribution; durable audit events are not yet implemented. |
 | SSH man-in-the-middle | Host registration requires an expected SHA-256 fingerprint and SSH host-key verification fails closed on mismatch. | Fingerprint acquisition, rotation, operator review, and API-level validation need a complete lifecycle. |
 | Credential disclosure | Storage adapters encrypt SSH credential fields; host credential fields are excluded from ordinary JSON serialization. | Protect DB files, backups, encryption keys, debug dumps, and all error/log paths. Rotation and external secret references are not implemented. |
@@ -30,7 +30,7 @@ Trust boundaries are the public HTTP listener, authenticated API routes, databas
 ## Immediate deployment guidance
 
 1. In production, leave `MACHINARCHY_SIGNUP_ENABLED` unset or set it to `false`. If account registration is required, enable it deliberately and disable it afterward.
-2. Keep signup disabled in production. Each account currently owns an isolated workspace, but public signup is not a substitute for an invitation and account lifecycle process.
+2. Keep signup disabled in production. New accounts join the shared workspace as read-only members and owners promote them through the members API, but public signup is not a substitute for an invitation and account lifecycle process.
 3. Use a random `MACHINARCHY_OPERATOR_TOKEN` of at least 32 characters and an independent, stable `MACHINARCHY_ENCRYPTION_SECRET`. Back up both through a secret-management process; loss/change of the latter makes encrypted SSH credentials unreadable.
 4. Require PostgreSQL `sslmode=verify-full` in production, exact CORS origins, TLS termination with trusted configuration, restrictive database/broker credentials, and private network placement.
 5. Apply outbound network policy to the API process. Permit only intended SSH destinations and block cloud metadata and other sensitive control-plane ranges unless the operator has an explicit need and compensating controls.
@@ -45,7 +45,7 @@ The current baseline uses workspace memberships and three roles:
 - **Operator:** inventory read/write and operations read.
 - **Reader:** inventory and operations read-only.
 
-New accounts receive a private workspace and owner membership. Human JWT authorization reloads the membership role on each request, so deleted memberships and role downgrades take effect without waiting for the JWT to expire. Current API-token creation is restricted to `operator` and `reader`; token creation, listing, and revocation require an owner authenticated by a human JWT session. A token's effective role is the less-privileged of its configured role and the current membership role.
+New accounts join the shared default workspace as `reader`; the first owner comes from the bootstrap configuration and owners promote others with `PUT /api/v1/members/{id}/role`. Human JWT authorization reloads the membership role on each request, so deleted memberships and role downgrades take effect without waiting for the JWT to expire. Current API-token creation is restricted to `operator` and `reader`; token creation, listing, and revocation require an owner authenticated by a human JWT session. A token's effective role is the less-privileged of its configured role and the current membership role.
 
 API tokens use a random `mch_pat_` secret, are returned only when created, and are stored as SHA-256 hashes. They default to a 30-day lifetime, have a maximum lifetime of 365 days, and can be revoked. Token resolution checks expiry and revocation against storage on every request. Treat the plaintext token like a password: store it in a secret manager, send it only in an HTTPS `Authorization: Bearer` header, and never put it in source control, URLs, shell history, logs, or support bundles. Rotate and revoke immediately after suspected exposure. Cookie authentication is not accepted for API-token credentials.
 
@@ -68,15 +68,21 @@ curl -X DELETE http://localhost:8080/api/v1/tokens/123 \
 
 The first response contains the token's plaintext exactly once. Copy it directly into a secret manager; do not save it in a shell variable or file with broad permissions.
 
-This implementation is not yet a full collaborative organization system: there are no invitations, workspace member management, workspace switching, or durable audit events. Do not promise multi-user collaboration until those flows exist and are tested.
+This implementation is not yet a full collaborative organization system: there are no invitations, member removal, workspace switching, or durable audit events (role changes are written to the structured server log only, which is not tamper-resistant). Do not promise multi-user collaboration until those flows exist and are tested.
 
 ### Existing database migration
 
-Migration 000003 assigns pre-existing hosts, environments, jobs, and metrics history to workspace 1. The earliest existing user (lowest database ID) becomes that workspace's owner. Each later existing user gets a new empty workspace and owner membership. If there are no existing users, the first account created claims workspace 1. This preserves all records while removing shared access for later accounts.
+Migration 000003 assigns pre-existing hosts, environments, jobs, and metrics history to workspace 1. The earliest existing user (lowest database ID) becomes that workspace's owner. Each later existing user gets a new empty workspace and owner membership. If there are no existing users, the first account created claims workspace 1. This preserves all records while removing shared access for later accounts. Databases migrated this way keep those per-account workspaces; accounts created after the single-workspace change join workspace 1.
 
 Before upgrading an existing installation, inspect the user IDs and confirm the earliest account is the intended owner of legacy records. Take and verify a database backup, rehearse the upgrade on a copy, and keep the original backup until application behavior is confirmed. The migration framework does not run down migrations; recovery is restore-from-backup or a reviewed forward migration. Do not manually change workspace IDs in production without a reviewed data migration.
 
 Do not rely on hidden UI controls, unguessable IDs, or disabling signup as the authorization boundary. Repository scoping remains authoritative even when the CLI or UI hides resources.
+
+## Member administration
+
+`GET /api/v1/members` and `PUT /api/v1/members/{id}/role` require a human owner session: the routes use the `members:manage` permission (owner only) plus the same human-session guard as token management, and the service repeats both checks, so API tokens can never list or change roles. Roles are `owner`, `operator`, and `reader`. The target must already be a member of the caller's workspace, and the workspace comes from the authenticated principal, never from the request. A workspace cannot be left without an owner: the store enforces this atomically with the update (a single guarded statement in SQLite, a transaction that locks the owner rows in PostgreSQL), so two owners demoting each other concurrently cannot both succeed. Role changes apply on the member's next request, and API tokens never exceed the current membership role. Each change is logged as a structured `audit` event with actor, target, previous role, and new role.
+
+Residual risks: there is no durable, tamper-resistant audit trail yet; there is no step-up authentication or confirmation for promoting an owner; there is no member removal or invitation flow; and an owner can demote themselves while another owner exists.
 
 ## SSH target policy
 

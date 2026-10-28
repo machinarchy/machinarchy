@@ -105,7 +105,7 @@ All settings use environment variables; the application does not load `.env` fil
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; required in production. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP/HTTP collector endpoint. |
 
-Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL. Keep signup disabled except during controlled onboarding. Workspace scoping is implemented, while invitations, human member roles, durable audit events, and PostgreSQL integration coverage remain future work. See [the security assessment](docs/SECURITY.md) and [roadmap](docs/ROADMAP.md).
+Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL. Keep signup disabled except during controlled onboarding. Workspace scoping is implemented, while invitations, member removal, durable audit events, and PostgreSQL integration coverage remain future work. See [the security assessment](docs/SECURITY.md) and [roadmap](docs/ROADMAP.md).
 
 ## Operations
 

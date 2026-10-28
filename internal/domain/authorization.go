@@ -11,6 +11,7 @@ var (
 	ErrPermissionDenied      = errors.New("permission denied")
 	ErrAPITokenNotFound      = errors.New("API token not found")
 	ErrAPITokenAlreadyExists = errors.New("API token name already exists")
+	ErrLastOwner             = errors.New("a workspace must keep at least one owner")
 )
 
 type Role string
@@ -28,6 +29,7 @@ const (
 	PermissionInventoryWrite Permission = "inventory:write"
 	PermissionOperationsRead Permission = "operations:read"
 	PermissionTokenManage    Permission = "tokens:manage"
+	PermissionMembersManage  Permission = "members:manage"
 )
 
 // Principal is the authenticated identity attached to an API request. API
@@ -103,4 +105,22 @@ type APITokenService interface {
 	Create(ctx context.Context, principal Principal, name string, role Role, expiresInHours int) (*IssuedAPIToken, error)
 	List(ctx context.Context, principal Principal) ([]APIToken, error)
 	Revoke(ctx context.Context, principal Principal, id int) error
+}
+
+// WorkspaceMember is a user's membership in a workspace.
+type WorkspaceMember struct {
+	UserID    int       `json:"id"`
+	Username  string    `json:"username"`
+	Email     string    `json:"email,omitempty"`
+	Role      Role      `json:"role" enums:"owner,operator,reader"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// MemberService lets workspace owners inspect and change member roles. Only
+// human owner sessions may use it; API-token principals are always refused.
+type MemberService interface {
+	List(ctx context.Context, principal Principal) ([]WorkspaceMember, error)
+	// SetRole changes a member's role. It returns ErrUserNotFound when the user is
+	// not a member and ErrLastOwner when the change would leave no owner.
+	SetRole(ctx context.Context, principal Principal, userID int, role Role) (*WorkspaceMember, error)
 }

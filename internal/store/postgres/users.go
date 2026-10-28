@@ -73,12 +73,73 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 }
 
 func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE workspace_memberships SET role = $1
-		WHERE workspace_id = $2 AND user_id = $3`, string(role), workspaceID, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin member role transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Lock the current owners (in a fixed order) so concurrent demotions are
+	// serialized and each one re-reads the committed owner set.
+	rows, err := tx.QueryContext(ctx, `SELECT user_id FROM workspace_memberships
+		WHERE workspace_id = $1 AND role = 'owner' ORDER BY user_id FOR UPDATE`, workspaceID)
+	if err != nil {
+		return fmt.Errorf("lock workspace owners: %w", err)
+	}
+	owners := 0
+	for rows.Next() {
+		owners++
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read workspace owners: %w", err)
+	}
+	rows.Close()
+
+	var current string
+	err = tx.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
+		WHERE workspace_id = $1 AND user_id = $2 FOR UPDATE`, workspaceID, userID).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read workspace membership: %w", err)
+	}
+	if current == string(domain.RoleOwner) && role != domain.RoleOwner && owners <= 1 {
+		return domain.ErrLastOwner
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workspace_memberships SET role = $1
+		WHERE workspace_id = $2 AND user_id = $3`, string(role), workspaceID, userID); err != nil {
 		return fmt.Errorf("update workspace member role: %w", err)
 	}
-	return affected(result, domain.ErrUserNotFound)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit member role transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT users.id, users.username, COALESCE(users.email, ''),
+		workspace_memberships.role, users.created_at
+		FROM workspace_memberships JOIN users ON users.id = workspace_memberships.user_id
+		WHERE workspace_memberships.workspace_id = $1
+		ORDER BY users.id LIMIT $2`, workspaceID, domain.MaxWorkspaceMembers)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	defer rows.Close()
+	members := make([]domain.WorkspaceMember, 0)
+	for rows.Next() {
+		var member domain.WorkspaceMember
+		if err := rows.Scan(&member.UserID, &member.Username, &member.Email, &member.Role, &member.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan workspace member: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace members: %w", err)
+	}
+	return members, nil
 }
 
 func (s *Store) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {

@@ -43,7 +43,7 @@ Preserve the later multi-tenant idea: organizations may eventually have separate
 
 ### Verified gaps and risks
 
-- Workspaces currently have one account owner each; there is no member invitation, workspace switching, or administrator workflow for assigning human operator/reader roles. API tokens provide the current non-owner automation identities.
+- The installation uses one shared workspace. Owners can list members and change roles through `/api/v1/members` (never leaving the workspace without an owner); there is still no member invitation or removal, workspace switching, or durable audit trail. API tokens provide the automation identities.
 - Public account signup defaults off in production and on in development. When deliberately enabled, each new account receives an isolated workspace.
 - Workspace authorization is covered by SQLite integration tests, but PostgreSQL migration/repository integration and exhaustive HTTP denial-path coverage are still outstanding.
 - Host listing and environment listing are unpaginated. Single registration tests one SSH connection synchronously. Bounded synchronous batch registration with per-record results exists (`POST /api/v1/hosts/bulk`); YAML/CSV import, asynchronous/resumable imports, and a database uniqueness constraint for hosts do not.
@@ -94,7 +94,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Protected API paths carry workspace identity into storage; missing membership blocks JWT requests; API token role is capped by current membership role; token expiry/revocation takes effect on the next request; cross-workspace resource lookups are non-disclosing; legacy rows have one deterministic owner.
 - **Security considerations:** Prevent broken object-level authorization on indirect routes and references; keep API-token secrets out of storage and logs; preserve backup data; do not accept credentials that can grant a role higher than their issuer.
 - **Tests required:** Role/permission tests; SQLite migration and repository isolation tests; API token expiry/revocation tests; HTTP allow/deny tests; PostgreSQL migration and integration tests.
-- **Status:** Core authorization and token lifecycle implemented. Human membership management, a production bootstrap flow, PostgreSQL integration tests, audit records, pagination, and broader HTTP denial-path tests remain planned.
+- **Status:** Core authorization and token lifecycle implemented. A bootstrap-owner flow and owner-only member role management are implemented. Member invitation/removal, PostgreSQL integration tests, durable audit records, pagination, and broader HTTP denial-path tests remain planned.
 
 ### Phase 1 follow-up — Shared installation and global roles
 
@@ -179,7 +179,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 | Risk | Mitigation / dependency |
 | --- | --- |
 | Legacy rows become owned by the earliest account during migration | Inventory existing account IDs first, verify a database backup, and confirm that the earliest account is the intended owner. Other existing accounts receive empty private workspaces. If ownership needs correction or the installation moves to a shared workspace, use a reviewed, auditable forward migration with explicit source/target selection; do not merge workspaces or edit production rows ad hoc. |
-| Workspace owner is the only human role currently available | Keep signup disabled in production; bootstrap a trusted owner, use reader/operator tokens for automation, and add invitation/member-management flows before multi-user collaboration is promised. |
+| Role changes are only logged, and there are no invitations or removals | Keep signup disabled in production; bootstrap a trusted owner, promote members deliberately, use reader/operator tokens for automation, and add durable audit records plus invitation/removal flows before multi-user collaboration is promised. |
 | SSH target inputs can reach unintended networks | Design explicit egress/address policy and DNS-safe dialing before discovery/import or broad execution. |
 | Per-process SSH limits multiply across replicas | Use fleet-level admission control only if measurements show the local bound is inadequate; until then, document aggregate capacity as replicas × process limit. |
 | Event publication can be lost after host persistence | Add transactional outbox only if reconnection events become required for correctness, not just as speculative infrastructure. |

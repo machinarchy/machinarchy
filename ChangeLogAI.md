@@ -2,6 +2,25 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — Owner-only member role administration
+
+### Changes in this update
+
+- Added `GET /api/v1/members` and `PUT /api/v1/members/{id}/role` (body `{"role": "owner|operator|reader"}`). Both require a human owner session (new `members:manage` permission plus the existing human-session guard, repeated in `service.MemberService`), so API tokens cannot use them. The workspace comes from the authenticated principal.
+- `UserStore.UpdateWorkspaceMemberRole` now refuses to demote the last owner with the new `domain.ErrLastOwner`, atomically with the update: one guarded statement in SQLite, and a transaction that locks owner rows in PostgreSQL. Changing a role within a workspace the member does not belong to returns `ErrUserNotFound`.
+- Added `UserStore.ListWorkspaceMembers` (bounded to 1000, ordered by user ID) for both engines.
+- Role changes are written to the structured log as `audit` events (actor, target, previous and new role); unchanged roles are a no-op.
+- Tests: member service permission matrix and behavior, handler error mapping and route guards (operator, reader, API token), SQLite listing, last-owner protection, cross-workspace refusal, and a concurrent-demotion test.
+- Docs: SECURITY.md (new member-administration section and corrected workspace statements left stale by the single-workspace change), ROADMAP.md, architecture.md, and README.md.
+
+### Known limitations
+
+- No invitations, member removal, or workspace switching. Audit records are log-only. No confirmation or step-up check when promoting an owner. The PostgreSQL implementation has no integration test. Swagger files were not regenerated; run `make api-docs`.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` (ideally with `-race`) before merging.
+
 ## 2026-10-28 — SSH target address policy and DNS-rebinding-safe dialing
 
 ### Changes in this update

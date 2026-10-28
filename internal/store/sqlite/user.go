@@ -72,12 +72,74 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordH
 }
 
 func (s *SQLiteStore) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
-	result, err := s.DB.ExecContext(ctx, `UPDATE workspace_memberships SET role = ?
-		WHERE workspace_id = ? AND user_id = ?`, string(role), workspaceID, userID)
+	// One statement, so the "keep at least one owner" check and the update are
+	// atomic. A member who is not an owner, or a change that keeps them an owner,
+	// always matches; demoting an owner matches only while another owner exists.
+	result, err := s.DB.ExecContext(ctx, `UPDATE workspace_memberships SET role = ?1
+		WHERE workspace_id = ?2 AND user_id = ?3
+		AND (role <> 'owner' OR ?1 = 'owner'
+			OR (SELECT COUNT(*) FROM workspace_memberships
+				WHERE workspace_id = ?2 AND role = 'owner') > 1)`,
+		string(role), workspaceID, userID)
 	if err != nil {
 		return fmt.Errorf("update workspace member role: %w", err)
 	}
-	return requireRowsAffected(result, domain.ErrUserNotFound)
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated membership rows: %w", err)
+	}
+	if rows > 0 {
+		return nil
+	}
+	var current string
+	err = s.DB.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
+		WHERE workspace_id = ? AND user_id = ?`, workspaceID, userID).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("check workspace membership: %w", err)
+	}
+	return domain.ErrLastOwner
+}
+
+func (s *SQLiteStore) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT users.id, users.username, COALESCE(users.email, ''),
+		workspace_memberships.role, users.created_at
+		FROM workspace_memberships JOIN users ON users.id = workspace_memberships.user_id
+		WHERE workspace_memberships.workspace_id = ?
+		ORDER BY users.id LIMIT ?`, workspaceID, domain.MaxWorkspaceMembers)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace members: %w", err)
+	}
+	defer rows.Close()
+	members := make([]domain.WorkspaceMember, 0)
+	for rows.Next() {
+		var member domain.WorkspaceMember
+		var role, createdAt string
+		if err := rows.Scan(&member.UserID, &member.Username, &member.Email, &role, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan workspace member: %w", err)
+		}
+		member.Role = domain.Role(role)
+		member.CreatedAt = parseStoredTime(createdAt)
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace members: %w", err)
+	}
+	return members, nil
+}
+
+// parseStoredTime reads timestamps written by CreateUser (RFC 3339) and by
+// SQLite's CURRENT_TIMESTAMP default used by older rows. Unparseable values
+// yield the zero time rather than failing a listing.
+func parseStoredTime(value string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func (s *SQLiteStore) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {

@@ -85,6 +85,10 @@ func NewServer(
 	if err != nil {
 		return nil, fmt.Errorf("configure API token service: %w", err)
 	}
+	memberService, err := service.NewMemberService(repositories.Users)
+	if err != nil {
+		return nil, fmt.Errorf("configure member service: %w", err)
+	}
 	origins, err := allowedOrigins(cfg.Environment)
 	if err != nil {
 		return nil, err
@@ -132,7 +136,7 @@ func NewServer(
 	api := e.Group("/api", limiter.Middleware())
 	v1.RegisterRoutes(api, repositories, authService,
 		metricsService, hostService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService)
+		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",
