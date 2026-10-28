@@ -58,8 +58,8 @@ func TestSQLiteHostUniquenessIsEnforcedByTheDatabase(t *testing.T) {
 	}
 
 	conflicts := map[string]*domain.Host{
-		"same name, different case":    testHost(1, "WEB-01", "10.0.0.2", 22),
-		"same address and port":        testHost(1, "other", "10.0.0.1", 22),
+		"same name, different case":     testHost(1, "WEB-01", "10.0.0.2", 22),
+		"same address and port":         testHost(1, "other", "10.0.0.1", 22),
 		"same hostname, different case": testHost(1, "dns-2", "db.example.test", 22),
 	}
 	for name, host := range conflicts {
