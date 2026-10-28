@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 	"github.com/machinarchy/machinarchy/pkg/sshclient"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,6 +31,7 @@ type hostService struct {
 	publisher EventPublisher
 	sshTester SSHConnectionTester
 	sshLimit  *SSHCapacity
+	policy    netpolicy.Policy
 }
 
 type EventPublisher interface {
@@ -53,21 +55,22 @@ func NewHostService(r domain.HostStore, publisher EventPublisher) HostService {
 func NewHostServiceWithTester(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester) HostService {
 	return &hostService{
 		repo: r, publisher: publisher, sshTester: tester,
-		sshLimit: newDefaultSSHCapacity(),
+		sshLimit: newDefaultSSHCapacity(), policy: netpolicy.Default(),
 	}
 }
 
 // NewHostServiceWithCapacity constructs a host service using a shared SSH bulkhead.
-func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity) (HostService, error) {
-	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity)
+func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
+	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity, opts...)
 }
 
 // NewHostServiceWithTesterAndCapacity injects SSH verification and capacity ports.
-func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity) (HostService, error) {
+func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
 	if r == nil || tester == nil || capacity == nil {
 		return nil, errors.New("host service dependencies and SSH capacity are required")
 	}
-	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity}, nil
+	options := applyOptions(opts)
+	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy}, nil
 }
 
 func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr error) {
@@ -95,6 +98,13 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 		return err
 	}
 
+	// Reject literal addresses the policy forbids before any SSH capacity is
+	// spent. Hostnames are resolved and enforced at dial time, which pins the
+	// validated address.
+	if err := s.policy.CheckHost(h.IPAddress); err != nil {
+		return err
+	}
+
 	// Choose signature parameters values matching deduced types matrix safely
 	var secretData string
 	if h.SSH.AuthType.Method == domain.AuthTypePrivateKey {
@@ -111,6 +121,7 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 		SecretData:          secretData,
 		Passphrase:          h.SSH.AuthType.Passphrase,
 		ExpectedFingerprint: h.SSH.AuthType.ExpectedFingerprint,
+		Dialer:              s.policy.DialContext,
 	}
 	// 3. Execute Bounded Cryptographic Network Test Verification Handshake
 	testCtx, cancel := context.WithTimeout(ctx, 7*time.Second)

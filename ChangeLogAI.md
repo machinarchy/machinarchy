@@ -2,6 +2,25 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — SSH target address policy and DNS-rebinding-safe dialing
+
+### Changes in this update
+
+- Added `pkg/netpolicy`: a destination policy (always-denied unspecified/multicast/broadcast/zoned/cloud-metadata addresses; denied-by-default loopback and link-local; configurable private ranges; explicit allow and deny CIDRs) and a `DialContext` that resolves a hostname once, requires every answer to be permitted, and dials the validated IP.
+- `pkg/sshclient` now dials through the policy; with no dialer supplied it uses `netpolicy.Default()`, so the policy cannot be skipped. Policy denials surface as `domain.ErrTargetNotAllowed`.
+- Host registration (single and bulk) rejects forbidden literal IPs before spending SSH capacity; the host and metrics services accept `service.WithTargetPolicy`, wired from configuration in the API runtime. Single and bulk responses report a fixed, non-revealing denial message.
+- New settings: `MACHINARCHY_SSH_ALLOW_PRIVATE` (default true), `MACHINARCHY_SSH_ALLOW_LOOPBACK` (default false), `MACHINARCHY_SSH_ALLOWED_CIDRS`, `MACHINARCHY_SSH_DENIED_CIDRS`.
+- Behavior change: loopback and link-local targets are now refused by default. Development setups that register hosts on 127.0.0.1 must set `MACHINARCHY_SSH_ALLOW_LOOPBACK=true`.
+- Updated `.env.example`, `docs/SECURITY.md`, `docs/architecture.md`, and `docs/ROADMAP.md`.
+
+### Known limitations
+
+- Not a substitute for network-layer egress controls; no port restrictions; `PUT /api/v1/hosts/{id}` does not re-check the address until the next dial.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` (ideally with `-race`) before merging.
+
 ## 2026-10-28 — Single shared workspace, bootstrap owner, and hardened bulk host registration
 
 ### Changes in this update

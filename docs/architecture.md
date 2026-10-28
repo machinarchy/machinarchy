@@ -22,7 +22,7 @@ SQLite and PostgreSQL adapters
 - `machinarchy-controlmanager` runs the durable JetStream consumer. It serves only health and metrics endpoints; readiness includes the database, NATS, and active worker subscription.
 - `machinarchy-monolit` runs the API and control-manager worker in one process, sharing one database pool and one NATS connection. Its readiness includes the worker subscription.
 - `machinarchy-agent` currently exits with an explicit “not implemented” error.
-- The host service verifies SSH connection details and the expected host-key fingerprint before persistence. SSH operations are bounded by a process-wide capacity limiter.
+- The host service verifies SSH connection details and the expected host-key fingerprint before persistence. SSH operations are bounded by a process-wide capacity limiter, and every SSH dial is resolved and checked by the target address policy in `pkg/netpolicy` (see the security assessment).
 - OpenTelemetry propagates trace context through HTTP requests and NATS messages. Prometheus metrics use a process-local registry.
 
 ## Current boundaries and known limitations

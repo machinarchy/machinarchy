@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 	"github.com/machinarchy/machinarchy/pkg/sshclient"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -20,6 +21,7 @@ type metricsService struct {
 	metricStore domain.MetricsStore
 	hostStore   domain.HostStore
 	sshLimit    *SSHCapacity
+	policy      netpolicy.Policy
 }
 
 func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.MetricsService {
@@ -27,15 +29,17 @@ func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.Metri
 		metricStore: ms,
 		hostStore:   hs,
 		sshLimit:    newDefaultSSHCapacity(),
+		policy:      netpolicy.Default(),
 	}
 }
 
 // NewMetricsServiceWithCapacity constructs a metrics service sharing the process SSH bulkhead.
-func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity) (domain.MetricsService, error) {
+func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity, opts ...ServiceOption) (domain.MetricsService, error) {
 	if ms == nil || hs == nil || capacity == nil {
 		return nil, errors.New("metrics service dependencies and SSH capacity are required")
 	}
-	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity}, nil
+	options := applyOptions(opts)
+	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity, policy: options.targetPolicy}, nil
 }
 
 func (s *metricsService) GetHistory(ctx context.Context, workspaceID int, timeRange string) ([]domain.DataPoint, error) {
@@ -108,6 +112,7 @@ func (s *metricsService) GetLiveDiagnostics(ctx context.Context, workspaceID, ho
 		SecretData:          secretData,
 		Passphrase:          host.SSH.AuthType.Passphrase,
 		ExpectedFingerprint: host.SSH.AuthType.ExpectedFingerprint,
+		Dialer:              s.policy.DialContext,
 	}
 
 	// 2. Execute Linux baseline collection telemetry matrix command block

@@ -49,7 +49,7 @@ Preserve the later multi-tenant idea: organizations may eventually have separate
 - Host listing and environment listing are unpaginated. Single registration tests one SSH connection synchronously. Bounded synchronous batch registration with per-record results exists (`POST /api/v1/hosts/bulk`); YAML/CSV import, asynchronous/resumable imports, and a database uniqueness constraint for hosts do not.
 - No public API submits remote commands. The agent process is a placeholder; job routes read existing rows only.
 - The control-manager currently logs reconnection events rather than reconciling host state. Host persistence and event publishing do not share an outbox transaction.
-- The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Target address policy, DNS rebinding protection, audit records, and credential rotation/secret references need explicit designs.
+- The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Audit records and credential rotation/secret references need explicit designs. The SSH target address policy and DNS-rebinding-safe dialing (`pkg/netpolicy`) are implemented; port restrictions and re-checking addresses on host update are not.
 - The repository still has sparse test coverage outside the authorization baseline. SQLite authorization integration coverage exists; PostgreSQL integration coverage and fleet benchmarks are outstanding.
 
 ## Architecture decisions
@@ -127,7 +127,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Unknown or changed host keys fail closed; checks have caller and server timeouts; cancellation releases connections; credentials never appear in logs or API responses; private networks work only under the chosen explicit policy; per-host failures are independently reported.
 - **Security considerations:** Mitigate MITM, SSRF, DNS rebinding, credential leakage, and lateral movement; test private, loopback, link-local, and public destinations under policy.
 - **Tests required:** SSH integration tests with ephemeral test servers and host keys, cancellation/resource cleanup tests, host-key rotation tests, address policy tests, and race detector.
-- **Status:** In progress. Pinned-key SSH auth and a process-local capacity limit exist; trust lifecycle and target policy remain incomplete.
+- **Status:** In progress. Pinned-key SSH auth, a process-local capacity limit, and a configurable target address policy with resolve-once/dial-validated-IP behavior exist. Not done: fingerprint acquisition/rotation workflow, an explicit validation endpoint, credential references/rotation, a structured error taxonomy, and SSH integration tests against an ephemeral server.
 
 ### Phase 4 — Fleet targeting and execution
 

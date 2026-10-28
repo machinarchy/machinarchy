@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
 const (
@@ -30,6 +31,11 @@ type DialParams struct {
 	SecretData          string
 	Passphrase          string
 	ExpectedFingerprint string
+	// Dialer opens the TCP connection. When nil, a netpolicy.Default() dialer is
+	// used, so targets are always resolved and checked under a policy and the
+	// validated address is the one dialed. Callers with a configured policy pass
+	// its DialContext.
+	Dialer func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // TestConnection verifies SSH authentication and the pinned host key.
@@ -90,8 +96,11 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 		return nil, nil, err
 	}
 	addr := net.JoinHostPort(strings.TrimSpace(params.IP), strconv.Itoa(params.Port))
-	dialer := net.Dialer{Timeout: defaultHandshakeTimeout}
-	netConn, err := dialer.DialContext(ctx, "tcp", addr)
+	dialContext := params.Dialer
+	if dialContext == nil {
+		dialContext = netpolicy.Default().DialContext
+	}
+	netConn, err := dialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, classifyNetworkError(ctx, err)
 	}
@@ -187,6 +196,9 @@ func hostKeyCallback(expectedFingerprint string) ssh.HostKeyCallback {
 func classifyNetworkError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
+	}
+	if errors.Is(err, domain.ErrTargetNotAllowed) {
+		return err
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return domain.ErrConnectionRefused

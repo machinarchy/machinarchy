@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
 type Environment string
@@ -64,6 +66,7 @@ type Config struct {
 	Database         DatabaseConfig
 	EventBroker      EventBrokerConfig
 	BootstrapAdmin   BootstrapAdminConfig
+	SSHTargetPolicy  netpolicy.Policy
 }
 
 // BootstrapAdminConfig describes the optional first owner account. The account is
@@ -156,6 +159,12 @@ func Load() (Config, error) {
 		}
 	}
 
+	targetPolicy, err := loadSSHTargetPolicy()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SSHTargetPolicy = targetPolicy
+
 	// Log System Levels Check
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -172,6 +181,29 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadSSHTargetPolicy reads the destination policy applied to every SSH dial.
+// Private networks are allowed by default because Machinarchy manages private
+// infrastructure; loopback and link-local stay denied unless allowed explicitly.
+func loadSSHTargetPolicy() (netpolicy.Policy, error) {
+	allowPrivate, err := strconv.ParseBool(GetEnv("MACHINARCHY_SSH_ALLOW_PRIVATE", "true"))
+	if err != nil {
+		return netpolicy.Policy{}, errors.New("MACHINARCHY_SSH_ALLOW_PRIVATE must be true or false")
+	}
+	allowLoopback, err := strconv.ParseBool(GetEnv("MACHINARCHY_SSH_ALLOW_LOOPBACK", "false"))
+	if err != nil {
+		return netpolicy.Policy{}, errors.New("MACHINARCHY_SSH_ALLOW_LOOPBACK must be true or false")
+	}
+	allow, err := netpolicy.ParsePrefixes(GetEnv("MACHINARCHY_SSH_ALLOWED_CIDRS"))
+	if err != nil {
+		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_ALLOWED_CIDRS: %w", err)
+	}
+	deny, err := netpolicy.ParsePrefixes(GetEnv("MACHINARCHY_SSH_DENIED_CIDRS"))
+	if err != nil {
+		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_DENIED_CIDRS: %w", err)
+	}
+	return netpolicy.Policy{AllowPrivate: allowPrivate, AllowLoopback: allowLoopback, Allow: allow, Deny: deny}, nil
 }
 
 func GetEnv(key string, defaultVal ...string) string {

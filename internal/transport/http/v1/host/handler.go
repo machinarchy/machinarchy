@@ -397,6 +397,8 @@ func hostServiceError(c echo.Context, err error) error {
 		})
 	case errors.Is(err, domain.ErrAuthenticationFailed):
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "SSH authentication failed"})
+	case errors.Is(err, domain.ErrTargetNotAllowed):
+		return badRequest(c, "target address is not permitted by the network policy")
 	case errors.Is(err, domain.ErrInvalidInput):
 		return badRequest(c, err.Error())
 	case errors.Is(err, domain.ErrEnvironmentNotFound):

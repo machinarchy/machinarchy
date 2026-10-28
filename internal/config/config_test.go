@@ -220,3 +220,50 @@ func TestLoadBootstrapAdmin(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadSSHTargetPolicy(t *testing.T) {
+	t.Run("defaults allow private networks only", func(t *testing.T) {
+		setCommonEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		policy := cfg.SSHTargetPolicy
+		if !policy.AllowPrivate || policy.AllowLoopback || len(policy.Allow) != 0 || len(policy.Deny) != 0 {
+			t.Fatalf("unexpected default policy: %+v", policy)
+		}
+	})
+
+	t.Run("explicit configuration", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_SSH_ALLOW_PRIVATE", "false")
+		t.Setenv("MACHINARCHY_SSH_ALLOW_LOOPBACK", "true")
+		t.Setenv("MACHINARCHY_SSH_ALLOWED_CIDRS", "10.20.0.0/16, 192.0.2.7")
+		t.Setenv("MACHINARCHY_SSH_DENIED_CIDRS", "10.20.99.0/24")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		policy := cfg.SSHTargetPolicy
+		if policy.AllowPrivate || !policy.AllowLoopback || len(policy.Allow) != 2 || len(policy.Deny) != 1 {
+			t.Fatalf("unexpected policy: %+v", policy)
+		}
+	})
+
+	t.Run("rejects invalid values", func(t *testing.T) {
+		for key, value := range map[string]string{
+			"MACHINARCHY_SSH_ALLOW_PRIVATE":  "maybe",
+			"MACHINARCHY_SSH_ALLOW_LOOPBACK": "sometimes",
+			"MACHINARCHY_SSH_ALLOWED_CIDRS":  "10.0.0.0/8,banana",
+			"MACHINARCHY_SSH_DENIED_CIDRS":   "300.1.1.1/8",
+		} {
+			t.Run(key, func(t *testing.T) {
+				setCommonEnv(t)
+				t.Setenv(key, value)
+				if _, err := Load(); err == nil {
+					t.Errorf("Load() accepted %s=%q", key, value)
+				}
+			})
+		}
+	})
+}

@@ -31,7 +31,7 @@ api-docs:
 	$(SWAG) init -g main.go -d cmd/api,internal/transport/http,internal/domain --parseInternal -o docs --outputTypes json,yaml
 
 fmt:
-	gofmt -w $$(find cmd internal pkg docs -type f -name '*.go')
+	$(GO) fmt ./...
 
 vet:
 	$(GO) vet ./...

@@ -22,6 +22,7 @@ var (
 	ErrConnectionRefused     = errors.New("target machine actively refused the network connection")
 	ErrSessionCreationFailed = errors.New("failed to initialize interactive payload session channel")
 	ErrServiceBusy           = errors.New("service is at capacity")
+	ErrTargetNotAllowed      = errors.New("target address is not permitted by the network policy")
 
 	ErrHostNotFound       = errors.New("requested host resource could not be found")
 	ErrConcurrentConflict = errors.New("concurrent state modification conflict")

@@ -99,11 +99,13 @@ func (r *Runtime) NewAPIServer(
 		return nil, err
 	}
 
-	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity)
+	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity,
+		service.WithTargetPolicy(cfg.SSHTargetPolicy))
 	if err != nil {
 		return nil, fmt.Errorf("construct host service: %w", err)
 	}
-	metricsService, err := service.NewMetricsServiceWithCapacity(r.stores.Metrics, r.stores.Hosts, sshCapacity)
+	metricsService, err := service.NewMetricsServiceWithCapacity(r.stores.Metrics, r.stores.Hosts, sshCapacity,
+		service.WithTargetPolicy(cfg.SSHTargetPolicy))
 	if err != nil {
 		return nil, fmt.Errorf("construct metrics service: %w", err)
 	}

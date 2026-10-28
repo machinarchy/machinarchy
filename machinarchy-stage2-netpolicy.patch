@@ -1,0 +1,1130 @@
+diff -ruN /tmp/applytest/.env.example work/.env.example
+--- /tmp/applytest/.env.example	2026-10-27 23:02:44.869625500 +0000
++++ work/.env.example	2026-10-27 23:17:12.012243894 +0000
+@@ -53,4 +53,16 @@
+ # MACHINARCHY_DATABASE_CONN_MAX_LIFETIME=0s
+ # MACHINARCHY_DATABASE_CONNECT_TIMEOUT=5s
+ 
++# SSH target network policy. Hostnames are resolved once and the validated
++# address is the one dialed; every resolved address must be permitted.
++# Always denied: unspecified, multicast, broadcast, zoned, and cloud-metadata
++# addresses. Denied by default: loopback and link-local. Private ranges
++# (RFC 1918, CGNAT, fc00::/7) are allowed unless disabled here.
++# MACHINARCHY_SSH_ALLOW_PRIVATE=true
++# MACHINARCHY_SSH_ALLOW_LOOPBACK=false
++# Comma-separated CIDRs or IPs. Allowed ranges override the loopback/link-local/
++# private defaults (never the always-denied set); denied ranges override allowed.
++# MACHINARCHY_SSH_ALLOWED_CIDRS=
++# MACHINARCHY_SSH_DENIED_CIDRS=
++
+ # SSH targets must be registered with a pinned SHA-256 host-key fingerprint.
+diff -ruN /tmp/applytest/ChangeLogAI.md work/ChangeLogAI.md
+--- /tmp/applytest/ChangeLogAI.md	2026-10-27 23:02:44.869781048 +0000
++++ work/ChangeLogAI.md	2026-10-27 23:17:12.013536105 +0000
+@@ -2,6 +2,25 @@
+ 
+ Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
+ 
++## 2026-10-28 — SSH target address policy and DNS-rebinding-safe dialing
++
++### Changes in this update
++
++- Added `pkg/netpolicy`: a destination policy (always-denied unspecified/multicast/broadcast/zoned/cloud-metadata addresses; denied-by-default loopback and link-local; configurable private ranges; explicit allow and deny CIDRs) and a `DialContext` that resolves a hostname once, requires every answer to be permitted, and dials the validated IP.
++- `pkg/sshclient` now dials through the policy; with no dialer supplied it uses `netpolicy.Default()`, so the policy cannot be skipped. Policy denials surface as `domain.ErrTargetNotAllowed`.
++- Host registration (single and bulk) rejects forbidden literal IPs before spending SSH capacity; the host and metrics services accept `service.WithTargetPolicy`, wired from configuration in the API runtime. Single and bulk responses report a fixed, non-revealing denial message.
++- New settings: `MACHINARCHY_SSH_ALLOW_PRIVATE` (default true), `MACHINARCHY_SSH_ALLOW_LOOPBACK` (default false), `MACHINARCHY_SSH_ALLOWED_CIDRS`, `MACHINARCHY_SSH_DENIED_CIDRS`.
++- Behavior change: loopback and link-local targets are now refused by default. Development setups that register hosts on 127.0.0.1 must set `MACHINARCHY_SSH_ALLOW_LOOPBACK=true`.
++- Updated `.env.example`, `docs/SECURITY.md`, `docs/architecture.md`, and `docs/ROADMAP.md`.
++
++### Known limitations
++
++- Not a substitute for network-layer egress controls; no port restrictions; `PUT /api/v1/hosts/{id}` does not re-check the address until the next dial.
++
++### Validation
++
++- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` (ideally with `-race`) before merging.
++
+ ## 2026-10-28 — Single shared workspace, bootstrap owner, and hardened bulk host registration
+ 
+ ### Changes in this update
+diff -ruN /tmp/applytest/docs/ROADMAP.md work/docs/ROADMAP.md
+--- /tmp/applytest/docs/ROADMAP.md	2026-10-27 23:02:44.869945787 +0000
++++ work/docs/ROADMAP.md	2026-10-27 23:17:12.013039226 +0000
+@@ -49,7 +49,7 @@
+ - Host listing and environment listing are unpaginated. Single registration tests one SSH connection synchronously. Bounded synchronous batch registration with per-record results exists (`POST /api/v1/hosts/bulk`); YAML/CSV import, asynchronous/resumable imports, and a database uniqueness constraint for hosts do not.
+ - No public API submits remote commands. The agent process is a placeholder; job routes read existing rows only.
+ - The control-manager currently logs reconnection events rather than reconciling host state. Host persistence and event publishing do not share an outbox transaction.
+-- The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Target address policy, DNS rebinding protection, audit records, and credential rotation/secret references need explicit designs.
++- The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Audit records and credential rotation/secret references need explicit designs. The SSH target address policy and DNS-rebinding-safe dialing (`pkg/netpolicy`) are implemented; port restrictions and re-checking addresses on host update are not.
+ - The repository still has sparse test coverage outside the authorization baseline. SQLite authorization integration coverage exists; PostgreSQL integration coverage and fleet benchmarks are outstanding.
+ 
+ ## Architecture decisions
+@@ -127,7 +127,7 @@
+ - **Acceptance criteria:** Unknown or changed host keys fail closed; checks have caller and server timeouts; cancellation releases connections; credentials never appear in logs or API responses; private networks work only under the chosen explicit policy; per-host failures are independently reported.
+ - **Security considerations:** Mitigate MITM, SSRF, DNS rebinding, credential leakage, and lateral movement; test private, loopback, link-local, and public destinations under policy.
+ - **Tests required:** SSH integration tests with ephemeral test servers and host keys, cancellation/resource cleanup tests, host-key rotation tests, address policy tests, and race detector.
+-- **Status:** In progress. Pinned-key SSH auth and a process-local capacity limit exist; trust lifecycle and target policy remain incomplete.
++- **Status:** In progress. Pinned-key SSH auth, a process-local capacity limit, and a configurable target address policy with resolve-once/dial-validated-IP behavior exist. Not done: fingerprint acquisition/rotation workflow, an explicit validation endpoint, credential references/rotation, a structured error taxonomy, and SSH integration tests against an ephemeral server.
+ 
+ ### Phase 4 — Fleet targeting and execution
+ 
+diff -ruN /tmp/applytest/docs/SECURITY.md work/docs/SECURITY.md
+--- /tmp/applytest/docs/SECURITY.md	2026-10-27 23:02:44.857549989 +0000
++++ work/docs/SECURITY.md	2026-10-27 23:17:12.012562203 +0000
+@@ -21,7 +21,7 @@
+ | Over-privileged automation credentials | API tokens are workspace-bound, limited to `operator` or `reader`, and effective permissions are intersected with the issuing user's current workspace role. Token management requires a human owner session. | No service-account/member lifecycle or per-token permission customization exists. Tokens inherit the issuer's identity for audit attribution; durable audit events are not yet implemented. |
+ | SSH man-in-the-middle | Host registration requires an expected SHA-256 fingerprint and SSH host-key verification fails closed on mismatch. | Fingerprint acquisition, rotation, operator review, and API-level validation need a complete lifecycle. |
+ | Credential disclosure | Storage adapters encrypt SSH credential fields; host credential fields are excluded from ordinary JSON serialization. | Protect DB files, backups, encryption keys, debug dumps, and all error/log paths. Rotation and external secret references are not implemented. |
+-| Arbitrary internal network reachability / SSRF | API rate limiting and SSH concurrency bounds constrain request volume and parallel dials. | Host addresses are caller-controlled and there is no explicit allow/deny policy or DNS rebinding defense. Restrict network egress and access to trusted operators; design policy before imports or execution. |
++| Arbitrary internal network reachability / SSRF | Every SSH dial goes through `pkg/netpolicy`: hostnames are resolved once, every answer must be permitted, and the validated IP is the address dialed (DNS-rebinding safe). Loopback, link-local, metadata, multicast, unspecified, and zoned addresses are denied by default; private ranges and explicit allow/deny CIDRs are configurable. Literal IPs are rejected before any SSH capacity is spent. | The policy limits destinations but is not a network control: keep egress restrictions at the network layer. Allowed private ranges remain reachable by anyone who can register hosts (owners/operators). Host updates are not re-verified when saved; the policy is enforced the next time the host is dialed. No port restrictions. |
+ | Resource exhaustion | HTTP body limit, rate limiter, seven-second host-registration timeout, SSH semaphore, output cap, database pool limits. | Limits are partly process-local; replicas multiply capacity. Host/environment lists are unpaginated. Import, job queue, and fleet-wide admission controls do not exist. |
+ | Command injection / remote command abuse | There is no public API endpoint that submits arbitrary commands. Registration only validates connectivity and does not execute a command. SSH client command helper uses a bounded output buffer. | Do not expose command execution until argument semantics, authorization, approval/preview, audit, timeout, and per-host result contracts are designed. |
+ | Audit tampering or missing attribution | Structured server logs and job `triggered_by` field exist. | No durable audit trail for sensitive inventory mutations; log fields/retention are not an audit guarantee. |
+@@ -78,9 +78,13 @@
+ 
+ Do not rely on hidden UI controls, unguessable IDs, or disabling signup as the authorization boundary. Repository scoping remains authoritative even when the CLI or UI hides resources.
+ 
+-## Required SSH target policy
++## SSH target policy
+ 
+-Machinarchy intentionally connects to private infrastructure, so blanket rejection of private IP ranges is not appropriate. Before host discovery/import or fleet execution, define configurable allowed destination CIDRs and explicit treatment for loopback, link-local, multicast, unspecified, metadata, and public addresses. Resolve hostnames under policy and ensure the validated address is the address actually dialed; otherwise DNS rebinding can bypass the check. Apply egress restrictions at the network layer as defense in depth.
++Implemented in `pkg/netpolicy` and applied by `pkg/sshclient` to every outbound SSH connection (host registration, bulk registration, and metrics collection). A caller cannot opt out: when no dialer is supplied the client uses `netpolicy.Default()`.
++
++Rules, in order: unspecified, multicast, broadcast, "this network", zoned, and cloud-metadata addresses (169.254.169.254, 169.254.170.2, 100.100.100.200, fd00:ec2::254) are always denied, even inside an allowed range. Addresses in `MACHINARCHY_SSH_DENIED_CIDRS` are denied. Addresses in `MACHINARCHY_SSH_ALLOWED_CIDRS` are allowed, which is how loopback or link-local ranges are opened deliberately. Loopback is denied unless `MACHINARCHY_SSH_ALLOW_LOOPBACK=true`; link-local is denied; private ranges (RFC 1918, CGNAT, fc00::/7) are allowed unless `MACHINARCHY_SSH_ALLOW_PRIVATE=false`; public addresses are allowed. IPv4-mapped IPv6 addresses are unmapped before checking. A hostname is permitted only if all of its addresses are permitted, and the connection is made to the validated IP rather than the hostname.
++
++Residual risks: the policy is not a substitute for network egress controls; permitted private ranges stay reachable by users who can register hosts; ports are not restricted; the host fingerprint check still decides whether a reachable server is trusted; and `PUT /hosts/{id}` does not re-check the address until the next dial.
+ 
+ ## Execution and audit gate
+ 
+diff -ruN /tmp/applytest/docs/architecture.md work/docs/architecture.md
+--- /tmp/applytest/docs/architecture.md	2026-10-27 23:02:44.870112108 +0000
++++ work/docs/architecture.md	2026-10-27 23:17:12.013279617 +0000
+@@ -22,7 +22,7 @@
+ - `machinarchy-controlmanager` runs the durable JetStream consumer. It serves only health and metrics endpoints; readiness includes the database, NATS, and active worker subscription.
+ - `machinarchy-monolit` runs the API and control-manager worker in one process, sharing one database pool and one NATS connection. Its readiness includes the worker subscription.
+ - `machinarchy-agent` currently exits with an explicit “not implemented” error.
+-- The host service verifies SSH connection details and the expected host-key fingerprint before persistence. SSH operations are bounded by a process-wide capacity limiter.
++- The host service verifies SSH connection details and the expected host-key fingerprint before persistence. SSH operations are bounded by a process-wide capacity limiter, and every SSH dial is resolved and checked by the target address policy in `pkg/netpolicy` (see the security assessment).
+ - OpenTelemetry propagates trace context through HTTP requests and NATS messages. Prometheus metrics use a process-local registry.
+ 
+ ## Current boundaries and known limitations
+diff -ruN /tmp/applytest/internal/bootstrap/runtime.go work/internal/bootstrap/runtime.go
+--- /tmp/applytest/internal/bootstrap/runtime.go	2026-10-27 23:02:44.870225591 +0000
++++ work/internal/bootstrap/runtime.go	2026-10-27 23:15:59.881606697 +0000
+@@ -99,11 +99,13 @@
+ 		return nil, err
+ 	}
+ 
+-	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity)
++	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity,
++		service.WithTargetPolicy(cfg.SSHTargetPolicy))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("construct host service: %w", err)
+ 	}
+-	metricsService, err := service.NewMetricsServiceWithCapacity(r.stores.Metrics, r.stores.Hosts, sshCapacity)
++	metricsService, err := service.NewMetricsServiceWithCapacity(r.stores.Metrics, r.stores.Hosts, sshCapacity,
++		service.WithTargetPolicy(cfg.SSHTargetPolicy))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("construct metrics service: %w", err)
+ 	}
+diff -ruN /tmp/applytest/internal/config/config.go work/internal/config/config.go
+--- /tmp/applytest/internal/config/config.go	2026-10-27 23:02:44.870317984 +0000
++++ work/internal/config/config.go	2026-10-27 23:15:59.880869009 +0000
+@@ -10,6 +10,8 @@
+ 	"strconv"
+ 	"strings"
+ 	"time"
++
++	"github.com/machinarchy/machinarchy/pkg/netpolicy"
+ )
+ 
+ type Environment string
+@@ -64,6 +66,7 @@
+ 	Database         DatabaseConfig
+ 	EventBroker      EventBrokerConfig
+ 	BootstrapAdmin   BootstrapAdminConfig
++	SSHTargetPolicy  netpolicy.Policy
+ }
+ 
+ // BootstrapAdminConfig describes the optional first owner account. The account is
+@@ -156,6 +159,12 @@
+ 		}
+ 	}
+ 
++	targetPolicy, err := loadSSHTargetPolicy()
++	if err != nil {
++		return Config{}, err
++	}
++	cfg.SSHTargetPolicy = targetPolicy
++
+ 	// Log System Levels Check
+ 	switch cfg.LogLevel {
+ 	case "debug", "info", "warn", "error":
+@@ -174,6 +183,29 @@
+ 	return cfg, nil
+ }
+ 
++// loadSSHTargetPolicy reads the destination policy applied to every SSH dial.
++// Private networks are allowed by default because Machinarchy manages private
++// infrastructure; loopback and link-local stay denied unless allowed explicitly.
++func loadSSHTargetPolicy() (netpolicy.Policy, error) {
++	allowPrivate, err := strconv.ParseBool(GetEnv("MACHINARCHY_SSH_ALLOW_PRIVATE", "true"))
++	if err != nil {
++		return netpolicy.Policy{}, errors.New("MACHINARCHY_SSH_ALLOW_PRIVATE must be true or false")
++	}
++	allowLoopback, err := strconv.ParseBool(GetEnv("MACHINARCHY_SSH_ALLOW_LOOPBACK", "false"))
++	if err != nil {
++		return netpolicy.Policy{}, errors.New("MACHINARCHY_SSH_ALLOW_LOOPBACK must be true or false")
++	}
++	allow, err := netpolicy.ParsePrefixes(GetEnv("MACHINARCHY_SSH_ALLOWED_CIDRS"))
++	if err != nil {
++		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_ALLOWED_CIDRS: %w", err)
++	}
++	deny, err := netpolicy.ParsePrefixes(GetEnv("MACHINARCHY_SSH_DENIED_CIDRS"))
++	if err != nil {
++		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_DENIED_CIDRS: %w", err)
++	}
++	return netpolicy.Policy{AllowPrivate: allowPrivate, AllowLoopback: allowLoopback, Allow: allow, Deny: deny}, nil
++}
++
+ func GetEnv(key string, defaultVal ...string) string {
+ 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+ 		return val
+diff -ruN /tmp/applytest/internal/config/config_test.go work/internal/config/config_test.go
+--- /tmp/applytest/internal/config/config_test.go	2026-10-27 23:02:44.870425168 +0000
++++ work/internal/config/config_test.go	2026-10-27 23:17:24.293414142 +0000
+@@ -220,3 +220,50 @@
+ 		}
+ 	})
+ }
++
++func TestLoadSSHTargetPolicy(t *testing.T) {
++	t.Run("defaults allow private networks only", func(t *testing.T) {
++		setCommonEnv(t)
++		cfg, err := Load()
++		if err != nil {
++			t.Fatalf("Load() error = %v", err)
++		}
++		policy := cfg.SSHTargetPolicy
++		if !policy.AllowPrivate || policy.AllowLoopback || len(policy.Allow) != 0 || len(policy.Deny) != 0 {
++			t.Fatalf("unexpected default policy: %+v", policy)
++		}
++	})
++
++	t.Run("explicit configuration", func(t *testing.T) {
++		setCommonEnv(t)
++		t.Setenv("MACHINARCHY_SSH_ALLOW_PRIVATE", "false")
++		t.Setenv("MACHINARCHY_SSH_ALLOW_LOOPBACK", "true")
++		t.Setenv("MACHINARCHY_SSH_ALLOWED_CIDRS", "10.20.0.0/16, 192.0.2.7")
++		t.Setenv("MACHINARCHY_SSH_DENIED_CIDRS", "10.20.99.0/24")
++		cfg, err := Load()
++		if err != nil {
++			t.Fatalf("Load() error = %v", err)
++		}
++		policy := cfg.SSHTargetPolicy
++		if policy.AllowPrivate || !policy.AllowLoopback || len(policy.Allow) != 2 || len(policy.Deny) != 1 {
++			t.Fatalf("unexpected policy: %+v", policy)
++		}
++	})
++
++	t.Run("rejects invalid values", func(t *testing.T) {
++		for key, value := range map[string]string{
++			"MACHINARCHY_SSH_ALLOW_PRIVATE":  "maybe",
++			"MACHINARCHY_SSH_ALLOW_LOOPBACK": "sometimes",
++			"MACHINARCHY_SSH_ALLOWED_CIDRS":  "10.0.0.0/8,banana",
++			"MACHINARCHY_SSH_DENIED_CIDRS":   "300.1.1.1/8",
++		} {
++			t.Run(key, func(t *testing.T) {
++				setCommonEnv(t)
++				t.Setenv(key, value)
++				if _, err := Load(); err == nil {
++					t.Errorf("Load() accepted %s=%q", key, value)
++				}
++			})
++		}
++	})
++}
+diff -ruN /tmp/applytest/internal/domain/host.go work/internal/domain/host.go
+--- /tmp/applytest/internal/domain/host.go	2026-10-27 23:02:44.870635525 +0000
++++ work/internal/domain/host.go	2026-10-27 23:15:30.247382934 +0000
+@@ -22,6 +22,7 @@
+ 	ErrConnectionRefused     = errors.New("target machine actively refused the network connection")
+ 	ErrSessionCreationFailed = errors.New("failed to initialize interactive payload session channel")
+ 	ErrServiceBusy           = errors.New("service is at capacity")
++	ErrTargetNotAllowed      = errors.New("target address is not permitted by the network policy")
+ 
+ 	ErrHostNotFound       = errors.New("requested host resource could not be found")
+ 	ErrConcurrentConflict = errors.New("concurrent state modification conflict")
+diff -ruN /tmp/applytest/internal/service/host_bulk.go work/internal/service/host_bulk.go
+--- /tmp/applytest/internal/service/host_bulk.go	2026-10-27 23:02:44.871137310 +0000
++++ work/internal/service/host_bulk.go	2026-10-27 23:15:53.821511796 +0000
+@@ -210,6 +210,8 @@
+ 	switch {
+ 	case errors.As(err, &unknownKey):
+ 		return fmt.Sprintf("untrusted SSH host key (%s %s)", unknownKey.Algorithm, unknownKey.Fingerprint)
++	case errors.Is(err, domain.ErrTargetNotAllowed):
++		return "target address is not permitted by the network policy"
+ 	case errors.Is(err, domain.ErrAuthenticationFailed):
+ 		return "SSH authentication failed"
+ 	case errors.Is(err, domain.ErrInvalidInput):
+diff -ruN /tmp/applytest/internal/service/host_policy_test.go work/internal/service/host_policy_test.go
+--- /tmp/applytest/internal/service/host_policy_test.go	1970-01-01 00:00:00.000000000 +0000
++++ work/internal/service/host_policy_test.go	2026-10-27 23:17:11.998546498 +0000
+@@ -0,0 +1,79 @@
++package service
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/machinarchy/machinarchy/internal/domain"
++	"github.com/machinarchy/machinarchy/pkg/netpolicy"
++)
++
++func TestRegisterHostRejectsForbiddenLiteralBeforeConnecting(t *testing.T) {
++	for _, address := range []string{"127.0.0.1", "169.254.169.254", "::1", "0.0.0.0", "224.0.0.5"} {
++		store := &bulkFakeStore{}
++		tester := &bulkFakeTester{}
++		svc := newBulkService(t, store, tester, 8)
++
++		host := bulkHost("blocked", address).Host
++		err := svc.RegisterHost(context.Background(), host)
++		if !errors.Is(err, domain.ErrTargetNotAllowed) {
++			t.Errorf("RegisterHost(%s) error = %v, want ErrTargetNotAllowed", address, err)
++		}
++		if tester.calls.Load() != 0 || len(store.created) != 0 {
++			t.Errorf("RegisterHost(%s) contacted (%d) or stored (%d) a forbidden target", address, tester.calls.Load(), len(store.created))
++		}
++	}
++}
++
++func TestRegisterHostHonorsConfiguredPolicy(t *testing.T) {
++	capacity, err := NewSSHCapacity(4)
++	if err != nil {
++		t.Fatal(err)
++	}
++	strict, err := NewHostServiceWithTesterAndCapacity(&bulkFakeStore{}, nil, &bulkFakeTester{}, capacity,
++		WithTargetPolicy(netpolicy.Policy{})) // private networks disabled
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := strict.RegisterHost(context.Background(), bulkHost("lan", "192.168.1.10").Host); !errors.Is(err, domain.ErrTargetNotAllowed) {
++		t.Errorf("private address under a strict policy error = %v, want ErrTargetNotAllowed", err)
++	}
++
++	store := &bulkFakeStore{}
++	open, err := NewHostServiceWithTesterAndCapacity(store, nil, &bulkFakeTester{}, capacity,
++		WithTargetPolicy(netpolicy.Policy{AllowLoopback: true}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := open.RegisterHost(context.Background(), bulkHost("local", "127.0.0.1").Host); err != nil {
++		t.Errorf("explicitly allowed loopback was rejected: %v", err)
++	}
++	if len(store.created) != 1 {
++		t.Errorf("stored %d hosts, want 1", len(store.created))
++	}
++}
++
++func TestBulkRegisterReportsPolicyDenialsPerRecord(t *testing.T) {
++	store := &bulkFakeStore{}
++	tester := &bulkFakeTester{}
++	svc := newBulkService(t, store, tester, 8)
++
++	res, err := svc.BulkRegisterHosts(context.Background(), 1, []domain.BulkHostEntry{
++		bulkHost("ok-1", "10.0.0.1"),
++		bulkHost("metadata", "169.254.169.254"),
++		bulkHost("ok-2", "10.0.0.2"),
++	}, BulkRegisterOptions{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if res.SuccessCount != 2 || res.FailureCount != 1 || res.Results[1].Status != domain.StatusFailed {
++		t.Fatalf("unexpected response: %+v", res)
++	}
++	if res.Results[1].Error != "target address is not permitted by the network policy" {
++		t.Errorf("denial message = %q", res.Results[1].Error)
++	}
++	if tester.calls.Load() != 2 {
++		t.Errorf("%d connection tests, want 2 (the forbidden target must not be contacted)", tester.calls.Load())
++	}
++}
+diff -ruN /tmp/applytest/internal/service/host_service.go work/internal/service/host_service.go
+--- /tmp/applytest/internal/service/host_service.go	2026-10-27 23:02:44.871322104 +0000
++++ work/internal/service/host_service.go	2026-10-27 23:15:53.820606643 +0000
+@@ -10,6 +10,7 @@
+ 	"time"
+ 
+ 	"github.com/machinarchy/machinarchy/internal/domain"
++	"github.com/machinarchy/machinarchy/pkg/netpolicy"
+ 	"github.com/machinarchy/machinarchy/pkg/sshclient"
+ 	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/attribute"
+@@ -30,6 +31,7 @@
+ 	publisher EventPublisher
+ 	sshTester SSHConnectionTester
+ 	sshLimit  *SSHCapacity
++	policy    netpolicy.Policy
+ }
+ 
+ type EventPublisher interface {
+@@ -53,21 +55,22 @@
+ func NewHostServiceWithTester(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester) HostService {
+ 	return &hostService{
+ 		repo: r, publisher: publisher, sshTester: tester,
+-		sshLimit: newDefaultSSHCapacity(),
++		sshLimit: newDefaultSSHCapacity(), policy: netpolicy.Default(),
+ 	}
+ }
+ 
+ // NewHostServiceWithCapacity constructs a host service using a shared SSH bulkhead.
+-func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity) (HostService, error) {
+-	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity)
++func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
++	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity, opts...)
+ }
+ 
+ // NewHostServiceWithTesterAndCapacity injects SSH verification and capacity ports.
+-func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity) (HostService, error) {
++func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
+ 	if r == nil || tester == nil || capacity == nil {
+ 		return nil, errors.New("host service dependencies and SSH capacity are required")
+ 	}
+-	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity}, nil
++	options := applyOptions(opts)
++	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy}, nil
+ }
+ 
+ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr error) {
+@@ -95,6 +98,13 @@
+ 		return err
+ 	}
+ 
++	// Reject literal addresses the policy forbids before any SSH capacity is
++	// spent. Hostnames are resolved and enforced at dial time, which pins the
++	// validated address.
++	if err := s.policy.CheckHost(h.IPAddress); err != nil {
++		return err
++	}
++
+ 	// Choose signature parameters values matching deduced types matrix safely
+ 	var secretData string
+ 	if h.SSH.AuthType.Method == domain.AuthTypePrivateKey {
+@@ -111,6 +121,7 @@
+ 		SecretData:          secretData,
+ 		Passphrase:          h.SSH.AuthType.Passphrase,
+ 		ExpectedFingerprint: h.SSH.AuthType.ExpectedFingerprint,
++		Dialer:              s.policy.DialContext,
+ 	}
+ 	// 3. Execute Bounded Cryptographic Network Test Verification Handshake
+ 	testCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
+diff -ruN /tmp/applytest/internal/service/metrics_service.go work/internal/service/metrics_service.go
+--- /tmp/applytest/internal/service/metrics_service.go	2026-10-27 23:02:44.858417545 +0000
++++ work/internal/service/metrics_service.go	2026-10-27 23:15:53.821354432 +0000
+@@ -20,6 +20,7 @@
+ 	metricStore domain.MetricsStore
+ 	hostStore   domain.HostStore
+ 	sshLimit    *SSHCapacity
++	policy      netpolicy.Policy
+ }
+ 
+ func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.MetricsService {
+@@ -27,15 +28,17 @@
+ 		metricStore: ms,
+ 		hostStore:   hs,
+ 		sshLimit:    newDefaultSSHCapacity(),
++		policy:      netpolicy.Default(),
+ 	}
+ }
+ 
+ // NewMetricsServiceWithCapacity constructs a metrics service sharing the process SSH bulkhead.
+-func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity) (domain.MetricsService, error) {
++func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity, opts ...ServiceOption) (domain.MetricsService, error) {
+ 	if ms == nil || hs == nil || capacity == nil {
+ 		return nil, errors.New("metrics service dependencies and SSH capacity are required")
+ 	}
+-	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity}, nil
++	options := applyOptions(opts)
++	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity, policy: options.targetPolicy}, nil
+ }
+ 
+ func (s *metricsService) GetHistory(ctx context.Context, workspaceID int, timeRange string) ([]domain.DataPoint, error) {
+@@ -108,6 +111,7 @@
+ 		SecretData:          secretData,
+ 		Passphrase:          host.SSH.AuthType.Passphrase,
+ 		ExpectedFingerprint: host.SSH.AuthType.ExpectedFingerprint,
++		Dialer:              s.policy.DialContext,
+ 	}
+ 
+ 	// 2. Execute Linux baseline collection telemetry matrix command block
+diff -ruN /tmp/applytest/internal/service/options.go work/internal/service/options.go
+--- /tmp/applytest/internal/service/options.go	1970-01-01 00:00:00.000000000 +0000
++++ work/internal/service/options.go	2026-10-27 23:15:53.819286008 +0000
+@@ -0,0 +1,26 @@
++package service
++
++import "github.com/machinarchy/machinarchy/pkg/netpolicy"
++
++type serviceOptions struct {
++	targetPolicy netpolicy.Policy
++}
++
++// ServiceOption customizes service construction.
++type ServiceOption func(*serviceOptions)
++
++// WithTargetPolicy sets the destination policy applied to every SSH dial. The
++// default is netpolicy.Default().
++func WithTargetPolicy(policy netpolicy.Policy) ServiceOption {
++	return func(o *serviceOptions) { o.targetPolicy = policy }
++}
++
++func applyOptions(opts []ServiceOption) serviceOptions {
++	options := serviceOptions{targetPolicy: netpolicy.Default()}
++	for _, opt := range opts {
++		if opt != nil {
++			opt(&options)
++		}
++	}
++	return options
++}
+diff -ruN /tmp/applytest/internal/transport/http/v1/host/handler.go work/internal/transport/http/v1/host/handler.go
+--- /tmp/applytest/internal/transport/http/v1/host/handler.go	2026-10-27 23:02:44.872103918 +0000
++++ work/internal/transport/http/v1/host/handler.go	2026-10-27 23:15:53.821829160 +0000
+@@ -397,6 +397,8 @@
+ 		})
+ 	case errors.Is(err, domain.ErrAuthenticationFailed):
+ 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "SSH authentication failed"})
++	case errors.Is(err, domain.ErrTargetNotAllowed):
++		return badRequest(c, "target address is not permitted by the network policy")
+ 	case errors.Is(err, domain.ErrInvalidInput):
+ 		return badRequest(c, err.Error())
+ 	case errors.Is(err, domain.ErrEnvironmentNotFound):
+diff -ruN /tmp/applytest/pkg/netpolicy/policy.go work/pkg/netpolicy/policy.go
+--- /tmp/applytest/pkg/netpolicy/policy.go	1970-01-01 00:00:00.000000000 +0000
++++ work/pkg/netpolicy/policy.go	2026-10-27 23:15:30.256002309 +0000
+@@ -0,0 +1,227 @@
++// Package netpolicy decides which network destinations Machinarchy may dial and
++// dials them safely. Hostnames are resolved once under the policy and the
++// validated address is the address actually dialed, so a DNS answer that changes
++// between the check and the connection (DNS rebinding) cannot bypass it.
++//
++// Rules, in order:
++//
++//  1. Unspecified, multicast, broadcast, "this network" (0.0.0.0/8), zoned
++//     addresses, and well-known cloud metadata addresses are always denied.
++//  2. Addresses inside Deny are denied.
++//  3. Addresses inside Allow are allowed. This is the way to permit loopback or
++//     link-local ranges deliberately.
++//  4. Loopback is denied unless AllowLoopback is set.
++//  5. Link-local unicast (169.254.0.0/16, fe80::/10) is denied.
++//  6. Private ranges (RFC 1918, CGNAT 100.64.0.0/10, fc00::/7) are allowed only
++//     when AllowPrivate is set.
++//  7. Everything else (public addresses) is allowed.
++//
++// A hostname is allowed only if every address it resolves to is allowed.
++//
++// The policy limits where connections may go; it does not replace network-layer
++// egress controls, which should be applied as defense in depth.
++package netpolicy
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"net/netip"
++	"strings"
++	"time"
++
++	"github.com/machinarchy/machinarchy/internal/domain"
++)
++
++// Resolver looks up the addresses of a hostname. *net.Resolver satisfies it.
++type Resolver interface {
++	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
++}
++
++// Policy is an immutable-by-convention destination policy. The zero value is the
++// strictest: no private, no loopback, no explicit allow list.
++type Policy struct {
++	AllowPrivate  bool
++	AllowLoopback bool
++	Allow         []netip.Prefix
++	Deny          []netip.Prefix
++	// Resolver defaults to net.DefaultResolver.
++	Resolver Resolver
++	// DialTimeout bounds one connection attempt; it defaults to 10 seconds.
++	DialTimeout time.Duration
++}
++
++// Default allows public and private destinations and denies loopback,
++// link-local, metadata, multicast, and unspecified addresses.
++func Default() Policy { return Policy{AllowPrivate: true} }
++
++var (
++	cgnat = netip.MustParsePrefix("100.64.0.0/10")
++
++	// Addresses of cloud instance-metadata services. Reaching them through a
++	// managed-host record would expose instance credentials, so they stay denied
++	// even when an Allow range covers them.
++	metadataAddrs = []netip.Addr{
++		netip.MustParseAddr("169.254.169.254"),
++		netip.MustParseAddr("169.254.170.2"),
++		netip.MustParseAddr("100.100.100.200"),
++		netip.MustParseAddr("fd00:ec2::254"),
++	}
++)
++
++// CheckAddr reports whether dialing addr is permitted.
++func (p Policy) CheckAddr(addr netip.Addr) error {
++	addr = addr.Unmap()
++	deny := func(reason string) error {
++		return fmt.Errorf("%w: %s is %s", domain.ErrTargetNotAllowed, addr, reason)
++	}
++	switch {
++	case !addr.IsValid():
++		return fmt.Errorf("%w: invalid address", domain.ErrTargetNotAllowed)
++	case addr.Zone() != "":
++		return deny("a zoned address")
++	case addr.IsUnspecified():
++		return deny("unspecified")
++	case addr.IsMulticast():
++		return deny("multicast")
++	case addr.Is4() && (addr == netip.AddrFrom4([4]byte{255, 255, 255, 255}) || addr.As4()[0] == 0):
++		return deny("a broadcast or this-network address")
++	}
++	for _, metadata := range metadataAddrs {
++		if addr == metadata {
++			return deny("a cloud metadata address")
++		}
++	}
++	for _, prefix := range p.Deny {
++		if prefix.Contains(addr) {
++			return deny("in a denied range")
++		}
++	}
++	for _, prefix := range p.Allow {
++		if prefix.Contains(addr) {
++			return nil
++		}
++	}
++	switch {
++	case addr.IsLoopback():
++		if !p.AllowLoopback {
++			return deny("a loopback address")
++		}
++	case addr.IsLinkLocalUnicast():
++		return deny("a link-local address")
++	case addr.IsPrivate() || cgnat.Contains(addr):
++		if !p.AllowPrivate {
++			return deny("a private address")
++		}
++	}
++	return nil
++}
++
++// CheckHost checks host only when it is an IP literal, without any DNS lookup.
++// Hostnames pass here and are enforced when they are resolved for dialing.
++func (p Policy) CheckHost(host string) error {
++	if addr, ok := parseLiteral(host); ok {
++		return p.CheckAddr(addr)
++	}
++	return nil
++}
++
++// Resolve returns the addresses host may be dialed at. An IP literal is checked
++// directly; a hostname is resolved once and every answer must be permitted.
++func (p Policy) Resolve(ctx context.Context, host string) ([]netip.Addr, error) {
++	if addr, ok := parseLiteral(host); ok {
++		if err := p.CheckAddr(addr); err != nil {
++			return nil, err
++		}
++		return []netip.Addr{addr.Unmap()}, nil
++	}
++	host = strings.TrimSpace(host)
++	if host == "" {
++		return nil, fmt.Errorf("%w: host is required", domain.ErrInvalidInput)
++	}
++	resolver := p.Resolver
++	if resolver == nil {
++		resolver = net.DefaultResolver
++	}
++	addrs, err := resolver.LookupNetIP(ctx, "ip", host)
++	if err != nil {
++		return nil, fmt.Errorf("resolve target host: %w", err)
++	}
++	if len(addrs) == 0 {
++		return nil, fmt.Errorf("resolve target host: no addresses found")
++	}
++	for _, addr := range addrs {
++		if err := p.CheckAddr(addr); err != nil {
++			return nil, err
++		}
++	}
++	return addrs, nil
++}
++
++// DialContext resolves address under the policy and dials the validated IP
++// directly, never the hostname. It has the signature of net.Dialer.DialContext
++// and only supports the "tcp" network.
++func (p Policy) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
++	if network != "tcp" {
++		return nil, fmt.Errorf("%w: unsupported network %q", domain.ErrInvalidInput, network)
++	}
++	host, port, err := net.SplitHostPort(address)
++	if err != nil {
++		return nil, fmt.Errorf("%w: invalid target address: %v", domain.ErrInvalidInput, err)
++	}
++	addrs, err := p.Resolve(ctx, host)
++	if err != nil {
++		return nil, err
++	}
++	timeout := p.DialTimeout
++	if timeout <= 0 {
++		timeout = 10 * time.Second
++	}
++	dialer := net.Dialer{Timeout: timeout}
++	var lastErr error
++	for _, addr := range addrs {
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(addr.Unmap().String(), port))
++		if err == nil {
++			return conn, nil
++		}
++		lastErr = err
++	}
++	return nil, lastErr
++}
++
++// ParsePrefixes parses a comma-separated list of CIDRs or single IP addresses.
++// An empty string yields no prefixes.
++func ParsePrefixes(list string) ([]netip.Prefix, error) {
++	var prefixes []netip.Prefix
++	for _, item := range strings.Split(list, ",") {
++		item = strings.TrimSpace(item)
++		if item == "" {
++			continue
++		}
++		if prefix, err := netip.ParsePrefix(item); err == nil {
++			prefixes = append(prefixes, prefix.Masked())
++			continue
++		}
++		addr, err := netip.ParseAddr(item)
++		if err != nil {
++			return nil, fmt.Errorf("%q is not a valid CIDR or IP address", item)
++		}
++		addr = addr.Unmap()
++		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
++	}
++	return prefixes, nil
++}
++
++func parseLiteral(host string) (netip.Addr, bool) {
++	host = strings.TrimSpace(host)
++	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
++	addr, err := netip.ParseAddr(host)
++	if err != nil {
++		return netip.Addr{}, false
++	}
++	return addr, true
++}
++
+diff -ruN /tmp/applytest/pkg/netpolicy/policy_test.go work/pkg/netpolicy/policy_test.go
+--- /tmp/applytest/pkg/netpolicy/policy_test.go	1970-01-01 00:00:00.000000000 +0000
++++ work/pkg/netpolicy/policy_test.go	2026-10-27 23:16:31.720162333 +0000
+@@ -0,0 +1,270 @@
++package netpolicy
++
++import (
++	"context"
++	"errors"
++	"net"
++	"net/netip"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/machinarchy/machinarchy/internal/domain"
++)
++
++func TestDefaultPolicyDecisions(t *testing.T) {
++	policy := Default()
++	tests := []struct {
++		addr    string
++		allowed bool
++	}{
++		{"8.8.8.8", true},
++		{"192.0.2.10", true}, // documentation range used in examples
++		{"2606:4700:4700::1111", true},
++		{"10.0.0.5", true},
++		{"172.16.4.9", true},
++		{"192.168.1.20", true},
++		{"100.64.0.7", true}, // CGNAT counts as private
++		{"fd12:3456::1", true},
++		{"127.0.0.1", false},
++		{"::1", false},
++		{"169.254.10.10", false},
++		{"169.254.169.254", false}, // cloud metadata
++		{"fe80::1", false},
++		{"fd00:ec2::254", false}, // AWS IPv6 metadata
++		{"100.100.100.200", false},
++		{"0.0.0.0", false},
++		{"::", false},
++		{"0.1.2.3", false},
++		{"255.255.255.255", false},
++		{"224.0.0.1", false},
++		{"ff02::1", false},
++		{"::ffff:127.0.0.1", false}, // IPv4-mapped loopback
++		{"::ffff:169.254.169.254", false},
++		{"::ffff:10.0.0.1", true},
++		{"fe80::1%eth0", false},
++	}
++	for _, tc := range tests {
++		err := policy.CheckAddr(netip.MustParseAddr(tc.addr))
++		if tc.allowed && err != nil {
++			t.Errorf("CheckAddr(%s) = %v, want allowed", tc.addr, err)
++		}
++		if !tc.allowed {
++			if err == nil {
++				t.Errorf("CheckAddr(%s) allowed, want denied", tc.addr)
++			} else if !errors.Is(err, domain.ErrTargetNotAllowed) {
++				t.Errorf("CheckAddr(%s) error = %v, want ErrTargetNotAllowed", tc.addr, err)
++			}
++		}
++	}
++}
++
++func TestZeroPolicyIsStrict(t *testing.T) {
++	var policy Policy
++	if err := policy.CheckAddr(netip.MustParseAddr("10.0.0.5")); err == nil {
++		t.Error("the zero policy must not allow private addresses")
++	}
++	if err := policy.CheckAddr(netip.MustParseAddr("8.8.8.8")); err != nil {
++		t.Errorf("the zero policy should still allow public addresses: %v", err)
++	}
++}
++
++func TestOverridesAndPrecedence(t *testing.T) {
++	prefixes := func(list string) []netip.Prefix {
++		t.Helper()
++		parsed, err := ParsePrefixes(list)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return parsed
++	}
++	t.Run("private can be disabled", func(t *testing.T) {
++		if err := (Policy{}).CheckAddr(netip.MustParseAddr("192.168.1.1")); err == nil {
++			t.Error("private should be denied when AllowPrivate is false")
++		}
++	})
++	t.Run("loopback needs an explicit opt-in", func(t *testing.T) {
++		if err := (Policy{AllowLoopback: true}).CheckAddr(netip.MustParseAddr("127.0.0.1")); err != nil {
++			t.Errorf("loopback should be allowed with AllowLoopback: %v", err)
++		}
++	})
++	t.Run("allow list can open a link-local range", func(t *testing.T) {
++		policy := Policy{Allow: prefixes("169.254.50.0/24")}
++		if err := policy.CheckAddr(netip.MustParseAddr("169.254.50.9")); err != nil {
++			t.Errorf("explicitly allowed range was denied: %v", err)
++		}
++		if err := policy.CheckAddr(netip.MustParseAddr("169.254.51.9")); err == nil {
++			t.Error("addresses outside the allowed range must stay denied")
++		}
++	})
++	t.Run("metadata stays denied even inside an allowed range", func(t *testing.T) {
++		policy := Policy{AllowPrivate: true, Allow: prefixes("169.254.0.0/16")}
++		if err := policy.CheckAddr(netip.MustParseAddr("169.254.169.254")); err == nil {
++			t.Error("the metadata address must never be allowed")
++		}
++	})
++	t.Run("deny wins over allow", func(t *testing.T) {
++		policy := Policy{Allow: prefixes("10.0.0.0/8"), Deny: prefixes("10.9.0.0/16")}
++		if err := policy.CheckAddr(netip.MustParseAddr("10.9.1.1")); err == nil {
++			t.Error("a denied range must win over an allowed one")
++		}
++		if err := policy.CheckAddr(netip.MustParseAddr("10.1.1.1")); err != nil {
++			t.Errorf("address outside the denied range was rejected: %v", err)
++		}
++	})
++	t.Run("deny can carve public space out", func(t *testing.T) {
++		policy := Policy{AllowPrivate: true, Deny: prefixes("203.0.113.0/24")}
++		if err := policy.CheckAddr(netip.MustParseAddr("203.0.113.5")); err == nil {
++			t.Error("denied public range was allowed")
++		}
++	})
++}
++
++func TestParsePrefixes(t *testing.T) {
++	got, err := ParsePrefixes(" 10.0.0.0/8 , 192.0.2.7,fd00::/8,, ")
++	if err != nil || len(got) != 3 {
++		t.Fatalf("ParsePrefixes() = %v, %v; want 3 prefixes", got, err)
++	}
++	if got[1].Bits() != 32 {
++		t.Errorf("a bare IPv4 address must become a /32, got %s", got[1])
++	}
++	if none, err := ParsePrefixes(""); err != nil || len(none) != 0 {
++		t.Errorf("empty list = %v, %v; want none", none, err)
++	}
++	if _, err := ParsePrefixes("10.0.0.0/8,not-an-ip"); err == nil {
++		t.Error("an invalid entry must be rejected, not skipped")
++	}
++}
++
++func TestCheckHostOnlyInspectsLiterals(t *testing.T) {
++	policy := Default()
++	for _, host := range []string{"127.0.0.1", "[::1]", " 169.254.169.254 "} {
++		if err := policy.CheckHost(host); !errors.Is(err, domain.ErrTargetNotAllowed) {
++			t.Errorf("CheckHost(%q) = %v, want ErrTargetNotAllowed", host, err)
++		}
++	}
++	for _, host := range []string{"web-01.example.com", "localhost", "10.0.0.5"} {
++		if err := policy.CheckHost(host); err != nil {
++			t.Errorf("CheckHost(%q) = %v; hostnames are enforced at dial time and private is allowed", host, err)
++		}
++	}
++}
++
++type fakeResolver struct {
++	answers map[string][]netip.Addr
++	err     error
++	calls   atomic.Int32
++}
++
++func (f *fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
++	f.calls.Add(1)
++	if f.err != nil {
++		return nil, f.err
++	}
++	return f.answers[host], nil
++}
++
++func TestResolveRequiresEveryAnswerToBeAllowed(t *testing.T) {
++	resolver := &fakeResolver{answers: map[string][]netip.Addr{
++		"good.example":    {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("10.0.0.9")},
++		"mixed.example":   {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("169.254.169.254")},
++		"loop.example":    {netip.MustParseAddr("127.0.0.1")},
++		"mapped.example":  {netip.MustParseAddr("::ffff:127.0.0.1")},
++		"nothing.example": {},
++	}}
++	policy := Default()
++	policy.Resolver = resolver
++
++	if addrs, err := policy.Resolve(context.Background(), "good.example"); err != nil || len(addrs) != 2 {
++		t.Fatalf("Resolve(good) = %v, %v", addrs, err)
++	}
++	for _, host := range []string{"mixed.example", "loop.example", "mapped.example"} {
++		if _, err := policy.Resolve(context.Background(), host); !errors.Is(err, domain.ErrTargetNotAllowed) {
++			t.Errorf("Resolve(%s) error = %v; one bad answer (rebinding set) must deny the host", host, err)
++		}
++	}
++	if _, err := policy.Resolve(context.Background(), "nothing.example"); err == nil {
++		t.Error("a hostname with no addresses must fail")
++	}
++	before := resolver.calls.Load()
++	if _, err := policy.Resolve(context.Background(), "10.0.0.5"); err != nil {
++		t.Fatal(err)
++	}
++	if resolver.calls.Load() != before {
++		t.Error("an IP literal must not trigger a DNS lookup")
++	}
++	resolver.err = errors.New("lookup failed")
++	if _, err := policy.Resolve(context.Background(), "good.example"); err == nil || errors.Is(err, domain.ErrTargetNotAllowed) {
++		t.Errorf("a DNS failure should surface as a resolution error, not a policy denial: %v", err)
++	}
++}
++
++func listen(t *testing.T) (port string, accepted *atomic.Int32) {
++	t.Helper()
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Skipf("cannot listen on loopback: %v", err)
++	}
++	t.Cleanup(func() { _ = listener.Close() })
++	accepted = new(atomic.Int32)
++	go func() {
++		for {
++			conn, err := listener.Accept()
++			if err != nil {
++				return
++			}
++			accepted.Add(1)
++			_ = conn.Close()
++		}
++	}()
++	_, port, _ = net.SplitHostPort(listener.Addr().String())
++	return port, accepted
++}
++
++func TestDialContextDialsTheValidatedAddressOnly(t *testing.T) {
++	port, accepted := listen(t)
++	resolver := &fakeResolver{answers: map[string][]netip.Addr{
++		"svc.internal.test": {netip.MustParseAddr("127.0.0.1")},
++	}}
++
++	t.Run("denied before any connection is attempted", func(t *testing.T) {
++		policy := Default()
++		policy.Resolver = resolver
++		if _, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("svc.internal.test", port)); !errors.Is(err, domain.ErrTargetNotAllowed) {
++			t.Fatalf("DialContext error = %v, want ErrTargetNotAllowed", err)
++		}
++		if _, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("127.0.0.1", port)); !errors.Is(err, domain.ErrTargetNotAllowed) {
++			t.Fatalf("literal loopback error = %v, want ErrTargetNotAllowed", err)
++		}
++		time.Sleep(50 * time.Millisecond)
++		if accepted.Load() != 0 {
++			t.Fatalf("the listener saw %d connections; a denied target must never be dialed", accepted.Load())
++		}
++	})
++
++	t.Run("allowed target resolves once and dials the pinned address", func(t *testing.T) {
++		resolver.calls.Store(0)
++		policy := Policy{AllowLoopback: true, Resolver: resolver}
++		conn, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("svc.internal.test", port))
++		if err != nil {
++			t.Fatalf("DialContext() error = %v", err)
++		}
++		defer conn.Close()
++		if got := resolver.calls.Load(); got != 1 {
++			t.Errorf("hostname resolved %d times, want exactly 1 (no re-resolution between check and dial)", got)
++		}
++		if remote := conn.RemoteAddr().String(); remote != net.JoinHostPort("127.0.0.1", port) {
++			t.Errorf("connected to %s, want the validated IP", remote)
++		}
++	})
++
++	t.Run("only tcp and valid addresses are accepted", func(t *testing.T) {
++		policy := Default()
++		if _, err := policy.DialContext(context.Background(), "udp", "8.8.8.8:53"); !errors.Is(err, domain.ErrInvalidInput) {
++			t.Errorf("udp error = %v, want ErrInvalidInput", err)
++		}
++		if _, err := policy.DialContext(context.Background(), "tcp", "no-port"); !errors.Is(err, domain.ErrInvalidInput) {
++			t.Errorf("missing port error = %v, want ErrInvalidInput", err)
++		}
++	})
++}
+diff -ruN /tmp/applytest/pkg/sshclient/client.go work/pkg/sshclient/client.go
+--- /tmp/applytest/pkg/sshclient/client.go	2026-10-27 23:02:44.859389821 +0000
++++ work/pkg/sshclient/client.go	2026-10-27 23:15:53.819215616 +0000
+@@ -15,6 +15,7 @@
+ 	"golang.org/x/crypto/ssh"
+ 
+ 	"github.com/machinarchy/machinarchy/internal/domain"
++	"github.com/machinarchy/machinarchy/pkg/netpolicy"
+ )
+ 
+ const (
+@@ -30,6 +31,11 @@
+ 	SecretData          string
+ 	Passphrase          string
+ 	ExpectedFingerprint string
++	// Dialer opens the TCP connection. When nil, a netpolicy.Default() dialer is
++	// used, so targets are always resolved and checked under a policy and the
++	// validated address is the one dialed. Callers with a configured policy pass
++	// its DialContext.
++	Dialer func(ctx context.Context, network, address string) (net.Conn, error)
+ }
+ 
+ // TestConnection verifies SSH authentication and the pinned host key.
+@@ -90,8 +96,11 @@
+ 		return nil, nil, err
+ 	}
+ 	addr := net.JoinHostPort(strings.TrimSpace(params.IP), strconv.Itoa(params.Port))
+-	dialer := net.Dialer{Timeout: defaultHandshakeTimeout}
+-	netConn, err := dialer.DialContext(ctx, "tcp", addr)
++	dialContext := params.Dialer
++	if dialContext == nil {
++		dialContext = netpolicy.Default().DialContext
++	}
++	netConn, err := dialContext(ctx, "tcp", addr)
+ 	if err != nil {
+ 		return nil, nil, classifyNetworkError(ctx, err)
+ 	}
+@@ -188,6 +197,9 @@
+ 	if ctxErr := ctx.Err(); ctxErr != nil {
+ 		return ctxErr
+ 	}
++	if errors.Is(err, domain.ErrTargetNotAllowed) {
++		return err
++	}
+ 	if errors.Is(err, syscall.ECONNREFUSED) {
+ 		return domain.ErrConnectionRefused
+ 	}
+diff -ruN /tmp/applytest/pkg/sshclient/dial_policy_test.go work/pkg/sshclient/dial_policy_test.go
+--- /tmp/applytest/pkg/sshclient/dial_policy_test.go	1970-01-01 00:00:00.000000000 +0000
++++ work/pkg/sshclient/dial_policy_test.go	2026-10-27 23:16:31.722423764 +0000
+@@ -0,0 +1,72 @@
++package sshclient
++
++import (
++	"context"
++	"errors"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/machinarchy/machinarchy/internal/domain"
++	"github.com/machinarchy/machinarchy/pkg/netpolicy"
++)
++
++func loopbackListener(t *testing.T) (port int, accepted *atomic.Int32) {
++	t.Helper()
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Skipf("cannot listen on loopback: %v", err)
++	}
++	t.Cleanup(func() { _ = listener.Close() })
++	accepted = new(atomic.Int32)
++	go func() {
++		for {
++			conn, err := listener.Accept()
++			if err != nil {
++				return
++			}
++			accepted.Add(1)
++			_ = conn.Close()
++		}
++	}()
++	return listener.Addr().(*net.TCPAddr).Port, accepted
++}
++
++func testParams(port int) DialParams {
++	return DialParams{
++		IP: "127.0.0.1", Port: port, Username: "deploy",
++		AuthMethod: domain.AuthTypePassword, SecretData: "pw", ExpectedFingerprint: "SHA256:test",
++	}
++}
++
++func TestTestConnectionRefusesLoopbackByDefault(t *testing.T) {
++	port, accepted := loopbackListener(t)
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++
++	err := TestConnection(ctx, testParams(port))
++	if !errors.Is(err, domain.ErrTargetNotAllowed) {
++		t.Fatalf("TestConnection() error = %v, want ErrTargetNotAllowed", err)
++	}
++	time.Sleep(50 * time.Millisecond)
++	if accepted.Load() != 0 {
++		t.Fatalf("listener saw %d connections; the default policy must stop the dial", accepted.Load())
++	}
++}
++
++func TestTestConnectionUsesInjectedDialer(t *testing.T) {
++	port, accepted := loopbackListener(t)
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++
++	params := testParams(port)
++	params.Dialer = netpolicy.Policy{AllowLoopback: true}.DialContext
++	err := TestConnection(ctx, params)
++	if err == nil || errors.Is(err, domain.ErrTargetNotAllowed) {
++		t.Fatalf("error = %v; the dial should be permitted and then fail during the SSH handshake", err)
++	}
++	if accepted.Load() != 1 {
++		t.Fatalf("listener saw %d connections, want 1", accepted.Load())
++	}
++}

@@ -210,6 +210,8 @@ func bulkFailureMessage(err error) string {
 	switch {
 	case errors.As(err, &unknownKey):
 		return fmt.Sprintf("untrusted SSH host key (%s %s)", unknownKey.Algorithm, unknownKey.Fingerprint)
+	case errors.Is(err, domain.ErrTargetNotAllowed):
+		return "target address is not permitted by the network policy"
 	case errors.Is(err, domain.ErrAuthenticationFailed):
 		return "SSH authentication failed"
 	case errors.Is(err, domain.ErrInvalidInput):
