@@ -2,6 +2,29 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — Host uniqueness enforced by the database
+
+### Changes in this update
+
+- Added migration `000004_host_uniqueness` for SQLite and PostgreSQL: unique indexes on `(workspace_id, name)` (case-insensitive) and `(workspace_id, ip_address, port)` (case-insensitive address). The previous schema had no uniqueness constraint, so duplicate detection in bulk import was a read-then-write check that concurrent requests could beat.
+- Added a migrator pre-flight hook (`internal/store/preflight.go`). Before applying migration 4 it scans for existing conflicts and, if any exist, refuses to start with a message listing each workspace, the conflicting name or address:port, and the host IDs. Nothing is renamed, merged, or deleted automatically; resolve the duplicates and restart. A fresh database or one without duplicates migrates normally.
+- Stores now map unique violations on create and update to the new `domain.ErrHostAlreadyExists`. `POST /api/v1/hosts` and `PUT /api/v1/hosts/{id}` return 409 Conflict; bulk registration reports a record that loses a race as `duplicate` (with no database error text) and leaves the others unaffected.
+- Tests: database-enforced duplicates (name, address:port, case, per-workspace independence, no partial rows), update collisions and self-update, the pre-flight conflict report and recovery after resolving duplicates, bulk insert-time duplicates, and handler status mapping.
+- Updated `docs/ROADMAP.md` and `docs/architecture.md`.
+
+### Upgrade note
+
+- Databases that already contain two hosts with the same name (ignoring ASCII case) or the same address:port in one workspace will fail to start until the duplicates are renamed or deleted. The error lists the host IDs.
+- Case-insensitivity is ASCII-only in SQLite; the application-level duplicate check folds Unicode case, so it can be slightly stricter than the SQLite index.
+
+### Known limitations
+
+- The migration pre-flight and PostgreSQL indexes have no PostgreSQL integration test. Host deletion is unaffected.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` (ideally with `-race`) before merging.
+
 ## 2026-10-28 — Owner-only member role administration
 
 ### Changes in this update

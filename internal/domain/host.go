@@ -25,6 +25,7 @@ var (
 	ErrTargetNotAllowed      = errors.New("target address is not permitted by the network policy")
 
 	ErrHostNotFound       = errors.New("requested host resource could not be found")
+	ErrHostAlreadyExists  = errors.New("a host with the same name or address:port already exists")
 	ErrConcurrentConflict = errors.New("concurrent state modification conflict")
 )
 

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ type bulkFakeStore struct {
 	existing []*domain.Host
 	created  []*domain.Host
 	nextID   int
+	// createErrs makes CreateHost fail for hosts with the given name.
+	createErrs map[string]error
 }
 
 func (f *bulkFakeStore) ListAllHosts(_ context.Context, _ int) ([]*domain.Host, error) {
@@ -32,6 +35,9 @@ func (f *bulkFakeStore) ListAllHosts(_ context.Context, _ int) ([]*domain.Host, 
 func (f *bulkFakeStore) CreateHost(_ context.Context, h *domain.Host) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.createErrs[h.Name]; ok {
+		return err
+	}
 	f.nextID++
 	h.ID = strconv.Itoa(f.nextID)
 	f.created = append(f.created, h)
@@ -267,5 +273,33 @@ func TestBulkRegisterRejectsInvalidBatchShape(t *testing.T) {
 	}
 	if _, err := svc.BulkRegisterHosts(context.Background(), 0, []domain.BulkHostEntry{bulkHost("a", "b")}, BulkRegisterOptions{}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Errorf("missing workspace error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestBulkRegisterReportsInsertTimeDuplicateAsDuplicate(t *testing.T) {
+	// The up-front check passes, but the database constraint rejects the insert
+	// (a concurrent registration won the race). That must read as a duplicate,
+	// not as a generic failure, and must not affect the other records.
+	store := &bulkFakeStore{createErrs: map[string]error{
+		"raced": fmt.Errorf("%w: UNIQUE constraint failed", domain.ErrHostAlreadyExists),
+	}}
+	svc := newBulkService(t, store, &bulkFakeTester{}, 8)
+
+	res, err := svc.BulkRegisterHosts(context.Background(), 1, []domain.BulkHostEntry{
+		bulkHost("fresh-1", "10.9.0.1"),
+		bulkHost("raced", "10.9.0.2"),
+		bulkHost("fresh-2", "10.9.0.3"),
+	}, BulkRegisterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SuccessCount != 2 || res.DuplicateCount != 1 || res.FailureCount != 0 {
+		t.Fatalf("unexpected counters: %+v", res)
+	}
+	if res.Results[1].Status != domain.StatusDuplicate || res.Results[1].Error == "" || res.Results[1].ID != "" {
+		t.Errorf("raced record = %+v, want a duplicate with a reason and no ID", res.Results[1])
+	}
+	if strings.Contains(res.Results[1].Error, "UNIQUE") {
+		t.Errorf("database error text must not reach clients: %q", res.Results[1].Error)
 	}
 }

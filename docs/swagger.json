@@ -605,6 +605,72 @@
                 }
             }
         },
+        "/api/v1/hosts/bulk": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Registers many hosts in one request with partial-success semantics: each record is validated, checked for duplicates (name or address:port, against the inventory and earlier records), SSH-verified against its pinned fingerprint, and stored independently. The response is 200 whenever the request itself is valid; inspect each result's status. Set validate_only to check records without contacting hosts or storing anything. SecretData is never returned. No commands are executed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Hosts"
+                ],
+                "summary": "Bulk register hosts",
+                "parameters": [
+                    {
+                        "description": "Up to 100 host records",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/host.BulkHostsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/domain.BulkImportResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/hosts/{id}": {
             "put": {
                 "security": [
@@ -1009,6 +1075,143 @@
                 }
             }
         },
+        "/api/v1/members": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. API tokens are refused.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Members"
+                ],
+                "summary": "List workspace members",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/domain.WorkspaceMember"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/members/{id}/role": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. Takes effect on the member's next request, including for API tokens, whose effective role never exceeds the membership role. A workspace must always keep at least one owner. The change is recorded in the structured server log.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Members"
+                ],
+                "summary": "Change a member's role",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New role",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/members.SetRoleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/domain.WorkspaceMember"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tokens": {
             "get": {
                 "security": [
@@ -1402,6 +1605,35 @@
                 }
             }
         },
+        "domain.BulkImportResponse": {
+            "type": "object",
+            "properties": {
+                "duplicate_count": {
+                    "type": "integer"
+                },
+                "failure_count": {
+                    "type": "integer"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.HostOperationResult"
+                    }
+                },
+                "success_count": {
+                    "type": "integer"
+                },
+                "total_processed": {
+                    "type": "integer"
+                },
+                "valid_count": {
+                    "type": "integer"
+                },
+                "validate_only": {
+                    "type": "boolean"
+                }
+            }
+        },
         "domain.ConnectionMethod": {
             "type": "string",
             "enum": [
@@ -1486,6 +1718,47 @@
                     "type": "string"
                 }
             }
+        },
+        "domain.HostOperationResult": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.HostResultStatus"
+                }
+            }
+        },
+        "domain.HostResultStatus": {
+            "type": "string",
+            "enum": [
+                "success",
+                "valid",
+                "failed",
+                "duplicate"
+            ],
+            "x-enum-varnames": [
+                "StatusSuccess",
+                "StatusValid",
+                "StatusFailed",
+                "StatusDuplicate"
+            ]
         },
         "domain.HostStatus": {
             "type": "string",
@@ -1622,6 +1895,35 @@
                 }
             }
         },
+        "domain.WorkspaceMember": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "role": {
+                    "enum": [
+                        "owner",
+                        "operator",
+                        "reader"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.Role"
+                        }
+                    ]
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
         "environments.EnvSavePayload": {
             "type": "object",
             "required": [
@@ -1635,6 +1937,21 @@
                 "name": {
                     "type": "string",
                     "example": "production"
+                }
+            }
+        },
+        "host.BulkHostsRequest": {
+            "type": "object",
+            "properties": {
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/host.HostPayload"
+                    }
+                },
+                "validate_only": {
+                    "description": "ValidateOnly checks records and duplicates without contacting hosts or\nstoring anything.",
+                    "type": "boolean"
                 }
             }
         },
@@ -1744,6 +2061,20 @@
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "members.SetRoleRequest": {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "owner",
+                        "operator",
+                        "reader"
+                    ],
+                    "example": "operator"
                 }
             }
         },

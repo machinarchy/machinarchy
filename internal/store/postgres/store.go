@@ -75,6 +75,9 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 		string(host.SSH.Status), now, now,
 	).Scan(&host.ID)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+		}
 		return fmt.Errorf("insert PostgreSQL host: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -241,6 +244,9 @@ func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 		string(labelsJSON), host.SSH.Port, host.SSH.Username, password, privateKey, passphrase,
 		host.SSH.AuthType.ExpectedFingerprint, string(host.SSH.Status), now, host.ID, host.WorkspaceID)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+		}
 		return fmt.Errorf("update PostgreSQL host %s: %w", host.ID, err)
 	}
 	if err := affected(result, domain.ErrHostNotFound); err != nil {

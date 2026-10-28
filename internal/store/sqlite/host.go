@@ -11,6 +11,8 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
+	sqliteDriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
@@ -54,6 +56,9 @@ func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
 		string(host.SSH.Status), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+		}
 		return fmt.Errorf("insert host: %w", err)
 	}
 
@@ -264,6 +269,9 @@ func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
 		now.Format(time.RFC3339Nano), host.ID, host.WorkspaceID,
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+		}
 		return fmt.Errorf("update host %s: %w", host.ID, err)
 	}
 	if err := requireRowsAffected(result, domain.ErrHostNotFound); err != nil {
@@ -317,4 +325,10 @@ func requireRowsAffected(result sql.Result, notFound error) error {
 		return notFound
 	}
 	return nil
+}
+
+func isUniqueConstraint(err error) bool {
+	var sqliteErr *sqliteDriver.Error
+	return errors.As(err, &sqliteErr) &&
+		(sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
 }

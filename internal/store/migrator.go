@@ -75,6 +75,12 @@ func (m *Migrator) Up(ctx context.Context) error {
 			continue
 		}
 
+		if check := preflightChecks[ver]; check != nil {
+			if err := check(ctx, m.db, m.engine); err != nil {
+				return fmt.Errorf("pre-flight check for migration %d: %w", ver, err)
+			}
+		}
+
 		filePath := migrationFiles[ver]
 		content, err := storageModule.ReadFile(filePath)
 		if err != nil {

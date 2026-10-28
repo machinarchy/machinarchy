@@ -152,6 +152,9 @@ func (h *Handler) Update(c echo.Context) error {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
 			return badRequest(c, "environment not found in this workspace")
 		}
+		if errors.Is(err, domain.ErrHostAlreadyExists) {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "a host with the same name or address:port already exists"})
+		}
 		return internalError(c)
 	}
 	return c.JSON(http.StatusOK, host)
@@ -399,6 +402,8 @@ func hostServiceError(c echo.Context, err error) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "SSH authentication failed"})
 	case errors.Is(err, domain.ErrTargetNotAllowed):
 		return badRequest(c, "target address is not permitted by the network policy")
+	case errors.Is(err, domain.ErrHostAlreadyExists):
+		return c.JSON(http.StatusConflict, map[string]string{"error": "a host with the same name or address:port already exists"})
 	case errors.Is(err, domain.ErrInvalidInput):
 		return badRequest(c, err.Error())
 	case errors.Is(err, domain.ErrEnvironmentNotFound):

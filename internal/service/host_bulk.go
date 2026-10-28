@@ -22,6 +22,8 @@ const (
 	bulkRegisterWorkers = 4
 )
 
+const duplicateMessage = "a host with the same name or address:port already exists or appears earlier in this batch"
+
 // BulkRegisterOptions tunes a bulk registration run.
 type BulkRegisterOptions struct {
 	// ValidateOnly checks records and duplicates without contacting any host or
@@ -34,9 +36,10 @@ type BulkRegisterOptions struct {
 // Semantics: partial success. Records are normalized and checked for
 // duplicates sequentially (against the current inventory and earlier records in
 // the batch), then verified and persisted by a small bounded worker pool using
-// the same RegisterHost path as single registration. Duplicate detection is a
-// read-then-write check, so two concurrent batches can still insert the same
-// host; the schema has no uniqueness constraint to prevent that.
+// the same RegisterHost path as single registration. The up-front duplicate
+// check is a fast path that avoids contacting hosts that cannot be stored; the
+// unique indexes added by migration 4 are the authority, so a record that loses
+// a race with a concurrent registration is reported as a duplicate at insert.
 func (s *hostService) BulkRegisterHosts(ctx context.Context, workspaceID int, entries []domain.BulkHostEntry, opts BulkRegisterOptions) (*domain.BulkImportResponse, error) {
 	if ctx == nil {
 		return nil, errors.New("bulk registration context is required")
@@ -98,7 +101,7 @@ func (s *hostService) BulkRegisterHosts(ctx context.Context, workspaceID int, en
 		keys := hostIdentityKeys(h)
 		if dup := firstSeen(seen, keys); dup != "" {
 			results[i].Status = domain.StatusDuplicate
-			results[i].Error = "a host with the same name or address:port already exists or appears earlier in this batch"
+			results[i].Error = duplicateMessage
 			continue
 		}
 		for _, key := range keys {
@@ -142,6 +145,13 @@ func (s *hostService) registerPending(ctx context.Context, entries []domain.Bulk
 			for i := range jobs {
 				h := entries[i].Host
 				if err := s.RegisterHost(ctx, h); err != nil {
+					if errors.Is(err, domain.ErrHostAlreadyExists) {
+						// Lost a race with another registration; the database
+						// constraint is the authority on duplicates.
+						results[i].Status = domain.StatusDuplicate
+						results[i].Error = duplicateMessage
+						continue
+					}
 					results[i].Status = domain.StatusFailed
 					results[i].Error = bulkFailureMessage(err)
 					continue
