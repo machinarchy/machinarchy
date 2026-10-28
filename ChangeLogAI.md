@@ -2,6 +2,26 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — Store contract tests for SQLite and PostgreSQL, and CI
+
+### Changes in this update
+
+- Replaced the SQLite-only member and host-uniqueness tests with one shared contract suite (`internal/store/contract_test.go`) that runs every case against each available engine: signup defaults and uniqueness (including accounts without an email), member roles and last-owner protection, concurrent owner demotion, host lifecycle and workspace isolation (including credential decryption round-trip and status guards), host uniqueness and update collisions, environments, API tokens (expiry, revocation, role capping), migration idempotence, and the migration-4 pre-flight.
+- SQLite always runs. PostgreSQL runs when `MACHINARCHY_TEST_POSTGRES_URL` is set; each test gets its own schema (via `search_path`) that is dropped afterwards. `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` turns a missing URL into a failure instead of a skip.
+- Added `.github/workflows/ci.yml`: gofmt check, `go build`, `go vet`, and `go test -race ./...` with a PostgreSQL 16 service (PostgreSQL tests required), plus a Docker image build.
+- Added `make test-postgres` and `scripts/test-postgres.sh` to run the suite against a throwaway Docker container, and documented both in `CONTRIBUTING.md`.
+- Updated `docs/ROADMAP.md`, `docs/SECURITY.md`, and `README.md` to say the PostgreSQL suite exists but has not yet been observed passing.
+
+### Known limitations
+
+- Not run: the PostgreSQL half of the suite has never been executed, so it may expose real PostgreSQL bugs or incorrect test assumptions; fix what it reports rather than loosening tests.
+- CI does not run `golangci-lint` (no configuration exists in the repository) and does not regenerate Swagger files.
+- Email uniqueness is case-insensitive in SQLite but case-sensitive in PostgreSQL; the suite does not assert either, so confirm the service normalizes emails before relying on it.
+
+### Validation
+
+- Not run: Go and Docker were unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` and `make test-postgres` (or push and let CI run) before merging.
+
 ## 2026-10-28 — Host uniqueness enforced by the database
 
 ### Changes in this update

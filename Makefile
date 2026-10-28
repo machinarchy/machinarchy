@@ -2,7 +2,7 @@ GO ?= go
 SWAG ?= swag
 GOLANGCI_LINT ?= golangci-lint
 
-.PHONY: setup build run-api run-controlmanager run-monolit run-cli api-docs fmt vet test lint
+.PHONY: setup build run-api run-controlmanager run-monolit run-cli api-docs fmt vet test test-postgres lint
 
 setup:
 	./scripts/prepare.sh
@@ -38,6 +38,10 @@ vet:
 
 test:
 	$(GO) test ./...
+
+# Runs the store contract tests against a throwaway PostgreSQL container (needs Docker).
+test-postgres:
+	bash scripts/test-postgres.sh
 
 lint:
 	$(GOLANGCI_LINT) run --timeout=5m

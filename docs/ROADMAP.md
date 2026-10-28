@@ -50,7 +50,7 @@ Preserve the later multi-tenant idea: organizations may eventually have separate
 - No public API submits remote commands. The agent process is a placeholder; job routes read existing rows only.
 - The control-manager currently logs reconnection events rather than reconciling host state. Host persistence and event publishing do not share an outbox transaction.
 - The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Audit records and credential rotation/secret references need explicit designs. The SSH target address policy and DNS-rebinding-safe dialing (`pkg/netpolicy`) are implemented; port restrictions and re-checking addresses on host update are not.
-- The repository still has sparse test coverage outside the authorization baseline. SQLite authorization integration coverage exists; PostgreSQL integration coverage and fleet benchmarks are outstanding.
+- The repository still has sparse test coverage outside the authorization baseline. A shared store contract suite (users, members, hosts, uniqueness, environments, API tokens, migrations) runs on SQLite and, when configured, PostgreSQL, and CI provisions a PostgreSQL service for it. The PostgreSQL half has been written but not yet observed running, so treat it as unproven until the first CI run is green. Fleet benchmarks are outstanding.
 
 ## Architecture decisions
 
@@ -94,7 +94,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Protected API paths carry workspace identity into storage; missing membership blocks JWT requests; API token role is capped by current membership role; token expiry/revocation takes effect on the next request; cross-workspace resource lookups are non-disclosing; legacy rows have one deterministic owner.
 - **Security considerations:** Prevent broken object-level authorization on indirect routes and references; keep API-token secrets out of storage and logs; preserve backup data; do not accept credentials that can grant a role higher than their issuer.
 - **Tests required:** Role/permission tests; SQLite migration and repository isolation tests; API token expiry/revocation tests; HTTP allow/deny tests; PostgreSQL migration and integration tests.
-- **Status:** Core authorization and token lifecycle implemented. A bootstrap-owner flow and owner-only member role management are implemented. Member invitation/removal, PostgreSQL integration tests, durable audit records, pagination, and broader HTTP denial-path tests remain planned.
+- **Status:** Core authorization and token lifecycle implemented. A bootstrap-owner flow and owner-only member role management are implemented. Member invitation/removal, a verified PostgreSQL contract-suite run, durable audit records, pagination, and broader HTTP denial-path tests remain planned.
 
 ### Phase 1 follow-up — Shared installation and global roles
 

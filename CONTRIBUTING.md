@@ -23,6 +23,15 @@ make lint
 make build
 ```
 
+`make test` runs the store contract tests against SQLite only. To run the same suite against PostgreSQL, either use `make test-postgres` (starts a throwaway Docker container) or point the tests at your own server:
+
+```sh
+export MACHINARCHY_TEST_POSTGRES_URL='postgres://user:password@localhost:5432/postgres?sslmode=disable'
+go test ./internal/store/... -count=1
+```
+
+Each test creates and drops its own schema, so the database may be shared, but use a disposable server. Set `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` to fail instead of skip when the URL is missing. The URL must use the `postgres://` form. GitHub Actions (`.github/workflows/ci.yml`) runs formatting, build, vet, and `go test -race` with a PostgreSQL service on every pull request.
+
 Install `golangci-lint` and the Swaggo CLI before using the corresponding targets. Do not commit credentials, local database files, generated binaries, or unreviewed generated API changes.
 
 Current test debt: `internal/transport/http/v1/history/history_test.go` still targets the removed `internal/metrics` package and old handler API. Update that legacy test before treating `make test` as a passing repository check.
