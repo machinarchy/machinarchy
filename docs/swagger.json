@@ -415,6 +415,81 @@
                 }
             }
         },
+        "/api/v1/fleet/targets/preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Resolves a selector with explicit include and exclude lists against the workspace inventory and lists the matching hosts (at most 500; total is always exact), the hosts removed by the exclude list, and include/exclude entries that matched no host. Nothing is contacted or changed, and no credentials are returned.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Fleet"
+                ],
+                "summary": "Preview fleet targets",
+                "parameters": [
+                    {
+                        "description": "Target rule",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/fleet.PreviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/domain.TargetPreview"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/history": {
             "get": {
                 "security": [
@@ -485,6 +560,7 @@
                         "BearerAuth": []
                     }
                 ],
+                "description": "Optionally filters with a label selector such as `environment=production,role in (web,db),!canary`. Built-in fields are name, hostname, address, status, connection, and environment; any other key is a label. Values may use the wildcards * and ?. An empty or invalid selector is rejected rather than treated as \"all\".",
                 "produces": [
                     "application/json"
                 ],
@@ -492,6 +568,14 @@
                     "Hosts"
                 ],
                 "summary": "List hosts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Label selector",
+                        "name": "selector",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -499,6 +583,15 @@
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/domain.Host"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
@@ -878,6 +971,94 @@
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/hosts/{id}/labels": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies the changes atomically on top of the host's current labels, so unrelated labels and all connection settings are untouched and concurrent patches do not overwrite each other. Keys are 1-63 characters of letters, digits, '.', '_', '-', or '/'; values may be empty or up to 63 characters; a host may have at most 50 labels; the built-in selector field names (id, name, hostname, address, status, environment, connection) are reserved.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Hosts"
+                ],
+                "summary": "Set or remove host labels",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Labels to set and remove",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/host.LabelPatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1881,6 +2062,72 @@
                 }
             }
         },
+        "domain.TargetHost": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.HostStatus"
+                }
+            }
+        },
+        "domain.TargetPreview": {
+            "type": "object",
+            "properties": {
+                "excluded": {
+                    "description": "Excluded lists hosts that were selected but removed by the exclude list.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.TargetHost"
+                    }
+                },
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.TargetHost"
+                    }
+                },
+                "total": {
+                    "description": "Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts of them.",
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "unknownExcludes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "unknownIncludes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "domain.UserResponse": {
             "type": "object",
             "properties": {
@@ -1937,6 +2184,34 @@
                 "name": {
                     "type": "string",
                     "example": "production"
+                }
+            }
+        },
+        "fleet.PreviewRequest": {
+            "type": "object",
+            "properties": {
+                "all": {
+                    "description": "All explicitly targets every host; it cannot be combined with selector or include.",
+                    "type": "boolean"
+                },
+                "exclude": {
+                    "description": "Exclude removes hosts by ID or name, always winning over selector and include.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include": {
+                    "description": "Include adds hosts by ID or name regardless of the selector.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "selector": {
+                    "description": "Selector is a label selector, for example environment=production,role in (web,db),!canary.",
+                    "type": "string",
+                    "example": "environment=production,role=web"
                 }
             }
         },
@@ -2041,6 +2316,23 @@
                 "username": {
                     "type": "string",
                     "example": "deploy"
+                }
+            }
+        },
+        "host.LabelPatchRequest": {
+            "type": "object",
+            "properties": {
+                "remove": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "set": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },

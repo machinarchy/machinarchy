@@ -251,6 +251,52 @@ definitions:
       username:
         type: string
     type: object
+  domain.TargetHost:
+    properties:
+      address:
+        type: string
+      environment:
+        type: string
+      hostname:
+        type: string
+      id:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      status:
+        $ref: '#/definitions/domain.HostStatus'
+    type: object
+  domain.TargetPreview:
+    properties:
+      excluded:
+        description: Excluded lists hosts that were selected but removed by the exclude
+          list.
+        items:
+          $ref: '#/definitions/domain.TargetHost'
+        type: array
+      hosts:
+        items:
+          $ref: '#/definitions/domain.TargetHost'
+        type: array
+      total:
+        description: Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts
+          of them.
+        type: integer
+      truncated:
+        type: boolean
+      unknownExcludes:
+        items:
+          type: string
+        type: array
+      unknownIncludes:
+        items:
+          type: string
+        type: array
+    type: object
   domain.UserResponse:
     properties:
       email:
@@ -288,6 +334,29 @@ definitions:
         type: string
     required:
     - name
+    type: object
+  fleet.PreviewRequest:
+    properties:
+      all:
+        description: All explicitly targets every host; it cannot be combined with
+          selector or include.
+        type: boolean
+      exclude:
+        description: Exclude removes hosts by ID or name, always winning over selector
+          and include.
+        items:
+          type: string
+        type: array
+      include:
+        description: Include adds hosts by ID or name regardless of the selector.
+        items:
+          type: string
+        type: array
+      selector:
+        description: Selector is a label selector, for example environment=production,role
+          in (web,db),!canary.
+        example: environment=production,role=web
+        type: string
     type: object
   host.BulkHostsRequest:
     properties:
@@ -364,6 +433,17 @@ definitions:
     - name
     - secretData
     - username
+    type: object
+  host.LabelPatchRequest:
+    properties:
+      remove:
+        items:
+          type: string
+        type: array
+      set:
+        additionalProperties:
+          type: string
+        type: object
     type: object
   job.ListResponse:
     properties:
@@ -673,6 +753,58 @@ paths:
       summary: Update an environment
       tags:
       - Environments
+  /api/v1/fleet/targets/preview:
+    post:
+      consumes:
+      - application/json
+      description: Resolves a selector with explicit include and exclude lists against
+        the workspace inventory and lists the matching hosts (at most 500; total is
+        always exact), the hosts removed by the exclude list, and include/exclude
+        entries that matched no host. Nothing is contacted or changed, and no credentials
+        are returned.
+      parameters:
+      - description: Target rule
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/fleet.PreviewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.TargetPreview'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Preview fleet targets
+      tags:
+      - Fleet
   /api/v1/history:
     get:
       parameters:
@@ -715,6 +847,16 @@ paths:
       - Metrics
   /api/v1/hosts:
     get:
+      description: Optionally filters with a label selector such as `environment=production,role
+        in (web,db),!canary`. Built-in fields are name, hostname, address, status,
+        connection, and environment; any other key is a label. Values may use the
+        wildcards * and ?. An empty or invalid selector is rejected rather than treated
+        as "all".
+      parameters:
+      - description: Label selector
+        in: query
+        name: selector
+        type: string
       produces:
       - application/json
       responses:
@@ -724,6 +866,12 @@ paths:
             items:
               $ref: '#/definitions/domain.Host'
             type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "401":
           description: Unauthorized
           schema:
@@ -942,6 +1090,68 @@ paths:
       security:
       - BearerAuth: []
       summary: List jobs for a host
+      tags:
+      - Hosts
+  /api/v1/hosts/{id}/labels:
+    patch:
+      consumes:
+      - application/json
+      description: Applies the changes atomically on top of the host's current labels,
+        so unrelated labels and all connection settings are untouched and concurrent
+        patches do not overwrite each other. Keys are 1-63 characters of letters,
+        digits, '.', '_', '-', or '/'; values may be empty or up to 63 characters;
+        a host may have at most 50 labels; the built-in selector field names (id,
+        name, hostname, address, status, environment, connection) are reserved.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Labels to set and remove
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/host.LabelPatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              additionalProperties:
+                type: string
+              type: object
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Set or remove host labels
       tags:
       - Hosts
   /api/v1/hosts/bulk:

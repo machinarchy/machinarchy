@@ -197,6 +197,8 @@ var contractTests = []struct {
 	{"concurrent owner demotion", testConcurrentDemotion},
 	{"host lifecycle and isolation", testHostLifecycle},
 	{"host uniqueness", testHostUniqueness},
+	{"host label patches", testHostLabelPatches},
+	{"concurrent label patches", testConcurrentLabelPatches},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
@@ -680,5 +682,131 @@ func testHostUniquenessPreflight(t *testing.T, f *fixture) {
 	)
 	if err := f.stores.DB.QueryRowContext(ctx, countIndexes).Scan(&indexes); err != nil || indexes != 2 {
 		t.Fatalf("uniqueness indexes present = %d, %v; want 2", indexes, err)
+	}
+}
+
+func testHostLabelPatches(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	other := f.newWorkspace(t, "other")
+	host := contractHost(1, "web-01", "10.0.0.1", 22) // starts with env=prod
+	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := strconv.Atoi(host.ID)
+
+	sameLabels := func(got, want map[string]string) bool {
+		if len(got) != len(want) {
+			return false
+		}
+		for k, v := range want {
+			if gv, ok := got[k]; !ok || gv != v {
+				return false
+			}
+		}
+		return true
+	}
+
+	merged, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"role": "web", "tier": "1"}, nil)
+	if err != nil || !sameLabels(merged, map[string]string{"env": "prod", "role": "web", "tier": "1"}) {
+		t.Fatalf("set = %v, %v; want existing labels kept and new ones added", merged, err)
+	}
+	merged, err = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"role": "api"}, []string{"tier", "absent"})
+	if err != nil || !sameLabels(merged, map[string]string{"env": "prod", "role": "api"}) {
+		t.Fatalf("set+remove = %v, %v; removing an absent label is not an error", merged, err)
+	}
+
+	stored, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
+	if err != nil || !sameLabels(stored.Labels, merged) {
+		t.Fatalf("stored labels = %v, %v; want %v", stored.Labels, err, merged)
+	}
+	if stored.Name != "web-01" || stored.IPAddress != "10.0.0.1" || stored.SSH.Username != "deploy" ||
+		stored.SSH.AuthType.Password != "pw" || stored.SSH.AuthType.ExpectedFingerprint != "SHA256:test" {
+		t.Errorf("a label patch must not touch other host fields or credentials: %+v", stored)
+	}
+
+	// The patched labels are what selectors see.
+	hosts, err := f.stores.Hosts.ListAllHosts(ctx, 1)
+	if err != nil || len(hosts) != 1 {
+		t.Fatalf("ListAllHosts() = %d, %v", len(hosts), err)
+	}
+	selector, err := domain.ParseSelector("role=api,env=prod,!tier")
+	if err != nil || !selector.Matches(hosts[0], "") {
+		t.Errorf("selector did not match the patched host: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		set    map[string]string
+		remove []string
+	}{
+		"empty patch":  {},
+		"reserved key": {set: map[string]string{"status": "x"}},
+		"bad value":    {set: map[string]string{"a": "has space"}},
+		"set+remove":   {set: map[string]string{"a": "b"}, remove: []string{"a"}},
+	} {
+		if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, tc.set, tc.remove); !errors.Is(err, domain.ErrInvalidInput) {
+			t.Errorf("%s: error = %v, want ErrInvalidInput", name, err)
+		}
+	}
+
+	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id+999, map[string]string{"a": "b"}, nil); !errors.Is(err, domain.ErrHostNotFound) {
+		t.Errorf("unknown host error = %v, want ErrHostNotFound", err)
+	}
+	if _, err := f.stores.Hosts.PatchHostLabels(ctx, other, id, map[string]string{"leak": "x"}, nil); !errors.Is(err, domain.ErrHostNotFound) {
+		t.Errorf("cross-workspace patch error = %v, want ErrHostNotFound", err)
+	}
+
+	// The label limit is enforced against the merged result, and a refused
+	// patch changes nothing.
+	fill := map[string]string{}
+	for i := 0; i < domain.MaxLabels-len(merged); i++ {
+		fill["fill"+strconv.Itoa(i)] = "v"
+	}
+	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, fill, nil); err != nil {
+		t.Fatalf("filling to the limit: %v", err)
+	}
+	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"one-too-many": "v"}, nil); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Errorf("exceeding the limit error = %v, want ErrInvalidInput", err)
+	}
+	after, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
+	if err != nil || len(after.Labels) != domain.MaxLabels || after.Labels["leak"] != "" || after.Labels["one-too-many"] != "" {
+		t.Errorf("labels after refused patches = %d, %v", len(after.Labels), err)
+	}
+}
+
+func testConcurrentLabelPatches(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	host := contractHost(1, "web-01", "10.0.0.1", 22)
+	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := strconv.Atoi(host.ID)
+
+	const patches = 20
+	var wg sync.WaitGroup
+	errs := make([]error, patches)
+	for i := 0; i < patches; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("patch %d: %v", i, err)
+		}
+	}
+	stored, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Labels) != patches+1 { // the 20 patched labels plus the original env=prod
+		t.Fatalf("stored %d labels, want %d; concurrent patches must not overwrite each other: %v", len(stored.Labels), patches+1, stored.Labels)
+	}
+	for i := 0; i < patches; i++ {
+		if stored.Labels["k"+strconv.Itoa(i)] != "v" {
+			t.Errorf("label k%d was lost", i)
+		}
 	}
 }

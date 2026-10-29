@@ -2,6 +2,29 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-29 — Fleet targeting: labels, selectors, include/exclude rules, and target preview
+
+### Changes in this update
+
+- Labels are now validated: keys of 1-63 characters from letters, digits, `.`, `_`, `-`, `/` (starting and ending alphanumeric), values up to 63 characters (may be empty), at most 50 labels per host, and the built-in field names `id`, `name`, `hostname`, `address`, `status`, `environment`, and `connection` are reserved. Validation applies in `Host.SSHValidate` and at the API boundary for create, update, and each bulk record. Existing stored labels are not rewritten.
+- Replaced the old `domain.HostSelector` (which matched every host when empty) with a parsed `domain.Selector`: comma-separated AND requirements `key=value`, `key!=value`, `key in (a,b)`, `key notin (a,b)`, `key`, and `!key`, with `*` and `?` wildcards, case-insensitive built-in fields (`name`, `hostname`, `address`, `status`, `connection`, `environment`, `id`), case-sensitive labels, and caps on length (2048), requirements (20), set size (50), and value length. There are no regular expressions; wildcard matching is non-backtracking. An empty or malformed selector is a parse error.
+- Added `domain.TargetRule` and `domain.ResolveTargets`: a selector or an include list or an explicit `all`, minus an exclude list that always wins; entries are host IDs or names; unknown include/exclude entries are reported; results are sorted deterministically. A rule with nothing to select, `all` combined with a selector or include list, oversized lists, and blank entries are rejected.
+- Added `POST /api/v1/fleet/targets/preview` (inventory read permission): returns the exact total, up to 500 credential-free host views, the hosts removed by the exclude list, and unknown entries. Nothing is contacted.
+- Added `GET /api/v1/hosts?selector=...` filtering (an empty or invalid selector returns 400, never everything).
+- Added `PATCH /api/v1/hosts/{id}/labels` (`{"set": {...}, "remove": [...]}`) backed by the new `HostStore.PatchHostLabels`, which merges atomically (a single-connection transaction in SQLite, `SELECT ... FOR UPDATE` in PostgreSQL), leaves credentials and connection settings untouched, enforces the label limit on the merged result, and is workspace-scoped.
+- The unwired fleet placeholder now takes a `TargetRule`, resolves it with the shared resolver, and still reports `ErrExecutionNotImplemented`; `NewFleetService` also takes the environment store.
+- Tests: selector parsing (accepted and rejected forms), matching semantics, wildcard matching (including a pathological pattern), rule resolution (selector/include/exclude/all, IDs vs names, unknown entries, determinism, never-default-to-all), label validation and patch rules, target service (workspace scoping, authorization, no credentials in output, truncation), fleet and host handler behavior, and store contract cases for label patches (merge, remove, limits, isolation, concurrent patches) on SQLite and PostgreSQL.
+- Docs: ROADMAP.md (Phase 4 status), architecture.md, SECURITY.md (new fleet-targeting section).
+
+### Known limitations
+
+- No execution yet; selectors are evaluated at request time, so execution must re-resolve or pin the previewed host IDs. No OR or grouping in selectors. No bulk relabeling by selector. Label changes are not audited. Swagger files were not regenerated; run `make api-docs`.
+- Existing databases may hold labels that no longer satisfy the new rules; they keep working for reads and selectors and can be removed with a patch, but a full host update (`PUT`) that resends them is rejected until they are fixed.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` and `make test-postgres` before merging.
+
 ## 2026-10-28 — SSH integration tests against an in-process server
 
 ### Changes in this update

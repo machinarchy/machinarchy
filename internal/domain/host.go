@@ -125,6 +125,10 @@ func (h *Host) SSHValidate() error {
 	h.Hostname = strings.TrimSpace(h.Hostname)
 	h.SSH.Username = strings.TrimSpace(h.SSH.Username)
 
+	if err := ValidateLabels(h.Labels); err != nil {
+		return err
+	}
+
 	// Validate mandatory operational requirements
 	if h.Name == "" || h.IPAddress == "" || h.SSH.Username == "" {
 		return fmt.Errorf("%w: host name, network target, and SSH username are required", ErrInvalidInput)
@@ -251,4 +255,9 @@ type HostStore interface {
 	UpdateHostStatusWithGuard(ctx context.Context, id int, expectedCurrent, newStatus HostStatus) error
 	DeleteHost(ctx context.Context, workspaceID int, id string) error
 	UpdateHost(ctx context.Context, host *Host) error
+	// PatchHostLabels atomically sets and removes labels on one host and returns
+	// the resulting labels, so concurrent patches cannot lose each other's
+	// changes. It returns ErrHostNotFound when the host is not in the workspace
+	// and ErrInvalidInput when the patch is invalid or would exceed MaxLabels.
+	PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error)
 }

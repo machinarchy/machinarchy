@@ -87,10 +87,13 @@ func (h *Handler) Create(c echo.Context) error {
 
 // List returns registered hosts without SSH credentials.
 // @Summary List hosts
+// @Description Optionally filters with a label selector such as `environment=production,role in (web,db),!canary`. Built-in fields are name, hostname, address, status, connection, and environment; any other key is a label. Values may use the wildcards * and ?. An empty or invalid selector is rejected rather than treated as "all".
 // @Tags Hosts
 // @Produce json
 // @Security BearerAuth
+// @Param selector query string false "Label selector"
 // @Success 200 {array} domain.Host
+// @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/hosts [get]
@@ -99,11 +102,88 @@ func (h *Handler) List(c echo.Context) error {
 	if !ok {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	}
-	hosts, err := h.hosts.ListAllHosts(c.Request().Context(), principal.WorkspaceID)
+	var selector *domain.Selector
+	if _, present := c.QueryParams()["selector"]; present {
+		parsed, err := domain.ParseSelector(c.QueryParam("selector"))
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+		selector = parsed
+	}
+	ctx := c.Request().Context()
+	hosts, err := h.hosts.ListAllHosts(ctx, principal.WorkspaceID)
 	if err != nil {
 		return internalError(c)
 	}
-	return c.JSON(http.StatusOK, hosts)
+	if selector == nil {
+		return c.JSON(http.StatusOK, hosts)
+	}
+	names := map[int]string{}
+	if h.environments != nil {
+		environments, err := h.environments.ListEnvironments(ctx, principal.WorkspaceID)
+		if err != nil {
+			return internalError(c)
+		}
+		for _, environment := range environments {
+			names[environment.ID] = environment.Name
+		}
+	}
+	matched := make([]*domain.Host, 0, len(hosts))
+	for _, host := range hosts {
+		if selector.Matches(host, names[host.EnvironmentID]) {
+			matched = append(matched, host)
+		}
+	}
+	return c.JSON(http.StatusOK, matched)
+}
+
+// LabelPatchRequest sets and removes labels on one host.
+type LabelPatchRequest struct {
+	Set    map[string]string `json:"set,omitempty"`
+	Remove []string          `json:"remove,omitempty"`
+}
+
+// PatchLabels merges label changes into a host.
+// @Summary Set or remove host labels
+// @Description Applies the changes atomically on top of the host's current labels, so unrelated labels and all connection settings are untouched and concurrent patches do not overwrite each other. Keys are 1-63 characters of letters, digits, '.', '_', '-', or '/'; values may be empty or up to 63 characters; a host may have at most 50 labels; the built-in selector field names (id, name, hostname, address, status, environment, connection) are reserved.
+// @Tags Hosts
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Host ID"
+// @Param request body LabelPatchRequest true "Labels to set and remove"
+// @Success 200 {object} map[string]map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/hosts/{id}/labels [patch]
+func (h *Handler) PatchLabels(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		return badRequest(c, "invalid host ID")
+	}
+	var request LabelPatchRequest
+	if err := c.Bind(&request); err != nil {
+		return badRequest(c, "invalid request body")
+	}
+	if err := domain.ValidateLabelPatch(request.Set, request.Remove); err != nil {
+		return badRequest(c, err.Error())
+	}
+	labels, err := h.hosts.PatchHostLabels(c.Request().Context(), principal.WorkspaceID, id, request.Set, request.Remove)
+	switch {
+	case errors.Is(err, domain.ErrHostNotFound):
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "host not found"})
+	case errors.Is(err, domain.ErrInvalidInput):
+		return badRequest(c, err.Error())
+	case err != nil:
+		return internalError(c)
+	}
+	return c.JSON(http.StatusOK, map[string]map[string]string{"labels": labels})
 }
 
 // Update replaces a host's SSH connection details.
@@ -315,6 +395,9 @@ func (p HostPayload) host(id string) (*domain.Host, error) {
 	username := strings.TrimSpace(p.Username)
 	if name == "" || address == "" || username == "" {
 		return nil, errors.New("name, host address, and SSH username are required")
+	}
+	if err := domain.ValidateLabels(p.Labels); err != nil {
+		return nil, err
 	}
 	method, err := domain.ParseAuthType(p.AuthMethod)
 	if err != nil {

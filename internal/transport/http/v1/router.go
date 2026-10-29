@@ -9,6 +9,7 @@ import (
 	// Sub-domain packages
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/auth"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/environments"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/fleet"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/history"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
@@ -39,6 +40,7 @@ func RegisterRoutes(
 	signupEnabled bool,
 	tokenService domain.APITokenService,
 	memberService domain.MemberService,
+	targetService domain.TargetService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
@@ -48,6 +50,7 @@ func RegisterRoutes(
 	jobHandler := job.NewHandler(repos.Jobs)
 	tokenHandler := tokens.NewHandler(tokenService)
 	memberHandler := members.NewHandler(memberService)
+	fleetHandler := fleet.NewHandler(targetService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -74,6 +77,9 @@ func RegisterRoutes(
 		hostReadGroup := readRoutes.Group("/hosts")
 		hostWriteGroup := writeRoutes.Group("/hosts")
 		host.RegisterRoutes(hostReadGroup, hostWriteGroup, hostHandler)
+
+		// /api/v1/fleet (target previews; read-only, nothing is executed)
+		fleet.RegisterRoutes(readRoutes.Group("/fleet"), fleetHandler)
 
 		// /api/v1/jobs (workspace-scoped job logs and tracking)
 		jobGroup := apiv1.Group("/jobs", middleware.RequirePermission(domain.PermissionOperationsRead))

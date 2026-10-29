@@ -305,3 +305,50 @@ func isUniqueViolation(err error) bool {
 	var postgresErr *pq.Error
 	return errors.As(err, &postgresErr) && postgresErr.Code == "23505"
 }
+
+func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error) {
+	if workspaceID <= 0 || id <= 0 {
+		return nil, fmt.Errorf("%w: workspace and host IDs must be positive", domain.ErrInvalidInput)
+	}
+	if err := domain.ValidateLabelPatch(set, remove); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin label patch transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// FOR UPDATE serializes concurrent patches of the same host.
+	var raw []byte
+	err = tx.QueryRowContext(ctx, `SELECT labels FROM hosts WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+		strconv.Itoa(id), workspaceID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrHostNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read host labels: %w", err)
+	}
+	current := map[string]string{}
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return nil, fmt.Errorf("decode labels for host %d: %w", id, err)
+		}
+	}
+	merged, err := domain.ApplyLabelPatch(current, set, remove)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("marshal host labels: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE hosts SET labels = $1, updated_at = NOW() WHERE id = $2 AND workspace_id = $3`,
+		string(encoded), strconv.Itoa(id), workspaceID); err != nil {
+		return nil, fmt.Errorf("update host labels: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit label patch: %w", err)
+	}
+	return merged, nil
+}
