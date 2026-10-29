@@ -2,6 +2,25 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-28 — SSH integration tests against an in-process server
+
+### Changes in this update
+
+- Added `internal/testutil/sshtest`, a loopback-only SSH server for tests: generated ed25519 host key, password and public-key authentication, `exec` requests with configurable output and exit status, counters (accepted and open connections, credential attempts, execs), and two deliberately broken modes (accepts TCP but never answers; answers with HTTP instead of SSH).
+- Added `pkg/sshclient/client_integration_test.go` covering the real client: success with a pinned key; mismatched and missing fingerprints (the server's actual key is reported and, crucially, no credential is ever sent to the unverified host); wrong password, wrong user, and a server that offers no password auth; unencrypted and passphrase-protected key auth, a wrong passphrase failing before any connection, and an untrusted key; connection refused; a hung host honoring the deadline; cancellation during the handshake; a non-SSH service; connection release after 20 sequential and 8 concurrent connections; command output, non-zero exit status, the 1 MiB output cap, no command execution on a host-key mismatch, blank-command rejection, and a deadline stopping a running command.
+- Added `internal/service/host_ssh_integration_test.go`: `RegisterHost` and bulk registration against real servers (success stored as active; wrong key, wrong password, refused, and hung hosts stored nothing and were isolated from each other; the default policy never dials loopback).
+- Fix found while writing the tests: when the handshake read timed out a moment before the context reported its deadline, `pkg/sshclient` returned an opaque "negotiate SSH connection" error. It now returns `context.DeadlineExceeded` when the context deadline has passed and `domain.ErrConnectionTimeout` otherwise.
+- Updated `docs/ROADMAP.md`.
+
+### Known limitations
+
+- The new tests have not been run. Timing-based cases (hung host, deadline during a command) use generous bounds but should be watched for flakiness under `-race` on slow CI runners.
+- The server does not implement shells, ptys, port forwarding, or SFTP.
+
+### Validation
+
+- Not run: Go was unavailable in the authoring environment, so nothing was compiled, vetted, formatted, or tested. Run `make fmt vet test` (and `go test -race ./pkg/sshclient/... ./internal/service/...`) before merging.
+
 ## 2026-10-28 — Store contract tests for SQLite and PostgreSQL, and CI
 
 ### Changes in this update

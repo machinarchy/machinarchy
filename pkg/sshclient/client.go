@@ -135,6 +135,16 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, nil, ctxErr
 		}
+		// The connection deadline is the context deadline, so a read timeout can
+		// surface a moment before the context reports it; report it as the
+		// deadline it is rather than as an opaque negotiation failure.
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				return nil, nil, context.DeadlineExceeded
+			}
+			return nil, nil, domain.ErrConnectionTimeout
+		}
 		return nil, nil, fmt.Errorf("negotiate SSH connection to %s: %w", addr, err)
 	}
 	// The handshake deadline must not constrain the lifetime of the session.
