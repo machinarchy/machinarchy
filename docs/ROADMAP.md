@@ -23,7 +23,7 @@ For the current single-team product, treat one Machinarchy installation as one s
 - **Operator/Writer:** reader access plus inventory changes.
 - **Owner/Admin:** operator access plus account, token, and other administrative controls.
 
-The current implementation gives every account a private workspace. That behavior is shipped, but it is not the intended near-term collaboration model: it prevents accounts on the same installation from seeing and managing shared environments and hosts. The planned near-term follow-up is to make accounts in one installation share a default workspace and apply roles at the installation level. Keep the workspace key as an internal single-tenant boundary for now if that makes the transition safer; do not require customers to manage multiple workspaces or treat each environment as a workspace.
+Accounts in one installation now share a default workspace (workspace 1): self-registered accounts join it as `reader`, the first owner comes from the bootstrap configuration, and owners promote others through the members API. The workspace key stays as an internal single-tenant boundary so multiple workspaces can return later; do not require customers to manage multiple workspaces or treat each environment as a workspace. Databases created before this change keep their per-account workspaces until an operator consolidates them deliberately.
 
 Do not grant elevated roles merely because someone can self-register. Define a trusted bootstrap/provisioning path and assign each account its installation-wide role through that path. Environment-specific roles and access lists are deferred until there is a concrete need for different users to access different environments.
 
@@ -105,7 +105,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Authorized accounts in one installation see the same inventory; each request still enforces the caller's assigned role; self-signup cannot grant operator/admin privileges; environment IDs cannot bypass installation-wide authorization; no existing workspace data is merged without explicit operator selection and backup.
 - **Security considerations:** Keep owner/admin assignment privileged; preserve server-side authorization for every route and storage query; document that environments alone do not isolate access.
 - **Tests required:** Multi-account shared-inventory integration tests; reader/operator/admin allow/deny matrix; signup/provisioning privilege tests; migration tests proving explicit ownership selection and no accidental data loss.
-- **Status:** Planned. Current behavior remains one private workspace per account until this follow-up is implemented.
+- **Status:** In progress. Implemented: one shared default workspace, read-only self-registration, a bootstrap owner from configuration (no built-in credential), and owner-only role management with last-owner protection. Not done: a supported, backed-up path to consolidate legacy per-account workspaces into the shared one, invitations and member removal, a durable audit trail, and multi-account HTTP integration tests for the shared inventory.
 
 ### Phase 2 — Bulk onboarding
 

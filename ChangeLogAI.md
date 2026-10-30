@@ -2,6 +2,25 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-29 — Verification pass (static review without a Go toolchain)
+
+### Problems found and fixed
+
+- Two test fakes (`targetFakeEnvs`, `listFakeEnvs`) implemented `ListEnvironments` with the wrong return type (`[]domain.Environment` instead of `[]*domain.Environment`), which would not compile.
+- `internal/transport/http/v1/router.go` had an unsorted import group (gofmt reorders imports, so the CI formatting check would have failed), and `pkg/netpolicy/policy.go` ended with extra blank lines.
+- CORS did not allow `PATCH`, so browser clients could not call `PATCH /api/v1/hosts/{id}/labels` (preflight would be refused). Added `PATCH` and a preflight regression test (`middleware/cors_test.go`).
+- The embedded OpenAPI spec (`docs/swagger.json`, served at runtime) lacked the members, bulk registration, fleet preview, and label patch endpoints, the `selector` query parameter, and the 409 responses. Added them by hand and regenerated `swagger.yaml` from the same data; every `$ref` resolves. Run `make api-docs` when the Swaggo CLI is available so the generator becomes the source of truth again (the handler annotations are in place).
+- Stale documentation: roadmap, architecture, and usage docs still described a private workspace per account. Corrected them, added ADR 0003 (shared workspace, bootstrap owner, owner-managed roles, last-owner protection, pre-flight migrations) and marked the superseded parts of ADR 0002, and added an "Upgrading" section to `docs/operations.md` covering the first-owner setting, the duplicate-host migration check, the SSH target policy, and label rules.
+
+### Checks performed (static only)
+
+- Qualified identifiers resolve to real declarations across all module packages; no duplicate top-level declarations; struct-literal field names exist; store and service interfaces are satisfied by both stores and by every fake, and fakes that embed an interface override its methods with matching signatures; call arity for module functions; every method called on the store interfaces exists; field access through `SSH`/`AuthType` chains; capitalized and lowercase unqualified identifiers resolve; no unused imports or unused variables (scope-aware); import groups sorted; indentation and end-of-file newlines; 923 printf-style calls have matching verb and argument counts and `%w` appears only in `Errorf`; no non-constant format strings; the shell script and workflow YAML parse; the OpenAPI JSON parses and all references resolve; environment variable names agree across code, `.env.example`, and docs. The checkers were validated by injecting known errors into a scratch copy and confirming each was reported.
+- Assertions in the integration tests were compared against the store and client implementations (not-found and conflict error types, status guards, token semantics, DSN handling for the PostgreSQL schema isolation, literal status/connection values in raw INSERTs, column widths).
+
+### Not verified
+
+- Nothing was compiled, vetted, formatted, or executed: Go and Docker were unavailable. Heuristic checks cannot find type errors in expressions, missing returns, or gofmt alignment differences (column alignment of struct and map literals and comments); expect `gofmt -w` to touch the new files. Run `make fmt`, then `make vet test` and `make test-postgres` before merging.
+
 ## 2026-10-29 — Fleet targeting: labels, selectors, include/exclude rules, and target preview
 
 ### Changes in this update

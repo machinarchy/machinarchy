@@ -76,7 +76,7 @@ func ResolvePath(explicit string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user config directory: %w", err)
 	}
-	return filepath.Join(configDir, "machinarchy", "config.yaml"), nil
+	return filepath.Join(configDir, ".machinarchy", "config.yaml"), nil
 }
 
 // Load reads the YAML config, then binds environment variables and command

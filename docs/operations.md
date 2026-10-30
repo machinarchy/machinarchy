@@ -12,6 +12,15 @@ SQLite migrations run at startup, and its parent directory is created with restr
 
 The event broker requires NATS JetStream. At startup Machinarchy creates the `MACHINARCHY` stream or validates that an existing stream has compatible subjects and bounded retention. Provision persistent NATS storage in environments where retained events matter.
 
+## Upgrading
+
+Take a database backup before every upgrade; migrations have no down path. Behavior changes to expect when moving to a build that includes the shared-workspace, target-policy, and host-uniqueness work:
+
+- **First owner.** New self-registered accounts are read-only. Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` (12-72 bytes, plus optional `_USERNAME` and `_EMAIL`) for the first start; it is only used while the workspace has no owner, so remove it from the environment afterwards. Without it the server starts but logs that no owner exists.
+- **Duplicate hosts block migration 4.** Two hosts in one workspace with the same name (ignoring case) or the same address and port stop startup with a message that lists the workspace, the conflict, and the host IDs. Nothing is changed; rename or delete the duplicates and restart.
+- **SSH targets.** Loopback and link-local addresses are refused by default and cloud-metadata addresses always are. Set `MACHINARCHY_SSH_ALLOW_LOOPBACK=true` for a local lab, or use `MACHINARCHY_SSH_ALLOWED_CIDRS` / `MACHINARCHY_SSH_DENIED_CIDRS` / `MACHINARCHY_SSH_ALLOW_PRIVATE` to shape the policy.
+- **Labels.** New label rules apply to writes; stored labels that violate them keep working until a full host update resends them.
+
 ## Kubernetes probes
 
 Configure the container port from `MACHINARCHY_LISTEN_ADDR` (default `8080`) for the API, control-manager operations server, or monolith. All three expose `/healthz/live`, `/healthz/ready`, and `/metrics`; the control-manager does not expose application API routes. Use:

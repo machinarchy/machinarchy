@@ -42,7 +42,7 @@ SQLite and PostgreSQL adapters
 
 Keep the current modular monolith and ports-and-adapters boundaries while inventory, identity, authorization, and execution contracts are made reliable. Separate API and control-manager binaries already exist for independent deployment; do not split them into more services until measured load, fault isolation, or ownership requires it. Treat SQLite as a single-instance/local option and PostgreSQL as the shared multi-process database.
 
-The workspace authorization baseline is implemented in migration 000003. Existing rows are assigned to workspace 1; the earliest existing account becomes its owner and later existing accounts receive empty private workspaces. Verify the intended legacy owner and take a database backup before upgrading. See the [security assessment](SECURITY.md) and [roadmap](ROADMAP.md) for migration recovery, token handling, and remaining work.
+The workspace authorization baseline is implemented in migration 000003. Existing rows are assigned to workspace 1; the earliest existing account becomes its owner and later existing accounts receive empty private workspaces. Accounts created after the single-workspace change join workspace 1 as readers, so a database migrated earlier keeps its legacy per-account workspaces alongside the shared one. Verify the intended legacy owner and take a database backup before upgrading. See the [security assessment](SECURITY.md) and [roadmap](ROADMAP.md) for migration recovery, token handling, and remaining work.
 
 Use the existing NATS JetStream integration only for its current durable event flow. Do not turn it into a general job queue until job submission, delivery guarantees, deduplication, retry policy, and cancellation semantics are specified.
 

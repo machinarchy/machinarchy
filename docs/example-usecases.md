@@ -12,7 +12,7 @@ This guide walks through creating an environment, registering an SSH host throug
 - Network access from the API server to the SSH host on the configured port.
 - SSH credentials with permission to log in to the host.
 
-Each account currently owns a private workspace. Signup does not invite other users, provide workspace switching, or create shared team access. In production, signup is disabled by default; have an operator bootstrap the owner account deliberately. Set the API endpoint and temporary owner JWT for setup. Supply long-lived automation credentials from a secret manager at runtime rather than saving them in project files or shell startup scripts.
+All accounts share one workspace. Self-registered accounts are read-only `reader` members; the first owner is created from the `MACHINARCHY_BOOTSTRAP_ADMIN_*` settings and promotes other members with `PUT /api/v1/members/{id}/role`. Signup does not send invitations or provide workspace switching. In production, signup is disabled by default; have an operator bootstrap the owner account deliberately. Set the API endpoint and temporary owner JWT for setup. Supply long-lived automation credentials from a secret manager at runtime rather than saving them in project files or shell startup scripts.
 
 Replace these sample values:
 

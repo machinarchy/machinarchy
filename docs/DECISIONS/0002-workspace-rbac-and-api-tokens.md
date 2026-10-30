@@ -1,6 +1,6 @@
 # ADR 0002: Workspace-scoped authorization and API tokens
 
-- **Status:** Accepted and implemented as the authorization baseline
+- **Status:** Accepted and implemented as the authorization baseline; the account-to-workspace assignment (decisions 1 and 6 and the matching consequences) is superseded by [ADR 0003](0003-shared-workspace-bootstrap-owner-and-member-roles.md)
 - **Date:** 2026-10-26
 - **Supersedes:** The pending workspace design in ADR 0001
 
