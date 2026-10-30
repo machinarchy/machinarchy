@@ -17,13 +17,16 @@ type bootstrapFakeUsers struct {
 	hashes     []string
 	promotedID int
 	promoted   domain.Role
+	actors     []domain.AuditActor
 }
 
 func (f *bootstrapFakeUsers) CountWorkspaceOwners(context.Context, int) (int, error) {
 	return f.owners, nil
 }
 
-func (f *bootstrapFakeUsers) CreateUser(_ context.Context, username, _ string, hash string) (*domain.User, error) {
+func (f *bootstrapFakeUsers) CreateUser(ctx context.Context, username, _ string, hash string) (*domain.User, error) {
+	actor, _ := domain.AuditActorFrom(ctx)
+	f.actors = append(f.actors, actor)
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -32,7 +35,9 @@ func (f *bootstrapFakeUsers) CreateUser(_ context.Context, username, _ string, h
 	return &domain.User{ID: 42, Username: username, WorkspaceID: domain.DefaultWorkspaceID, Role: domain.RoleReader}, nil
 }
 
-func (f *bootstrapFakeUsers) UpdateWorkspaceMemberRole(_ context.Context, workspaceID, userID int, role domain.Role) error {
+func (f *bootstrapFakeUsers) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
+	actor, _ := domain.AuditActorFrom(ctx)
+	f.actors = append(f.actors, actor)
 	if workspaceID != domain.DefaultWorkspaceID {
 		return errors.New("unexpected workspace")
 	}
@@ -53,6 +58,14 @@ func TestBootstrapOwnerCreatesAndPromotesWhenNoOwnerExists(t *testing.T) {
 	}
 	if users.promotedID != 42 || users.promoted != domain.RoleOwner {
 		t.Errorf("promotion = user %d role %q, want user 42 owner", users.promotedID, users.promoted)
+	}
+	if len(users.actors) != 2 {
+		t.Fatalf("recorded %d store calls with an actor, want 2", len(users.actors))
+	}
+	for i, actor := range users.actors {
+		if actor.Source != "bootstrap" || actor.Username != "bootstrap" {
+			t.Errorf("store call %d actor = %+v; bootstrap changes must be attributed to the bootstrap process", i, actor)
+		}
 	}
 	if users.hashes[0] == bootstrapTestPassword || bcrypt.CompareHashAndPassword([]byte(users.hashes[0]), []byte(bootstrapTestPassword)) != nil {
 		t.Error("the password must be stored only as a valid bcrypt hash")

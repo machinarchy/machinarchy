@@ -26,6 +26,10 @@ func BootstrapOwner(ctx context.Context, users domain.UserStore, username, email
 		return false, fmt.Errorf("%w: bootstrap username is required and password must be between 12 and 72 bytes", domain.ErrInvalidInput)
 	}
 
+	// Everything this function writes is attributed to the bootstrap process, not
+	// to the account it creates.
+	ctx = domain.WithAuditActor(ctx, domain.AuditActor{Username: "bootstrap", Source: "bootstrap"})
+
 	owners, err := users.CountWorkspaceOwners(ctx, domain.DefaultWorkspaceID)
 	if err != nil {
 		return false, err

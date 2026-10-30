@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -199,6 +200,11 @@ var contractTests = []struct {
 	{"host uniqueness", testHostUniqueness},
 	{"host label patches", testHostLabelPatches},
 	{"concurrent label patches", testConcurrentLabelPatches},
+	{"audit trail", testAuditTrail},
+	{"audit events are append-only", testAuditAppendOnly},
+	{"audit detects a modified event", testAuditDetectsModification},
+	{"audit detects a removed event", testAuditDetectsRemoval},
+	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
@@ -808,5 +814,329 @@ func testConcurrentLabelPatches(t *testing.T, f *fixture) {
 		if stored.Labels["k"+strconv.Itoa(i)] != "v" {
 			t.Errorf("label k%d was lost", i)
 		}
+	}
+}
+
+// auditEvents returns a workspace's events oldest first.
+func auditEvents(t *testing.T, f *fixture, workspaceID int) []domain.AuditEvent {
+	t.Helper()
+	newest, err := f.stores.Audit.ListAuditEvents(context.Background(), workspaceID, domain.AuditFilter{Limit: domain.MaxAuditPageSize})
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	oldest := make([]domain.AuditEvent, len(newest))
+	for i, event := range newest {
+		oldest[len(newest)-1-i] = event
+	}
+	return oldest
+}
+
+func testAuditTrail(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	actor := domain.AuditActor{UserID: 99, Username: "ops", RequestID: "req-123", Source: "api"}
+	actx := domain.WithAuditActor(ctx, actor)
+	other := f.newWorkspace(t, "other")
+
+	// Self-registration: each account is its own actor.
+	alice, err := f.stores.Users.CreateUser(ctx, "alice", "alice@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := f.stores.Users.CreateUser(ctx, "bob", "bob@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	// Neither a no-op change nor a refused one is an event.
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleReader); !errors.Is(err, domain.ErrLastOwner) {
+		t.Fatalf("demoting the last owner error = %v, want ErrLastOwner", err)
+	}
+
+	host := contractHost(1, "web-01", "10.0.0.1", 22)
+	host.SSH.AuthType.Password = "TOP-SECRET-PW"
+	if err := f.stores.Hosts.CreateHost(actx, host); err != nil {
+		t.Fatal(err)
+	}
+	hostID, _ := strconv.Atoi(host.ID)
+
+	// Operations that fail must leave no event behind.
+	before := len(auditEvents(t, f, 1))
+	if err := f.stores.Hosts.CreateHost(actx, contractHost(1, "dup", "10.0.0.1", 22)); !errors.Is(err, domain.ErrHostAlreadyExists) {
+		t.Fatalf("duplicate host error = %v", err)
+	}
+	if err := f.stores.Hosts.DeleteHost(actx, 1, "999999"); !errors.Is(err, domain.ErrHostNotFound) {
+		t.Fatalf("unknown host delete error = %v", err)
+	}
+	if _, err := f.stores.Hosts.PatchHostLabels(actx, 1, hostID, map[string]string{"name": "reserved"}, nil); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("invalid patch error = %v", err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, 9999, domain.RoleReader); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("unknown member error = %v", err)
+	}
+	if err := f.stores.Access.RevokeAPIToken(actx, 9999, bob.ID, 1); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Fatalf("unknown token revoke error = %v", err)
+	}
+	if _, err := f.stores.Users.CreateUser(ctx, "alice", "other@example.test", "hash"); !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Fatalf("duplicate user error = %v", err)
+	}
+	if after := len(auditEvents(t, f, 1)); after != before {
+		t.Fatalf("failed operations wrote %d audit events, want 0", after-before)
+	}
+
+	host.Name = "web-01-renamed"
+	if err := f.stores.Hosts.UpdateHost(actx, host); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.stores.Hosts.PatchHostLabels(actx, 1, hostID, map[string]string{"role": "web"}, []string{"env"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Hosts.DeleteHost(actx, 1, host.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	expires := time.Now().Add(time.Hour)
+	token := &domain.APIToken{
+		UserID: bob.ID, WorkspaceID: 1, Name: "ci", Role: domain.RoleOperator,
+		TokenHash: strings.Repeat("a", 64), CreatedAt: time.Now().UTC(), ExpiresAt: &expires,
+	}
+	if err := f.stores.Access.CreateAPIToken(actx, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Access.RevokeAPIToken(actx, token.ID, bob.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	events := auditEvents(t, f, 1)
+	wantActions := []string{
+		domain.AuditUserCreated, domain.AuditUserCreated, domain.AuditMemberRoleChanged,
+		domain.AuditHostCreated, domain.AuditHostUpdated, domain.AuditHostLabelsPatched, domain.AuditHostDeleted,
+		domain.AuditAPITokenCreated, domain.AuditAPITokenRevoked,
+	}
+	if len(events) != len(wantActions) {
+		t.Fatalf("recorded %d events, want %d: %+v", len(events), len(wantActions), events)
+	}
+	for i, want := range wantActions {
+		if events[i].Action != want || events[i].Outcome != domain.AuditOutcomeSuccess ||
+			events[i].OccurredAt.IsZero() || len(events[i].Hash) != 64 {
+			t.Errorf("event[%d] = %+v, want a successful %s", i, events[i], want)
+		}
+	}
+
+	expectDetails := func(i int, want map[string]string) {
+		t.Helper()
+		got := events[i].Details
+		if len(got) != len(want) {
+			t.Errorf("event[%d] (%s) details = %v, want %v", i, events[i].Action, got, want)
+			return
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Errorf("event[%d] (%s) detail %s = %q, want %q", i, events[i].Action, key, got[key], value)
+			}
+		}
+	}
+	// Self-registration is attributed to the new account.
+	if e := events[0]; e.ActorUserID != alice.ID || e.ActorUsername != "alice" || e.Source != "signup" || e.TargetID != strconv.Itoa(alice.ID) {
+		t.Errorf("signup event = %+v", e)
+	}
+	expectDetails(0, map[string]string{"username": "alice", "role": "reader"})
+	// Mutations made with an actor carry it, including the request ID.
+	for i := 2; i < len(events); i++ {
+		if e := events[i]; e.ActorUserID != 99 || e.ActorUsername != "ops" || e.RequestID != "req-123" || e.Source != "api" {
+			t.Errorf("event[%d] actor = %d/%q/%q/%q, want the context actor", i, e.ActorUserID, e.ActorUsername, e.RequestID, e.Source)
+		}
+	}
+	expectDetails(2, map[string]string{"previous_role": "reader", "new_role": "owner"})
+	if events[2].TargetType != domain.AuditTargetUser || events[2].TargetID != strconv.Itoa(alice.ID) {
+		t.Errorf("role change target = %s/%s", events[2].TargetType, events[2].TargetID)
+	}
+	expectDetails(3, map[string]string{"name": "web-01", "address": "10.0.0.1", "port": "22"})
+	expectDetails(4, map[string]string{"name": "web-01-renamed", "address": "10.0.0.1", "port": "22"})
+	expectDetails(5, map[string]string{"set_keys": "role", "removed_keys": "env"})
+	expectDetails(6, map[string]string{"name": "web-01-renamed", "address": "10.0.0.1"})
+	for i := 3; i <= 6; i++ {
+		if events[i].TargetType != domain.AuditTargetHost || events[i].TargetID != host.ID {
+			t.Errorf("event[%d] target = %s/%s, want host %s", i, events[i].TargetType, events[i].TargetID, host.ID)
+		}
+	}
+	if e := events[7]; e.TargetType != domain.AuditTargetAPIToken || e.TargetID != strconv.Itoa(token.ID) || e.Details["name"] != "ci" ||
+		e.Details["role"] != "operator" || e.Details["expires_at"] == "" || len(e.Details) != 3 {
+		t.Errorf("token creation event = %+v", e)
+	}
+	expectDetails(8, map[string]string{"name": "ci"})
+
+	// No credential ever reaches the trail.
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"TOP-SECRET-PW", strings.Repeat("a", 64), "SHA256:test"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the audit trail contains %q", secret)
+		}
+	}
+
+	// The events form one valid chain.
+	if events[0].PrevHash != domain.AuditGenesisHash {
+		t.Errorf("first event links to %q, want the genesis hash", events[0].PrevHash)
+	}
+	for i := 1; i < len(events); i++ {
+		if events[i].PrevHash != events[i-1].Hash {
+			t.Errorf("event[%d] does not link to event[%d]", i, i-1)
+		}
+	}
+	verification, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil || !verification.Valid || verification.Events != len(events) || verification.HeadHash != events[len(events)-1].Hash {
+		t.Fatalf("VerifyAuditChain() = %+v, %v", verification, err)
+	}
+
+	// Paging and filtering, newest first.
+	page, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Limit: 2})
+	if err != nil || len(page) != 2 || page[0].Action != domain.AuditAPITokenRevoked || page[1].Action != domain.AuditAPITokenCreated {
+		t.Fatalf("first page = %+v, %v", page, err)
+	}
+	rest, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{BeforeID: page[1].ID})
+	if err != nil || len(rest) != len(events)-2 || rest[0].ID >= page[1].ID {
+		t.Fatalf("second page = %d events, %v", len(rest), err)
+	}
+	created, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditHostCreated})
+	if err != nil || len(created) != 1 {
+		t.Fatalf("filtered events = %d, %v; want 1", len(created), err)
+	}
+
+	// Another workspace sees nothing of this and has its own, empty, valid chain.
+	if foreign := auditEvents(t, f, other); len(foreign) != 0 {
+		t.Errorf("another workspace sees %d events, want 0", len(foreign))
+	}
+	if empty, err := f.stores.Audit.VerifyAuditChain(ctx, other); err != nil || !empty.Valid || empty.Events != 0 || empty.HeadHash != domain.AuditGenesisHash {
+		t.Errorf("an empty chain should verify: %+v, %v", empty, err)
+	}
+}
+
+// seedAuditEvents creates a host and n label patches, returning the events oldest first.
+func seedAuditEvents(t *testing.T, f *fixture, patches int) []domain.AuditEvent {
+	t.Helper()
+	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
+	host := contractHost(1, "web-01", "10.0.0.1", 22)
+	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := strconv.Atoi(host.ID)
+	for i := 0; i < patches; i++ {
+		if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return auditEvents(t, f, 1)
+}
+
+func disableAuditTriggers(t *testing.T, f *fixture) {
+	t.Helper()
+	statements := []string{`DROP TRIGGER audit_events_no_update`, `DROP TRIGGER audit_events_no_delete`}
+	if f.engine == store.EnginePostgres {
+		statements = []string{
+			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update`,
+			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_delete`,
+		}
+	}
+	for _, statement := range statements {
+		if _, err := f.stores.DB.ExecContext(context.Background(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
+func testAuditAppendOnly(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 1)
+	id := events[0].ID
+
+	update := f.pick(`UPDATE audit_events SET outcome = 'tampered' WHERE id = ?`, `UPDATE audit_events SET outcome = 'tampered' WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, update, id); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Errorf("UPDATE error = %v, want an append-only refusal", err)
+	}
+	remove := f.pick(`DELETE FROM audit_events WHERE id = ?`, `DELETE FROM audit_events WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, remove, id); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Errorf("DELETE error = %v, want an append-only refusal", err)
+	}
+	if after := auditEvents(t, f, 1); len(after) != len(events) || after[0].Outcome != domain.AuditOutcomeSuccess {
+		t.Errorf("events changed despite the refusals: %+v", after)
+	}
+}
+
+func testAuditDetectsModification(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 4) // five events
+	disableAuditTriggers(t, f)
+
+	target := events[2]
+	update := f.pick(`UPDATE audit_events SET details = '{"name":"evil"}' WHERE id = ?`, `UPDATE audit_events SET details = '{"name":"evil"}' WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, update, target.ID); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.FirstInvalidID != target.ID || !strings.Contains(result.Reason, "modified") || result.Events != 2 {
+		t.Fatalf("verification = %+v, want the modification of event %d reported", result, target.ID)
+	}
+}
+
+func testAuditDetectsRemoval(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 4) // five events
+	disableAuditTriggers(t, f)
+
+	remove := f.pick(`DELETE FROM audit_events WHERE id = ?`, `DELETE FROM audit_events WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, remove, events[2].ID); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.FirstInvalidID != events[3].ID || !strings.Contains(result.Reason, "link") {
+		t.Fatalf("verification = %+v, want the break reported at event %d", result, events[3].ID)
+	}
+}
+
+func testAuditConcurrentAppends(t *testing.T, f *fixture) {
+	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
+	host := contractHost(1, "web-01", "10.0.0.1", 22)
+	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := strconv.Atoi(host.ID)
+
+	const patches = 20
+	var wg sync.WaitGroup
+	errs := make([]error, patches)
+	for i := 0; i < patches; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("patch %d: %v", i, err)
+		}
+	}
+
+	events := auditEvents(t, f, 1)
+	if len(events) != patches+1 {
+		t.Fatalf("recorded %d events, want %d (one per mutation, none lost or duplicated)", len(events), patches+1)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(context.Background(), 1)
+	if err != nil || !result.Valid || result.Events != patches+1 {
+		t.Fatalf("the chain forked or broke under concurrency: %+v, %v", result, err)
 	}
 }

@@ -93,6 +93,10 @@ func NewServer(
 	if err != nil {
 		return nil, fmt.Errorf("configure target service: %w", err)
 	}
+	auditService, err := service.NewAuditService(repositories.Audit)
+	if err != nil {
+		return nil, fmt.Errorf("configure audit service: %w", err)
+	}
 	origins, err := allowedOrigins(cfg.Environment)
 	if err != nil {
 		return nil, err
@@ -140,7 +144,7 @@ func NewServer(
 	api := e.Group("/api", limiter.Middleware())
 	v1.RegisterRoutes(api, repositories, authService,
 		metricsService, hostService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, targetService)
+		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, targetService, auditService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",

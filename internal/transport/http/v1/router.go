@@ -7,6 +7,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	// Sub-domain packages
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/audit"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/auth"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/environments"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/fleet"
@@ -26,6 +27,7 @@ type Repositories struct {
 	Jobs         domain.JobStore
 	Environments domain.EnvironmentStore
 	Access       domain.AccessStore
+	Audit        domain.AuditStore
 }
 
 // RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
@@ -41,6 +43,7 @@ func RegisterRoutes(
 	tokenService domain.APITokenService,
 	memberService domain.MemberService,
 	targetService domain.TargetService,
+	auditService domain.AuditService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
@@ -51,6 +54,7 @@ func RegisterRoutes(
 	tokenHandler := tokens.NewHandler(tokenService)
 	memberHandler := members.NewHandler(memberService)
 	fleetHandler := fleet.NewHandler(targetService)
+	auditHandler := audit.NewHandler(auditService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -61,7 +65,7 @@ func RegisterRoutes(
 	// ==========================================
 	// PROTECTED API ROUTES
 	// ==========================================
-	apiv1 := g.Group("/v1", middleware.JWTAuth(jwtSecret, repos.Access))
+	apiv1 := g.Group("/v1", middleware.JWTAuth(jwtSecret, repos.Access), middleware.AuditActor())
 	{
 		// User Profile
 		apiv1.GET("/me", authHandler.GetMe)
@@ -97,6 +101,11 @@ func RegisterRoutes(
 		memberGroup := apiv1.Group("/members",
 			middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
 		members.RegisterRoutes(memberGroup, memberHandler)
+
+		// Owner-only audit trail; API tokens are refused.
+		auditGroup := apiv1.Group("/audit",
+			middleware.RequirePermission(domain.PermissionAuditRead), middleware.RequireHuman())
+		audit.RegisterRoutes(auditGroup, auditHandler)
 
 	}
 }

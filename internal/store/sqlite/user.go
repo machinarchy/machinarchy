@@ -61,6 +61,18 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordH
 		VALUES (?, ?, ?)`, domain.DefaultWorkspaceID, id, string(domain.RoleReader)); err != nil {
 		return nil, fmt.Errorf("create workspace membership: %w", err)
 	}
+	auditCtx := ctx
+	if _, ok := domain.AuditActorFrom(ctx); !ok {
+		// Self-registration: the new account is its own actor.
+		auditCtx = domain.WithAuditActor(ctx, domain.AuditActor{UserID: int(id), Username: username, Source: "signup"})
+	}
+	if err := appendAudit(auditCtx, tx, domain.AuditEvent{
+		WorkspaceID: domain.DefaultWorkspaceID, Action: domain.AuditUserCreated,
+		TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(id),
+		Details: map[string]string{"username": username, "role": string(domain.RoleReader)},
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create user transaction: %w", err)
 	}
@@ -72,10 +84,26 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordH
 }
 
 func (s *SQLiteStore) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin member role transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var previous string
+	err = tx.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
+		WHERE workspace_id = ? AND user_id = ?`, workspaceID, userID).Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read workspace membership: %w", err)
+	}
+
 	// One statement, so the "keep at least one owner" check and the update are
 	// atomic. A member who is not an owner, or a change that keeps them an owner,
 	// always matches; demoting an owner matches only while another owner exists.
-	result, err := s.DB.ExecContext(ctx, `UPDATE workspace_memberships SET role = ?1
+	result, err := tx.ExecContext(ctx, `UPDATE workspace_memberships SET role = ?1
 		WHERE workspace_id = ?2 AND user_id = ?3
 		AND (role <> 'owner' OR ?1 = 'owner'
 			OR (SELECT COUNT(*) FROM workspace_memberships
@@ -88,19 +116,22 @@ func (s *SQLiteStore) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID
 	if err != nil {
 		return fmt.Errorf("read updated membership rows: %w", err)
 	}
-	if rows > 0 {
-		return nil
+	if rows == 0 {
+		return domain.ErrLastOwner
 	}
-	var current string
-	err = s.DB.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
-		WHERE workspace_id = ? AND user_id = ?`, workspaceID, userID).Scan(&current)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.ErrUserNotFound
+	if previous != string(role) {
+		if err := appendAudit(ctx, tx, domain.AuditEvent{
+			WorkspaceID: workspaceID, Action: domain.AuditMemberRoleChanged,
+			TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(userID),
+			Details: map[string]string{"previous_role": previous, "new_role": string(role)},
+		}); err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("check workspace membership: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit member role transaction: %w", err)
 	}
-	return domain.ErrLastOwner
+	return nil
 }
 
 func (s *SQLiteStore) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {

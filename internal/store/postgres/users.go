@@ -66,6 +66,18 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 		VALUES ($1, $2, $3)`, user.WorkspaceID, user.ID, string(user.Role)); err != nil {
 		return nil, fmt.Errorf("create workspace membership: %w", err)
 	}
+	auditCtx := ctx
+	if _, ok := domain.AuditActorFrom(ctx); !ok {
+		// Self-registration: the new account is its own actor.
+		auditCtx = domain.WithAuditActor(ctx, domain.AuditActor{UserID: user.ID, Username: user.Username, Source: "signup"})
+	}
+	if err := appendAudit(auditCtx, tx, domain.AuditEvent{
+		WorkspaceID: domain.DefaultWorkspaceID, Action: domain.AuditUserCreated,
+		TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(user.ID),
+		Details: map[string]string{"username": user.Username, "role": string(domain.RoleReader)},
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create user transaction: %w", err)
 	}
@@ -111,6 +123,15 @@ func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, user
 	if _, err := tx.ExecContext(ctx, `UPDATE workspace_memberships SET role = $1
 		WHERE workspace_id = $2 AND user_id = $3`, string(role), workspaceID, userID); err != nil {
 		return fmt.Errorf("update workspace member role: %w", err)
+	}
+	if current != string(role) {
+		if err := appendAudit(ctx, tx, domain.AuditEvent{
+			WorkspaceID: workspaceID, Action: domain.AuditMemberRoleChanged,
+			TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(userID),
+			Details: map[string]string{"previous_role": current, "new_role": string(role)},
+		}); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit member role transaction: %w", err)

@@ -30,6 +30,7 @@ const (
 	PermissionOperationsRead Permission = "operations:read"
 	PermissionTokenManage    Permission = "tokens:manage"
 	PermissionMembersManage  Permission = "members:manage"
+	PermissionAuditRead      Permission = "audit:read"
 )
 
 // Principal is the authenticated identity attached to an API request. API

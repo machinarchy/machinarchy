@@ -32,6 +32,8 @@ go test ./internal/store/... -count=1
 
 Each test creates and drops its own schema, so the database may be shared, but use a disposable server. Set `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` to fail instead of skip when the URL is missing. The URL must use the `postgres://` form. GitHub Actions (`.github/workflows/ci.yml`) runs formatting, build, vet, and `go test -race` with a PostgreSQL service on every pull request.
 
+Every store method that changes inventory or access data must record an audit event in the same transaction (see `appendAudit` in `internal/store/sqlite/audit.go` and `internal/store/postgres/audit.go`) and a contract test in `internal/store/contract_test.go` that checks the event; never put credentials or token hashes in event details.
+
 Install `golangci-lint` and the Swaggo CLI before using the corresponding targets. Do not commit credentials, local database files, generated binaries, or unreviewed generated API changes.
 
 Current test debt: `internal/transport/http/v1/history/history_test.go` still targets the removed `internal/metrics` package and old handler API. Update that legacy test before treating `make test` as a passing repository check.

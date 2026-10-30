@@ -22,5 +22,5 @@ Authenticated accounts could previously access shared hosts, environments, jobs,
 
 - New accounts are isolated by storage-enforced workspace scope; role-limited automation credentials can be revoked without rotating the JWT signing key.
 - Legacy installations must inspect account IDs, verify backups, and rehearse migration 000003 before upgrading. The migration runner has no down-migration support; recovery is restore-from-backup or a reviewed forward migration.
-- Workspace collaboration is not complete: invitations, member-role management, multiple workspace memberships, and durable audit events are future work. Every newly created user is currently an owner of a separate workspace.
+- Workspace collaboration is not complete: invitations, member-role management, multiple workspace memberships, are future work (the audit trail now exists; see ADR 0003 and the security assessment). Every newly created user is currently an owner of a separate workspace.
 - SQLite migration/repository integration and role/token tests exist. PostgreSQL integration and exhaustive HTTP denial-path coverage remain required before claiming equivalent test evidence for both engines.

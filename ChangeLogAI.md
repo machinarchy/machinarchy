@@ -2,6 +2,27 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-29 — Append-only, hash-chained audit trail
+
+### Changes in this update
+
+- Added migration 5 (`audit_events`) for SQLite and PostgreSQL: one row per audited change with actor (user, username, API token, request ID, entry point), action, target, outcome, a small set of non-secret details, and the previous and own SHA-256 hash. Triggers abort UPDATE and DELETE.
+- The stores now write the event in the same transaction as the change: account creation (self-registration is attributed to the new account, bootstrap to `bootstrap`), member role changes (not when the role is unchanged), host create, update, and delete, label patches, and API token create and revoke. Failed or no-op operations write nothing. `DeleteHost`, `CreateAPIToken`, `RevokeAPIToken`, and `UpdateWorkspaceMemberRole` are now transactional so they can read what they record and write it atomically.
+- Events of a workspace form a hash chain (length-prefixed fields plus the exact timestamp text). Appends are serialized per workspace (single SQLite connection; transaction-scoped advisory lock in PostgreSQL) so the chain cannot fork. `domain.AuditChainVerifier` walks it and reports the first modified, removed, or reordered event.
+- New `AuditActor` middleware attaches the authenticated principal and request ID to the request context after authentication; stores read it with `domain.AuditActorFrom`.
+- New owner-only endpoints (new `audit:read` permission; human sessions only, API tokens refused): `GET /api/v1/audit/events` (newest first; `action`, `before_id`, `limit` up to 500) and `GET /api/v1/audit/verify` (valid flag, event count, head hash, first invalid event and reason).
+- Tests: hash coverage of every field, unambiguous encoding, detail sanitization, filter normalization, actor context, and the verifier (intact, modified, removed, reordered, forged-with-recomputed-hash, truncated, empty); store contract cases on SQLite and PostgreSQL for the full trail (every audited action, actors, request IDs, details, no secrets in any event, failures leaving nothing, paging and filtering, workspace isolation), append-only enforcement, tamper detection by modification and by removal (triggers disabled to simulate a privileged attacker), and concurrent appends keeping one valid chain; service permission matrix; handler guards and error mapping; actor middleware; bootstrap attribution.
+- Docs: new audit sections in the security assessment, architecture, ADR 0003, ROADMAP, and an upgrade note in the operations guide (including recording the head hash outside the database).
+
+### Known limitations
+
+- Denied requests, failed logins, reads, bulk-import summaries, and automatic host status changes are not recorded. No retention, archival, or export. A database administrator can disable the triggers and rewrite the chain; removal of the newest events is only detectable by comparing a head hash recorded elsewhere. New mutating store methods must write an event themselves.
+- Swagger files were not updated for the two audit endpoints; run `make api-docs` (the handler annotations are in place).
+
+### Validation
+
+- Not run: Go and Docker were unavailable. Static checks only (identifier resolution, interface and fake signatures, call arity, unused variables and imports, printf formats, missing imports). Run `gofmt -w`, `make vet test`, and `make test-postgres`; the PostgreSQL triggers, advisory lock, and `ALTER TABLE ... DISABLE TRIGGER` in the tamper tests are the most likely places to need adjustment.
+
 ## 2026-10-29 — Verification pass (static review without a Go toolchain)
 
 ### Problems found and fixed

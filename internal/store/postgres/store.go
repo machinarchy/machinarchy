@@ -80,6 +80,13 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 		}
 		return fmt.Errorf("insert PostgreSQL host: %w", err)
 	}
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: host.WorkspaceID, Action: domain.AuditHostCreated,
+		TargetType: domain.AuditTargetHost, TargetID: host.ID,
+		Details: map[string]string{"name": host.Name, "address": host.IPAddress, "port": strconv.Itoa(host.SSH.Port)},
+	}); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit create host transaction: %w", err)
 	}
@@ -203,11 +210,39 @@ func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) erro
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM hosts WHERE id = $1 AND workspace_id = $2`, id, workspaceID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete host transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var name, address string
+	err = tx.QueryRowContext(ctx, `SELECT name, ip_address FROM hosts WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+		id, workspaceID).Scan(&name, &address)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrHostNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read PostgreSQL host %s before delete: %w", id, err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM hosts WHERE id = $1 AND workspace_id = $2`, id, workspaceID)
 	if err != nil {
 		return fmt.Errorf("delete PostgreSQL host %s: %w", id, err)
 	}
-	return affected(result, domain.ErrHostNotFound)
+	if err := affected(result, domain.ErrHostNotFound); err != nil {
+		return err
+	}
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: workspaceID, Action: domain.AuditHostDeleted,
+		TargetType: domain.AuditTargetHost, TargetID: id,
+		Details: map[string]string{"name": name, "address": address},
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete host transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
@@ -250,6 +285,13 @@ func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 		return fmt.Errorf("update PostgreSQL host %s: %w", host.ID, err)
 	}
 	if err := affected(result, domain.ErrHostNotFound); err != nil {
+		return err
+	}
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: host.WorkspaceID, Action: domain.AuditHostUpdated,
+		TargetType: domain.AuditTargetHost, TargetID: host.ID,
+		Details: map[string]string{"name": host.Name, "address": host.IPAddress, "port": strconv.Itoa(host.SSH.Port)},
+	}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -346,6 +388,13 @@ func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set ma
 	if _, err := tx.ExecContext(ctx, `UPDATE hosts SET labels = $1, updated_at = NOW() WHERE id = $2 AND workspace_id = $3`,
 		string(encoded), strconv.Itoa(id), workspaceID); err != nil {
 		return nil, fmt.Errorf("update host labels: %w", err)
+	}
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: workspaceID, Action: domain.AuditHostLabelsPatched,
+		TargetType: domain.AuditTargetHost, TargetID: strconv.Itoa(id),
+		Details: map[string]string{"set_keys": keyList(set), "removed_keys": sortedList(remove)},
+	}); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit label patch: %w", err)

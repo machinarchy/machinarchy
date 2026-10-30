@@ -27,5 +27,5 @@ ADR 0002 gave every new account its own workspace and the `owner` role. That iso
 
 - Databases migrated before this change keep their per-account workspaces next to the shared one; consolidating them is a deliberate operator task that is not automated.
 - In production, with signup disabled, nobody can write until the bootstrap variables are set once. Remove the password from the environment afterwards.
-- Role changes are only logged. A durable, tamper-resistant audit trail, invitations, member removal, and step-up confirmation for promoting an owner remain future work.
+- Role changes are written to the append-only, hash-chained audit trail (see the audit section of the security assessment). Invitations, member removal, step-up confirmation for promoting an owner, and audit retention or export remain future work.
 - Because every account sees the same inventory, the permission to relabel hosts must stay separate from any future permission to execute commands (see the fleet-targeting section of the security assessment).

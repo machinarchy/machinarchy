@@ -113,7 +113,12 @@ func (s *SQLiteStore) CreateAPIToken(ctx context.Context, token *domain.APIToken
 	if token.CreatedAt.IsZero() || token.ExpiresAt == nil || token.ExpiresAt.IsZero() {
 		return fmt.Errorf("%w: API token timestamps are required", domain.ErrInvalidInput)
 	}
-	result, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create API token transaction: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens
 		(user_id, workspace_id, name, role, token_hash, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`, token.UserID, token.WorkspaceID, token.Name,
 		string(token.Role), token.TokenHash, token.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -129,6 +134,21 @@ func (s *SQLiteStore) CreateAPIToken(ctx context.Context, token *domain.APIToken
 	if err != nil {
 		return fmt.Errorf("read API token ID: %w", err)
 	}
+	// Only the token's name, role, and expiry are recorded; the secret and its
+	// hash never enter the audit trail.
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: token.WorkspaceID, Action: domain.AuditAPITokenCreated,
+		TargetType: domain.AuditTargetAPIToken, TargetID: fmt.Sprint(id),
+		Details: map[string]string{
+			"name": token.Name, "role": string(token.Role),
+			"expires_at": token.ExpiresAt.UTC().Format(time.RFC3339),
+		},
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create API token transaction: %w", err)
+	}
 	token.ID = int(id)
 	return nil
 }
@@ -137,11 +157,39 @@ func (s *SQLiteStore) RevokeAPIToken(ctx context.Context, id, userID, workspaceI
 	if id <= 0 || userID <= 0 || workspaceID <= 0 {
 		return fmt.Errorf("%w: token, user, and workspace IDs must be positive", domain.ErrInvalidInput)
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin revoke API token transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var name string
+	err = tx.QueryRowContext(ctx, `SELECT name FROM api_tokens
+		WHERE id = ? AND user_id = ? AND workspace_id = ? AND revoked_at IS NULL`,
+		id, userID, workspaceID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrAPITokenNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read API token before revoke: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?
 		WHERE id = ? AND user_id = ? AND workspace_id = ? AND revoked_at IS NULL`,
 		time.Now().UTC().Format(time.RFC3339Nano), id, userID, workspaceID)
 	if err != nil {
 		return fmt.Errorf("revoke API token: %w", err)
 	}
-	return requireRowsAffected(result, domain.ErrAPITokenNotFound)
+	if err := requireRowsAffected(result, domain.ErrAPITokenNotFound); err != nil {
+		return err
+	}
+	if err := appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: workspaceID, Action: domain.AuditAPITokenRevoked,
+		TargetType: domain.AuditTargetAPIToken, TargetID: fmt.Sprint(id),
+		Details: map[string]string{"name": name},
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit revoke API token transaction: %w", err)
+	}
+	return nil
 }
