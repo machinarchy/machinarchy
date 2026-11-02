@@ -15,6 +15,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/runs"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/tokens"
 )
 
@@ -44,6 +45,7 @@ func RegisterRoutes(
 	memberService domain.MemberService,
 	targetService domain.TargetService,
 	auditService domain.AuditService,
+	runService domain.RunService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
@@ -55,6 +57,7 @@ func RegisterRoutes(
 	memberHandler := members.NewHandler(memberService)
 	fleetHandler := fleet.NewHandler(targetService)
 	auditHandler := audit.NewHandler(auditService)
+	runHandler := runs.NewHandler(runService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -101,6 +104,14 @@ func RegisterRoutes(
 		memberGroup := apiv1.Group("/members",
 			middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
 		members.RegisterRoutes(memberGroup, memberHandler)
+
+		// Runs: anyone who can read operations may list and inspect them; starting
+		// and cancelling need the separate runs:execute permission.
+		runs.RegisterRoutes(
+			apiv1.Group("/runs", middleware.RequirePermission(domain.PermissionOperationsRead)),
+			apiv1.Group("/runs", middleware.RequirePermission(domain.PermissionRunsExecute)),
+			runHandler,
+		)
 
 		// Owner-only audit trail; API tokens are refused.
 		auditGroup := apiv1.Group("/audit",

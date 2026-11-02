@@ -1529,6 +1529,316 @@
                 }
             }
         },
+        "/api/v1/runs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Newest first, without arguments or per-host results. Requires operations read permission.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runs"
+                ],
+                "summary": "List runs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only runs with this status",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only runs with a smaller id (paging cursor)",
+                        "name": "before_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 50, maximum 200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/domain.Run"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Disabled unless the server enables execution and lists the allowed programs. Requires the runs:execute permission (owners and operators). The command is an argument list with no shell, the targets are resolved and pinned when the run is accepted, and the run executes in the background: poll GET /api/v1/runs/{id}. Output is combined stdout and stderr. Commands are never retried; a timeout or cancellation does not prove the command did not run. The 202 response carries the run; with dryRun the plan is returned with 200 and nothing is stored or contacted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runs"
+                ],
+                "summary": "Run a command on hosts",
+                "parameters": [
+                    {
+                        "description": "Command and target rule",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/runs.SubmitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Dry run plan",
+                        "schema": {
+                            "$ref": "#/definitions/domain.Run"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/domain.Run"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "The targeted hosts changed since the preview",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runs/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Callers with the runs:execute permission also see the arguments and each host's output; others see only status, exit codes, and errors.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runs"
+                ],
+                "summary": "Get a run",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/domain.Run"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runs/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Stops new hosts from starting and closes running SSH sessions. A command that was already sent may still have run, or keep running, on its host; cancelled hosts are reported as such. Requires the runs:execute permission.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runs"
+                ],
+                "summary": "Cancel a run",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/domain.Run"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tokens": {
             "get": {
                 "security": [
@@ -2246,6 +2556,179 @@
                 "RoleReader"
             ]
         },
+        "domain.Run": {
+            "type": "object",
+            "properties": {
+                "argCount": {
+                    "type": "integer"
+                },
+                "argv": {
+                    "description": "Argv is only returned to callers allowed to execute; it may contain\nsensitive values and is stored encrypted.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "cancelRequested": {
+                    "description": "CancelRequested is set when cancellation was asked for.",
+                    "type": "boolean"
+                },
+                "concurrency": {
+                    "type": "integer"
+                },
+                "counts": {
+                    "$ref": "#/definitions/domain.RunCounts"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdByTokenId": {
+                    "type": "integer"
+                },
+                "createdByUserId": {
+                    "type": "integer"
+                },
+                "createdByUsername": {
+                    "type": "string"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "hosts": {
+                    "description": "Hosts is omitted from listings. Output is only included for callers\nallowed to execute.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.RunHost"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "program": {
+                    "type": "string"
+                },
+                "rule": {
+                    "$ref": "#/definitions/domain.TargetRule"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.RunStatus"
+                },
+                "targetsHash": {
+                    "type": "string"
+                },
+                "timeoutSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.RunCounts": {
+            "type": "object",
+            "properties": {
+                "cancelled": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "interrupted": {
+                    "type": "integer"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "running": {
+                    "type": "integer"
+                },
+                "succeeded": {
+                    "type": "integer"
+                },
+                "timedOut": {
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.RunHost": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "exitCode": {
+                    "type": "integer"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "hostId": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "output": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.RunHostStatus"
+                }
+            }
+        },
+        "domain.RunHostStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "running",
+                "succeeded",
+                "failed",
+                "timed_out",
+                "cancelled",
+                "interrupted"
+            ],
+            "x-enum-varnames": [
+                "RunHostPending",
+                "RunHostRunning",
+                "RunHostSucceeded",
+                "RunHostFailed",
+                "RunHostTimedOut",
+                "RunHostCancelled",
+                "RunHostInterrupted"
+            ]
+        },
+        "domain.RunStatus": {
+            "type": "string",
+            "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "partially_succeeded",
+                "failed",
+                "cancelled",
+                "interrupted",
+                "planned"
+            ],
+            "x-enum-varnames": [
+                "RunQueued",
+                "RunRunning",
+                "RunSucceeded",
+                "RunPartiallySucceeded",
+                "RunFailed",
+                "RunCancelled",
+                "RunInterrupted",
+                "RunPlanned"
+            ]
+        },
         "domain.SSHAccess": {
             "type": "object",
             "properties": {
@@ -2314,6 +2797,10 @@
                         "$ref": "#/definitions/domain.TargetHost"
                     }
                 },
+                "targetsHash": {
+                    "description": "TargetsHash identifies the exact targeted hosts (all of them, not only the\nlisted ones). A run can require it so it runs on what was reviewed.",
+                    "type": "string"
+                },
                 "total": {
                     "description": "Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts of them.",
                     "type": "integer"
@@ -2332,6 +2819,29 @@
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "domain.TargetRule": {
+            "type": "object",
+            "properties": {
+                "all": {
+                    "type": "boolean"
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "selector": {
+                    "type": "string"
                 }
             }
         },
@@ -2574,6 +3084,54 @@
                         "reader"
                     ],
                     "example": "operator"
+                }
+            }
+        },
+        "runs.SubmitRequest": {
+            "type": "object",
+            "properties": {
+                "all": {
+                    "type": "boolean"
+                },
+                "argv": {
+                    "description": "Argv is the program followed by its arguments. There is no shell: each\nelement reaches the program as exactly one argument.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "concurrency": {
+                    "description": "Concurrency bounds hosts processed at once (default 5, maximum 20).",
+                    "type": "integer"
+                },
+                "dryRun": {
+                    "description": "DryRun validates and plans without storing a run or contacting any host.",
+                    "type": "boolean"
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "expectTargetsHash": {
+                    "description": "ExpectTargetsHash, copied from a preview, makes the request fail with 409\nunless it would run on exactly the previewed hosts.",
+                    "type": "string"
+                },
+                "include": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "selector": {
+                    "description": "Selector, Include, Exclude, and All form the target rule exactly as in the\ntarget preview. At least one of selector, include, or all is required.",
+                    "type": "string",
+                    "example": "environment=production,role=web"
+                },
+                "timeoutSeconds": {
+                    "description": "TimeoutSeconds bounds the command on each host (default 60, maximum 900).",
+                    "type": "integer"
                 }
             }
         },

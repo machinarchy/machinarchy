@@ -12,6 +12,9 @@ func TestRoleAllows(t *testing.T) {
 		want       bool
 	}{
 		{RoleOwner, PermissionTokenManage, true},
+		{RoleOwner, PermissionRunsExecute, true},
+		{RoleOperator, PermissionRunsExecute, true},
+		{RoleReader, PermissionRunsExecute, false},
 		{RoleOwner, PermissionMembersManage, true},
 		{RoleOperator, PermissionMembersManage, false},
 		{RoleReader, PermissionMembersManage, false},

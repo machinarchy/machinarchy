@@ -72,13 +72,14 @@ func NewServer(
 	hostService service.HostService,
 	metricsService domain.MetricsService,
 	sshCapacity *service.SSHCapacity,
+	runService domain.RunService,
 	repositories v1.Repositories,
 	database DatabaseReadiness,
 	dependencies ...ReadinessChecker,
 ) (*Server, error) {
 	if database == nil || repositories.Users == nil || repositories.Metrics == nil || repositories.Hosts == nil ||
 		repositories.Jobs == nil || repositories.Environments == nil || repositories.Access == nil ||
-		authService == nil || hostService == nil || metricsService == nil || sshCapacity == nil {
+		authService == nil || hostService == nil || metricsService == nil || sshCapacity == nil || runService == nil {
 		return nil, errors.New("HTTP server dependencies are required")
 	}
 	tokenService, err := service.NewAPITokenService(repositories.Access)
@@ -144,7 +145,7 @@ func NewServer(
 	api := e.Group("/api", limiter.Middleware())
 	v1.RegisterRoutes(api, repositories, authService,
 		metricsService, hostService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, targetService, auditService)
+		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, targetService, auditService, runService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",

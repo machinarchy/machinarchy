@@ -31,6 +31,7 @@ const (
 	PermissionTokenManage    Permission = "tokens:manage"
 	PermissionMembersManage  Permission = "members:manage"
 	PermissionAuditRead      Permission = "audit:read"
+	PermissionRunsExecute    Permission = "runs:execute"
 )
 
 // Principal is the authenticated identity attached to an API request. API
@@ -50,7 +51,8 @@ func (r Role) Allows(permission Permission) bool {
 	case RoleOperator:
 		return permission == PermissionInventoryRead ||
 			permission == PermissionInventoryWrite ||
-			permission == PermissionOperationsRead
+			permission == PermissionOperationsRead ||
+			permission == PermissionRunsExecute
 	case RoleReader:
 		return permission == PermissionInventoryRead || permission == PermissionOperationsRead
 	default:

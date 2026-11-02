@@ -39,6 +39,7 @@ type Stores struct {
 	Jobs         domain.JobStore
 	Environments domain.EnvironmentStore
 	Audit        domain.AuditStore
+	Runs         domain.RunStore
 }
 
 func Open(parent context.Context, cfg Config) (*Stores, error) {
@@ -129,6 +130,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Jobs = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
+		stores.Runs = storeInstance
 	case "postgres":
 		storeInstance, err := postgres.NewStore(db, cfg.EncryptionSecret)
 		if err != nil {
@@ -141,6 +143,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Jobs = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
+		stores.Runs = storeInstance
 	}
 
 	return stores, nil

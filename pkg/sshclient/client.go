@@ -80,6 +80,18 @@ func ExecuteRemoteCommand(ctx context.Context, params DialParams, command string
 	return output.String(), err
 }
 
+// ExitStatus reports the exit status of a remote command that ran and exited
+// unsuccessfully. It returns false for every other kind of error, including
+// failures to connect, so callers can tell "the command failed" from "the
+// command may not have run".
+func ExitStatus(err error) (int, bool) {
+	var exit *ssh.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitStatus(), true
+	}
+	return 0, false
+}
+
 func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 	if ctx == nil {
 		return nil, nil, fmt.Errorf("%w: context is required", domain.ErrInvalidInput)

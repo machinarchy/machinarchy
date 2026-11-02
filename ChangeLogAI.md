@@ -2,6 +2,29 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-10-29 — Command execution foundation: structured, pinned, audited runs
+
+### Changes in this update
+
+- New permission `runs:execute` (owners and operators; readers cannot start or cancel runs). Execution is disabled by default: `MACHINARCHY_EXECUTION_ENABLED` and a required `MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS` list (`*` must be explicit; enabling without a list stops startup).
+- A command is an argument list (`domain.ValidateArgv`, `QuoteArgv`): the program must be a plain name or path, arguments are bounded and free of control characters, and every element is single-quoted when sent, so the remote shell sees one word per argument. There is no shell string.
+- `POST /api/v1/runs` validates policy and shape before touching the inventory, resolves the target rule once (at most 200 hosts), pins it as host IDs, optionally verifies a preview's `targetsHash` (409 with the new hash if the hosts differ), supports `dryRun`, and returns 202 with the run. Previews now include `targetsHash`.
+- `GET /api/v1/runs`, `GET /api/v1/runs/{id}`, `POST /api/v1/runs/{id}/cancel`. Arguments and per-host output are returned only to callers with `runs:execute`.
+- Migration 6 (`runs`, `run_hosts`); the arguments are stored encrypted with the installation key; run-store methods write `run.created`, `run.cancel_requested`, `run.finished`, and `run.interrupted` audit events transactionally (arguments and output never included).
+- `service.RunManager`: background executor with a per-run worker pool, per-host timeouts, SSH capacity waiting, sanitized and truncated output (terminal escapes and control characters removed, 64 KiB per host), exit-code reporting (`sshclient.ExitStatus`), refusal to contact a host whose address or port changed since submission, heartbeats, cancellation through the heartbeat, recovery of abandoned runs at startup and periodically, a limit on concurrently executing runs, and orderly shutdown (runs in flight are interrupted and recorded before the database closes). Commands are never retried.
+- Removed the unwired fleet-execution placeholder and its result types.
+- Tests: argv validation and quoting (including a POSIX-style round-trip of hostile arguments), execution policy, targets hash, status aggregation, output sanitization; run service behavior with in-memory fakes (policy before inventory, validation, dry run, preview binding, results and attribution, mixed outcomes and timeouts, concurrency bound, cancellation, shutdown, moved or deleted hosts, active-run limit, SSH capacity queueing, redaction, authorization, recovery); real-SSH-server runs (quoting reaches the remote shell intact, exit codes, wrong host key never sees credentials or the command, timeouts, forbidden addresses, twelve hosts); store contract tests on SQLite and PostgreSQL (lifecycle, encryption at rest, listing, recovery, audit contents); handler guards and error mapping; configuration parsing.
+- Docs: new command-execution section in the security assessment, ADR 0004, architecture, ROADMAP, usage guide (preview, run, watch, cancel), operations guide, README, and `.env.example`.
+
+### Known limitations
+
+- No CLI `exec` command, scripts, file transfer, approval step, agent execution, submission idempotency keys, or retention and export of output. Output is stored unencrypted. Runs execute in the API process, so a crash interrupts them (the next recovery sweep records it). The program allow list cannot judge arguments; do not allow interpreters or `ssh`.
+- Swagger files were not updated for the run endpoints; run `make api-docs`.
+
+### Validation
+
+- Not run: Go and Docker were unavailable. Static checks only. Run `gofmt -w`, `make vet test`, and `make test-postgres`. The most timing-sensitive tests are the cancellation, shutdown, recovery, and real-SSH timeout cases; watch them under `-race`.
+
 ## 2026-10-29 — Append-only, hash-chained audit trail
 
 ### Changes in this update

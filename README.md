@@ -2,7 +2,7 @@
 
 Machinarchy is a Go control-plane service for registering SSH-managed hosts, grouping them into environments, and querying host and job history. It exposes an Echo-based HTTP API, stores application data in SQLite or PostgreSQL, and uses NATS JetStream for events.
 
-> **Implementation status:** Host registration, authentication, environment management, history queries, health checks, and event plumbing are implemented. The agent runtime is currently a stub, and there is no HTTP endpoint that submits or executes jobs. Job endpoints expose records already present in storage. See [architecture and current limitations](docs/architecture.md).
+> **Implementation status:** Host registration, authentication, environment management, history queries, health checks, and event plumbing are implemented. The agent runtime is currently a stub. Command execution over SSH is available through `POST /api/v1/runs` but disabled by default; the older job endpoints expose records already present in storage. See [architecture and current limitations](docs/architecture.md).
 
 ## Components
 

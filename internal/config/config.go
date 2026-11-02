@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
@@ -67,6 +68,7 @@ type Config struct {
 	EventBroker      EventBrokerConfig
 	BootstrapAdmin   BootstrapAdminConfig
 	SSHTargetPolicy  netpolicy.Policy
+	Execution        domain.ExecutionPolicy
 }
 
 // BootstrapAdminConfig describes the optional first owner account. The account is
@@ -164,6 +166,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.SSHTargetPolicy = targetPolicy
+
+	executionEnabled, err := strconv.ParseBool(GetEnv("MACHINARCHY_EXECUTION_ENABLED", "false"))
+	if err != nil {
+		return Config{}, errors.New("MACHINARCHY_EXECUTION_ENABLED must be true or false")
+	}
+	execution, err := domain.NewExecutionPolicy(executionEnabled,
+		strings.Split(GetEnv("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS"), ","))
+	if err != nil {
+		return Config{}, fmt.Errorf("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS: %w", err)
+	}
+	cfg.Execution = execution
 
 	// Log System Levels Check
 	switch cfg.LogLevel {

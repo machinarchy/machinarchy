@@ -470,6 +470,9 @@ type TargetPreview struct {
 	Excluded        []TargetHost `json:"excluded"`
 	UnknownIncludes []string     `json:"unknownIncludes"`
 	UnknownExcludes []string     `json:"unknownExcludes"`
+	// TargetsHash identifies the exact targeted hosts (all of them, not only the
+	// listed ones). A run can require it so it runs on what was reviewed.
+	TargetsHash string `json:"targetsHash"`
 }
 
 // TargetService resolves target rules for the caller's workspace.
@@ -477,21 +480,4 @@ type TargetService interface {
 	// Preview resolves rule without touching any host. Selector and rule errors
 	// wrap ErrInvalidInput; callers need inventory read permission.
 	Preview(ctx context.Context, principal Principal, rule TargetRule) (*TargetPreview, error)
-}
-
-// HostJobResult captures the per-host outcome of a fleet execution job.
-type HostJobResult struct {
-	Hostname string `json:"hostname"`
-	Address  string `json:"address"`
-	Status   string `json:"status"` // "success" or "failed"
-	Output   string `json:"output,omitempty"`
-	Error    string `json:"error,omitempty"`
-}
-
-// FleetExecutionResult captures aggregated and per-host outcomes for fleet jobs.
-type FleetExecutionResult struct {
-	TotalTargeted int             `json:"total_targeted"`
-	SuccessCount  int             `json:"success_count"`
-	FailureCount  int             `json:"failure_count"`
-	Results       []HostJobResult `json:"results"`
 }

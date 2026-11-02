@@ -25,6 +25,7 @@ import (
 type Runtime struct {
 	stores      *store.Stores
 	eventBroker *broker.EventBroker
+	runManager  service.RunManager
 }
 
 // Open initializes the shared persistence and event infrastructure.
@@ -60,8 +61,18 @@ func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
+	var runErr error
+	if r.runManager != nil {
+		// Let executing runs record their outcome before the database closes.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		runErr = r.runManager.Close(ctx)
+		cancel()
+	}
 	if r.eventBroker != nil {
 		r.eventBroker.Close()
+	}
+	if runErr != nil {
+		slog.Error("run executors did not stop cleanly", "error", runErr)
 	}
 	if r.stores != nil {
 		if err := r.stores.Close(); err != nil {
@@ -109,6 +120,19 @@ func (r *Runtime) NewAPIServer(
 	if err != nil {
 		return nil, fmt.Errorf("construct metrics service: %w", err)
 	}
+	runManager, err := service.NewRunService(r.stores.Runs, r.stores.Hosts, r.stores.Environments, sshCapacity,
+		cfg.Execution, service.WithTargetPolicy(cfg.SSHTargetPolicy))
+	if err != nil {
+		return nil, fmt.Errorf("construct run service: %w", err)
+	}
+	recoverCtx, cancelRecover := context.WithTimeout(context.Background(), 15*time.Second)
+	_, err = runManager.Recover(recoverCtx)
+	cancelRecover()
+	if err != nil {
+		_ = runManager.Close(context.Background())
+		return nil, err
+	}
+	r.runManager = runManager
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Metrics: r.stores.Metrics, Hosts: r.stores.Hosts,
 		Jobs: r.stores.Jobs, Environments: r.stores.Environments, Access: r.stores.Access,
@@ -119,7 +143,7 @@ func (r *Runtime) NewAPIServer(
 	readiness = append(readiness, r.eventBroker)
 	readiness = append(readiness, additionalReadiness...)
 	return httpserver.NewServer(cfg, authService, hostService, metricsService,
-		sshCapacity, repositories, r.stores, readiness...)
+		sshCapacity, runManager, repositories, r.stores, readiness...)
 }
 
 // NewControlManagerOperationsServer creates the HTTP surface used for worker

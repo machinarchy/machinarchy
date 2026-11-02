@@ -78,6 +78,9 @@ func TestTargetPreviewResolvesRuleForTheCallersWorkspace(t *testing.T) {
 	if preview.Hosts[1].Environment != "production" || preview.Hosts[1].Labels["role"] != "web" {
 		t.Errorf("host view = %+v", preview.Hosts[1])
 	}
+	if want := domain.TargetsHash([]*domain.Host{targetInventory()[0], targetInventory()[2]}); preview.TargetsHash != want {
+		t.Errorf("TargetsHash = %q, want %q (it identifies exactly the targeted hosts)", preview.TargetsHash, want)
+	}
 	if len(preview.UnknownExcludes) != 1 || preview.UnknownExcludes[0] != "ghost" ||
 		preview.UnknownIncludes == nil || preview.Excluded == nil {
 		t.Errorf("preview lists must be present (never null): %+v", preview)

@@ -23,9 +23,15 @@ const (
 	AuditAPITokenCreated   = "api_token.created"
 	AuditAPITokenRevoked   = "api_token.revoked"
 
+	AuditRunCreated         = "run.created"
+	AuditRunCancelRequested = "run.cancel_requested"
+	AuditRunFinished        = "run.finished"
+	AuditRunInterrupted     = "run.interrupted"
+
 	AuditTargetUser     = "user"
 	AuditTargetHost     = "host"
 	AuditTargetAPIToken = "api_token"
+	AuditTargetRun      = "run"
 
 	AuditOutcomeSuccess = "success"
 

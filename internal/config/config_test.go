@@ -267,3 +267,58 @@ func TestLoadSSHTargetPolicy(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadExecutionPolicy(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		setCommonEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Execution.Enabled || cfg.Execution.AllowAny || cfg.Execution.Check("uptime") == nil {
+			t.Fatalf("execution must be off by default: %+v", cfg.Execution)
+		}
+	})
+
+	t.Run("enabled with an explicit program list", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_EXECUTION_ENABLED", "true")
+		t.Setenv("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS", "uptime, /usr/bin/df")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Execution.Check("uptime") != nil || cfg.Execution.Check("/usr/bin/df") != nil || cfg.Execution.Check("rm") == nil {
+			t.Errorf("unexpected policy: %+v", cfg.Execution)
+		}
+	})
+
+	t.Run("allowing every program must be explicit", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_EXECUTION_ENABLED", "true")
+		t.Setenv("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS", "*")
+		cfg, err := Load()
+		if err != nil || !cfg.Execution.AllowAny {
+			t.Fatalf("Load() = %+v, %v", cfg.Execution, err)
+		}
+	})
+
+	t.Run("rejects unsafe configuration", func(t *testing.T) {
+		for name, env := range map[string]map[string]string{
+			"enabled with no programs": {"MACHINARCHY_EXECUTION_ENABLED": "true"},
+			"enabled with blank list":  {"MACHINARCHY_EXECUTION_ENABLED": "true", "MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS": " , "},
+			"invalid program name":     {"MACHINARCHY_EXECUTION_ENABLED": "true", "MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS": "ls;rm"},
+			"invalid switch":           {"MACHINARCHY_EXECUTION_ENABLED": "sometimes"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				setCommonEnv(t)
+				for key, value := range env {
+					t.Setenv(key, value)
+				}
+				if _, err := Load(); err == nil {
+					t.Error("Load() accepted an unsafe execution configuration")
+				}
+			})
+		}
+	})
+}

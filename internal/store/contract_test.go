@@ -205,6 +205,9 @@ var contractTests = []struct {
 	{"audit detects a modified event", testAuditDetectsModification},
 	{"audit detects a removed event", testAuditDetectsRemoval},
 	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
+	{"run lifecycle", testRunLifecycle},
+	{"run listing", testRunListing},
+	{"run recovery", testRunRecovery},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
@@ -1138,5 +1141,321 @@ func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 	result, err := f.stores.Audit.VerifyAuditChain(context.Background(), 1)
 	if err != nil || !result.Valid || result.Events != patches+1 {
 		t.Fatalf("the chain forked or broke under concurrency: %+v, %v", result, err)
+	}
+}
+
+func contractRun(workspaceID int, argv []string, hostIDs ...string) *domain.Run {
+	run := &domain.Run{
+		WorkspaceID: workspaceID, CreatedByUserID: 7, CreatedByUsername: "ops", CreatedByTokenID: 3,
+		Program: argv[0], ArgCount: len(argv) - 1, Argv: argv, ArgvSHA256: domain.ArgvDigest(argv),
+		TimeoutSeconds: 60, Concurrency: 5, TargetsHash: strings.Repeat("c", 64),
+		Rule: domain.TargetRule{Selector: "role=web"},
+	}
+	for i, id := range hostIDs {
+		run.Hosts = append(run.Hosts, domain.RunHost{
+			HostID: id, Name: "web-0" + strconv.Itoa(i+1), Address: "10.0.0." + strconv.Itoa(i+1), Port: 22,
+		})
+	}
+	return run
+}
+
+func runEvents(t *testing.T, f *fixture, action string) []domain.AuditEvent {
+	t.Helper()
+	events, err := f.stores.Audit.ListAuditEvents(context.Background(), 1, domain.AuditFilter{Action: action})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func testRunLifecycle(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	actor := domain.AuditActor{UserID: 7, Username: "ops", APITokenID: 3, RequestID: "req-run", Source: "api"}
+	actx := domain.WithAuditActor(ctx, actor)
+	other := f.newWorkspace(t, "other")
+
+	argv := []string{"echo", "TOP-SECRET-ARG", "b"}
+	run := contractRun(1, argv, "101", "102")
+	if err := f.stores.Runs.CreateRun(actx, run); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if run.ID <= 0 || run.Status != domain.RunQueued || run.CreatedAt.IsZero() {
+		t.Fatalf("created run = %+v", run)
+	}
+
+	got, err := f.stores.Runs.GetRun(ctx, 1, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.RunQueued || got.Program != "echo" || got.ArgCount != 2 || len(got.Argv) != 3 || got.Argv[1] != "TOP-SECRET-ARG" ||
+		got.CreatedByUserID != 7 || got.CreatedByUsername != "ops" || got.CreatedByTokenID != 3 ||
+		got.TimeoutSeconds != 60 || got.Concurrency != 5 || got.Rule.Selector != "role=web" ||
+		got.TargetsHash != run.TargetsHash || got.CancelRequested || got.StartedAt != nil || got.FinishedAt != nil {
+		t.Fatalf("stored run = %+v", got)
+	}
+	if len(got.Hosts) != 2 || got.Hosts[0].Name != "web-01" || got.Hosts[0].Status != domain.RunHostPending ||
+		got.Hosts[1].HostID != "102" || got.Counts.Pending != 2 {
+		t.Fatalf("stored hosts = %+v counts %+v", got.Hosts, got.Counts)
+	}
+	// The arguments are encrypted at rest.
+	var stored string
+	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT argv_encrypted FROM runs WHERE id = ?`, `SELECT argv_encrypted FROM runs WHERE id = $1`), run.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == "" || strings.Contains(stored, "TOP-SECRET-ARG") {
+		t.Errorf("argv_encrypted = %q; the arguments must not be stored in the clear", stored)
+	}
+	if _, err := f.stores.Runs.GetRun(ctx, other, run.ID); !errors.Is(err, domain.ErrRunNotFound) {
+		t.Errorf("another workspace's read error = %v, want ErrRunNotFound", err)
+	}
+	if _, err := f.stores.Runs.GetRun(ctx, 1, 999999); !errors.Is(err, domain.ErrRunNotFound) {
+		t.Errorf("unknown run error = %v, want ErrRunNotFound", err)
+	}
+
+	// Starting is claimed exactly once.
+	now := time.Now().UTC()
+	if err := f.stores.Runs.StartRun(ctx, run.ID, "executor-1", now); err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if err := f.stores.Runs.StartRun(ctx, run.ID, "executor-2", now); !errors.Is(err, domain.ErrRunFinished) {
+		t.Errorf("second StartRun error = %v, want ErrRunFinished", err)
+	}
+	if running, _ := f.stores.Runs.GetRun(ctx, 1, run.ID); running.Status != domain.RunRunning || running.StartedAt == nil {
+		t.Errorf("after start: %+v", running)
+	}
+
+	// Cancellation: recorded once, visible through the heartbeat.
+	if cancel, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); err != nil || cancel {
+		t.Fatalf("Heartbeat() = %v, %v; want no cancellation yet", cancel, err)
+	}
+	if err := f.stores.Runs.RequestCancel(actx, other, run.ID); !errors.Is(err, domain.ErrRunNotFound) {
+		t.Errorf("another workspace's cancel error = %v, want ErrRunNotFound", err)
+	}
+	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); err != nil {
+		t.Errorf("a repeated cancel request must be harmless: %v", err)
+	}
+	if cancel, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); err != nil || !cancel {
+		t.Fatalf("Heartbeat() after cancel = %v, %v; want cancellation reported", cancel, err)
+	}
+
+	// Host results: progress, a final result, and a final result that cannot be overwritten.
+	started := time.Now().UTC()
+	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{Status: domain.RunHostRunning, StartedAt: &started}); err != nil {
+		t.Fatal(err)
+	}
+	zero, three := 0, 3
+	finished := time.Now().UTC()
+	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{
+		Status: domain.RunHostSucceeded, ExitCode: &zero, Output: "ok", FinishedAt: &finished}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{Status: domain.RunHostFailed, Output: "tampered"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "102", domain.RunHostUpdate{
+		Status: domain.RunHostFailed, ExitCode: &three, Output: "boom", Error: "the command exited with status 3", FinishedAt: &finished}); err != nil {
+		t.Fatal(err)
+	}
+	mid, err := f.stores.Runs.GetRun(ctx, 1, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, h2 := mid.Hosts[0], mid.Hosts[1]
+	if h1.Status != domain.RunHostSucceeded || h1.Output != "ok" || h1.ExitCode == nil || *h1.ExitCode != 0 ||
+		h1.StartedAt == nil || h1.FinishedAt == nil {
+		t.Errorf("host 101 = %+v; a final result must not be overwritten and must keep its start time", h1)
+	}
+	if h2.Status != domain.RunHostFailed || h2.ExitCode == nil || *h2.ExitCode != 3 || h2.Output != "boom" || h2.Error == "" {
+		t.Errorf("host 102 = %+v", h2)
+	}
+	if mid.Counts.Succeeded != 1 || mid.Counts.Failed != 1 || mid.Counts.Pending != 0 || !mid.CancelRequested {
+		t.Errorf("counts = %+v cancelRequested=%v", mid.Counts, mid.CancelRequested)
+	}
+
+	// Finishing is idempotent and final.
+	if err := f.stores.Runs.FinishRun(ctx, run.ID, domain.RunRunning, time.Now().UTC()); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Errorf("finishing with a non-final status error = %v, want ErrInvalidInput", err)
+	}
+	if err := f.stores.Runs.FinishRun(actx, run.ID, domain.RunCancelled, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.FinishRun(actx, run.ID, domain.RunSucceeded, time.Now().UTC()); err != nil {
+		t.Errorf("finishing twice must be a no-op: %v", err)
+	}
+	done, _ := f.stores.Runs.GetRun(ctx, 1, run.ID)
+	if done.Status != domain.RunCancelled || done.FinishedAt == nil {
+		t.Errorf("finished run = %+v; the first final status must stand", done)
+	}
+	if _, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); !errors.Is(err, domain.ErrRunFinished) {
+		t.Errorf("Heartbeat on a finished run error = %v, want ErrRunFinished", err)
+	}
+	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); !errors.Is(err, domain.ErrRunFinished) {
+		t.Errorf("RequestCancel on a finished run error = %v, want ErrRunFinished", err)
+	}
+
+	// The audit trail: one event per change, attributed, never containing the arguments.
+	created := runEvents(t, f, domain.AuditRunCreated)
+	if len(created) != 1 {
+		t.Fatalf("run.created events = %d, want 1", len(created))
+	}
+	c := created[0]
+	if c.TargetType != domain.AuditTargetRun || c.TargetID != strconv.FormatInt(run.ID, 10) || c.ActorUserID != 7 ||
+		c.ActorTokenID != 3 || c.RequestID != "req-run" || c.Details["program"] != "echo" || c.Details["arg_count"] != "2" ||
+		c.Details["hosts"] != "2" || len(c.Details["argv_sha256"]) != 16 || len(c.Details["targets_hash"]) != 16 ||
+		c.Details["timeout_seconds"] != "60" || c.Details["concurrency"] != "5" {
+		t.Errorf("run.created = %+v", c)
+	}
+	if cancels := runEvents(t, f, domain.AuditRunCancelRequested); len(cancels) != 1 || cancels[0].ActorUserID != 7 {
+		t.Errorf("run.cancel_requested events = %+v, want exactly one", cancels)
+	}
+	finishedEvents := runEvents(t, f, domain.AuditRunFinished)
+	if len(finishedEvents) != 1 || finishedEvents[0].Details["status"] != "cancelled" ||
+		finishedEvents[0].Details["hosts_succeeded"] != "1" || finishedEvents[0].Details["hosts_failed"] != "1" {
+		t.Errorf("run.finished events = %+v", finishedEvents)
+	}
+	all := auditEvents(t, f, 1)
+	encoded, _ := json.Marshal(all)
+	for _, secret := range []string{"TOP-SECRET-ARG", run.ArgvSHA256} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the audit trail contains %q", secret)
+		}
+	}
+	if result, err := f.stores.Audit.VerifyAuditChain(ctx, 1); err != nil || !result.Valid {
+		t.Errorf("audit chain = %+v, %v", result, err)
+	}
+}
+
+func testRunListing(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	other := f.newWorkspace(t, "other")
+
+	first := contractRun(1, []string{"uptime"}, "1", "2", "3")
+	second := contractRun(1, []string{"df", "-h"}, "4")
+	foreign := contractRun(other, []string{"uptime"}, "9")
+	for _, run := range []*domain.Run{first, second, foreign} {
+		if err := f.stores.Runs.CreateRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	zero := 0
+	for _, id := range []string{"1", "2"} {
+		if err := f.stores.Runs.UpdateRunHost(ctx, first.ID, id, domain.RunHostUpdate{Status: domain.RunHostSucceeded, ExitCode: &zero}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.stores.Runs.UpdateRunHost(ctx, first.ID, "3", domain.RunHostUpdate{Status: domain.RunHostTimedOut}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.StartRun(ctx, first.ID, "executor", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.FinishRun(ctx, first.ID, domain.RunPartiallySucceeded, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{})
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("ListRuns() = %d runs, %v; want 2 (the other workspace's run must not appear)", len(runs), err)
+	}
+	if runs[0].ID != second.ID || runs[1].ID != first.ID {
+		t.Errorf("order = %d, %d; want newest first", runs[0].ID, runs[1].ID)
+	}
+	if runs[1].Counts.Succeeded != 2 || runs[1].Counts.TimedOut != 1 || runs[1].Counts.Total() != 3 ||
+		runs[0].Counts.Pending != 1 || runs[1].Status != domain.RunPartiallySucceeded {
+		t.Errorf("listed counts: %+v / %+v", runs[1].Counts, runs[0].Counts)
+	}
+	for _, run := range runs {
+		if len(run.Argv) != 0 || len(run.Hosts) != 0 || run.Program == "" {
+			t.Errorf("a listing must not carry arguments or host results: %+v", run)
+		}
+	}
+	if only, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Status: string(domain.RunQueued)}); err != nil || len(only) != 1 || only[0].ID != second.ID {
+		t.Errorf("status filter = %+v, %v", only, err)
+	}
+	if page, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{BeforeID: second.ID, Limit: 10}); err != nil || len(page) != 1 || page[0].ID != first.ID {
+		t.Errorf("paging = %+v, %v", page, err)
+	}
+	if limited, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Limit: 1}); err != nil || len(limited) != 1 {
+		t.Errorf("limit = %d, %v", len(limited), err)
+	}
+	if empty, err := f.stores.Runs.ListRuns(ctx, 4242, domain.RunFilter{}); err != nil || len(empty) != 0 {
+		t.Errorf("an unknown workspace lists %d runs, %v", len(empty), err)
+	}
+	if _, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Status: "exploded"}); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Errorf("an unknown status error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func testRunRecovery(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	running := contractRun(1, []string{"uptime"}, "1", "2")
+	queued := contractRun(1, []string{"uptime"}, "3")
+	finished := contractRun(1, []string{"uptime"}, "4")
+	for _, run := range []*domain.Run{running, queued, finished} {
+		if err := f.stores.Runs.CreateRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	zero := 0
+	if err := f.stores.Runs.StartRun(ctx, running.ID, "executor", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.UpdateRunHost(ctx, running.ID, "1", domain.RunHostUpdate{Status: domain.RunHostSucceeded, ExitCode: &zero, Output: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.UpdateRunHost(ctx, running.ID, "2", domain.RunHostUpdate{Status: domain.RunHostRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.StartRun(ctx, finished.ID, "executor", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Runs.FinishRun(ctx, finished.ID, domain.RunFailed, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing is stale yet.
+	if count, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(-time.Hour), now); err != nil || count != 0 {
+		t.Fatalf("InterruptStaleRuns(old cutoff) = %d, %v; want 0", count, err)
+	}
+	// Everything whose heartbeat is older than the cutoff and not final is interrupted.
+	count, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(time.Hour), now.Add(time.Minute))
+	if err != nil || count != 2 {
+		t.Fatalf("InterruptStaleRuns() = %d, %v; want 2 (the running and the queued run)", count, err)
+	}
+	got, _ := f.stores.Runs.GetRun(ctx, 1, running.ID)
+	if got.Status != domain.RunInterrupted || got.FinishedAt == nil {
+		t.Errorf("running run = %+v", got)
+	}
+	if got.Hosts[0].Status != domain.RunHostSucceeded || got.Hosts[0].Output != "ok" {
+		t.Errorf("a host that had finished must keep its result: %+v", got.Hosts[0])
+	}
+	if got.Hosts[1].Status != domain.RunHostInterrupted || !strings.Contains(got.Hosts[1].Error, "may or may not have run") {
+		t.Errorf("an unfinished host must be marked interrupted with the honest caveat: %+v", got.Hosts[1])
+	}
+	if q, _ := f.stores.Runs.GetRun(ctx, 1, queued.ID); q.Status != domain.RunInterrupted || q.Hosts[0].Status != domain.RunHostInterrupted {
+		t.Errorf("queued run = %+v", q)
+	}
+	if fin, _ := f.stores.Runs.GetRun(ctx, 1, finished.ID); fin.Status != domain.RunFailed {
+		t.Errorf("a finished run must be left alone: %+v", fin)
+	}
+	if again, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(time.Hour), now.Add(2*time.Minute)); err != nil || again != 0 {
+		t.Errorf("a second sweep = %d, %v; want 0", again, err)
+	}
+
+	interrupted := runEvents(t, f, domain.AuditRunInterrupted)
+	if len(interrupted) != 2 {
+		t.Fatalf("run.interrupted events = %d, want 2", len(interrupted))
+	}
+	for _, e := range interrupted {
+		if e.Source != "recovery" || e.ActorUserID != 0 {
+			t.Errorf("recovery event = %+v; it must be attributed to the system", e)
+		}
+	}
+	if result, err := f.stores.Audit.VerifyAuditChain(ctx, 1); err != nil || !result.Valid {
+		t.Errorf("audit chain = %+v, %v", result, err)
 	}
 }

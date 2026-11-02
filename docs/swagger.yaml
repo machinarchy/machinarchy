@@ -285,6 +285,134 @@ definitions:
     - RoleOwner
     - RoleOperator
     - RoleReader
+  domain.Run:
+    properties:
+      argCount:
+        type: integer
+      argv:
+        description: |-
+          Argv is only returned to callers allowed to execute; it may contain
+          sensitive values and is stored encrypted.
+        items:
+          type: string
+        type: array
+      cancelRequested:
+        description: CancelRequested is set when cancellation was asked for.
+        type: boolean
+      concurrency:
+        type: integer
+      counts:
+        $ref: '#/definitions/domain.RunCounts'
+      createdAt:
+        type: string
+      createdByTokenId:
+        type: integer
+      createdByUserId:
+        type: integer
+      createdByUsername:
+        type: string
+      finishedAt:
+        type: string
+      hosts:
+        description: |-
+          Hosts is omitted from listings. Output is only included for callers
+          allowed to execute.
+        items:
+          $ref: '#/definitions/domain.RunHost'
+        type: array
+      id:
+        type: integer
+      program:
+        type: string
+      rule:
+        $ref: '#/definitions/domain.TargetRule'
+      startedAt:
+        type: string
+      status:
+        $ref: '#/definitions/domain.RunStatus'
+      targetsHash:
+        type: string
+      timeoutSeconds:
+        type: integer
+    type: object
+  domain.RunCounts:
+    properties:
+      cancelled:
+        type: integer
+      failed:
+        type: integer
+      interrupted:
+        type: integer
+      pending:
+        type: integer
+      running:
+        type: integer
+      succeeded:
+        type: integer
+      timedOut:
+        type: integer
+    type: object
+  domain.RunHost:
+    properties:
+      address:
+        type: string
+      error:
+        type: string
+      exitCode:
+        type: integer
+      finishedAt:
+        type: string
+      hostId:
+        type: string
+      name:
+        type: string
+      output:
+        type: string
+      port:
+        type: integer
+      startedAt:
+        type: string
+      status:
+        $ref: '#/definitions/domain.RunHostStatus'
+    type: object
+  domain.RunHostStatus:
+    enum:
+    - pending
+    - running
+    - succeeded
+    - failed
+    - timed_out
+    - cancelled
+    - interrupted
+    type: string
+    x-enum-varnames:
+    - RunHostPending
+    - RunHostRunning
+    - RunHostSucceeded
+    - RunHostFailed
+    - RunHostTimedOut
+    - RunHostCancelled
+    - RunHostInterrupted
+  domain.RunStatus:
+    enum:
+    - queued
+    - running
+    - succeeded
+    - partially_succeeded
+    - failed
+    - cancelled
+    - interrupted
+    - planned
+    type: string
+    x-enum-varnames:
+    - RunQueued
+    - RunRunning
+    - RunSucceeded
+    - RunPartiallySucceeded
+    - RunFailed
+    - RunCancelled
+    - RunInterrupted
+    - RunPlanned
   domain.SSHAccess:
     properties:
       last_check_at:
@@ -331,6 +459,11 @@ definitions:
         items:
           $ref: '#/definitions/domain.TargetHost'
         type: array
+      targetsHash:
+        description: |-
+          TargetsHash identifies the exact targeted hosts (all of them, not only the
+          listed ones). A run can require it so it runs on what was reviewed.
+        type: string
       total:
         description: Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts
           of them.
@@ -345,6 +478,21 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  domain.TargetRule:
+    properties:
+      all:
+        type: boolean
+      exclude:
+        items:
+          type: string
+        type: array
+      include:
+        items:
+          type: string
+        type: array
+      selector:
+        type: string
     type: object
   domain.UserResponse:
     properties:
@@ -516,6 +664,49 @@ definitions:
         - reader
         example: operator
         type: string
+    type: object
+  runs.SubmitRequest:
+    properties:
+      all:
+        type: boolean
+      argv:
+        description: |-
+          Argv is the program followed by its arguments. There is no shell: each
+          element reaches the program as exactly one argument.
+        items:
+          type: string
+        type: array
+      concurrency:
+        description: Concurrency bounds hosts processed at once (default 5, maximum
+          20).
+        type: integer
+      dryRun:
+        description: DryRun validates and plans without storing a run or contacting
+          any host.
+        type: boolean
+      exclude:
+        items:
+          type: string
+        type: array
+      expectTargetsHash:
+        description: |-
+          ExpectTargetsHash, copied from a preview, makes the request fail with 409
+          unless it would run on exactly the previewed hosts.
+        type: string
+      include:
+        items:
+          type: string
+        type: array
+      selector:
+        description: |-
+          Selector, Include, Exclude, and All form the target rule exactly as in the
+          target preview. At least one of selector, include, or all is required.
+        example: environment=production,role=web
+        type: string
+      timeoutSeconds:
+        description: TimeoutSeconds bounds the command on each host (default 60, maximum
+          900).
+        type: integer
     type: object
   tokens.CreateRequest:
     properties:
@@ -1547,6 +1738,217 @@ paths:
       summary: Change a member's role
       tags:
       - Members
+  /api/v1/runs:
+    get:
+      description: Newest first, without arguments or per-host results. Requires operations
+        read permission.
+      parameters:
+      - description: Only runs with this status
+        in: query
+        name: status
+        type: string
+      - description: Only runs with a smaller id (paging cursor)
+        in: query
+        name: before_id
+        type: integer
+      - description: Page size (default 50, maximum 200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Run'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List runs
+      tags:
+      - Runs
+    post:
+      consumes:
+      - application/json
+      description: 'Disabled unless the server enables execution and lists the allowed
+        programs. Requires the runs:execute permission (owners and operators). The
+        command is an argument list with no shell, the targets are resolved and pinned
+        when the run is accepted, and the run executes in the background: poll GET
+        /api/v1/runs/{id}. Output is combined stdout and stderr. Commands are never
+        retried; a timeout or cancellation does not prove the command did not run.
+        The 202 response carries the run; with dryRun the plan is returned with 200
+        and nothing is stored or contacted.'
+      parameters:
+      - description: Command and target rule
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/runs.SubmitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Dry run plan
+          schema:
+            $ref: '#/definitions/domain.Run'
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/domain.Run'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: The targeted hosts changed since the preview
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Run a command on hosts
+      tags:
+      - Runs
+  /api/v1/runs/{id}:
+    get:
+      description: Callers with the runs:execute permission also see the arguments
+        and each host's output; others see only status, exit codes, and errors.
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Run'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a run
+      tags:
+      - Runs
+  /api/v1/runs/{id}/cancel:
+    post:
+      description: Stops new hosts from starting and closes running SSH sessions.
+        A command that was already sent may still have run, or keep running, on its
+        host; cancelled hosts are reported as such. Requires the runs:execute permission.
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/domain.Run'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Cancel a run
+      tags:
+      - Runs
   /api/v1/tokens:
     get:
       description: Requires a human workspace owner session. Returns metadata for

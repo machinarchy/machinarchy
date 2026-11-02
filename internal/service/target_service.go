@@ -57,6 +57,7 @@ func (s *targetService) Preview(ctx context.Context, principal domain.Principal,
 		Excluded:        make([]domain.TargetHost, 0, minInt(len(set.Excluded), domain.MaxPreviewHosts)),
 		UnknownIncludes: nonNil(set.UnknownIncludes),
 		UnknownExcludes: nonNil(set.UnknownExcludes),
+		TargetsHash:     domain.TargetsHash(set.Matched),
 	}
 	for i, host := range set.Matched {
 		if i == domain.MaxPreviewHosts {

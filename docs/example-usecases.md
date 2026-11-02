@@ -2,7 +2,7 @@
 
 This guide walks through creating an environment, registering an SSH host through the API, and inspecting it from the API and CLI.
 
-> **Current execution limit:** Host registration and host listing are implemented. Arbitrary user command execution is not yet exposed through an API endpoint or the Machinarchy CLI. The job endpoints only read job records; they do not submit jobs. To run a command today, connect directly with OpenSSH from your workstation after verifying the host key. That direct SSH session is outside Machinarchy's API, audit trail, and job tracking.
+> **Command execution:** Running commands through the API is available but off by default, and the CLI has no `exec` command yet (see [Running a command on several hosts](#running-a-command-on-several-hosts)). Without it enabled, connect with OpenSSH from your workstation after verifying the host key; that session is outside Machinarchy's API, audit trail, and run tracking.
 
 ## Prerequisites
 
@@ -172,8 +172,34 @@ ssh -i "$SSH_KEY_FILE" \
 
 You can replace `uname -a` with a command you are authorized to run. The command executes from your workstation over a separate SSH connection; Machinarchy does not receive, authorize, record, or return its output. Do not disable host-key checking to work around a mismatch.
 
-## What is needed for managed command execution
+## Running a command on several hosts
 
-The repository currently has job read endpoints (`GET /api/v1/jobs`, `GET /api/v1/jobs/{id}`, and `GET /api/v1/hosts/{id}/jobs`) but no job submission route. The CLI has no `exec`, `run`, `apply`, or host creation command. The agent runtime is also a placeholder. An internal SSH helper executes a fixed Linux diagnostics command, but there is no public route wired to it for arbitrary commands.
+Execution is disabled until an operator opts in, with an explicit list of the programs that may run:
 
-Managed execution will require an authenticated submission API, an authorization policy for allowed hosts and commands, durable job state, a worker/agent execution path, bounded output and timeouts, audit logging, and a CLI command that submits and watches a job. The existing job read endpoints can then report those persisted results.
+```sh
+MACHINARCHY_EXECUTION_ENABLED=true
+MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS=uptime,/usr/bin/df,systemctl
+```
+
+Use `*` instead of a list only if you deliberately want any program allowed. Starting a run needs the `runs:execute` permission (owners and operators, including operator API tokens). The workflow is preview, run, watch:
+
+```sh
+# 1. Preview exactly which hosts a rule targets, and note the targetsHash.
+curl -sS -X POST "$API/api/v1/fleet/targets/preview" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"selector":"environment=production,role=web"}'
+
+# 2. Optionally rehearse the run: dryRun validates and plans without storing or contacting anything.
+# 3. Start it, bound to the reviewed hosts. A command is an argument list, not a shell string.
+curl -sS -X POST "$API/api/v1/runs" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"argv":["systemctl","status","nginx"],"selector":"environment=production,role=web", "expectTargetsHash":"<targetsHash from the preview>","timeoutSeconds":30,"concurrency":5}'
+# -> 202 with the run and a Location header; if the rule now matches different hosts, 409 returns the new hash.
+
+# 4. Watch it, then read the per-host results (output is shown to executors only).
+curl -sS "$API/api/v1/runs/42" -H "Authorization: Bearer $TOKEN"
+
+# 5. Stop it if needed. This closes running sessions; a command already sent may still run on its host.
+curl -sS -X POST "$API/api/v1/runs/42/cancel" -H "Authorization: Bearer $TOKEN"
+```
+
+Things to know: there is no shell, so `["echo", "a;b", "$(id)"]` prints those words literally; commands are never retried, and a timed-out, cancelled, or interrupted host may or may not have run the command, which the result says; output is combined stdout and stderr, capped at 64 KiB per host and stripped of terminal escape sequences; and arguments are visible to other operators and on the remote process list, so do not put secrets in them. Hosts whose address or port changed after you submitted are refused rather than contacted.
+

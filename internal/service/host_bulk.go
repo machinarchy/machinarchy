@@ -215,7 +215,11 @@ func firstSeen(seen map[string]struct{}, keys []string) string {
 
 // bulkFailureMessage turns an error into a message that is safe to return to
 // API clients. Unexpected errors are logged and reduced to a generic message.
-func bulkFailureMessage(err error) string {
+func bulkFailureMessage(err error) string { return sshFailureMessage(err, "registration failed") }
+
+// sshFailureMessage describes an SSH-related failure in client-safe terms and
+// falls back to fallback (after logging the real error) for anything else.
+func sshFailureMessage(err error, fallback string) string {
 	var unknownKey *domain.ErrHostKeyUnknown
 	switch {
 	case errors.As(err, &unknownKey):
@@ -237,7 +241,7 @@ func bulkFailureMessage(err error) string {
 	case errors.Is(err, domain.ErrConnectionRefused):
 		return "the host refused the connection"
 	default:
-		slog.Error("bulk host registration failed", "error", err)
-		return "registration failed"
+		slog.Error("SSH operation failed", "error", err)
+		return fallback
 	}
 }
