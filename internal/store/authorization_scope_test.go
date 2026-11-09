@@ -20,7 +20,8 @@ import (
 func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "machinarchy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
+	// #nosec G302 -- Directories require execute permission for traversal.
+	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	stores, err := store.Open(ctx, store.Config{
@@ -217,7 +218,8 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "legacy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
+	// #nosec G302 -- Directories require execute permission for traversal.
+	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	db, err := sql.Open("sqlite", databasePath)
@@ -336,7 +338,8 @@ func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 func TestSQLiteSignupsShareDefaultWorkspaceAndBootstrapOwnerIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "machinarchy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
+	// #nosec G302 -- Directories require execute permission for traversal.
+	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	stores, err := store.Open(ctx, store.Config{
