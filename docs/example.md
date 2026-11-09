@@ -4,7 +4,7 @@ This guide shows how to start Machinarchy locally, run its processes separately,
 
 ## Requirements
 
-- Go 1.26 or newer
+- Go 1.27 or newer
 - Docker, for the local NATS example
 - NATS with JetStream enabled
 - PostgreSQL for running the API and control-manager as separate local processes; SQLite is the simple local option for monolith mode

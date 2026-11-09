@@ -238,7 +238,7 @@ Project change history maintained alongside the code. Entries are newest first. 
 
 ### Changes in this update
 
-- Updated `scripts/prepare.sh` to match Machinarchy: require Go 1.26+, create `.env` securely from the repository template, and configure the checked-in hooks. Removed unrelated frontend/assets setup and automatic `go mod tidy`/dependency download behavior.
+- Updated `scripts/prepare.sh` to match Machinarchy: require Go 1.27+, create `.env` securely from the repository template, and configure the checked-in hooks. Removed unrelated frontend/assets setup and automatic `go mod tidy`/dependency download behavior.
 - Made setup preserve an existing non-default `core.hooksPath` by stopping for review instead of silently replacing it.
 - Updated the commit-message hook to validate conventional breaking-change syntax and reject invalid invocation; refreshed the Git-hook documentation to reference current paths and behavior.
 

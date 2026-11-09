@@ -42,7 +42,7 @@ Run the project setup script from the repository root:
 make setup
 ```
 
-This checks for Go 1.26 or newer, creates `.env` from `.env.example` with owner-only permissions if needed, and configures `.githooks` for this clone. It leaves an existing `.env` unchanged. If another non-default `core.hooksPath` is already configured, setup stops and asks you to review that setting instead of silently replacing it.
+This checks for Go 1.27 or newer, creates `.env` from `.env.example` with owner-only permissions if needed, and configures `.githooks` for this clone. It leaves an existing `.env` unchanged. If another non-default `core.hooksPath` is already configured, setup stops and asks you to review that setting instead of silently replacing it.
 
 ## 4. Workflow Diagram
 

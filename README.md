@@ -21,7 +21,7 @@ Machinarchy is a Go control-plane service for registering SSH-managed hosts, gro
 
 ## Requirements
 
-- Go 1.26.0 or newer.
+- Go 1.27.3 or newer.
 - NATS with JetStream enabled, reachable at `MACHINARCHY_BROKER_URL` (default `nats://localhost:4222`).
 - SQLite (default) or PostgreSQL (optional).
 
