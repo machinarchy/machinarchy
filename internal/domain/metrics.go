@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// SystemStats represents the current system metrics snapshot.
 type SystemStats struct {
 	CPUPercent float64 `json:"cpuPercent"`
 	MemUsed    uint64  `json:"memUsed"`
@@ -19,6 +20,7 @@ type DataPoint struct {
 	CreatedAt  string  `json:"created_at"`
 }
 
+// HostRuntimeDiagnostics represents the runtime diagnostics of a host at a specific point in time.
 type HostRuntimeDiagnostics struct {
 	HostID       int       `json:"hostId"`
 	Timestamp    time.Time `json:"timestamp"`
@@ -32,11 +34,12 @@ type HostRuntimeDiagnostics struct {
 	DiskUsagePct float64   `json:"diskUsagePct"`
 }
 
+// TelemetryReader defines the interface for reading system metrics from a host.
 type TelemetryReader interface {
 	ReadCurrentStats() SystemStats
 }
 
-// MetricsRepository defines how your app queries and stores metrics in SQLite
+// MetricsStore defines how your app queries and stores metrics in SQLite
 type MetricsStore interface {
 	SaveMetricPoint(ctx context.Context, workspaceID int, cpuPct, memPct float64) error
 	GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]DataPoint, error)

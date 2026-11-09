@@ -23,6 +23,7 @@ type clientTracker struct {
 	lastBannedAt time.Time
 }
 
+// Config defines the configuration options for the HTTP rate limiter.
 type Config struct {
 	RequestsPerSec       float64
 	Burst                int
@@ -47,6 +48,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// RateLimiter enforces request rate limits for incoming HTTP traffic.
 type RateLimiter struct {
 	shards   [clientShardCount]clientShard
 	seed     uint64

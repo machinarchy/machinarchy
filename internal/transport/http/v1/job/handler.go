@@ -1,3 +1,4 @@
+// Package job provides HTTP handlers and routes for job management operations.
 package job
 
 import (
@@ -11,10 +12,12 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for job management operations.
 type Handler struct {
 	jobs domain.JobStore
 }
 
+// ListResponse represents the response containing a collection of jobs.
 type ListResponse struct {
 	Data   []*domain.Job `json:"data"`
 	Total  int           `json:"total"`
@@ -22,6 +25,7 @@ type ListResponse struct {
 	Offset int           `json:"offset"`
 }
 
+// NewHandler creates a job HTTP handler using the provided job store.
 func NewHandler(jobs domain.JobStore) *Handler {
 	return &Handler{jobs: jobs}
 }

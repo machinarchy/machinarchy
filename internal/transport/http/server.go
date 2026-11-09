@@ -1,3 +1,5 @@
+// Package http provides the HTTP transport layer for Machinarchy,
+// including API routing, handlers, middleware, and API documentation.
 package http
 
 import (

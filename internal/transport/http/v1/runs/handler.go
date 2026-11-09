@@ -1,3 +1,4 @@
+// Package runs provides HTTP handlers and routes for run management operations.
 package runs
 
 import (
@@ -10,10 +11,12 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for run management operations.
 type Handler struct {
 	service domain.RunService
 }
 
+// NewHandler creates a run HTTP handler using the provided run service.
 func NewHandler(service domain.RunService) *Handler {
 	return &Handler{service: service}
 }

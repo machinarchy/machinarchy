@@ -10,20 +10,29 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 //go:embed migrations/*
 var storageModule embed.FS
 
+// Migrator handles database schema migrations for different database engines.
 type Migrator struct {
 	db     *sql.DB
 	engine string
+	logger *slog.Logger
 }
 
-func NewMigrator(db *sql.DB, engine string) *Migrator {
-	return &Migrator{db: db, engine: engine}
+// NewMigrator creates a new Migrator for the given database connection and engine type.
+func NewMigrator(db *sql.DB, engine string, logger *slog.Logger) *Migrator {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Migrator{db: db, engine: engine, logger: logger}
 }
 
+// Up applies all pending migrations for the configured database engine.
 func (m *Migrator) Up(ctx context.Context) error {
 	// 1. Ensure schema_migrations tracking table exists
 	if err := m.ensureMigrationTable(ctx); err != nil {
@@ -93,7 +102,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to begin migration tx: %w", err)
 		}
-		defer tx.Rollback()
+		defer utils.RollbackTx(tx, m.logger, "migration")
 
 		if _, err := tx.ExecContext(ctx, string(content)); err != nil {
 			return fmt.Errorf("failed to execute migration %d: %w", ver, err)
@@ -132,7 +141,7 @@ func (m *Migrator) getAppliedVersions(ctx context.Context) (map[int]bool, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, m.logger, "query schema_migrations")
 
 	applied := make(map[int]bool)
 	for rows.Next() {

@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
+// SaveMetricPoint saves a new metric point for a workspace, ensuring that the CPU and memory percentages are valid.
 func (s *Store) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent, memoryPercent float64) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -21,7 +23,8 @@ func (s *Store) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent
 	if err != nil {
 		return fmt.Errorf("begin save metric transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "metric")
+
 	if _, err := tx.ExecContext(ctx, `INSERT INTO metrics_history
 		(workspace_id, timestamp, cpu_percent, mem_percent) VALUES ($1, $2, $3, $4)`,
 		workspaceID, time.Now().UTC(), cpuPercent, memoryPercent); err != nil {
@@ -38,6 +41,7 @@ func (s *Store) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent
 	return nil
 }
 
+// GetStoredHistory retrieves the stored metric history for a workspace, limited to a specified number of recent points.
 func (s *Store) GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]domain.DataPoint, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -50,7 +54,7 @@ func (s *Store) GetStoredHistory(ctx context.Context, workspaceID, limit int) ([
 	if err != nil {
 		return nil, fmt.Errorf("query metric history: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query metric history")
 
 	points := make([]domain.DataPoint, 0)
 	for rows.Next() {

@@ -1,3 +1,4 @@
+// Package members provides HTTP handlers and routes for workspace member management.
 package members
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for workspace member management operations.
 type Handler struct {
 	service domain.MemberService
 }
@@ -20,6 +22,7 @@ type SetRoleRequest struct {
 	Role string `json:"role" enums:"owner,operator,reader" example:"operator"`
 }
 
+// NewHandler creates a member HTTP handler using the provided member service.
 func NewHandler(service domain.MemberService) *Handler {
 	return &Handler{service: service}
 }

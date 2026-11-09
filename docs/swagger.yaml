@@ -559,7 +559,7 @@ definitions:
     properties:
       hosts:
         items:
-          $ref: '#/definitions/host.HostPayload'
+          $ref: '#/definitions/host.Payload'
         type: array
       validate_only:
         description: |-
@@ -567,7 +567,7 @@ definitions:
           storing anything.
         type: boolean
     type: object
-  host.HostJobsResponse:
+  host.JobsResponse:
     properties:
       data:
         items:
@@ -582,7 +582,18 @@ definitions:
       total:
         type: integer
     type: object
-  host.HostPayload:
+  host.LabelPatchRequest:
+    properties:
+      remove:
+        items:
+          type: string
+        type: array
+      set:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
+  host.Payload:
     properties:
       authMethod:
         enum:
@@ -630,17 +641,6 @@ definitions:
     - name
     - secretData
     - username
-    type: object
-  host.LabelPatchRequest:
-    properties:
-      remove:
-        items:
-          type: string
-        type: array
-      set:
-        additionalProperties:
-          type: string
-        type: object
     type: object
   job.ListResponse:
     properties:
@@ -1234,7 +1234,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/host.HostPayload'
+          $ref: '#/definitions/host.Payload'
       produces:
       - application/json
       responses:
@@ -1339,7 +1339,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/host.HostPayload'
+          $ref: '#/definitions/host.Payload'
       produces:
       - application/json
       responses:
@@ -1400,7 +1400,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/host.HostJobsResponse'
+            $ref: '#/definitions/host.JobsResponse'
         "400":
           description: Bad Request
           schema:

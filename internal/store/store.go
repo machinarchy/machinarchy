@@ -1,3 +1,4 @@
+// Package store provides a unified interface for accessing different database engines (SQLite and PostgreSQL) and their associated domain stores. It handles database connection, configuration, migrations, and readiness checks.
 package store
 
 import (
@@ -5,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,11 +15,13 @@ import (
 	"github.com/machinarchy/machinarchy/internal/store/sqlite"
 )
 
+// Database engine identifiers.
 const (
 	EngineSQLite   = "sqlite"
 	EnginePostgres = "postgres"
 )
 
+// Config contains the configuration required to initialize the storage layer.
 type Config struct {
 	Engine           string
 	SQLitePath       string
@@ -29,6 +33,8 @@ type Config struct {
 	EncryptionSecret string
 }
 
+// Stores provides access to the configured persistence backends and manages
+// their lifecycle.
 type Stores struct {
 	DB           *sql.DB
 	engine       string
@@ -40,8 +46,12 @@ type Stores struct {
 	Environments domain.EnvironmentStore
 	Audit        domain.AuditStore
 	Runs         domain.RunStore
+	logger       *slog.Logger
 }
 
+// Open initializes the configured storage backends using the provided context
+// and configuration.
+// It returns an error if any backend cannot be initialized.
 func Open(parent context.Context, cfg Config) (*Stores, error) {
 	engine := strings.ToLower(strings.TrimSpace(cfg.Engine))
 	var (
@@ -98,7 +108,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 	}
 
 	// Run embedded migrations
-	migrator := NewMigrator(db, engine)
+	migrator := NewMigrator(db, engine, slog.Default())
 	if err := migrator.Up(ctx); err != nil {
 		return fail(fmt.Errorf("migrate %s database: %w", engine, err))
 	}
@@ -118,7 +128,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 
 	switch engine {
 	case "sqlite":
-		storeInstance, err := sqlite.NewSQLiteStore(db, cfg.EncryptionSecret)
+		storeInstance, err := sqlite.NewStore(db, cfg.EncryptionSecret, slog.Default())
 		if err != nil {
 			return fail(err)
 		}
@@ -132,7 +142,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Audit = storeInstance
 		stores.Runs = storeInstance
 	case "postgres":
-		storeInstance, err := postgres.NewStore(db, cfg.EncryptionSecret)
+		storeInstance, err := postgres.NewStore(db, cfg.EncryptionSecret, slog.Default())
 		if err != nil {
 			return fail(err)
 		}
@@ -149,6 +159,8 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 	return stores, nil
 }
 
+// Close releases the resources held by all configured storage backends.
+// It returns an error if any backend fails to close.
 func (s *Stores) Close() error {
 	if s == nil || s.DB == nil {
 		return nil
@@ -156,6 +168,8 @@ func (s *Stores) Close() error {
 	return s.DB.Close()
 }
 
+// Ping verifies connectivity to all configured storage backends.
+// It returns an error if any backend is unreachable.
 func (s *Stores) Ping(ctx context.Context) error {
 	if s == nil || s.DB == nil {
 		return errors.New("database is not initialized")
@@ -169,8 +183,11 @@ func (s *Stores) Ping(ctx context.Context) error {
 	return nil
 }
 
+// CheckReadiness reports whether all configured storage backends are ready.
+// It returns an error if any backend is unavailable.
 func (s *Stores) CheckReadiness(ctx context.Context) error { return s.Ping(ctx) }
 
+// DatabaseStats returns connection pool statistics for the configured database.
 func (s *Stores) DatabaseStats() sql.DBStats {
 	if s == nil || s.DB == nil {
 		return sql.DBStats{}

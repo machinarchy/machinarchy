@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	sqliteDriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-var _ domain.AccessStore = (*SQLiteStore)(nil)
+var _ domain.AccessStore = (*Store)(nil)
 
-func (s *SQLiteStore) GetWorkspaceRole(ctx context.Context, userID, workspaceID int) (domain.Role, error) {
+// GetWorkspaceRole retrieves the role of a user in a specific workspace, returning an error if the membership does not exist or if any database operation fails.
+func (s *Store) GetWorkspaceRole(ctx context.Context, userID, workspaceID int) (domain.Role, error) {
 	var role string
 	err := s.DB.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
 		WHERE user_id = ? AND workspace_id = ?`, userID, workspaceID).Scan(&role)
@@ -31,7 +33,8 @@ func (s *SQLiteStore) GetWorkspaceRole(ctx context.Context, userID, workspaceID 
 	return domain.Role(role), nil
 }
 
-func (s *SQLiteStore) ResolveAPIToken(ctx context.Context, tokenHash string) (*domain.Principal, error) {
+// ResolveAPIToken resolves an API token by its hash, returning the associated principal or an error if the token is not found or invalid.
+func (s *Store) ResolveAPIToken(ctx context.Context, tokenHash string) (*domain.Principal, error) {
 	if len(tokenHash) != 64 {
 		return nil, domain.ErrAPITokenNotFound
 	}
@@ -59,7 +62,8 @@ func (s *SQLiteStore) ResolveAPIToken(ctx context.Context, tokenHash string) (*d
 	return &principal, nil
 }
 
-func (s *SQLiteStore) ListAPITokens(ctx context.Context, userID, workspaceID int) ([]domain.APIToken, error) {
+// ListAPITokens retrieves all API tokens for a specific user and workspace, returning an error if any database operation fails.
+func (s *Store) ListAPITokens(ctx context.Context, userID, workspaceID int) ([]domain.APIToken, error) {
 	if userID <= 0 || workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: user and workspace IDs must be positive", domain.ErrInvalidInput)
 	}
@@ -69,7 +73,7 @@ func (s *SQLiteStore) ListAPITokens(ctx context.Context, userID, workspaceID int
 	if err != nil {
 		return nil, fmt.Errorf("list API tokens: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list api tokens")
 
 	tokens := make([]domain.APIToken, 0)
 	for rows.Next() {
@@ -105,7 +109,8 @@ func (s *SQLiteStore) ListAPITokens(ctx context.Context, userID, workspaceID int
 	return tokens, nil
 }
 
-func (s *SQLiteStore) CreateAPIToken(ctx context.Context, token *domain.APIToken) error {
+// CreateAPIToken creates a new API token for a user in a specific workspace, returning an error if the operation fails or if the input is invalid.
+func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) error {
 	if token == nil || token.UserID <= 0 || token.WorkspaceID <= 0 ||
 		(token.Role != domain.RoleOperator && token.Role != domain.RoleReader) || len(token.TokenHash) != 64 {
 		return fmt.Errorf("%w: invalid API token record", domain.ErrInvalidInput)
@@ -117,7 +122,8 @@ func (s *SQLiteStore) CreateAPIToken(ctx context.Context, token *domain.APIToken
 	if err != nil {
 		return fmt.Errorf("begin create API token transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create API token")
+
 	result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens
 		(user_id, workspace_id, name, role, token_hash, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`, token.UserID, token.WorkspaceID, token.Name,
@@ -153,7 +159,8 @@ func (s *SQLiteStore) CreateAPIToken(ctx context.Context, token *domain.APIToken
 	return nil
 }
 
-func (s *SQLiteStore) RevokeAPIToken(ctx context.Context, id, userID, workspaceID int) error {
+// RevokeAPIToken revokes an existing API token for a user in a specific workspace, returning an error if the operation fails or if the input is invalid.
+func (s *Store) RevokeAPIToken(ctx context.Context, id, userID, workspaceID int) error {
 	if id <= 0 || userID <= 0 || workspaceID <= 0 {
 		return fmt.Errorf("%w: token, user, and workspace IDs must be positive", domain.ErrInvalidInput)
 	}
@@ -161,7 +168,8 @@ func (s *SQLiteStore) RevokeAPIToken(ctx context.Context, id, userID, workspaceI
 	if err != nil {
 		return fmt.Errorf("begin revoke API token transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "revoke API token")
+
 	var name string
 	err = tx.QueryRowContext(ctx, `SELECT name FROM api_tokens
 		WHERE id = ? AND user_id = ? AND workspace_id = ? AND revoked_at IS NULL`,

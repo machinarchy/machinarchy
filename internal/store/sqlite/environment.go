@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	sqliteDriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-func (s *SQLiteStore) CreateEnvironment(ctx context.Context, environment *domain.Environment) error {
+// CreateEnvironment inserts a new environment into the database, returning an error if the environment already exists or if any database operation fails.
+func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Environment) error {
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
@@ -34,7 +36,8 @@ func (s *SQLiteStore) CreateEnvironment(ctx context.Context, environment *domain
 	return nil
 }
 
-func (s *SQLiteStore) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*domain.Environment, error) {
+// GetEnvironmentByID retrieves an environment by its ID and workspace ID, returning the environment or an error if not found or if any database operation fails.
+func (s *Store) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*domain.Environment, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -55,7 +58,8 @@ func (s *SQLiteStore) GetEnvironmentByID(ctx context.Context, workspaceID, id in
 	return environment, nil
 }
 
-func (s *SQLiteStore) ListEnvironments(ctx context.Context, workspaceID int) ([]*domain.Environment, error) {
+// ListEnvironments retrieves a list of environments for a specific workspace, returning the environments or an error if any database operation fails.
+func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domain.Environment, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -64,7 +68,7 @@ func (s *SQLiteStore) ListEnvironments(ctx context.Context, workspaceID int) ([]
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list environments")
 
 	environments := make([]*domain.Environment, 0)
 	for rows.Next() {
@@ -85,7 +89,8 @@ func (s *SQLiteStore) ListEnvironments(ctx context.Context, workspaceID int) ([]
 	return environments, nil
 }
 
-func (s *SQLiteStore) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
+// UpdateEnvironment updates an existing environment in the database, returning an error if the environment does not exist or if any database operation fails.
+func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
@@ -102,7 +107,8 @@ func (s *SQLiteStore) UpdateEnvironment(ctx context.Context, environment *domain
 	return requireRowsAffected(result, domain.ErrEnvironmentNotFound)
 }
 
-func (s *SQLiteStore) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
+// DeleteEnvironment removes an environment from the database, returning an error if the environment does not exist or if any database operation fails.
+func (s *Store) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}

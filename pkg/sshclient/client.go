@@ -1,3 +1,5 @@
+// Package sshclient provides SSH client functionality for connecting to and
+// communicating with remote hosts.
 package sshclient
 
 import (
@@ -5,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -23,6 +26,7 @@ const (
 	maxCommandOutputBytes   = 1 << 20
 )
 
+// DialParams contains the parameters required to establish an SSH connection.
 type DialParams struct {
 	IP                  string
 	Port                int
@@ -71,7 +75,11 @@ func ExecuteRemoteCommand(ctx context.Context, params DialParams, command string
 	if err != nil {
 		return "", fmt.Errorf("create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			slog.Warn("failed to close SSH session", "error", err)
+		}
+	}()
 
 	output := &limitedBuffer{limit: maxCommandOutputBytes}
 	session.Stdout = output

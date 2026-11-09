@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 var _ domain.AccessStore = (*Store)(nil)
 
+// GetWorkspaceRole retrieves the role of a user within a specific workspace.
 func (s *Store) GetWorkspaceRole(ctx context.Context, userID, workspaceID int) (domain.Role, error) {
 	var role string
 	err := s.db.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
@@ -28,6 +30,7 @@ func (s *Store) GetWorkspaceRole(ctx context.Context, userID, workspaceID int) (
 	return domain.Role(role), nil
 }
 
+// ResolveAPIToken resolves an API token and returns the associated principal.
 func (s *Store) ResolveAPIToken(ctx context.Context, tokenHash string) (*domain.Principal, error) {
 	if len(tokenHash) != 64 {
 		return nil, domain.ErrAPITokenNotFound
@@ -55,6 +58,7 @@ func (s *Store) ResolveAPIToken(ctx context.Context, tokenHash string) (*domain.
 	return &principal, nil
 }
 
+// ListAPITokens lists all API tokens for a given user and workspace.
 func (s *Store) ListAPITokens(ctx context.Context, userID, workspaceID int) ([]domain.APIToken, error) {
 	if userID <= 0 || workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: user and workspace IDs must be positive", domain.ErrInvalidInput)
@@ -65,7 +69,7 @@ func (s *Store) ListAPITokens(ctx context.Context, userID, workspaceID int) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("list API tokens: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query API tokens")
 
 	tokens := make([]domain.APIToken, 0)
 	for rows.Next() {
@@ -93,6 +97,7 @@ func (s *Store) ListAPITokens(ctx context.Context, userID, workspaceID int) ([]d
 	return tokens, nil
 }
 
+// CreateAPIToken creates a new API token record in the database.
 func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) error {
 	if token == nil || token.UserID <= 0 || token.WorkspaceID <= 0 ||
 		(token.Role != domain.RoleOperator && token.Role != domain.RoleReader) || len(token.TokenHash) != 64 {
@@ -105,7 +110,8 @@ func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) erro
 	if err != nil {
 		return fmt.Errorf("begin create API token transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "API token")
+
 	var id int
 	err = tx.QueryRowContext(ctx, `INSERT INTO api_tokens
 		(user_id, workspace_id, name, role, token_hash, created_at, expires_at)
@@ -137,6 +143,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) erro
 	return nil
 }
 
+// RevokeAPIToken revokes an API token by setting its revoked_at timestamp.
 func (s *Store) RevokeAPIToken(ctx context.Context, id, userID, workspaceID int) error {
 	if id <= 0 || userID <= 0 || workspaceID <= 0 {
 		return fmt.Errorf("%w: token, user, and workspace IDs must be positive", domain.ErrInvalidInput)
@@ -145,7 +152,8 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id, userID, workspaceID int)
 	if err != nil {
 		return fmt.Errorf("begin revoke API token transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "API token")
+
 	var name string
 	err = tx.QueryRowContext(ctx, `SELECT name FROM api_tokens
 		WHERE id = $1 AND user_id = $2 AND workspace_id = $3 AND revoked_at IS NULL FOR UPDATE`,

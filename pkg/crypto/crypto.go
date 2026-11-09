@@ -1,3 +1,4 @@
+// Package crypto provides cryptographic utilities for Machinarchy.
 package crypto
 
 import (
@@ -12,6 +13,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// ErrInvalidKey indicates that a cryptographic key does not meet the minimum length requirement.
 var ErrInvalidKey = errors.New("cryptographic key must be at least 32 bytes")
 
 // DeriveKey creates a purpose-specific AES-256 key from a high-entropy master

@@ -2,6 +2,7 @@ package audit
 
 import "github.com/labstack/echo/v4"
 
+// RegisterRoutes registers the audit API endpoints on the provided Echo group.
 func RegisterRoutes(g *echo.Group, h *Handler) {
 	g.GET("/events", h.List)
 	g.GET("/verify", h.Verify)

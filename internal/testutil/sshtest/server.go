@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -193,8 +194,11 @@ func (s *Server) handle(conn net.Conn) {
 	defer s.wg.Done()
 	defer s.open.Add(-1)
 	defer s.track(conn, false)
-	defer conn.Close()
-
+	defer func() {
+		if err := conn.Close(); err != nil {
+			slog.Warn("failed to close network connection", "error", err)
+		}
+	}()
 	switch s.opts.Mode {
 	case ModeSilent:
 		_, _ = io.Copy(io.Discard, conn) // returns when the client or Close drops the connection
@@ -230,7 +234,11 @@ func (s *Server) handle(conn net.Conn) {
 }
 
 func (s *Server) session(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
+	defer func() {
+		if err := channel.Close(); err != nil {
+			slog.Warn("failed to close SSH channel", "error", err)
+		}
+	}()
 	for request := range requests {
 		if request.Type != "exec" {
 			if request.WantReply {

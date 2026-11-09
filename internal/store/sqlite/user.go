@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	sqliteDriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -17,33 +18,42 @@ const userColumns = `users.id, users.username, COALESCE(users.email, ''), users.
 	COALESCE(users.reset_token, ''), users.reset_token_expires, users.created_at,
 	workspace_memberships.workspace_id, workspace_memberships.role`
 
-func (s *SQLiteStore) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
+// GetUserByUsername retrieves a user by their username.
+// It returns an error if the user cannot be found or the query fails.
+func (s *Store) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
 		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
 		WHERE users.username = ?`, strings.TrimSpace(username)))
 }
 
-func (s *SQLiteStore) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+// GetUserByEmail retrieves a user by their email address.
+// It returns an error if the user cannot be found or the query fails.
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
 		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
 		WHERE users.email = ?`, strings.TrimSpace(email)))
 }
 
-func (s *SQLiteStore) GetUserByIdentifier(ctx context.Context, identifier string) (*domain.User, error) {
+// GetUserByIdentifier retrieves a user by their username or email address.
+// It returns an error if the user cannot be found or the query fails.
+func (s *Store) GetUserByIdentifier(ctx context.Context, identifier string) (*domain.User, error) {
 	identifier = strings.TrimSpace(identifier)
 	return s.scanUserRow(s.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users
 		JOIN workspace_memberships ON workspace_memberships.user_id = users.id
 		WHERE users.username = ? OR users.email = ?`, identifier, identifier))
 }
 
-func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
+// CreateUser creates a user with the specified username, email address, and password hash.
+// It returns the created user or an error if the operation fails.
+func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
 	username, email = strings.TrimSpace(username), strings.TrimSpace(email)
 	now := time.Now().UTC()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin create user transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create user")
+
 	result, err := tx.ExecContext(ctx, `INSERT INTO users (username, email, password_hash, created_at)
 		VALUES (?, NULLIF(?, ''), ?, ?)`, username, email, passwordHash, now.Format(time.RFC3339Nano))
 	if err != nil {
@@ -83,12 +93,14 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, username, email, passwordH
 		Username: username, Email: email, PasswordHash: passwordHash, CreatedAt: now}, nil
 }
 
-func (s *SQLiteStore) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
+// UpdateWorkspaceMemberRole updates a user's role within the specified workspace.
+// It returns an error if the role cannot be updated.
+func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin member role transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "member role")
 
 	var previous string
 	err = tx.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
@@ -134,7 +146,9 @@ func (s *SQLiteStore) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID
 	return nil
 }
 
-func (s *SQLiteStore) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {
+// ListWorkspaceMembers retrieves all members of the specified workspace.
+// It returns an error if the query fails.
+func (s *Store) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT users.id, users.username, COALESCE(users.email, ''),
 		workspace_memberships.role, users.created_at
 		FROM workspace_memberships JOIN users ON users.id = workspace_memberships.user_id
@@ -143,7 +157,8 @@ func (s *SQLiteStore) ListWorkspaceMembers(ctx context.Context, workspaceID int)
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list workspace members")
+
 	members := make([]domain.WorkspaceMember, 0)
 	for rows.Next() {
 		var member domain.WorkspaceMember
@@ -173,7 +188,9 @@ func parseStoredTime(value string) time.Time {
 	return time.Time{}
 }
 
-func (s *SQLiteStore) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {
+// CountWorkspaceOwners returns the number of owners in the specified workspace.
+// It returns an error if the count query fails.
+func (s *Store) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {
 	var count int
 	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspace_memberships
 		WHERE workspace_id = ? AND role = ?`, workspaceID, string(domain.RoleOwner)).Scan(&count); err != nil {
@@ -182,7 +199,10 @@ func (s *SQLiteStore) CountWorkspaceOwners(ctx context.Context, workspaceID int)
 	return count, nil
 }
 
-func (s *SQLiteStore) SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error {
+// SaveUserResetToken stores a password reset token for the specified user
+// with the given expiration time.
+// It returns an error if the token cannot be saved.
+func (s *Store) SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error {
 	result, err := s.DB.ExecContext(ctx, `UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE username = ?`,
 		token, expiresAt.UTC().Format(time.RFC3339Nano), strings.TrimSpace(username))
 	if err != nil {
@@ -191,7 +211,9 @@ func (s *SQLiteStore) SaveUserResetToken(ctx context.Context, username, token st
 	return requireRowsAffected(result, domain.ErrUserNotFound)
 }
 
-func (s *SQLiteStore) UpdateUserPassword(ctx context.Context, userID int, passwordHash string) error {
+// UpdateUserPassword updates a user's password hash.
+// It returns an error if the password cannot be updated.
+func (s *Store) UpdateUserPassword(ctx context.Context, userID int, passwordHash string) error {
 	result, err := s.DB.ExecContext(ctx, `UPDATE users SET password_hash = ?,
 		reset_token = NULL, reset_token_expires = NULL WHERE id = ?`, passwordHash, userID)
 	if err != nil {
@@ -200,7 +222,7 @@ func (s *SQLiteStore) UpdateUserPassword(ctx context.Context, userID int, passwo
 	return requireRowsAffected(result, domain.ErrUserNotFound)
 }
 
-func (s *SQLiteStore) scanUserRow(row *sql.Row) (*domain.User, error) {
+func (s *Store) scanUserRow(row *sql.Row) (*domain.User, error) {
 	user := new(domain.User)
 	var expires sql.NullString
 	var createdAt string

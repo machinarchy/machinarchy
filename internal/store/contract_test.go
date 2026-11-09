@@ -56,7 +56,7 @@ func newFixture(t *testing.T, engine string) *fixture {
 	switch engine {
 	case store.EngineSQLite:
 		path := filepath.Join(t.TempDir(), "machinarchy.db")
-		if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		if err := os.Chmod(filepath.Dir(path), 0o600); err != nil {
 			t.Fatalf("restrict test database directory: %v", err)
 		}
 		f.cfg = store.Config{Engine: engine, SQLitePath: path, EncryptionSecret: testEncryptionSecret}

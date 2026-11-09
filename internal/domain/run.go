@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -17,6 +19,7 @@ import (
 // RunStatus is the lifecycle state of a run.
 type RunStatus string
 
+// Const defines the possible statuses for a run.
 const (
 	RunQueued             RunStatus = "queued"
 	RunRunning            RunStatus = "running"
@@ -44,6 +47,7 @@ func (s RunStatus) Final() bool {
 // RunHostStatus is the outcome of a run on one host.
 type RunHostStatus string
 
+// Const defines the possible statuses for a run on a host.
 const (
 	RunHostPending     RunHostStatus = "pending"
 	RunHostRunning     RunHostStatus = "running"
@@ -74,6 +78,7 @@ const (
 	outputTruncationMarker = "\n[output truncated]"
 )
 
+// Errors returned by the run service.
 var (
 	ErrRunNotFound          = errors.New("run not found")
 	ErrRunFinished          = errors.New("the run has already finished")
@@ -90,7 +95,10 @@ type TargetsChangedError struct {
 	Total       int
 }
 
-func (e *TargetsChangedError) Error() string        { return ErrTargetsChanged.Error() }
+// Error implements the error interface.
+func (e *TargetsChangedError) Error() string { return ErrTargetsChanged.Error() }
+
+// Is implements errors.Is so callers can check for ErrTargetsChanged.
 func (e *TargetsChangedError) Is(target error) bool { return target == ErrTargetsChanged }
 
 // RunRequest asks for a command to be run on a set of hosts.
@@ -347,13 +355,19 @@ func QuoteArgv(argv []string) string {
 	return strings.Join(quoted, " ")
 }
 
+func writeDigestField(digest hash.Hash, value string) {
+	_, _ = digest.Write([]byte(strconv.Itoa(len(value)) + ":" + value + "|"))
+}
+
 // ArgvDigest returns a SHA-256 digest of argv that is unambiguous across
 // argument boundaries. It is recorded instead of the arguments in audit events.
 func ArgvDigest(argv []string) string {
 	digest := sha256.New()
+
 	for _, arg := range argv {
-		fmt.Fprintf(digest, "%d:%s|", len(arg), arg)
+		writeDigestField(digest, arg)
 	}
+
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
@@ -368,7 +382,7 @@ func TargetsHash(hosts []*Host) string {
 	sort.Strings(ids)
 	digest := sha256.New()
 	for _, id := range ids {
-		fmt.Fprintf(digest, "%d:%s|", len(id), id)
+		writeDigestField(digest, id)
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }

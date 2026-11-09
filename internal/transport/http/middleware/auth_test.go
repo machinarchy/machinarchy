@@ -81,7 +81,13 @@ func TestAPITokenAuthenticationUsesScopedPrincipalAndPermissions(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/cookie", nil)
-	req.AddCookie(&http.Cookie{Name: "auth_token", Value: rawToken})
+	req.AddCookie(&http.Cookie{
+		Name:     "auth_token",
+		Value:    rawToken,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

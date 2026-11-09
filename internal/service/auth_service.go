@@ -1,4 +1,3 @@
-// internal/service/auth_service.go
 package service
 
 import (
@@ -25,6 +24,7 @@ type authService struct {
 
 const defaultTokenTTL = 24 * time.Hour
 
+// NewAuthService creates a new instance of the authentication service with the provided user store, JWT secret, and token TTL.
 func NewAuthService(userStore domain.UserStore, jwtSecret string, tokenTTL time.Duration) domain.AuthService {
 	if tokenTTL <= 0 {
 		tokenTTL = defaultTokenTTL

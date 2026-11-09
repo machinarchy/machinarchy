@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
+// CreateJob inserts a new job record into the database and returns the generated ID.
 func (s *Store) CreateJob(ctx context.Context, job *domain.Job) error {
 	if job == nil || job.WorkspaceID <= 0 || job.HostID <= 0 {
 		return fmt.Errorf("%w: job, workspace, and positive host ID are required", domain.ErrInvalidInput)
@@ -38,6 +40,7 @@ func (s *Store) CreateJob(ctx context.Context, job *domain.Job) error {
 	return nil
 }
 
+// UpdateJobResult updates the status and result log of a job, marking it as finished.
 func (s *Store) UpdateJobResult(ctx context.Context, id int, status, resultLog string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = $1, result_log = $2,
 		finished_at = $3 WHERE id = $4`, status, resultLog, time.Now().UTC(), id)
@@ -47,6 +50,7 @@ func (s *Store) UpdateJobResult(ctx context.Context, id int, status, resultLog s
 	return affected(result, sql.ErrNoRows)
 }
 
+// GetJobByID retrieves a job by its ID and workspace ID.
 func (s *Store) GetJobByID(ctx context.Context, workspaceID, id int) (*domain.Job, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -62,6 +66,7 @@ func (s *Store) GetJobByID(ctx context.Context, workspaceID, id int) (*domain.Jo
 	return job, nil
 }
 
+// ListJobs retrieves jobs for a workspace, optionally filtered by host ID, and paginated by limit and offset.
 func (s *Store) ListJobs(ctx context.Context, filter domain.JobFilter) ([]*domain.Job, int, error) {
 	if filter.WorkspaceID <= 0 {
 		return nil, 0, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -97,7 +102,7 @@ func (s *Store) ListJobs(ctx context.Context, filter domain.JobFilter) ([]*domai
 	if err != nil {
 		return nil, 0, fmt.Errorf("list jobs: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list jobs")
 
 	jobs := make([]*domain.Job, 0)
 	for rows.Next() {

@@ -1,3 +1,4 @@
+// Package history provides HTTP handlers and routes for historical data operations.
 package history
 
 import (

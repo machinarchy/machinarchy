@@ -1,0 +1,52 @@
+name: Bug Report
+description: File a bug report for the control plane, agent, or SSH engine.
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please provide as much operational context as possible to help isolate fleet or network issues.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description of the Bug
+      description: What is failing? (e.g., host enrollment drops, command execution timeouts)
+    validations:
+      required: true
+  - type: input
+    id: control-plane-version
+    attributes:
+      label: Control Plane Version / Commit Hash
+      placeholder: e.g., v0.1.0 or main@abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Target Host OS / Environment
+      description: What operating system are you enrolling or deploying agents to?
+      options:
+        - Ubuntu / Debian
+        - RHEL / Rocky Linux / Fedora
+        - Alpine Linux
+        - macOS
+        - Multiple / Mixed Fleet
+        - Other (Specify in notes)
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How do you trigger the bug?
+      placeholder: |
+        1. Add host via SSH with key auth
+        2. Run command '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs / Output
+      description: Paste relevant logs from the control plane or agent stdout/stderr.
+      render: shell

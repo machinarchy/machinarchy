@@ -20,7 +20,7 @@ import (
 func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "machinarchy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
+	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	stores, err := store.Open(ctx, store.Config{
@@ -217,7 +217,7 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "legacy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
+	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	db, err := sql.Open("sqlite", databasePath)
@@ -234,6 +234,7 @@ func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 	}
 	migrationDir := filepath.Join(filepath.Dir(sourceFile), "migrations", "sqlite")
 	for _, migration := range []string{"000001_init_hosts.up.sql", "000002_application_tables.up.sql"} {
+		// #nosec G304 -- migration filenames are hardcoded test fixtures.
 		content, err := os.ReadFile(filepath.Join(migrationDir, migration))
 		if err != nil {
 			t.Fatalf("read legacy migration %s: %v", migration, err)
@@ -335,7 +336,7 @@ func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 func TestSQLiteSignupsShareDefaultWorkspaceAndBootstrapOwnerIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "machinarchy.db")
-	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
+	if err := os.Chmod(filepath.Dir(databasePath), 0o600); err != nil {
 		t.Fatalf("restrict test database directory: %v", err)
 	}
 	stores, err := store.Open(ctx, store.Config{

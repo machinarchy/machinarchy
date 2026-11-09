@@ -1,3 +1,5 @@
+// Package middleware provides reusable HTTP middleware for authentication,
+// authorization, auditing, logging, rate limiting, and request handling.
 package middleware
 
 import (

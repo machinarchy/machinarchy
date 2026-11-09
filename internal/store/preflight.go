@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 // preflightChecks run before a pending migration is applied. They exist for
@@ -57,11 +59,13 @@ func checkHostUniqueness(ctx context.Context, db *sql.DB, engine string) error {
 }
 
 func hostConflicts(ctx context.Context, db *sql.DB, label, query string) ([]string, error) {
+	s := &Stores{} // dummy store for logger
 	rows, err := db.QueryContext(ctx, query, maxReportedConflicts)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query hostConflicts")
+
 	var conflicts []string
 	for rows.Next() {
 		var workspaceID, count int

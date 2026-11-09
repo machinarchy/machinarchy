@@ -775,7 +775,7 @@
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/host.HostPayload"
+                            "$ref": "#/definitions/host.Payload"
                         }
                     }
                 ],
@@ -932,7 +932,7 @@
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/host.HostPayload"
+                            "$ref": "#/definitions/host.Payload"
                         }
                     }
                 ],
@@ -1093,7 +1093,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/host.HostJobsResponse"
+                            "$ref": "#/definitions/host.JobsResponse"
                         }
                     },
                     "400": {
@@ -2938,7 +2938,7 @@
                 "hosts": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/host.HostPayload"
+                        "$ref": "#/definitions/host.Payload"
                     }
                 },
                 "validate_only": {
@@ -2947,7 +2947,7 @@
                 }
             }
         },
-        "host.HostJobsResponse": {
+        "host.JobsResponse": {
             "type": "object",
             "properties": {
                 "data": {
@@ -2970,7 +2970,24 @@
                 }
             }
         },
-        "host.HostPayload": {
+        "host.LabelPatchRequest": {
+            "type": "object",
+            "properties": {
+                "remove": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "set": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "host.Payload": {
             "type": "object",
             "required": [
                 "authMethod",
@@ -3033,23 +3050,6 @@
                 "username": {
                     "type": "string",
                     "example": "deploy"
-                }
-            }
-        },
-        "host.LabelPatchRequest": {
-            "type": "object",
-            "properties": {
-                "remove": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "set": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
                 }
             }
         },

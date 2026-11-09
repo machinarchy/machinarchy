@@ -1,0 +1,2 @@
+# Disable the "Open a blank issue" button to force users to use your templates
+blank_issues_enabled: false

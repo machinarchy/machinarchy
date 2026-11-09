@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
@@ -72,6 +74,7 @@ func (s *Store) scanRun(row rowScanner, extra ...any) (*domain.Run, error) {
 	return &run, nil
 }
 
+// CreateRun creates a new run record in the database along with its associated hosts.
 func (s *Store) CreateRun(ctx context.Context, run *domain.Run) error {
 	if run == nil || run.WorkspaceID <= 0 || run.Program == "" || len(run.Argv) == 0 || len(run.Hosts) == 0 {
 		return fmt.Errorf("%w: invalid run record", domain.ErrInvalidInput)
@@ -94,7 +97,8 @@ func (s *Store) CreateRun(ctx context.Context, run *domain.Run) error {
 	if err != nil {
 		return fmt.Errorf("begin create run transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create run")
+
 	var id int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO runs (workspace_id, status, created_by_user_id,
 		created_by_username, created_by_token_id, created_at, program, arg_count, argv_encrypted, argv_sha256,
@@ -132,6 +136,7 @@ func (s *Store) CreateRun(ctx context.Context, run *domain.Run) error {
 	return nil
 }
 
+// GetRun retrieves a run record and its associated hosts from the database.
 func (s *Store) GetRun(ctx context.Context, workspaceID int, id int64) (*domain.Run, error) {
 	run, err := s.scanRun(s.db.QueryRowContext(ctx, `SELECT `+runColumns+` FROM runs r
 		WHERE r.id = $1 AND r.workspace_id = $2`, id, workspaceID))
@@ -146,7 +151,8 @@ func (s *Store) GetRun(ctx context.Context, workspaceID int, id int64) (*domain.
 	if err != nil {
 		return nil, fmt.Errorf("read run hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query run hosts")
+
 	for rows.Next() {
 		var host domain.RunHost
 		var status string
@@ -190,6 +196,7 @@ func addToCounts(counts *domain.RunCounts, status domain.RunHostStatus) {
 	}
 }
 
+// ListRuns retrieves a list of runs for a given workspace, optionally filtered by status and limited in number.
 func (s *Store) ListRuns(ctx context.Context, workspaceID int, filter domain.RunFilter) ([]domain.Run, error) {
 	filter, err := domain.NormalizeRunFilter(filter)
 	if err != nil {
@@ -198,14 +205,24 @@ func (s *Store) ListRuns(ctx context.Context, workspaceID int, filter domain.Run
 	count := func(status domain.RunHostStatus) string {
 		return `COALESCE(SUM(CASE WHEN h.status = '` + string(status) + `' THEN 1 ELSE 0 END), 0)`
 	}
-	query := `SELECT r.id, r.workspace_id, r.status, r.created_by_user_id, r.created_by_username,
-		r.created_by_token_id, r.created_at, r.started_at, r.finished_at, r.program, r.arg_count,
-		'' AS argv_encrypted, r.argv_sha256, r.timeout_seconds, r.concurrency, r.targets_hash, r.rule,
-		r.cancel_requested, r.heartbeat_at, ` +
-		count(domain.RunHostPending) + `, ` + count(domain.RunHostRunning) + `, ` + count(domain.RunHostSucceeded) + `, ` +
-		count(domain.RunHostFailed) + `, ` + count(domain.RunHostTimedOut) + `, ` + count(domain.RunHostCancelled) + `, ` +
-		count(domain.RunHostInterrupted) + `
-		FROM runs r LEFT JOIN run_hosts h ON h.run_id = r.id WHERE r.workspace_id = $1`
+	// #nosec G202 -- count() generates fixed application-controlled SQL expressions.
+	query := `
+			SELECT r.id, r.workspace_id, r.status, r.created_by_user_id, r.created_by_username,
+						r.created_by_token_id, r.created_at, r.started_at, r.finished_at, r.program, r.arg_count,
+						'' AS argv_encrypted, r.argv_sha256, r.timeout_seconds, r.concurrency, r.targets_hash, r.rule,
+						r.cancel_requested, r.heartbeat_at,
+	` + strings.Join([]string{
+		count(domain.RunHostPending),
+		count(domain.RunHostRunning),
+		count(domain.RunHostSucceeded),
+		count(domain.RunHostFailed),
+		count(domain.RunHostTimedOut),
+		count(domain.RunHostCancelled),
+		count(domain.RunHostInterrupted),
+	}, ", ") + `
+			FROM runs r
+			LEFT JOIN run_hosts h ON h.run_id = r.id
+			WHERE r.workspace_id = $1`
 	args := []any{workspaceID}
 	if filter.Status != "" {
 		args = append(args, filter.Status)
@@ -222,7 +239,8 @@ func (s *Store) ListRuns(ctx context.Context, workspaceID int, filter domain.Run
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list runs")
+
 	runs := make([]domain.Run, 0, filter.Limit)
 	for rows.Next() {
 		var c domain.RunCounts
@@ -236,6 +254,7 @@ func (s *Store) ListRuns(ctx context.Context, workspaceID int, filter domain.Run
 	return runs, rows.Err()
 }
 
+// StartRun updates the status of a run to "running" and sets its start time.
 func (s *Store) StartRun(ctx context.Context, id int64, owner string, now time.Time) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET status = $1, started_at = $2, owner_id = $3, heartbeat_at = $2
 		WHERE id = $4 AND status = $5`, string(domain.RunRunning), now.UTC(), owner, id, string(domain.RunQueued))
@@ -245,6 +264,7 @@ func (s *Store) StartRun(ctx context.Context, id int64, owner string, now time.T
 	return affected(result, domain.ErrRunFinished)
 }
 
+// Heartbeat updates the heartbeat timestamp of a run and returns whether cancellation has been requested.
 func (s *Store) Heartbeat(ctx context.Context, id int64, now time.Time) (bool, error) {
 	var cancel bool
 	err := s.db.QueryRowContext(ctx, `UPDATE runs SET heartbeat_at = $1 WHERE id = $2 AND status IN ($3, $4)
@@ -258,6 +278,7 @@ func (s *Store) Heartbeat(ctx context.Context, id int64, now time.Time) (bool, e
 	return cancel, nil
 }
 
+// UpdateRunHost updates the status and other details of a specific host within a run.
 func (s *Store) UpdateRunHost(ctx context.Context, runID int64, hostID string, update domain.RunHostUpdate) error {
 	var exit sql.NullInt64
 	if update.ExitCode != nil {
@@ -275,12 +296,14 @@ func (s *Store) UpdateRunHost(ctx context.Context, runID int64, hostID string, u
 	return nil
 }
 
+// RequestCancel marks a run as having a cancellation requested, if it is not already finished or cancelled.
 func (s *Store) RequestCancel(ctx context.Context, workspaceID int, id int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin cancel transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "cancel")
+
 	var status string
 	var already bool
 	err = tx.QueryRowContext(ctx, `SELECT status, cancel_requested FROM runs WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
@@ -314,12 +337,13 @@ func (s *Store) RequestCancel(ctx context.Context, workspaceID int, id int64) er
 }
 
 // runHostCounts returns per-status host counts of a run as audit details.
-func runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]string, error) {
+func (s *Store) runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT status, COUNT(*) FROM run_hosts WHERE run_id = $1 GROUP BY status`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("count run hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query run hosts")
+
 	details := map[string]string{}
 	for rows.Next() {
 		var status string
@@ -332,6 +356,7 @@ func runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]str
 	return details, rows.Err()
 }
 
+// FinishRun updates the status of a run to a final state and records its finish time, along with audit details.
 func (s *Store) FinishRun(ctx context.Context, id int64, status domain.RunStatus, now time.Time) error {
 	if !status.Final() {
 		return fmt.Errorf("%w: %q is not a final run status", domain.ErrInvalidInput, status)
@@ -340,7 +365,8 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status domain.RunStatus
 	if err != nil {
 		return fmt.Errorf("begin finish run transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "finish run")
+
 	var workspaceID int
 	var current string
 	err = tx.QueryRowContext(ctx, `SELECT workspace_id, status FROM runs WHERE id = $1 FOR UPDATE`, id).Scan(&workspaceID, &current)
@@ -353,7 +379,7 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status domain.RunStatus
 	if domain.RunStatus(current).Final() {
 		return nil
 	}
-	details, err := runHostCounts(ctx, tx, id)
+	details, err := s.runHostCounts(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -374,18 +400,22 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status domain.RunStatus
 	return nil
 }
 
+// InterruptStaleRuns finds runs that have not sent a heartbeat since the cutoff time and marks them as interrupted.
 func (s *Store) InterruptStaleRuns(ctx context.Context, cutoff, now time.Time) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin recovery transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "recovery")
+
 	rows, err := tx.QueryContext(ctx, `SELECT id, workspace_id FROM runs
 		WHERE status IN ($1, $2) AND heartbeat_at < $3 ORDER BY id FOR UPDATE`,
 		string(domain.RunQueued), string(domain.RunRunning), cutoff.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("find stale runs: %w", err)
 	}
+	defer utils.CloseRows(rows, s.logger, "find stale runs")
+
 	type stale struct {
 		id        int64
 		workspace int
@@ -394,13 +424,11 @@ func (s *Store) InterruptStaleRuns(ctx context.Context, cutoff, now time.Time) (
 	for rows.Next() {
 		var item stale
 		if err := rows.Scan(&item.id, &item.workspace); err != nil {
-			rows.Close()
 			return 0, fmt.Errorf("scan stale run: %w", err)
 		}
 		stales = append(stales, item)
 	}
 	err = rows.Err()
-	rows.Close()
 	if err != nil {
 		return 0, fmt.Errorf("iterate stale runs: %w", err)
 	}

@@ -106,7 +106,7 @@ func (m *memRunStore) ListRuns(_ context.Context, workspaceID int, filter domain
 	return out, nil
 }
 
-func (m *memRunStore) StartRun(ctx context.Context, id int64, _ string, now time.Time) error {
+func (m *memRunStore) StartRun(_ context.Context, id int64, _ string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	run := m.runs[id]
@@ -181,7 +181,7 @@ func (m *memRunStore) FinishRun(ctx context.Context, id int64, status domain.Run
 	return nil
 }
 
-func (m *memRunStore) InterruptStaleRuns(ctx context.Context, cutoff, now time.Time) (int, error) {
+func (m *memRunStore) InterruptStaleRuns(_ context.Context, cutoff, now time.Time) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0

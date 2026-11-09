@@ -1,4 +1,4 @@
-// internal/config/config.go
+// Package config provides configuration parsing and validation for the application.
 package config
 
 import (
@@ -15,13 +15,16 @@ import (
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
+// Environment represents the execution environment (e.g., development, production).
 type Environment string
 
+// Supported execution environments.
 const (
 	Development Environment = "development"
 	Production  Environment = "production"
 )
 
+// Validate checks if the Environment value is valid (either Development or Production).
 func (e Environment) Validate() error {
 	switch e {
 	case Development, Production:
@@ -31,13 +34,16 @@ func (e Environment) Validate() error {
 	}
 }
 
+// DatabaseEngine represents the type of database engine used (e.g., SQLite, Postgres).
 type DatabaseEngine string
 
+// Supported database engines.
 const (
-	SQLite   DatabaseEngine = "sqlite"
-	Postgres DatabaseEngine = "postgres"
+	SQLite   DatabaseEngine = "sqlite"   // SQLite is the default database engine for local development and testing.
+	Postgres DatabaseEngine = "postgres" // Postgres is the recommended database engine for production deployments, offering better performance and scalability.
 )
 
+// Validate checks if the DatabaseEngine value is valid (either SQLite or Postgres).
 func (de DatabaseEngine) Validate() error {
 	switch de {
 	case SQLite, Postgres:
@@ -47,6 +53,7 @@ func (de DatabaseEngine) Validate() error {
 	}
 }
 
+// DatabaseConfig holds the configuration for the database connection.
 type DatabaseConfig struct {
 	Engine          DatabaseEngine
 	Path            string
@@ -57,6 +64,7 @@ type DatabaseConfig struct {
 	ConnectTimeout  time.Duration
 }
 
+// Config holds the overall application configuration, including server settings, database configuration, and other operational parameters.
 type Config struct {
 	ListenAddr       string
 	Environment      Environment
@@ -80,10 +88,12 @@ type BootstrapAdminConfig struct {
 	Password string
 }
 
+// EventBrokerConfig holds the configuration for the event broker connection.
 type EventBrokerConfig struct {
 	URL string
 }
 
+// Load reads the configuration from environment variables, applies defaults, and validates the configuration values. It returns a Config struct or an error if validation fails.
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:    GetEnv("MACHINARCHY_LISTEN_ADDR", ":8080"),
@@ -219,6 +229,7 @@ func loadSSHTargetPolicy() (netpolicy.Policy, error) {
 	return netpolicy.Policy{AllowPrivate: allowPrivate, AllowLoopback: allowLoopback, Allow: allow, Deny: deny}, nil
 }
 
+// GetEnv retrieves the value of the environment variable named by the key. If the variable is present in the environment, its value is returned. Otherwise, it returns the provided default value if specified, or an empty string if no default is given.
 func GetEnv(key string, defaultVal ...string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -297,11 +308,11 @@ func (c *Config) validateDatabase() error {
 	return nil
 }
 
-// Consolidated numeric boundary validator parsing functions
-func parseNumericBounds(raw, key string, min int, allowZero bool) (int, error) {
+// parseNumericBounds parses a string as an integer and checks if it falls within the specified bounds. It returns the parsed integer or an error if the value is invalid.
+func parseNumericBounds(raw, key string, minValue int, allowZero bool) (int, error) {
 	val, err := strconv.Atoi(raw)
-	if err != nil || val < min {
-		if allowZero && min == 0 {
+	if err != nil || val < minValue {
+		if allowZero && minValue == 0 {
 			return 0, fmt.Errorf("%s must be a non-negative integer configurations constraint error", key)
 		}
 		return 0, fmt.Errorf("%s must evaluate as a positive integer above threshold parameters", key)

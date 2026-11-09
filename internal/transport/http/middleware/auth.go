@@ -60,7 +60,9 @@ func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
 
 			now := time.Now()
 			issuedAt := claims.IssuedAt.Time
-			if issuedAt.After(now.Add(allowedClockSkew)) || now.Sub(issuedAt) > maxTokenAge || claims.ExpiresAt.Time.Sub(issuedAt) > maxTokenLifespan {
+			if issuedAt.After(now.Add(allowedClockSkew)) ||
+				now.Sub(issuedAt) > maxTokenAge ||
+				claims.ExpiresAt.Sub(issuedAt) > maxTokenLifespan {
 				return unauthorized(c)
 			}
 			if claims.UserID <= 0 || claims.WorkspaceID <= 0 || strings.TrimSpace(claims.Username) == "" {
@@ -104,6 +106,9 @@ func authenticateAPIToken(c echo.Context, next echo.HandlerFunc, access domain.A
 	return next(c)
 }
 
+// RequirePermission returns middleware that enforces the specified permission
+// for the authenticated principal.
+// It rejects requests from principals that lack the required permission.
 func RequirePermission(permission domain.Permission) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -153,6 +158,9 @@ func unauthorized(c echo.Context) error {
 	return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid or expired authorization token"})
 }
 
+// Principal retrieves the authenticated principal from the Echo context.
+// It returns the principal and true if one is available, or a zero-value
+// principal and false otherwise.
 func Principal(c echo.Context) (domain.Principal, bool) {
 	principal, ok := c.Get("principal").(domain.Principal)
 	return principal, ok && principal.UserID > 0 && principal.WorkspaceID > 0

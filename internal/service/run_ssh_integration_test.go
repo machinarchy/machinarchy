@@ -45,12 +45,15 @@ func TestRunAgainstRealSSHServers(t *testing.T) {
 	var sent commandLog
 	echoing := func(_ context.Context, command string, out io.Writer) int {
 		sent.add(command)
-		fmt.Fprintf(out, "ran: %s", command)
+		if _, err := fmt.Fprintf(out, "ran: %s", command); err != nil {
+			return 1
+		}
+
 		return 0
 	}
 	failing := func(_ context.Context, command string, out io.Writer) int {
 		sent.add(command)
-		fmt.Fprint(out, "boom\x1b[31m red \x1b[0m\x00")
+		_, _ = fmt.Fprint(out, "boom\x1b[31m red \x1b[0m\x00")
 		return 3
 	}
 	hanging := func(ctx context.Context, command string, _ io.Writer) int {
@@ -166,8 +169,8 @@ func TestRunWithManyHostsAgainstRealServers(t *testing.T) {
 	const count = 12
 	var hostList []*domain.Host
 	for i := 1; i <= count; i++ {
-		server := sshtest.Start(t, sshtest.Options{Password: runSSHPassword, Exec: func(_ context.Context, command string, out io.Writer) int {
-			fmt.Fprint(out, "done")
+		server := sshtest.Start(t, sshtest.Options{Password: runSSHPassword, Exec: func(_ context.Context, _ string, out io.Writer) int {
+			_, _ = fmt.Fprint(out, "done")
 			return 0
 		}})
 		hostList = append(hostList, sshRunHost(i, "host-"+strconv.Itoa(100+i), server, server.Fingerprint))

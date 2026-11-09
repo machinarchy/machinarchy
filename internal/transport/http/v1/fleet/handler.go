@@ -1,3 +1,5 @@
+// Package fleet provides HTTP handlers and routes for fleet management
+// operations, including target management.
 package fleet
 
 import (
@@ -9,10 +11,12 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for fleet management operations.
 type Handler struct {
 	targets domain.TargetService
 }
 
+// NewHandler creates a fleet HTTP handler using the provided target service.
 func NewHandler(targets domain.TargetService) *Handler {
 	return &Handler{targets: targets}
 }

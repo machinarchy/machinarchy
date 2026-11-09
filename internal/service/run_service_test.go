@@ -34,13 +34,13 @@ func standardHosts() *runHosts {
 	)
 }
 
-func newRunSvc(t *testing.T, store *memRunStore, hosts *runHosts, runner *fakeRunner, policy domain.ExecutionPolicy, opts ...ServiceOption) RunManager {
+func newRunSvc(t *testing.T, store *memRunStore, hosts *runHosts, runner *fakeRunner, policy domain.ExecutionPolicy, opts ...Option) RunManager {
 	t.Helper()
 	capacity, err := NewSSHCapacity(32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all := append([]ServiceOption{WithCommandRunner(runner), WithRunTiming(20*time.Millisecond, 400*time.Millisecond)}, opts...)
+	all := append([]Option{WithCommandRunner(runner), WithRunTiming(20*time.Millisecond, 400*time.Millisecond)}, opts...)
 	svc, err := NewRunService(store, hosts, noEnvironments{}, capacity, policy, all...)
 	if err != nil {
 		t.Fatal(err)

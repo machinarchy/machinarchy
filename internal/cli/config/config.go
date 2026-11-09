@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -355,7 +356,14 @@ func (s *Store) save() error {
 		return fmt.Errorf("create temporary config: %w", err)
 	}
 	tempPath := file.Name()
-	defer os.Remove(tempPath)
+	defer func() {
+		if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("failed to remove temporary config file",
+				"path", tempPath,
+				"error", err,
+			)
+		}
+	}()
 
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()

@@ -14,32 +14,32 @@ type serviceOptions struct {
 	maxActiveRuns     int
 }
 
-// ServiceOption customizes service construction.
-type ServiceOption func(*serviceOptions)
+// Option customizes service construction.
+type Option func(*serviceOptions)
 
 // WithTargetPolicy sets the destination policy applied to every SSH dial. The
 // default is netpolicy.Default().
-func WithTargetPolicy(policy netpolicy.Policy) ServiceOption {
+func WithTargetPolicy(policy netpolicy.Policy) Option {
 	return func(o *serviceOptions) { o.targetPolicy = policy }
 }
 
 // WithCommandRunner replaces the SSH command runner used by runs (tests).
-func WithCommandRunner(runner CommandRunner) ServiceOption {
+func WithCommandRunner(runner CommandRunner) Option {
 	return func(o *serviceOptions) { o.commandRunner = runner }
 }
 
 // WithRunTiming sets how often an executing run renews its heartbeat and how
 // long a heartbeat may be missing before the run is considered abandoned.
-func WithRunTiming(heartbeatInterval, staleAfter time.Duration) ServiceOption {
+func WithRunTiming(heartbeatInterval, staleAfter time.Duration) Option {
 	return func(o *serviceOptions) { o.heartbeatInterval, o.staleAfter = heartbeatInterval, staleAfter }
 }
 
 // WithMaxActiveRuns bounds runs executing at once in this process.
-func WithMaxActiveRuns(limit int) ServiceOption {
+func WithMaxActiveRuns(limit int) Option {
 	return func(o *serviceOptions) { o.maxActiveRuns = limit }
 }
 
-func applyOptions(opts []ServiceOption) serviceOptions {
+func applyOptions(opts []Option) serviceOptions {
 	options := serviceOptions{
 		targetPolicy:      netpolicy.Default(),
 		heartbeatInterval: defaultHeartbeatInterval,

@@ -1,6 +1,38 @@
+# Version control and local tooling
 .git
+.githooks
+.github
+.golangci.yml
+
+# Local configuration and credentials
 .env
 .env.*
-bin
-data
+!.env.example
+*.pem
+*.key
+id_rsa*
+
+# Local build/test output
+bin/
+dist/
+dist-binaries/
 coverage.out
+*.test
+*.prof
+
+# Go workspace/cache and editor files
+.gocache/
+.go/
+.idea/
+.vscode/
+.DS_Store
+
+# Local databases and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Dependency/build caches
+node_modules/
+

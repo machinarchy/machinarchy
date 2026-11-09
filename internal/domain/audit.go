@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -181,7 +182,9 @@ func SanitizeAuditDetails(details map[string]string) (map[string]string, error) 
 // so no two different events can produce the same input.
 func ComputeAuditHash(prevHash, occurredAt string, e AuditEvent) string {
 	digest := sha256.New()
-	field := func(value string) { fmt.Fprintf(digest, "%d:%s|", len(value), value) }
+	field := func(value string) {
+		_, _ = digest.Write([]byte(strconv.Itoa(len(value)) + ":" + value + "|"))
+	}
 	field(prevHash)
 	field(fmt.Sprint(e.WorkspaceID))
 	field(occurredAt)

@@ -1,3 +1,5 @@
+// Package v1 provides version 1 of the Machinarchy HTTP API,
+// including its routes, handlers, and request/response types.
 package v1
 
 import (

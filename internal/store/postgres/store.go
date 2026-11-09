@@ -1,3 +1,4 @@
+// Package postgres implements the domain store interfaces for PostgreSQL, including user, host, job, environment, and metrics stores. It provides methods for creating, retrieving, updating, and deleting entities in a PostgreSQL database while handling encryption of sensitive data and audit logging.
 package postgres
 
 import (
@@ -6,17 +7,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/lib/pq"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
+// Store implements the domain store interfaces for PostgreSQL
 type Store struct {
 	db            *sql.DB
 	encryptionKey []byte
+	logger        *slog.Logger
 }
 
 var (
@@ -27,7 +32,8 @@ var (
 	_ domain.EnvironmentStore = (*Store)(nil)
 )
 
-func NewStore(db *sql.DB, secret string) (*Store, error) {
+// NewStore creates a new Store instance with the given PostgreSQL database handle, encryption secret, and logger. It derives an encryption key from the secret for encrypting sensitive data in the database.
+func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("PostgreSQL database handle is required")
 	}
@@ -35,9 +41,17 @@ func NewStore(db *sql.DB, secret string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("derive PostgreSQL credential encryption key: %w", err)
 	}
-	return &Store{db: db, encryptionKey: key}, nil
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{
+		db:            db,
+		encryptionKey: key,
+		logger:        logger,
+	}, nil
 }
 
+// CreateHost creates a new host in the database, encrypting its SSH credentials and validating its environment. It returns an error if the host already exists or if any database operation fails.
 func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	if host == nil || host.SSH == nil || host.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: host, workspace, and SSH access settings are required", domain.ErrInvalidInput)
@@ -58,7 +72,8 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return fmt.Errorf("begin create host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create host")
+
 	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
 		return err
 	}
@@ -95,10 +110,12 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	return nil
 }
 
+// GetHostByID retrieves a host by its ID, returning an error if the host does not exist or if any database operation fails.
 func (s *Store) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
 	return s.getHostByID(ctx, 0, id)
 }
 
+// GetHostByIDInWorkspace retrieves a host by its ID within a specific workspace, returning an error if the host does not exist or if any database operation fails.
 func (s *Store) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -154,6 +171,7 @@ func (s *Store) getHostByID(ctx context.Context, workspaceID, id int) (*domain.H
 	return &host, nil
 }
 
+// ListAllHosts lists all hosts in a workspace, returning an error if any database operation fails.
 func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -164,7 +182,7 @@ func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Ho
 	if err != nil {
 		return nil, fmt.Errorf("list PostgreSQL hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list hosts")
 
 	hosts := make([]*domain.Host, 0)
 	for rows.Next() {
@@ -188,6 +206,7 @@ func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Ho
 	return hosts, nil
 }
 
+// UpdateHostStatus updates the status of a host, returning an error if the host does not exist or if any database operation fails.
 func (s *Store) UpdateHostStatus(ctx context.Context, id string, status domain.HostStatus) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE hosts SET status = $1, updated_at = $2 WHERE id = $3`,
 		string(status), time.Now().UTC(), id)
@@ -197,6 +216,7 @@ func (s *Store) UpdateHostStatus(ctx context.Context, id string, status domain.H
 	return affected(result, domain.ErrHostNotFound)
 }
 
+// UpdateHostStatusWithGuard updates the status of a host only if its current status matches the expected status, returning an error if the host does not exist, if the current status does not match, or if any database operation fails.
 func (s *Store) UpdateHostStatusWithGuard(ctx context.Context, id int, expected, next domain.HostStatus) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE hosts SET status = $1, updated_at = $2
 		WHERE id = $3 AND status = $4`, string(next), time.Now().UTC(), strconv.Itoa(id), string(expected))
@@ -206,6 +226,7 @@ func (s *Store) UpdateHostStatusWithGuard(ctx context.Context, id int, expected,
 	return affected(result, domain.ErrConcurrentConflict)
 }
 
+// DeleteHost deletes a host from the database, returning an error if the host does not exist or if any database operation fails.
 func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -214,7 +235,7 @@ func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) erro
 	if err != nil {
 		return fmt.Errorf("begin delete host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "delete host")
 
 	var name, address string
 	err = tx.QueryRowContext(ctx, `SELECT name, ip_address FROM hosts WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
@@ -245,6 +266,7 @@ func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) erro
 	return nil
 }
 
+// UpdateHost updates a host in the database, returning an error if the host does not exist or if any database operation fails.
 func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if host == nil || host.SSH == nil || host.ID == "" || host.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: host ID, workspace, and SSH access settings are required", domain.ErrInvalidInput)
@@ -265,7 +287,8 @@ func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return fmt.Errorf("begin update host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "update host")
+
 	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
 		return err
 	}
@@ -348,6 +371,7 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &postgresErr) && postgresErr.Code == "23505"
 }
 
+// PatchHostLabels updates the labels of a host by applying a set of new labels and removing specified labels. It ensures that the workspace and host IDs are valid, applies the label changes, and records an audit event. The function returns the updated labels or an error if any operation fails.
 func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error) {
 	if workspaceID <= 0 || id <= 0 {
 		return nil, fmt.Errorf("%w: workspace and host IDs must be positive", domain.ErrInvalidInput)
@@ -359,7 +383,7 @@ func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set ma
 	if err != nil {
 		return nil, fmt.Errorf("begin label patch transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "label patch")
 
 	// FOR UPDATE serializes concurrent patches of the same host.
 	var raw []byte

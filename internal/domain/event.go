@@ -18,7 +18,10 @@ type HostReconnectedEvent struct {
 	Timestamp time.Time
 }
 
+// EventName returns the name of the HostReconnectedEvent.
 func (e HostReconnectedEvent) EventName() string { return "host.reconnected" }
+
+// OccurredAt returns the timestamp of when the event occurred, defaulting to the current time if not set.
 func (e HostReconnectedEvent) OccurredAt() time.Time {
 	if e.Timestamp.IsZero() {
 		return time.Now()
@@ -34,7 +37,10 @@ type HostCreatedEvent struct {
 	Timestamp     time.Time
 }
 
+// EventName returns the name of the HostCreatedEvent.
 func (e HostCreatedEvent) EventName() string { return "host.created" }
+
+// OccurredAt returns the timestamp of when the event occurred, defaulting to the current time if not set.
 func (e HostCreatedEvent) OccurredAt() time.Time {
 	if e.Timestamp.IsZero() {
 		return time.Now()
@@ -50,7 +56,10 @@ type JobCompletedEvent struct {
 	Timestamp time.Time
 }
 
+// EventName returns the name of the JobCompletedEvent.
 func (e JobCompletedEvent) EventName() string { return "job.completed" }
+
+// OccurredAt returns the timestamp of when the event occurred, defaulting to the current time if not set.
 func (e JobCompletedEvent) OccurredAt() time.Time {
 	if e.Timestamp.IsZero() {
 		return time.Now()

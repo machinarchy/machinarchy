@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	// Register the PostgreSQL driver with database/sql.
 	_ "github.com/lib/pq"
 )
 
+// Config holds the configuration for connecting to a PostgreSQL database.
 type Config struct {
 	PostgresURL     string
 	MaxOpenConns    int
@@ -18,6 +20,7 @@ type Config struct {
 	ConnectTimeout  time.Duration
 }
 
+// OpenDB opens a PostgreSQL database connection using the provided configuration.
 func OpenDB(cfg Config) (*sql.DB, error) {
 	dsn := strings.TrimSpace(cfg.PostgresURL)
 	if dsn == "" {

@@ -1,31 +1,56 @@
 #!/usr/bin/env bash
-set -e
+# Validate staged Go files using Bash features supported by macOS Bash 3.2.
+set -Eeuo pipefail
 
-echo "➡ Running go fmt..."
-if [ -n "$(gofmt -l .)" ]; then
-  echo "❌ go fmt failed. Fix formatting first."
-  gofmt -l .
+info() { printf '→ %s\n' "$1"; }
+success() { printf '✓ %s\n' "$1"; }
+error() { printf '✗ %s\n' "$1" >&2; }
+
+info "Running pre-commit checks for staged Go files..."
+
+staged_go_files=()
+while IFS= read -r -d '' file; do
+  staged_go_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go')
+
+if [[ ${#staged_go_files[@]} -eq 0 ]]; then
+  success "No staged Go files; skipping Go checks."
+  exit 0
+fi
+
+info "Checking gofmt..."
+unformatted="$(gofmt -l "${staged_go_files[@]}")"
+if [[ -n "$unformatted" ]]; then
+  error "The following staged Go files are not formatted:"
+  printf '%s\n' "$unformatted" | sed 's/^/  /' >&2
+  error "Run make fmt, stage the changes, and retry."
   exit 1
 fi
 
-echo "➡ Running go vet..."
-go vet ./...
+# Collect package directories and remove duplicates without associative arrays.
+package_dirs=()
+for file in "${staged_go_files[@]}"; do
+  dir="${file%/*}"
+  [[ "$dir" == "$file" ]] && dir="."
+  found=false
+  for existing in "${package_dirs[@]}"; do
+    if [[ "$existing" == "$dir" ]]; then
+      found=true
+      break
+    fi
+  done
+  [[ "$found" == true ]] || package_dirs+=("$dir")
+done
 
-if command -v staticcheck >/dev/null 2>&1; then
-  echo "➡ Running staticcheck..."
-  staticcheck ./...
-fi
+packages=()
+for dir in "${package_dirs[@]}"; do
+  packages+=("./$dir")
+done
 
-echo "➡ Running go test..."
-go test -v ./...
+info "Running go vet for staged packages..."
+go vet "${packages[@]}"
 
-# echo "➡ Running go build..."
-# go build ./...
+info "Running targeted tests for staged packages..."
+go test -timeout=30s -count=1 "${packages[@]}"
 
-# # Optional docker build test
-# if docker version >/dev/null 2>&1; then
-#   echo "➡ Checking Dockerfile builds..."
-#   docker build -q -f Dockerfile .
-# fi
-
-echo "✔ Pre-commit checks passed."
+success "Pre-commit checks passed."

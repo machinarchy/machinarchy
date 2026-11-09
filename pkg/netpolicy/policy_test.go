@@ -249,7 +249,12 @@ func TestDialContextDialsTheValidatedAddressOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DialContext() error = %v", err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("failed to close network connection error: %v", err)
+			}
+		}()
+
 		if got := resolver.calls.Load(); got != 1 {
 			t.Errorf("hostname resolved %d times, want exactly 1 (no re-resolution between check and dial)", got)
 		}

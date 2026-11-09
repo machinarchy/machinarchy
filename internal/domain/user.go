@@ -1,4 +1,3 @@
-// internal/domain/user.go
 package domain
 
 import (
@@ -12,12 +11,14 @@ import (
 // MaxWorkspaceMembers bounds a member listing.
 const MaxWorkspaceMembers = 1000
 
-var ErrUserAlreadyExists = errors.New("username or email is already registered")
+// Various errors returned by the user store and service.
+var (
+	ErrUserAlreadyExists  = errors.New("username or email is already registered")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+)
 
-var ErrUserNotFound = errors.New("user not found")
-
-var ErrInvalidCredentials = errors.New("invalid credentials")
-
+// User represents a user in the system.
 type User struct {
 	ID                int       `json:"id"`
 	WorkspaceID       int       `json:"-"`
@@ -30,6 +31,7 @@ type User struct {
 	CreatedAt         time.Time `json:"-"`
 }
 
+// JWTCustomClaims represents the custom claims used in JWT tokens for authentication.
 type JWTCustomClaims struct {
 	UserID      int    `json:"id"`
 	WorkspaceID int    `json:"workspace_id"`
@@ -37,12 +39,14 @@ type JWTCustomClaims struct {
 	jwt.RegisteredClaims
 }
 
+// UserResponse represents the public-facing user information returned in API responses.
 type UserResponse struct {
 	ID       int    `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email,omitempty"`
 }
 
+// UserStore defines the interface for user-related data operations.
 type UserStore interface {
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)

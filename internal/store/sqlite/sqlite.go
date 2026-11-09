@@ -1,3 +1,4 @@
+// Package sqlite provides a SQLite database store implementation for Machinarchy.
 package sqlite
 
 import (
@@ -5,24 +6,33 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/machinarchy/machinarchy/pkg/crypto"
+	// Import modernc.org/sqlite to register the SQLite database driver.
 	_ "modernc.org/sqlite"
 )
 
+// Config contains the settings required to open a SQLite database.
 type Config struct {
 	DatabasePath     string
 	EncryptionSecret string
 }
-type SQLiteStore struct {
+
+// Store provides SQLite-backed persistence for Machinarchy.
+type Store struct {
 	DB            *sql.DB
 	encryptionKey []byte
+	logger        *slog.Logger
 }
 
-func NewSQLiteStore(db *sql.DB, secret string) (*SQLiteStore, error) {
+// NewStore creates a Store using the provided database connection,
+// encryption secret, and logger.
+// It returns an error if the store cannot be initialized.
+func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("SQLite database handle is required")
 	}
@@ -30,9 +40,14 @@ func NewSQLiteStore(db *sql.DB, secret string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("derive SQLite credential encryption key: %w", err)
 	}
-	return &SQLiteStore{DB: db, encryptionKey: key}, nil
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{DB: db, encryptionKey: key, logger: logger}, nil
 }
 
+// OpenDB opens a SQLite database using the provided configuration.
+// It returns an error if the database cannot be opened or configured.
 func OpenDB(cfg Config) (*sql.DB, error) {
 	path := strings.TrimSpace(cfg.DatabasePath)
 	if path == "" {
@@ -72,6 +87,8 @@ func OpenDB(cfg Config) (*sql.DB, error) {
 	return db, nil
 }
 
+// Configure applies the required SQLite connection and database settings.
+// It returns an error if any configuration operation fails.
 func Configure(ctx context.Context, db *sql.DB) error {
 	for _, statement := range []string{
 		"PRAGMA foreign_keys = ON",
@@ -91,6 +108,8 @@ func Configure(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// SecureFile sets restrictive filesystem permissions on the specified database file.
+// It returns an error if the file permissions cannot be updated.
 func SecureFile(path string) error {
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {

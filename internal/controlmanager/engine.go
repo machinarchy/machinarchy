@@ -1,3 +1,4 @@
+// Package controlmanager implements the control plane engine for the Machinarchy system, responsible for managing host states, processing telemetry events, and coordinating with other components via an event-driven architecture.
 package controlmanager
 
 import (
@@ -12,17 +13,20 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
+// EventPublisher defines the interface for publishing and subscribing to events in the control manager's event-driven architecture.
 type EventPublisher interface {
 	Publish(ctx context.Context, subject string, payload interface{}) error
 	Subscribe(ctx context.Context, subject string, handler func(context.Context, []byte) error) error
 }
 
+// Engine represents the control manager engine that handles host state management, telemetry processing, and event coordination.
 type Engine struct {
 	hostStore domain.HostStore
 	publisher EventPublisher
 	ready     atomic.Bool
 }
 
+// NewEngine creates a new instance of the control manager engine with the provided host store and event publisher.
 func NewEngine(hostStore domain.HostStore, publisher EventPublisher) *Engine {
 	return &Engine{
 		hostStore: hostStore,
@@ -30,8 +34,10 @@ func NewEngine(hostStore domain.HostStore, publisher EventPublisher) *Engine {
 	}
 }
 
+// ReadinessName returns the name of the control manager engine for readiness checks.
 func (e *Engine) ReadinessName() string { return "control-manager" }
 
+// CheckReadiness verifies that the control manager engine is ready to process events and manage host states.
 func (e *Engine) CheckReadiness(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("readiness context is required")
@@ -88,6 +94,7 @@ func (e *Engine) HandleHostHeartbeat(ctx context.Context, hostID int) error {
 	return nil
 }
 
+// Start initializes the control manager engine, sets up event subscriptions, and runs background workers to process events and manage host states.
 func (e *Engine) Start(ctx context.Context) error {
 	if e == nil || e.publisher == nil {
 		return errors.New("control-manager event publisher is not configured")
@@ -99,6 +106,7 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	// Example: Subscribe to host reconnected events
 	err := e.publisher.Subscribe(ctx, "machinarchy.host.reconnected", func(c context.Context, data []byte) error {
+		_ = c // Use the context for tracing or cancellation if needed
 		var event domain.HostReconnectedEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("unmarshal host reconnected event: %w", err)

@@ -1,3 +1,4 @@
+// Package audit provides HTTP handlers and routes for audit-related API operations.
 package audit
 
 import (
@@ -10,10 +11,12 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for audit-related operations.
 type Handler struct {
 	service domain.AuditService
 }
 
+// NewHandler creates an audit HTTP handler using the provided audit service.
 func NewHandler(service domain.AuditService) *Handler {
 	return &Handler{service: service}
 }

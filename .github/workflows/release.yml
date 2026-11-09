@@ -1,0 +1,241 @@
+# Reusable Release Please workflow. The calling CI workflow is responsible for
+# running tests, linting, and database validation before invoking this file.
+name: Machinarchy Release Control Plane
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Do not create/update release PRs, tags, or GitHub Releases"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      new_release_published:
+        description: "Whether this run created a new GitHub Release"
+        value: ${{ jobs.release.outputs.new_release_published }}
+      new_release_version:
+        description: "Release version without the v prefix"
+        value: ${{ jobs.release.outputs.new_release_version }}
+      new_release_tag:
+        description: "Release Git tag"
+        value: ${{ jobs.release.outputs.new_release_tag }}
+    secrets:
+      MY_GITHUB_TOKEN:
+        description: "PAT or GitHub App token used by Release Please"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: machinarchy-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Evaluate and create release with Release Please
+    runs-on: ubuntu-24.04
+    # Write operations use the explicit MY_GITHUB_TOKEN secret. Keep the
+    # automatically generated GITHUB_TOKEN read-only.
+    permissions:
+      contents: read
+    outputs:
+      new_release_published: ${{ steps.release_please.outputs.release_created || 'false' }}
+      new_release_version: ${{ steps.release_please.outputs.version || '' }}
+      new_release_tag: ${{ steps.release_please.outputs.tag_name || '' }}
+      release_sha: ${{ steps.release_please.outputs.sha || '' }}
+      release_body: ${{ steps.release_please.outputs.body || '' }}
+    steps:
+      - name: Explain dry-run mode
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "::notice::dry_run=true: Release Please was not executed."
+          echo "No release PR, tag, GitHub Release, or asset will be created or changed."
+
+      - name: Run Release Please
+        id: release_please
+        if: ${{ !inputs.dry_run }}
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.MY_GITHUB_TOKEN }}
+          release-type: go
+          target-branch: main
+          # Do not set skip-github-release: true. We need Release Please to
+          # create the GitHub Release before the asset job can upload binaries.
+
+  publish-assets:
+    name: Build and upload release binaries
+    runs-on: ubuntu-24.04
+    needs: release
+    if: >-
+      ${{
+        !inputs.dry_run &&
+        needs.release.outputs.new_release_published == 'true'
+      }}
+    # gh uses MY_GITHUB_TOKEN for release edits/uploads; checkout only needs read.
+    permissions:
+      contents: read
+    steps:
+      - name: Validate release metadata
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
+          RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RELEASE_TAG" ]] || { echo "Missing Release Please tag output." >&2; exit 1; }
+          [[ -n "$RELEASE_SHA" ]] || { echo "Missing Release Please SHA output." >&2; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Unexpected release tag: $RELEASE_TAG" >&2
+            exit 1
+          }
+
+      - name: Checkout exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build CLI and agent binaries
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
+          RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-binaries
+          BUILD_TIME="$(git show -s --format=%cI "$RELEASE_SHA")"
+          LDFLAGS="-s -w -X main.Version=${RELEASE_TAG} -X main.Commit=${RELEASE_SHA} -X main.BuildTime=${BUILD_TIME}"
+
+          build_binary() {
+            local goos="$1" goarch="$2" package="$3" output="$4"
+            echo "Building ${output} (${goos}/${goarch})"
+            env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" \
+              -o "dist-binaries/${output}" "$package"
+          }
+
+          # Standalone controller / CLI binaries.
+          build_binary linux  amd64 ./cmd/machinarchy machinarchy-linux-amd64
+          build_binary linux  arm64 ./cmd/machinarchy machinarchy-linux-arm64
+          build_binary darwin amd64 ./cmd/machinarchy machinarchy-darwin-amd64
+          build_binary darwin arm64 ./cmd/machinarchy machinarchy-darwin-arm64
+
+          # Agent binaries (Linux targets).
+          build_binary linux amd64 ./cmd/agent machinarchy-agent-linux-amd64
+          build_binary linux arm64 ./cmd/agent machinarchy-agent-linux-arm64
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist-binaries
+          sha256sum machinarchy-* > checksums.txt
+          cat checksums.txt
+
+      - name: Generate release notes
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
+          RELEASE_BODY: ${{ needs.release.outputs.release_body }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > CUSTOM_RELEASE_NOTES.md <<'EOF'
+          # Machinarchy
+
+          Download the binary for your platform from the release assets.
+
+          ## Controller / CLI
+
+          | Platform | Architecture | Asset |
+          |---|---|---|
+          | Linux | AMD64 | machinarchy-linux-amd64 |
+          | Linux | ARM64 | machinarchy-linux-arm64 |
+          | macOS | Intel | machinarchy-darwin-amd64 |
+          | macOS | Apple Silicon | machinarchy-darwin-arm64 |
+
+          ## Agent
+
+          | Platform | Architecture | Asset |
+          |---|---|---|
+          | Linux | AMD64 | machinarchy-agent-linux-amd64 |
+          | Linux | ARM64 | machinarchy-agent-linux-arm64 |
+
+          ## Install
+
+          Download and unpack the asset for your OS and architecture, then install it:
+
+          ```bash
+          chmod +x machinarchy-linux-amd64
+          sudo install -m 0755 machinarchy-linux-amd64 /usr/local/bin/machinarchy
+          ```
+
+          ## Verify downloads
+
+          Linux:
+
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+
+          macOS:
+
+          ```bash
+          shasum -a 256 -c checksums.txt
+          ```
+
+          ## Changes
+          EOF
+
+          {
+            printf '\nRelease: %s\n\n' "$RELEASE_TAG"
+            printf '%s\n' '### Direct download links'
+            for asset in \
+              machinarchy-linux-amd64 \
+              machinarchy-linux-arm64 \
+              machinarchy-darwin-amd64 \
+              machinarchy-darwin-arm64 \
+              machinarchy-agent-linux-amd64 \
+              machinarchy-agent-linux-arm64 \
+              checksums.txt; do
+              printf -- '- [%s](https://github.com/%s/releases/download/%s/%s)\n' \
+                "$asset" "$REPOSITORY" "$RELEASE_TAG" "$asset"
+            done
+            printf '\n%s\n' "$RELEASE_BODY"
+          } >> CUSTOM_RELEASE_NOTES.md
+
+      - name: Update GitHub Release notes
+        env:
+          GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Machinarchy $RELEASE_TAG" \
+            --notes-file CUSTOM_RELEASE_NOTES.md
+
+      - name: Upload binaries and checksums
+        env:
+          GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            dist-binaries/* \
+            --clobber
+
+      - name: Attest release binaries
+        uses: actions/attest@v4
+        with:
+          subject-path: dist-binaries/machinarchy-*

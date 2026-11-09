@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Logging returns middleware that logs incoming HTTP requests and their
+// corresponding responses.
 func Logging() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

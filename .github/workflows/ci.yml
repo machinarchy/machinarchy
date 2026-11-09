@@ -5,54 +5,138 @@ on:
     branches: [main]
   pull_request:
 
+# Default-deny. Individual jobs grant only the permissions required by the
+# reusable workflow they call or the work they perform.
 permissions:
   contents: read
 
+# PR runs for the same PR supersede older PR runs. Push runs get unique groups
+# so a newer main push does not cancel an in-progress release evaluation.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  lint-and-audit:
+    name: Code quality and security analysis
+    uses: ./.github/workflows/template-lint.yml
+    permissions:
+      contents: read
+
   test:
-    runs-on: ubuntu-latest
+    name: Unit and PostgreSQL integration tests
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
         env:
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: machinarchy_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -U postgres -d machinarchy_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      MACHINARCHY_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      MACHINARCHY_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/machinarchy_test?sslmode=disable
       MACHINARCHY_REQUIRE_POSTGRES_TESTS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Download modules
-        run: go mod download
-      - name: Check formatting
-        run: |
-          unformatted="$(gofmt -l $(find cmd internal pkg docs -type f -name '*.go'))"
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:"; echo "$unformatted"; exit 1
-          fi
-      - name: Build
-        run: go build ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Test (race detector, SQLite and PostgreSQL)
-        run: go test -race -count=1 ./...
+          cache: true
+          cache-dependency-path: go.sum
 
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t machinarchy:ci .
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: make test
+
+  database-schema-validation:
+    name: PostgreSQL migration and schema validation
+    needs: [test, lint-and-audit]
+    uses: ./.github/workflows/template-db-validate.yml
+    permissions:
+      contents: read
+
+  # Build-only PR validation. The reusable workflow deliberately does not push,
+  # scan a registry artifact, or sign when docker_push=false.
+  docker-pr-verify:
+    name: Verify Docker build (no push)
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: database-schema-validation
+    uses: ./.github/workflows/template-docker.yml
+    permissions:
+      contents: read
+    with:
+      image_name: machinarchy
+      version: pr-${{ github.event.pull_request.number }}
+      registry: ghcr.io
+      organization: ${{ github.repository_owner }}
+      docker_push: false
+    secrets:
+      DOCKER_USERNAME: ""
+      DOCKER_PASSWORD: ""
+      
+  orchestrate-release:
+    name: Evaluate and create semantic release
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: database-schema-validation
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: read
+    secrets:
+      # Use a PAT or GitHub App token, not GITHUB_TOKEN, so Release Please's
+      # PR/tag events can trigger the downstream workflows you intend to run.
+      MY_GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+
+  docker-production-delivery:
+    name: Publish, scan, and sign production image
+    needs: orchestrate-release
+    if: >-
+      ${{
+        needs.orchestrate-release.result == 'success' &&
+        needs.orchestrate-release.outputs.new_release_published == 'true'
+      }}
+    uses: ./.github/workflows/template-docker.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+    with:
+      image_name: machinarchy
+      version: ${{ needs.orchestrate-release.outputs.new_release_version }}
+      registry: ghcr.io
+      organization: ${{ github.repository_owner }}
+      docker_push: true
+
+  # Notifications are opt-in. Uncomment and configure secrets when needed.
+  # notify:
+  #   name: Notify pipeline result
+  #   if: always()
+  #   needs:
+  #     - lint-and-audit
+  #     - test
+  #     - database-schema-validation
+  #     - orchestrate-release
+  #     - docker-production-delivery
+  #   uses: ./.github/workflows/template-notifications.yml
+  #   with:
+  #     telegram: true
+  #     status: >-
+  #       ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'FAILURE' || 'SUCCESS' }}
+  #     message: "Machinarchy CI pipeline finished."
+  #   secrets:
+  #     TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

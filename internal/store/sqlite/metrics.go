@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
-func (s *SQLiteStore) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent, memoryPercent float64) error {
+// SaveMetricPoint saves a new metric data point for a specific workspace, ensuring that the CPU and memory percentages are valid and within the range of 0 to 100. It also prunes older metric points to maintain a maximum of 1440 entries per workspace.
+func (s *Store) SaveMetricPoint(ctx context.Context, workspaceID int, cpuPercent, memoryPercent float64) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -22,7 +24,7 @@ func (s *SQLiteStore) SaveMetricPoint(ctx context.Context, workspaceID int, cpuP
 	if err != nil {
 		return fmt.Errorf("begin save metric transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "save metric")
 
 	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO metrics_history
@@ -39,7 +41,9 @@ func (s *SQLiteStore) SaveMetricPoint(ctx context.Context, workspaceID int, cpuP
 	return nil
 }
 
-func (s *SQLiteStore) GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]domain.DataPoint, error) {
+// GetStoredHistory retrieves historical data points for the specified workspace,
+// returning at most limit records. It returns an error if the query fails.
+func (s *Store) GetStoredHistory(ctx context.Context, workspaceID, limit int) ([]domain.DataPoint, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -53,7 +57,7 @@ func (s *SQLiteStore) GetStoredHistory(ctx context.Context, workspaceID, limit i
 	if err != nil {
 		return nil, fmt.Errorf("query metric history: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query metric history")
 
 	points := make([]domain.DataPoint, 0, limit)
 	for rows.Next() {

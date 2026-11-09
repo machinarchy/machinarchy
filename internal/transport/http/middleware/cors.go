@@ -7,6 +7,8 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// CORS returns middleware that configures Cross-Origin Resource Sharing (CORS)
+// using the specified allowed origins.
 func CORS(allowOrigins []string) echo.MiddlewareFunc {
 	return middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     allowOrigins,

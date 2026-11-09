@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 // auditExecer is satisfied by *sql.Tx, so an event is written by the same
@@ -89,7 +90,8 @@ func scanAuditEvent(row rowScanner) (domain.StoredAuditEvent, error) {
 	return stored, nil
 }
 
-func (s *SQLiteStore) ListAuditEvents(ctx context.Context, workspaceID int, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
+// ListAuditEvents retrieves a list of audit events for a specific workspace, applying optional filters such as action type and pagination, returning the events or an error if any database operation fails.
+func (s *Store) ListAuditEvents(ctx context.Context, workspaceID int, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
 	filter, err := domain.NormalizeAuditFilter(filter)
 	if err != nil {
 		return nil, err
@@ -111,7 +113,8 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, workspaceID int, filt
 	if err != nil {
 		return nil, fmt.Errorf("list audit events: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list audit events")
+
 	events := make([]domain.AuditEvent, 0, filter.Limit)
 	for rows.Next() {
 		stored, err := scanAuditEvent(rows)
@@ -123,7 +126,8 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, workspaceID int, filt
 	return events, rows.Err()
 }
 
-func (s *SQLiteStore) VerifyAuditChain(ctx context.Context, workspaceID int) (*domain.AuditVerification, error) {
+// VerifyAuditChain checks the integrity of the audit event chain for a specific workspace, returning a verification result or an error if any database operation fails.
+func (s *Store) VerifyAuditChain(ctx context.Context, workspaceID int) (*domain.AuditVerification, error) {
 	verifier := domain.NewAuditChainVerifier()
 	var after int64
 	for {
@@ -132,23 +136,22 @@ func (s *SQLiteStore) VerifyAuditChain(ctx context.Context, workspaceID int) (*d
 		if err != nil {
 			return nil, fmt.Errorf("read audit events for verification: %w", err)
 		}
+		defer utils.CloseRows(rows, s.logger, "query audit events for verification")
+
 		count := 0
 		for rows.Next() {
 			stored, err := scanAuditEvent(rows)
 			if err != nil {
-				rows.Close()
 				return nil, err
 			}
 			count++
 			after = stored.ID
 			if !verifier.Add(stored) {
-				rows.Close()
 				result := verifier.Result()
 				return &result, nil
 			}
 		}
 		err = rows.Err()
-		rows.Close()
 		if err != nil {
 			return nil, fmt.Errorf("iterate audit events: %w", err)
 		}

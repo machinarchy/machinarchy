@@ -78,13 +78,21 @@ var _ RunManager = (*runService)(nil)
 // NewRunService creates the run service and starts its recovery sweeper; call
 // Close to stop it.
 func NewRunService(runs domain.RunStore, hosts domain.HostStore, environments domain.EnvironmentStore,
-	sshLimit *SSHCapacity, execution domain.ExecutionPolicy, opts ...ServiceOption) (RunManager, error) {
+	sshLimit *SSHCapacity, execution domain.ExecutionPolicy, opts ...Option) (RunManager, error) {
 	if runs == nil || hosts == nil || environments == nil || sshLimit == nil {
 		return nil, errors.New("run service requires run, host, and environment stores and an SSH capacity limiter")
 	}
 	options := applyOptions(opts)
-	if options.heartbeatInterval <= 0 || options.staleAfter <= options.heartbeatInterval || options.maxActiveRuns < 1 {
+	if options.heartbeatInterval <= 0 ||
+		options.staleAfter <= options.heartbeatInterval ||
+		options.maxActiveRuns < 1 {
 		return nil, errors.New("run timing must have a positive heartbeat interval shorter than the stale timeout and allow at least one active run")
+	}
+	if int64(options.maxActiveRuns) > 1<<31-1 {
+		return nil, fmt.Errorf(
+			"max active runs exceeds int32 limit: %d",
+			options.maxActiveRuns,
+		)
 	}
 	runner := options.commandRunner
 	if runner == nil {
@@ -558,10 +566,11 @@ func (s *runService) runHost(ctx context.Context, run *domain.Run, target domain
 	release()
 
 	update := domain.RunHostUpdate{Output: domain.SanitizeOutput(output, domain.MaxRunHostOutputBytes)}
-	switch {
-	case runErr == nil:
+	switch runErr {
+	case nil:
 		zero := 0
 		update.Status, update.ExitCode = domain.RunHostSucceeded, &zero
+
 	default:
 		if code, ok := sshclient.ExitStatus(runErr); ok {
 			update.Status, update.ExitCode = domain.RunHostFailed, &code
@@ -569,9 +578,13 @@ func (s *runService) runHost(ctx context.Context, run *domain.Run, target domain
 		} else if ctx.Err() != nil {
 			stop := stopped()
 			update.Status, update.Error = stop.Status, stop.Error
-		} else if errors.Is(hostCtx.Err(), context.DeadlineExceeded) || errors.Is(runErr, context.DeadlineExceeded) {
+		} else if errors.Is(hostCtx.Err(), context.DeadlineExceeded) ||
+			errors.Is(runErr, context.DeadlineExceeded) {
 			update.Status = domain.RunHostTimedOut
-			update.Error = fmt.Sprintf("the command did not finish within %d seconds; it may still be running on the host", run.TimeoutSeconds)
+			update.Error = fmt.Sprintf(
+				"the command did not finish within %d seconds; it may still be running on the host",
+				run.TimeoutSeconds,
+			)
 		} else {
 			update.Status = domain.RunHostFailed
 			update.Error = sshFailureMessage(runErr, "execution failed")

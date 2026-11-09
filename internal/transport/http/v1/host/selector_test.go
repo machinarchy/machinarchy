@@ -50,7 +50,7 @@ func listHosts() []*domain.Host {
 	return []*domain.Host{mk(1, "web-01", "web", 1), mk(2, "web-02", "web", 2), mk(3, "db-01", "db", 1)}
 }
 
-func call(h *Handler, handler func(echo.Context) error, method, target, body string, params map[string]string) *httptest.ResponseRecorder {
+func call(_ *Handler, handler func(echo.Context) error, method, target, body string, params map[string]string) *httptest.ResponseRecorder {
 	e := echo.New()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

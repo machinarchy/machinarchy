@@ -40,8 +40,10 @@ func (e *ErrHostKeyUnknown) Error() string {
 	return fmt.Sprintf("untrusted host key matching %s presented from %s [Fingerprint: %s]", e.Algorithm, e.Host, e.Fingerprint)
 }
 
+// HostStatus represents the operational state of a managed host.
 type HostStatus string
 
+// HostStatus represents the operational state of a managed host.
 const (
 	HostStatusPending      HostStatus = "PENDING"
 	HostStatusActive       HostStatus = "ACTIVE"
@@ -49,15 +51,17 @@ const (
 	HostStatusDisconnected HostStatus = "DISCONNECTED"
 )
 
-// connection method
+// ConnectionMethod represents the method used to connect to a managed host.
 type ConnectionMethod string
 
+// Const defines the supported connection methods for managed hosts.
 const (
 	MethodSSH       ConnectionMethod = "SSH"
 	MethodAgentPull ConnectionMethod = "AGENT_PULL"
 	MethodAgentPush ConnectionMethod = "AGENT_PUSH"
 )
 
+// Host represents a managed target machine within a workspace and environment.
 type Host struct {
 	ID            string            `json:"id"`
 	WorkspaceID   int               `json:"-"`
@@ -72,6 +76,7 @@ type Host struct {
 	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
+// SSHAccess encapsulates the SSH connection configuration for a managed host.
 type SSHAccess struct {
 	Username string `json:"username"`
 	Port     int    `json:"port"`
@@ -83,13 +88,16 @@ type SSHAccess struct {
 	LastCheckMessage string      `json:"last_check_message,omitempty"`
 }
 
+// SSHAuthMethod defines the type of SSH authentication used for a host.
 type SSHAuthMethod string
 
+// Const defines the supported SSH authentication methods for managed hosts.
 const (
 	AuthTypePassword   SSHAuthMethod = "PASSWORD"
 	AuthTypePrivateKey SSHAuthMethod = "PRIVATE_KEY"
 )
 
+// ParseAuthType converts a string representation of an SSH authentication method
 func ParseAuthType(value string) (SSHAuthMethod, error) {
 	switch SSHAuthMethod(strings.ToUpper(strings.TrimSpace(value))) {
 	case AuthTypePassword:
@@ -101,6 +109,7 @@ func ParseAuthType(value string) (SSHAuthMethod, error) {
 	}
 }
 
+// SSHAuthType encapsulates the credentials and configuration for SSH authentication.
 type SSHAuthType struct {
 	Method              SSHAuthMethod `json:"-"`
 	Password            string        `json:"-"`
@@ -109,6 +118,7 @@ type SSHAuthType struct {
 	ExpectedFingerprint string        `json:"-"`
 }
 
+// SSHValidate checks the integrity and completeness of the SSH configuration for a host.
 func (h *Host) SSHValidate() error {
 	if h == nil {
 		return fmt.Errorf("%w: host is required", ErrInvalidInput)

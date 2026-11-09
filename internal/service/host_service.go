@@ -1,4 +1,3 @@
-// internal/service/host_service.go
 package service
 
 import (
@@ -34,10 +33,12 @@ type hostService struct {
 	policy    netpolicy.Policy
 }
 
+// EventPublisher defines the interface for publishing events to an external system.
 type EventPublisher interface {
 	Publish(ctx context.Context, subject string, payload interface{}) error
 }
 
+// SSHConnectionTester defines the interface for testing SSH connections.
 type SSHConnectionTester interface {
 	TestConnection(ctx context.Context, params sshclient.DialParams) error
 }
@@ -48,10 +49,12 @@ func (defaultSSHConnectionTester) TestConnection(ctx context.Context, params ssh
 	return sshclient.TestConnection(ctx, params)
 }
 
+// NewHostService constructs a host service with default SSH connection testing and capacity.
 func NewHostService(r domain.HostStore, publisher EventPublisher) HostService {
 	return NewHostServiceWithTester(r, publisher, defaultSSHConnectionTester{})
 }
 
+// NewHostServiceWithTester constructs a host service with a custom SSH connection tester.
 func NewHostServiceWithTester(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester) HostService {
 	return &hostService{
 		repo: r, publisher: publisher, sshTester: tester,
@@ -60,12 +63,12 @@ func NewHostServiceWithTester(r domain.HostStore, publisher EventPublisher, test
 }
 
 // NewHostServiceWithCapacity constructs a host service using a shared SSH bulkhead.
-func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
+func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity, opts ...Option) (HostService, error) {
 	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity, opts...)
 }
 
 // NewHostServiceWithTesterAndCapacity injects SSH verification and capacity ports.
-func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity, opts ...ServiceOption) (HostService, error) {
+func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity, opts ...Option) (HostService, error) {
 	if r == nil || tester == nil || capacity == nil {
 		return nil, errors.New("host service dependencies and SSH capacity are required")
 	}

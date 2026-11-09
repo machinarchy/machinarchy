@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Errors related to authorization and workspace membership.
 var (
 	ErrMembershipNotFound    = errors.New("workspace membership not found")
 	ErrPermissionDenied      = errors.New("permission denied")
@@ -14,16 +15,20 @@ var (
 	ErrLastOwner             = errors.New("a workspace must keep at least one owner")
 )
 
+// Role represents a user's role within a workspace.
 type Role string
 
+// Valid roles are "owner", "operator", and "reader".
 const (
 	RoleOwner    Role = "owner"
 	RoleOperator Role = "operator"
 	RoleReader   Role = "reader"
 )
 
+// Permission represents a specific action that can be performed within the system.
 type Permission string
 
+// Valid permissions are defined for inventory, operations, tokens, members, audit, and runs.
 const (
 	PermissionInventoryRead  Permission = "inventory:read"
 	PermissionInventoryWrite Permission = "inventory:write"
@@ -44,6 +49,7 @@ type Principal struct {
 	Username    string `json:"-"`
 }
 
+// Allows checks if the principal has the specified permission.
 func (r Role) Allows(permission Permission) bool {
 	switch r {
 	case RoleOwner:
@@ -60,6 +66,7 @@ func (r Role) Allows(permission Permission) bool {
 	}
 }
 
+// ValidRole checks if the provided role is one of the defined valid roles.
 func ValidRole(role Role) bool {
 	return role == RoleOwner || role == RoleOperator || role == RoleReader
 }
@@ -79,6 +86,7 @@ func EffectiveRole(credential, membership Role) Role {
 	return RoleOwner
 }
 
+// AccessStore defines the interface for managing workspace memberships and API tokens.
 type AccessStore interface {
 	GetWorkspaceRole(ctx context.Context, userID, workspaceID int) (Role, error)
 	ResolveAPIToken(ctx context.Context, tokenHash string) (*Principal, error)
@@ -87,6 +95,7 @@ type AccessStore interface {
 	RevokeAPIToken(ctx context.Context, id, userID, workspaceID int) error
 }
 
+// APIToken represents an API token associated with a user and workspace.
 type APIToken struct {
 	ID          int        `json:"id"`
 	UserID      int        `json:"-"`
@@ -99,11 +108,13 @@ type APIToken struct {
 	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
 }
 
+// IssuedAPIToken represents an API token that has been issued to a user, including the token string.
 type IssuedAPIToken struct {
 	APIToken
 	Token string `json:"token"`
 }
 
+// APITokenService defines the interface for managing API tokens, including creation, listing, and revocation.
 type APITokenService interface {
 	Create(ctx context.Context, principal Principal, name string, role Role, expiresInHours int) (*IssuedAPIToken, error)
 	List(ctx context.Context, principal Principal) ([]APIToken, error)

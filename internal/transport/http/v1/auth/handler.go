@@ -1,3 +1,5 @@
+// Package auth provides HTTP handlers and routes for authentication operations,
+// including registration, login, and session management.
 package auth
 
 import (
@@ -9,37 +11,45 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
+// Handler handles HTTP requests for authentication operations.
 type Handler struct {
 	authService   domain.AuthService
 	secureCookie  bool
 	signupEnabled bool
 }
 
+// NewHandler creates an authentication HTTP handler using the provided
+// authentication service and cookie and signup settings.
 func NewHandler(as domain.AuthService, secureCookie, signupEnabled bool) *Handler {
 	return &Handler{authService: as, secureCookie: secureCookie, signupEnabled: signupEnabled}
 }
 
+// SignUpRequest represents the payload required to register a new user.
 type SignUpRequest struct {
 	Username string `json:"username" binding:"required" example:"operator"`
 	Email    string `json:"email" example:"operator@example.com"`
 	Password string `json:"password" binding:"required" example:"use-a-secret-with-12+-bytes"`
 }
 
+// LoginRequest represents the credentials submitted during authentication.
 type LoginRequest struct {
 	Email    string `json:"email,omitempty" example:"operator@example.com"`
 	Username string `json:"username,omitempty" example:"operator"`
 	Password string `json:"password" binding:"required" example:"account-password"`
 }
 
+// ErrorResponse represents a standardized API error response.
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// MessageResponse represents a simple API response containing a message.
 type MessageResponse struct {
 	Message string `json:"message"`
 }
 
 func setAuthCookie(c echo.Context, token string, secure bool) {
+	// #nosec G124 -- Secure is controlled by the application's HTTPS configuration.
 	cookie := &http.Cookie{
 		Name:     "auth_token",
 		Value:    token,
@@ -49,10 +59,12 @@ func setAuthCookie(c echo.Context, token string, secure bool) {
 		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 	}
+
 	c.SetCookie(cookie)
 }
 
 func clearAuthCookie(c echo.Context, secure bool) {
+	// #nosec G124 -- Secure matches the application's HTTPS configuration.
 	cookie := &http.Cookie{
 		Name:     "auth_token",
 		Value:    "",
@@ -63,6 +75,7 @@ func clearAuthCookie(c echo.Context, secure bool) {
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	}
+
 	c.SetCookie(cookie)
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// Const defines the maximum limits for labels.
 const (
 	// MaxLabels is the most labels one host may carry.
 	MaxLabels = 50

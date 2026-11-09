@@ -24,6 +24,7 @@ type metricsService struct {
 	policy      netpolicy.Policy
 }
 
+// NewMetricsService constructs a metrics service with default SSH connection testing and capacity.
 func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.MetricsService {
 	return &metricsService{
 		metricStore: ms,
@@ -34,7 +35,7 @@ func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.Metri
 }
 
 // NewMetricsServiceWithCapacity constructs a metrics service sharing the process SSH bulkhead.
-func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity, opts ...ServiceOption) (domain.MetricsService, error) {
+func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity, opts ...Option) (domain.MetricsService, error) {
 	if ms == nil || hs == nil || capacity == nil {
 		return nil, errors.New("metrics service dependencies and SSH capacity are required")
 	}
@@ -96,11 +97,12 @@ func (s *metricsService) GetLiveDiagnostics(ctx context.Context, workspaceID, ho
 	}
 
 	var secretData string
-	if host.SSH.AuthType.Method == domain.AuthTypePrivateKey {
+	switch host.SSH.AuthType.Method {
+	case domain.AuthTypePrivateKey:
 		secretData = host.SSH.AuthType.PrivateKey
-	} else if host.SSH.AuthType.Method == domain.AuthTypePassword {
+	case domain.AuthTypePassword:
 		secretData = host.SSH.AuthType.Password
-	} else {
+	default:
 		return nil, fmt.Errorf("%w: host has no supported SSH authentication method", domain.ErrInvalidInput)
 	}
 

@@ -9,16 +9,20 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
+// GetUserByUsername retrieves a user by their username, returning an error if the user does not exist or if any database operation fails.
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return s.getUser(ctx, `WHERE username = $1`, strings.TrimSpace(username))
 }
 
+// GetUserByEmail retrieves a user by their email, returning an error if the user does not exist or if any database operation fails.
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return s.getUser(ctx, `WHERE email = $1`, strings.TrimSpace(email))
 }
 
+// GetUserByIdentifier retrieves a user by their username or email, returning an error if the user does not exist or if any database operation fails.
 func (s *Store) GetUserByIdentifier(ctx context.Context, identifier string) (*domain.User, error) {
 	return s.getUser(ctx, `WHERE username = $1 OR email = $1`, strings.TrimSpace(identifier))
 }
@@ -38,6 +42,7 @@ func (s *Store) getUser(ctx context.Context, predicate, value string) (*domain.U
 	return user, nil
 }
 
+// CreateUser creates a new user with the provided username, email, and password hash, returning the created user or an error if the operation fails.
 func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
 	username, email = strings.TrimSpace(username), strings.TrimSpace(email)
 	user := &domain.User{}
@@ -45,7 +50,8 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 	if err != nil {
 		return nil, fmt.Errorf("begin create user transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create user")
+
 	err = tx.QueryRowContext(ctx, `INSERT INTO users (username, email, password_hash)
 		VALUES ($1, NULLIF($2, ''), $3)
 		RETURNING id, username, COALESCE(email, ''), password_hash, created_at`,
@@ -84,12 +90,13 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 	return user, nil
 }
 
+// UpdateWorkspaceMemberRole updates the role of a user in a workspace, ensuring that the last owner cannot be demoted. It returns an error if the operation fails or if it would violate the ownership constraint.
 func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role domain.Role) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin member role transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "update member role")
 
 	// Lock the current owners (in a fixed order) so concurrent demotions are
 	// serialized and each one re-reads the committed owner set.
@@ -98,15 +105,15 @@ func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, user
 	if err != nil {
 		return fmt.Errorf("lock workspace owners: %w", err)
 	}
+	defer utils.CloseRows(rows, s.logger, "query workspace owners")
+
 	owners := 0
 	for rows.Next() {
 		owners++
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return fmt.Errorf("read workspace owners: %w", err)
 	}
-	rows.Close()
 
 	var current string
 	err = tx.QueryRowContext(ctx, `SELECT role FROM workspace_memberships
@@ -139,6 +146,7 @@ func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, user
 	return nil
 }
 
+// ListWorkspaceMembers retrieves all members of a workspace, returning a slice of WorkspaceMember or an error if the operation fails.
 func (s *Store) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]domain.WorkspaceMember, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT users.id, users.username, COALESCE(users.email, ''),
 		workspace_memberships.role, users.created_at
@@ -148,7 +156,6 @@ func (s *Store) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]do
 	if err != nil {
 		return nil, fmt.Errorf("list workspace members: %w", err)
 	}
-	defer rows.Close()
 	members := make([]domain.WorkspaceMember, 0)
 	for rows.Next() {
 		var member domain.WorkspaceMember
@@ -163,6 +170,7 @@ func (s *Store) ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]do
 	return members, nil
 }
 
+// CountWorkspaceOwners counts the number of owners in a workspace, returning the count or an error if the operation fails.
 func (s *Store) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspace_memberships
@@ -172,6 +180,7 @@ func (s *Store) CountWorkspaceOwners(ctx context.Context, workspaceID int) (int,
 	return count, nil
 }
 
+// SaveUserResetToken saves a password reset token and its expiration time for a user, returning an error if the operation fails.
 func (s *Store) SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE users SET reset_token = $1,
 		reset_token_expires = $2 WHERE username = $3`, token, expiresAt, username)
@@ -181,6 +190,7 @@ func (s *Store) SaveUserResetToken(ctx context.Context, username, token string, 
 	return affected(result, sql.ErrNoRows)
 }
 
+// UpdateUserPassword updates the password hash for a user, returning an error if the operation fails.
 func (s *Store) UpdateUserPassword(ctx context.Context, userID int, passwordHash string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = $1,
 		reset_token = NULL, reset_token_expires = NULL WHERE id = $2`, passwordHash, userID)

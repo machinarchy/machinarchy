@@ -1,0 +1,50 @@
+name: PostgreSQL validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-postgres:
+    name: Run PostgreSQL integration and schema checks
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: machinarchy_migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d machinarchy_migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/machinarchy_migration_test?sslmode=disable
+      MACHINARCHY_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/machinarchy_migration_test?sslmode=disable
+      MACHINARCHY_ENV: test
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      # Use the repository's declared Make target rather than assuming a
+      # migration engine, directory, or migration format that is not declared.
+      - name: Run PostgreSQL validation contract
+        run: make test-postgres

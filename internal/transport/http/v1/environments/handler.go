@@ -1,3 +1,4 @@
+// Package environments provides HTTP handlers and routes for environment management.
 package environments
 
 import (
@@ -11,10 +12,12 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for environment management operations.
 type Handler struct {
 	repo domain.EnvironmentStore
 }
 
+// NewHandler creates an environment HTTP handler using the provided environment store.
 func NewHandler(r domain.EnvironmentStore) *Handler {
 	return &Handler{repo: r}
 }

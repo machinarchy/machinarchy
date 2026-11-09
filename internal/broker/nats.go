@@ -1,3 +1,4 @@
+// Package broker provides an event broker implementation using NATS JetStream for event publishing and subscription with OpenTelemetry tracing support.
 package broker
 
 import (
@@ -18,13 +19,16 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// EventBroker manages event publishing and subscription.
 type EventBroker struct {
 	nc *nats.Conn
 	js nats.JetStreamContext
 }
 
+// ReadinessName returns the name of the component for readiness checks.
 func (b *EventBroker) ReadinessName() string { return "event-broker" }
 
+// CheckReadiness verifies that the NATS JetStream connection is established and the MACHINARCHY stream is available.
 func (b *EventBroker) CheckReadiness(ctx context.Context) error {
 	if b == nil || b.nc == nil || b.js == nil {
 		return errors.New("NATS JetStream is not initialized")
@@ -50,6 +54,7 @@ func (b *EventBroker) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
+// NewEventBroker creates a new EventBroker connected to the specified NATS server URL and ensures the MACHINARCHY stream exists with bounded retention.
 func NewEventBroker(natsURL string) (*EventBroker, error) {
 	nc, err := nats.Connect(natsURL,
 		nats.MaxReconnects(-1),
@@ -106,6 +111,7 @@ func compatibleBoundedStream(existing, required nats.StreamConfig) bool {
 		existing.MaxMsgs > 0 && existing.MaxMsgs <= required.MaxMsgs
 }
 
+// Publish publishes an event to the specified NATS subject with OpenTelemetry tracing and context propagation.
 func (b *EventBroker) Publish(ctx context.Context, subject string, payload interface{}) error {
 	if b == nil || b.js == nil {
 		return errors.New("NATS event broker is not initialized")
@@ -141,6 +147,7 @@ func (b *EventBroker) Publish(ctx context.Context, subject string, payload inter
 	return nil
 }
 
+// Subscribe subscribes to a NATS subject and invokes the provided handler for each received message, with OpenTelemetry tracing and context propagation.
 func (b *EventBroker) Subscribe(ctx context.Context, subject string, handler func(context.Context, []byte) error) error {
 	if b == nil || b.js == nil {
 		return errors.New("NATS event broker is not initialized")
@@ -191,6 +198,7 @@ func (b *EventBroker) Subscribe(ctx context.Context, subject string, handler fun
 	return nil
 }
 
+// Close closes the NATS connection.
 func (b *EventBroker) Close() {
 	if b != nil && b.nc != nil {
 		b.nc.Close()

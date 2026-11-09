@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
-func (s *SQLiteStore) CreateJob(ctx context.Context, job *domain.Job) error {
+// CreateJob inserts a new job into the database, returning an error if the job already exists or if any database operation fails.
+func (s *Store) CreateJob(ctx context.Context, job *domain.Job) error {
 	if job == nil || job.WorkspaceID <= 0 || job.HostID <= 0 {
 		return fmt.Errorf("%w: job, workspace, and positive host ID are required", domain.ErrInvalidInput)
 	}
@@ -45,7 +47,8 @@ func (s *SQLiteStore) CreateJob(ctx context.Context, job *domain.Job) error {
 	return nil
 }
 
-func (s *SQLiteStore) UpdateJobResult(ctx context.Context, id int, status, resultLog string) error {
+// UpdateJobResult updates the status and result log of an existing job in the database, returning an error if the job does not exist or if any database operation fails.
+func (s *Store) UpdateJobResult(ctx context.Context, id int, status, resultLog string) error {
 	result, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = ?, result_log = ?,
 		finished_at = ? WHERE id = ?`, status, resultLog,
 		time.Now().UTC().Format(time.RFC3339Nano), id)
@@ -55,7 +58,8 @@ func (s *SQLiteStore) UpdateJobResult(ctx context.Context, id int, status, resul
 	return requireRowsAffected(result, sql.ErrNoRows)
 }
 
-func (s *SQLiteStore) GetJobByID(ctx context.Context, workspaceID, id int) (*domain.Job, error) {
+// GetJobByID retrieves a job by its ID and workspace ID, returning the job or an error if not found or if any database operation fails.
+func (s *Store) GetJobByID(ctx context.Context, workspaceID, id int) (*domain.Job, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -81,7 +85,8 @@ func (s *SQLiteStore) GetJobByID(ctx context.Context, workspaceID, id int) (*dom
 	return &job, nil
 }
 
-func (s *SQLiteStore) ListJobs(ctx context.Context, filter domain.JobFilter) ([]*domain.Job, int, error) {
+// ListJobs retrieves a list of jobs for a specific workspace, applying optional filters such as host ID and pagination, returning the jobs and total count or an error if any database operation fails.
+func (s *Store) ListJobs(ctx context.Context, filter domain.JobFilter) ([]*domain.Job, int, error) {
 	if filter.WorkspaceID <= 0 || filter.Limit < 1 || filter.Limit > 100 || filter.Offset < 0 || filter.HostID < 0 {
 		return nil, 0, fmt.Errorf("%w: invalid job pagination filter", domain.ErrInvalidInput)
 	}
@@ -109,7 +114,7 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter domain.JobFilter) ([]
 	if err != nil {
 		return nil, 0, fmt.Errorf("list jobs: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list jobs")
 
 	jobs := make([]*domain.Job, 0)
 	for rows.Next() {

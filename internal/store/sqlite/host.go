@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 	sqliteDriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
+// CreateHost inserts a new host into the database, returning an error if the host already exists or if any database operation fails.
+func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	if host == nil || host.SSH == nil || host.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: host, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
@@ -44,7 +46,8 @@ func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return fmt.Errorf("begin create host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create host")
+
 	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
 		return err
 	}
@@ -90,18 +93,20 @@ func (s *SQLiteStore) CreateHost(ctx context.Context, host *domain.Host) error {
 	return nil
 }
 
-func (s *SQLiteStore) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
+// GetHostByID retrieves a host by its ID, returning the host or an error if not found or if any database operation fails.
+func (s *Store) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
 	return s.getHostByID(ctx, 0, id)
 }
 
-func (s *SQLiteStore) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+// GetHostByIDInWorkspace retrieves a host by its ID and workspace ID, returning the host or an error if not found or if any database operation fails.
+func (s *Store) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
 	return s.getHostByID(ctx, workspaceID, id)
 }
 
-func (s *SQLiteStore) getHostByID(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
+func (s *Store) getHostByID(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
 	query := `SELECT id, workspace_id, environment_id, name, hostname, ip_address, connection,
 		labels, port, username, password, private_key, passphrase,
 		expected_fingerprint, status, created_at, updated_at
@@ -160,7 +165,8 @@ func (s *SQLiteStore) getHostByID(ctx context.Context, workspaceID, id int) (*do
 	return &host, nil
 }
 
-func (s *SQLiteStore) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
+// ListAllHosts retrieves a list of all hosts for a specific workspace, returning the hosts or an error if any database operation fails.
+func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -171,7 +177,7 @@ func (s *SQLiteStore) ListAllHosts(ctx context.Context, workspaceID int) ([]*dom
 	if err != nil {
 		return nil, fmt.Errorf("list hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list hosts")
 
 	hosts := make([]*domain.Host, 0)
 	for rows.Next() {
@@ -206,7 +212,8 @@ func (s *SQLiteStore) ListAllHosts(ctx context.Context, workspaceID int) ([]*dom
 	return hosts, nil
 }
 
-func (s *SQLiteStore) UpdateHostStatus(ctx context.Context, id string, status domain.HostStatus) error {
+// UpdateHostStatus updates the status of a host, returning an error if the host is not found or if any database operation fails.
+func (s *Store) UpdateHostStatus(ctx context.Context, id string, status domain.HostStatus) error {
 	result, err := s.DB.ExecContext(ctx,
 		`UPDATE hosts SET status = ?, updated_at = ? WHERE id = ?`,
 		string(status), time.Now().UTC().Format(time.RFC3339Nano), id,
@@ -217,7 +224,8 @@ func (s *SQLiteStore) UpdateHostStatus(ctx context.Context, id string, status do
 	return requireRowsAffected(result, domain.ErrHostNotFound)
 }
 
-func (s *SQLiteStore) UpdateHostStatusWithGuard(ctx context.Context, id int, expected, next domain.HostStatus) error {
+// UpdateHostStatusWithGuard updates the status of a host only if its current status matches the expected value, returning an error if the host is not found, if the current status does not match, or if any database operation fails.
+func (s *Store) UpdateHostStatusWithGuard(ctx context.Context, id int, expected, next domain.HostStatus) error {
 	result, err := s.DB.ExecContext(ctx,
 		`UPDATE hosts SET status = ?, updated_at = ? WHERE id = ? AND status = ?`,
 		string(next), time.Now().UTC().Format(time.RFC3339Nano), strconv.Itoa(id), string(expected),
@@ -228,7 +236,8 @@ func (s *SQLiteStore) UpdateHostStatusWithGuard(ctx context.Context, id int, exp
 	return requireRowsAffected(result, domain.ErrConcurrentConflict)
 }
 
-func (s *SQLiteStore) DeleteHost(ctx context.Context, workspaceID int, id string) error {
+// DeleteHost removes a host from the database, returning an error if the host is not found or if any database operation fails.
+func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
@@ -236,7 +245,7 @@ func (s *SQLiteStore) DeleteHost(ctx context.Context, workspaceID int, id string
 	if err != nil {
 		return fmt.Errorf("begin delete host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "delete host")
 
 	var name, address string
 	err = tx.QueryRowContext(ctx, `SELECT name, ip_address FROM hosts WHERE id = ? AND workspace_id = ?`,
@@ -267,7 +276,8 @@ func (s *SQLiteStore) DeleteHost(ctx context.Context, workspaceID int, id string
 	return nil
 }
 
-func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
+// UpdateHost updates an existing host in the database, returning an error if the host does not exist or if any database operation fails.
+func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if host == nil || host.SSH == nil || host.ID == "" || host.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: host ID, workspace, and SSH access settings are required", domain.ErrInvalidInput)
 	}
@@ -288,7 +298,8 @@ func (s *SQLiteStore) UpdateHost(ctx context.Context, host *domain.Host) error {
 	if err != nil {
 		return fmt.Errorf("begin update host transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "update host")
+
 	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
 		return err
 	}
@@ -345,7 +356,7 @@ func validateHostEnvironment(ctx context.Context, tx *sql.Tx, workspaceID, envir
 	return nil
 }
 
-func (s *SQLiteStore) encryptCredentials(auth domain.SSHAuthType) (password, privateKey, passphrase string, err error) {
+func (s *Store) encryptCredentials(auth domain.SSHAuthType) (password, privateKey, passphrase string, err error) {
 	if password, err = crypto.Encrypt(auth.Password, s.encryptionKey); err != nil {
 		return "", "", "", fmt.Errorf("encrypt host password: %w", err)
 	}
@@ -375,7 +386,8 @@ func isUniqueConstraint(err error) bool {
 		(sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
 }
 
-func (s *SQLiteStore) PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error) {
+// PatchHostLabels updates the labels of a host, returning the updated labels or an error if any database operation fails.
+func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error) {
 	if workspaceID <= 0 || id <= 0 {
 		return nil, fmt.Errorf("%w: workspace and host IDs must be positive", domain.ErrInvalidInput)
 	}
@@ -388,7 +400,7 @@ func (s *SQLiteStore) PatchHostLabels(ctx context.Context, workspaceID, id int, 
 	if err != nil {
 		return nil, fmt.Errorf("begin label patch transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "patch host labels")
 
 	var raw []byte
 	err = tx.QueryRowContext(ctx, `SELECT labels FROM hosts WHERE id = ? AND workspace_id = ?`,

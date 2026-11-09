@@ -1,3 +1,4 @@
+// Package commands provides configuration parsing and validation for the application.
 package commands
 
 import (

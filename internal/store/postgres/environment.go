@@ -7,8 +7,10 @@ import (
 	"fmt"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
+// CreateEnvironment creates a new environment record in the database.
 func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Environment) error {
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
@@ -25,6 +27,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 	return nil
 }
 
+// GetEnvironmentByID retrieves an environment by its ID and workspace ID.
 func (s *Store) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*domain.Environment, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -42,6 +45,7 @@ func (s *Store) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*d
 	return environment, nil
 }
 
+// ListEnvironments retrieves all environments for a given workspace ID.
 func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domain.Environment, error) {
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
@@ -51,7 +55,7 @@ func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domai
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list environments")
 
 	environments := make([]*domain.Environment, 0)
 	for rows.Next() {
@@ -68,6 +72,7 @@ func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domai
 	return environments, nil
 }
 
+// UpdateEnvironment updates an existing environment record in the database.
 func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
@@ -84,6 +89,7 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 	return affected(result, domain.ErrEnvironmentNotFound)
 }
 
+// DeleteEnvironment deletes an environment record from the database.
 func (s *Store) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)

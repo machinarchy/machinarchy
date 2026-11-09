@@ -1,3 +1,5 @@
+// Package host provides HTTP handlers and routes for host management,
+// including host operations, job associations, and host selection.
 package host
 
 import (
@@ -12,6 +14,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for host management operations.
 type Handler struct {
 	hosts        domain.HostStore
 	jobs         domain.JobStore
@@ -19,11 +22,13 @@ type Handler struct {
 	service      service.HostService
 }
 
+// NewHandler creates a host HTTP handler using the provided stores and host service.
 func NewHandler(hosts domain.HostStore, jobs domain.JobStore, environments domain.EnvironmentStore, hostService service.HostService) *Handler {
 	return &Handler{hosts: hosts, jobs: jobs, environments: environments, service: hostService}
 }
 
-type HostPayload struct {
+// Payload represents the data accepted when creating or updating a host.
+type Payload struct {
 	EnvironmentID       int               `json:"environmentId" example:"1"`
 	Name                string            `json:"name" binding:"required" example:"web-01"`
 	Hostname            string            `json:"hostname,omitempty" example:"web-01.example.com"`
@@ -38,7 +43,8 @@ type HostPayload struct {
 	ExpectedFingerprint string            `json:"expectedFingerprint" binding:"required" example:"SHA256:..."`
 }
 
-type HostJobsResponse struct {
+// JobsResponse represents the response containing a host and its associated jobs.
+type JobsResponse struct {
 	HostID int           `json:"hostId"`
 	Data   []*domain.Job `json:"data"`
 	Total  int           `json:"total"`
@@ -53,7 +59,7 @@ type HostJobsResponse struct {
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body HostPayload true "Host connection details; provide either ip or hostname. SecretData is the SSH password or private key and is never returned."
+// @Param request body Payload true "Host connection details; provide either ip or hostname. SecretData is the SSH password or private key and is never returned."
 // @Success 201 {object} domain.Host
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -66,7 +72,7 @@ func (h *Handler) Create(c echo.Context) error {
 	if !ok {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	}
-	var payload HostPayload
+	var payload Payload
 	if err := c.Bind(&payload); err != nil {
 		return badRequest(c, "invalid request body")
 	}
@@ -194,7 +200,7 @@ func (h *Handler) PatchLabels(c echo.Context) error {
 // @Produce json
 // @Security BearerAuth
 // @Param id path int true "Host ID"
-// @Param request body HostPayload true "Updated host details"
+// @Param request body Payload true "Updated host details"
 // @Success 200 {object} domain.Host
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -210,7 +216,7 @@ func (h *Handler) Update(c echo.Context) error {
 	if err != nil || id < 1 {
 		return badRequest(c, "invalid host ID")
 	}
-	var payload HostPayload
+	var payload Payload
 	if err := c.Bind(&payload); err != nil {
 		return badRequest(c, "invalid request body")
 	}
@@ -278,7 +284,7 @@ func (h *Handler) Delete(c echo.Context) error {
 // @Param id path int true "Host ID"
 // @Param limit query int false "Page size (1-100)" default(10)
 // @Param offset query int false "Number of rows to skip" default(0)
-// @Success 200 {object} HostJobsResponse
+// @Success 200 {object} JobsResponse
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
 // @Failure 500 {object} map[string]string
@@ -309,14 +315,14 @@ func (h *Handler) ListJobsForHost(c echo.Context) error {
 	if err != nil {
 		return internalError(c)
 	}
-	return c.JSON(http.StatusOK, HostJobsResponse{
+	return c.JSON(http.StatusOK, JobsResponse{
 		HostID: hostID, Data: jobs, Total: total, Limit: limit, Offset: offset,
 	})
 }
 
 // BulkHostsRequest is the body of a bulk registration request.
 type BulkHostsRequest struct {
-	Hosts []HostPayload `json:"hosts"`
+	Hosts []Payload `json:"hosts"`
 	// ValidateOnly checks records and duplicates without contacting hosts or
 	// storing anything.
 	ValidateOnly bool `json:"validate_only,omitempty"`
@@ -386,7 +392,7 @@ func (h *Handler) BulkCreate(c echo.Context) error {
 	return c.JSON(http.StatusOK, res)
 }
 
-func (p HostPayload) host(id string) (*domain.Host, error) {
+func (p Payload) host(id string) (*domain.Host, error) {
 	name := strings.TrimSpace(p.Name)
 	address := strings.TrimSpace(p.IP)
 	if address == "" {

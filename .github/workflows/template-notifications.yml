@@ -1,0 +1,220 @@
+name: Reusable CI notifications
+
+on:
+  workflow_call:
+    inputs:
+      slack:
+        description: "Send a Slack notification"
+        required: false
+        type: boolean
+        default: false
+      telegram:
+        description: "Send a Telegram notification"
+        required: false
+        type: boolean
+        default: false
+      email:
+        description: "Send an email notification"
+        required: false
+        type: boolean
+        default: false
+      discord:
+        description: "Send a Discord notification"
+        required: false
+        type: boolean
+        default: false
+      teams:
+        description: "Send a Microsoft Teams webhook notification"
+        required: false
+        type: boolean
+        default: false
+      status:
+        description: "Pipeline status text"
+        required: true
+        type: string
+      message:
+        description: "Optional additional context"
+        required: false
+        type: string
+        default: ""
+      EMAIL_SERVER_ADDRESS:
+        required: false
+        type: string
+        default: smtp.gmail.com
+      EMAIL_SERVER_PORT:
+        required: false
+        type: number
+        default: 587
+    secrets:
+      SLACK_TOKEN:
+        required: false
+      SLACK_CHANNEL:
+        required: false
+      TELEGRAM_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+      EMAIL_USERNAME:
+        required: false
+      EMAIL_PASSWORD:
+        required: false
+      EMAIL_TO:
+        required: false
+      DISCORD_WEBHOOK:
+        required: false
+      TEAMS_WEBHOOK:
+        required: false
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Send configured notifications
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate selected notification configuration
+        id: validate
+        env:
+          SLACK_ENABLED: ${{ inputs.slack }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          TELEGRAM_ENABLED: ${{ inputs.telegram }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_ENABLED: ${{ inputs.email }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          DISCORD_ENABLED: ${{ inputs.discord }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TEAMS_ENABLED: ${{ inputs.teams }}
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          require_value() {
+            local label="$1" value="$2"
+            [[ -n "$value" ]] || { echo "::error::Missing secret/configuration: ${label}"; exit 1; }
+          }
+          if [[ "$SLACK_ENABLED" == "true" ]]; then
+            require_value SLACK_TOKEN "$SLACK_TOKEN"
+            require_value SLACK_CHANNEL "$SLACK_CHANNEL"
+          fi
+          if [[ "$TELEGRAM_ENABLED" == "true" ]]; then
+            require_value TELEGRAM_TOKEN "$TELEGRAM_TOKEN"
+            require_value TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID"
+          fi
+          if [[ "$EMAIL_ENABLED" == "true" ]]; then
+            require_value EMAIL_USERNAME "$EMAIL_USERNAME"
+            require_value EMAIL_PASSWORD "$EMAIL_PASSWORD"
+            require_value EMAIL_TO "$EMAIL_TO"
+          fi
+          if [[ "$DISCORD_ENABLED" == "true" ]]; then
+            require_value DISCORD_WEBHOOK "$DISCORD_WEBHOOK"
+          fi
+          if [[ "$TEAMS_ENABLED" == "true" ]]; then
+            require_value TEAMS_WEBHOOK "$TEAMS_WEBHOOK"
+          fi
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+      - name: Compose notification message
+        id: compose
+        env:
+          INPUT_STATUS: ${{ inputs.status }}
+          INPUT_NOTE: ${{ inputs.message }}
+          EVENT_COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title || '' }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${SHA:0:7}"
+          delimiter="MSG_$(openssl rand -hex 16)"
+          {
+            printf 'message<<%s\n' "$delimiter"
+            printf 'Machinarchy CI/CD notification\n'
+            printf 'Status: %s\n' "$INPUT_STATUS"
+            printf 'Repository: %s\n' "$REPOSITORY"
+            printf 'Branch/tag: %s\n' "$REF_NAME"
+            printf 'Commit: %s\n' "$short_sha"
+            printf 'Commit/PR title: %s\n' "${EVENT_COMMIT_MESSAGE%%$'\n'*}"
+            printf 'Actor: %s\n' "$ACTOR"
+            printf 'Run: %s/%s/actions/runs/%s\n' "$SERVER_URL" "$REPOSITORY" "$RUN_ID"
+            if [[ -n "$INPUT_NOTE" ]]; then
+              printf '\nAdditional context:\n%s\n' "$INPUT_NOTE"
+            fi
+            printf '%s\n' "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send Slack notification
+        if: ${{ !cancelled() && steps.validate.outputs.valid == 'true' && steps.compose.outcome == 'success' && inputs.slack }}
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          MESSAGE: ${{ steps.compose.outputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -n --arg channel "$SLACK_CHANNEL" --arg text "$MESSAGE" '{channel:$channel,text:$text}')"
+          response="$(curl --fail-with-body --silent --show-error --retry 3 \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$payload" https://slack.com/api/chat.postMessage)"
+          jq -e '.ok == true' <<< "$response" >/dev/null
+
+      - name: Send Telegram notification
+        if: ${{ !cancelled() && steps.validate.outputs.valid == 'true' && steps.compose.outcome == 'success' && inputs.telegram }}
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MESSAGE: ${{ steps.compose.outputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$MESSAGE" \
+            '{chat_id:$chat_id,text:$text,disable_web_page_preview:true}')"
+          response="$(curl --fail-with-body --silent --show-error --retry 3 \
+            -H 'Content-Type: application/json' \
+            --data "$payload" "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage")"
+          jq -e '.ok == true' <<< "$response" >/dev/null
+
+      - name: Send email notification
+        if: ${{ !cancelled() && steps.validate.outputs.valid == 'true' && steps.compose.outcome == 'success' && inputs.email }}
+        uses: dawidd6/action-send-mail@v23
+        with:
+          server_address: ${{ inputs.EMAIL_SERVER_ADDRESS }}
+          server_port: ${{ inputs.EMAIL_SERVER_PORT }}
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Machinarchy CI/CD: ${{ inputs.status }}"
+          body: ${{ steps.compose.outputs.message }}
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+
+      - name: Send Discord notification
+        if: ${{ !cancelled() && steps.validate.outputs.valid == 'true' && steps.compose.outcome == 'success' && inputs.discord }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MESSAGE: ${{ steps.compose.outputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -n --arg content "$MESSAGE" '{content:$content}')"
+          curl --fail-with-body --silent --show-error --retry 3 \
+            -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK"
+
+      - name: Send Microsoft Teams notification
+        if: ${{ !cancelled() && steps.validate.outputs.valid == 'true' && steps.compose.outcome == 'success' && inputs.teams }}
+        env:
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+          MESSAGE: ${{ steps.compose.outputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -n --arg text "$MESSAGE" '{text:$text}')"
+          curl --fail-with-body --silent --show-error --retry 3 \
+            -H 'Content-Type: application/json' --data "$payload" "$TEAMS_WEBHOOK"

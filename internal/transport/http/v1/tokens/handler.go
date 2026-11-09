@@ -1,3 +1,4 @@
+// Package tokens provides HTTP handlers and routes for API token management.
 package tokens
 
 import (
@@ -11,16 +12,19 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
+// Handler handles HTTP requests for API token management operations.
 type Handler struct {
 	service domain.APITokenService
 }
 
+// CreateRequest represents the payload required to create an API token.
 type CreateRequest struct {
 	Name           string `json:"name" example:"ci-deploy"`
 	Role           string `json:"role" enums:"operator,reader" example:"reader"`
 	ExpiresInHours int    `json:"expiresInHours,omitempty" example:"720"`
 }
 
+// NewHandler creates an API token HTTP handler using the provided token service.
 func NewHandler(service domain.APITokenService) *Handler {
 	return &Handler{service: service}
 }

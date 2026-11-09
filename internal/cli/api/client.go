@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -124,7 +125,11 @@ func (c *HTTPClient) get(ctx context.Context, endpoint string, destination any) 
 	if err != nil {
 		return fmt.Errorf("request %s: %w", endpoint, err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			slog.Warn("failed to close HTTP response body", "error", err)
+		}
+	}()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {

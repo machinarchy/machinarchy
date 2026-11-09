@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
-var _ domain.RunStore = (*SQLiteStore)(nil)
+var _ domain.RunStore = (*Store)(nil)
 
 // runTimeLayout is fixed-width UTC text, so run timestamps compare correctly as strings.
 const runTimeLayout = "2006-01-02T15:04:05.000000000Z"
@@ -55,7 +56,7 @@ const runColumns = `r.id, r.workspace_id, r.status, r.created_by_user_id, r.crea
 	r.argv_encrypted, r.argv_sha256, r.timeout_seconds, r.concurrency, r.targets_hash, r.rule,
 	r.cancel_requested, r.heartbeat_at`
 
-func (s *SQLiteStore) scanRun(row rowScanner, extra ...any) (*domain.Run, error) {
+func (s *Store) scanRun(row rowScanner, extra ...any) (*domain.Run, error) {
 	var run domain.Run
 	var status, createdAt, heartbeat, argvEncrypted, rule string
 	var started, finished sql.NullString
@@ -86,7 +87,9 @@ func (s *SQLiteStore) scanRun(row rowScanner, extra ...any) (*domain.Run, error)
 	return &run, nil
 }
 
-func (s *SQLiteStore) CreateRun(ctx context.Context, run *domain.Run) error {
+// CreateRun persists a new run in the SQLite database.
+// It returns an error if the run cannot be created.
+func (s *Store) CreateRun(ctx context.Context, run *domain.Run) error {
 	if run == nil || run.WorkspaceID <= 0 || run.Program == "" || len(run.Argv) == 0 || len(run.Hosts) == 0 {
 		return fmt.Errorf("%w: invalid run record", domain.ErrInvalidInput)
 	}
@@ -108,7 +111,8 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *domain.Run) error {
 	if err != nil {
 		return fmt.Errorf("begin create run transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "create run")
+
 	result, err := tx.ExecContext(ctx, `INSERT INTO runs (workspace_id, status, created_by_user_id,
 		created_by_username, created_by_token_id, created_at, program, arg_count, argv_encrypted, argv_sha256,
 		timeout_seconds, concurrency, targets_hash, rule, heartbeat_at)
@@ -149,7 +153,9 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *domain.Run) error {
 	return nil
 }
 
-func (s *SQLiteStore) GetRun(ctx context.Context, workspaceID int, id int64) (*domain.Run, error) {
+// GetRun retrieves a run by its ID within the specified workspace.
+// It returns an error if the run cannot be found or the query fails.
+func (s *Store) GetRun(ctx context.Context, workspaceID int, id int64) (*domain.Run, error) {
 	run, err := s.scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runColumns+` FROM runs r
 		WHERE r.id = ? AND r.workspace_id = ?`, id, workspaceID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -163,7 +169,8 @@ func (s *SQLiteStore) GetRun(ctx context.Context, workspaceID int, id int64) (*d
 	if err != nil {
 		return nil, fmt.Errorf("read run hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query run hosts")
+
 	for rows.Next() {
 		var host domain.RunHost
 		var status string
@@ -207,7 +214,9 @@ func addToCounts(counts *domain.RunCounts, status domain.RunHostStatus) {
 	}
 }
 
-func (s *SQLiteStore) ListRuns(ctx context.Context, workspaceID int, filter domain.RunFilter) ([]domain.Run, error) {
+// ListRuns retrieves runs for the specified workspace that match the given filter.
+// It returns an error if the query fails.
+func (s *Store) ListRuns(ctx context.Context, workspaceID int, filter domain.RunFilter) ([]domain.Run, error) {
 	filter, err := domain.NormalizeRunFilter(filter)
 	if err != nil {
 		return nil, err
@@ -215,6 +224,7 @@ func (s *SQLiteStore) ListRuns(ctx context.Context, workspaceID int, filter doma
 	count := func(status domain.RunHostStatus) string {
 		return `COALESCE(SUM(CASE WHEN h.status = '` + string(status) + `' THEN 1 ELSE 0 END), 0)`
 	}
+	// #nosec G202 -- count() generates fixed application-controlled SQL expressions.
 	query := `SELECT r.id, r.workspace_id, r.status, r.created_by_user_id, r.created_by_username,
 		r.created_by_token_id, r.created_at, r.started_at, r.finished_at, r.program, r.arg_count,
 		'' AS argv_encrypted, r.argv_sha256, r.timeout_seconds, r.concurrency, r.targets_hash, r.rule,
@@ -239,7 +249,8 @@ func (s *SQLiteStore) ListRuns(ctx context.Context, workspaceID int, filter doma
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list runs")
+
 	runs := make([]domain.Run, 0, filter.Limit)
 	for rows.Next() {
 		var c domain.RunCounts
@@ -253,7 +264,9 @@ func (s *SQLiteStore) ListRuns(ctx context.Context, workspaceID int, filter doma
 	return runs, rows.Err()
 }
 
-func (s *SQLiteStore) StartRun(ctx context.Context, id int64, owner string, now time.Time) error {
+// StartRun marks a run as started, assigning the specified owner and start time.
+// It returns an error if the run cannot be started.
+func (s *Store) StartRun(ctx context.Context, id int64, owner string, now time.Time) error {
 	result, err := s.DB.ExecContext(ctx, `UPDATE runs SET status = ?, started_at = ?, owner_id = ?, heartbeat_at = ?
 		WHERE id = ? AND status = ?`, string(domain.RunRunning), formatRunTime(now), owner, formatRunTime(now),
 		id, string(domain.RunQueued))
@@ -263,12 +276,15 @@ func (s *SQLiteStore) StartRun(ctx context.Context, id int64, owner string, now 
 	return requireRowsAffected(result, domain.ErrRunFinished)
 }
 
-func (s *SQLiteStore) Heartbeat(ctx context.Context, id int64, now time.Time) (bool, error) {
+// Heartbeat updates the last heartbeat timestamp for a run.
+// It returns false if the run was not found or could not be updated, and an error if the operation fails.
+func (s *Store) Heartbeat(ctx context.Context, id int64, now time.Time) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin heartbeat transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "heartbeat")
+
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status IN (?, ?)`,
 		formatRunTime(now), id, string(domain.RunQueued), string(domain.RunRunning))
 	if err != nil {
@@ -287,7 +303,9 @@ func (s *SQLiteStore) Heartbeat(ctx context.Context, id int64, now time.Time) (b
 	return cancel != 0, nil
 }
 
-func (s *SQLiteStore) UpdateRunHost(ctx context.Context, runID int64, hostID string, update domain.RunHostUpdate) error {
+// UpdateRunHost updates the host information associated with a run.
+// It returns an error if the update fails.
+func (s *Store) UpdateRunHost(ctx context.Context, runID int64, hostID string, update domain.RunHostUpdate) error {
 	var exit sql.NullInt64
 	if update.ExitCode != nil {
 		exit = sql.NullInt64{Int64: int64(*update.ExitCode), Valid: true}
@@ -304,12 +322,15 @@ func (s *SQLiteStore) UpdateRunHost(ctx context.Context, runID int64, hostID str
 	return nil
 }
 
-func (s *SQLiteStore) RequestCancel(ctx context.Context, workspaceID int, id int64) error {
+// RequestCancel requests cancellation of a run within the specified workspace.
+// It returns an error if the cancellation request fails.
+func (s *Store) RequestCancel(ctx context.Context, workspaceID int, id int64) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin cancel transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "request cancel")
+
 	var status string
 	var already int
 	err = tx.QueryRowContext(ctx, `SELECT status, cancel_requested FROM runs WHERE id = ? AND workspace_id = ?`,
@@ -343,12 +364,13 @@ func (s *SQLiteStore) RequestCancel(ctx context.Context, workspaceID int, id int
 }
 
 // runHostCounts returns per-status host counts of a run as audit details.
-func runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]string, error) {
+func (s *Store) runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT status, COUNT(*) FROM run_hosts WHERE run_id = ? GROUP BY status`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("count run hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query count run hosts")
+
 	details := map[string]string{}
 	for rows.Next() {
 		var status string
@@ -361,7 +383,9 @@ func runHostCounts(ctx context.Context, tx *sql.Tx, runID int64) (map[string]str
 	return details, rows.Err()
 }
 
-func (s *SQLiteStore) FinishRun(ctx context.Context, id int64, status domain.RunStatus, now time.Time) error {
+// FinishRun marks a run as finished with the specified status and completion time.
+// It returns an error if the run cannot be updated.
+func (s *Store) FinishRun(ctx context.Context, id int64, status domain.RunStatus, now time.Time) error {
 	if !status.Final() {
 		return fmt.Errorf("%w: %q is not a final run status", domain.ErrInvalidInput, status)
 	}
@@ -369,7 +393,8 @@ func (s *SQLiteStore) FinishRun(ctx context.Context, id int64, status domain.Run
 	if err != nil {
 		return fmt.Errorf("begin finish run transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "finish run")
+
 	var workspaceID int
 	var current string
 	err = tx.QueryRowContext(ctx, `SELECT workspace_id, status FROM runs WHERE id = ?`, id).Scan(&workspaceID, &current)
@@ -382,7 +407,7 @@ func (s *SQLiteStore) FinishRun(ctx context.Context, id int64, status domain.Run
 	if domain.RunStatus(current).Final() {
 		return nil
 	}
-	details, err := runHostCounts(ctx, tx, id)
+	details, err := s.runHostCounts(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -403,18 +428,23 @@ func (s *SQLiteStore) FinishRun(ctx context.Context, id int64, status domain.Run
 	return nil
 }
 
-func (s *SQLiteStore) InterruptStaleRuns(ctx context.Context, cutoff, now time.Time) (int, error) {
+// InterruptStaleRuns marks runs with heartbeats older than the specified cutoff as interrupted.
+// It returns the number of affected runs and an error if the operation fails.
+func (s *Store) InterruptStaleRuns(ctx context.Context, cutoff, now time.Time) (int, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin recovery transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer utils.RollbackTx(tx, s.logger, "recovery")
+
 	rows, err := tx.QueryContext(ctx, `SELECT id, workspace_id FROM runs
 		WHERE status IN (?, ?) AND heartbeat_at < ? ORDER BY id`,
 		string(domain.RunQueued), string(domain.RunRunning), formatRunTime(cutoff))
 	if err != nil {
 		return 0, fmt.Errorf("find stale runs: %w", err)
 	}
+	defer utils.CloseRows(rows, s.logger, "query stale runs")
+
 	type stale struct {
 		id        int64
 		workspace int
@@ -423,13 +453,11 @@ func (s *SQLiteStore) InterruptStaleRuns(ctx context.Context, cutoff, now time.T
 	for rows.Next() {
 		var item stale
 		if err := rows.Scan(&item.id, &item.workspace); err != nil {
-			rows.Close()
 			return 0, fmt.Errorf("scan stale run: %w", err)
 		}
 		stales = append(stales, item)
 	}
 	err = rows.Err()
-	rows.Close()
 	if err != nil {
 		return 0, fmt.Errorf("iterate stale runs: %w", err)
 	}

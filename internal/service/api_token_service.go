@@ -1,3 +1,4 @@
+// Package service implements the domain.APITokenService interface for managing API tokens.
 package service
 
 import (
@@ -27,6 +28,7 @@ type apiTokenService struct {
 
 var _ domain.APITokenService = (*apiTokenService)(nil)
 
+// NewAPITokenService creates a new instance of the API token service with the provided store.
 func NewAPITokenService(store domain.AccessStore) (domain.APITokenService, error) {
 	if store == nil {
 		return nil, errors.New("API token store is required")
@@ -103,6 +105,7 @@ func (s *apiTokenService) Revoke(ctx context.Context, principal domain.Principal
 	return s.store.RevokeAPIToken(ctx, id, principal.UserID, principal.WorkspaceID)
 }
 
+// HashAPIToken computes the SHA-256 hash of the given API token string and returns it as a hexadecimal string.
 func HashAPIToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])

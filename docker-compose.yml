@@ -1,0 +1,48 @@
+name: machinarchy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: machinarchy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinarchy_dev_only}
+      POSTGRES_DB: machinarchy_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U machinarchy -d machinarchy_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "127.0.0.1:4222:4222"
+    volumes:
+      - nats_data:/data
+
+  monolit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MACHINARCHY_COMMAND: monolit
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      MACHINARCHY_LISTEN_ADDR: ":8080"
+      MACHINARCHY_DATABASE_ENGINE: postgres
+      MACHINARCHY_DATABASE_URL: postgres://machinarchy:${POSTGRES_PASSWORD:-machinarchy_dev_only}@postgres:5432/machinarchy_dev?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+volumes:
+  pgdata:
+  nats_data:
