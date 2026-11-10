@@ -1,0 +1,44 @@
+name: machinarchy-infra
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: machinarchy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinarchy_dev_only}
+      POSTGRES_DB: machinarchy_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U machinarchy -d machinarchy_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - machinarchy-network
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "127.0.0.1:4222:4222"
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+    networks:
+      - machinarchy-network
+
+volumes:
+  pgdata:
+    name: machinarchy_pgdata
+  nats_data:
+    name: machinarchy_nats_data
+
+networks:
+  machinarchy-network:
+    name: machinarchy-network
+    driver: bridge

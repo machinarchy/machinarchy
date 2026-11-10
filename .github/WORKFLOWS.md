@@ -26,7 +26,7 @@ already exists, grant this repository Actions write access to that package.
 - `ci.yml` runs for pushes to `main` and pull requests.
 - `template-lint.yml` runs formatting and golangci-lint v2 (including gosec).
 - `template-db-validate.yml` calls `make test-postgres`. The repository must
-  include `scripts/test-postgres.sh`, and it must consume `DATABASE_URL` or
+  include `scripts/db/test-postgres.sh`, and it must consume `DATABASE_URL` or
   `MACHINARCHY_TEST_POSTGRES_URL`.
 - `release.yml` is reusable and runs Release Please after the CI checks pass.
   `dry_run: true` skips Release Please and all release mutations.
@@ -61,7 +61,7 @@ should be reviewed against the actual workflow run before enforcement.
 - Confirm the SQLite driver supports `CGO_ENABLED=0`. If it is
   `github.com/mattn/go-sqlite3`, these release builds need a CGO-enabled native
   toolchain instead of the current pure-Go cross-compilation approach.
-- Ensure `scripts/test-postgres.sh` and `scripts/prepare.sh` exist. They are
+- Ensure `scripts/db/test-postgres.sh` and `scripts/dev/setup-local.sh` exist. They are
   referenced by the Makefile but were not present in the review archive.
 - Verify the Compose environment variable names for the database URL and NATS
   endpoint against the actual config loader; the Go configuration source was

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the store contract tests against a throwaway PostgreSQL container.
-# Usage: bash scripts/test-postgres.sh [go test packages and flags...]
+# Usage: bash scripts/db/test-postgres.sh [go test packages and flags...]
 # Requires Docker. Set POSTGRES_IMAGE to test another server version.
 set -euo pipefail
 

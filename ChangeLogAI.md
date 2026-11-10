@@ -114,7 +114,7 @@ Project change history maintained alongside the code. Entries are newest first. 
 - Replaced the SQLite-only member and host-uniqueness tests with one shared contract suite (`internal/store/contract_test.go`) that runs every case against each available engine: signup defaults and uniqueness (including accounts without an email), member roles and last-owner protection, concurrent owner demotion, host lifecycle and workspace isolation (including credential decryption round-trip and status guards), host uniqueness and update collisions, environments, API tokens (expiry, revocation, role capping), migration idempotence, and the migration-4 pre-flight.
 - SQLite always runs. PostgreSQL runs when `MACHINARCHY_TEST_POSTGRES_URL` is set; each test gets its own schema (via `search_path`) that is dropped afterwards. `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` turns a missing URL into a failure instead of a skip.
 - Added `.github/workflows/ci.yml`: gofmt check, `go build`, `go vet`, and `go test -race ./...` with a PostgreSQL 16 service (PostgreSQL tests required), plus a Docker image build.
-- Added `make test-postgres` and `scripts/test-postgres.sh` to run the suite against a throwaway Docker container, and documented both in `CONTRIBUTING.md`.
+- Added `make test-postgres` and `scripts/db/test-postgres.sh` to run the suite against a throwaway Docker container, and documented both in `CONTRIBUTING.md`.
 - Updated `docs/ROADMAP.md`, `docs/SECURITY.md`, and `README.md` to say the PostgreSQL suite exists but has not yet been observed passing.
 
 ### Known limitations
@@ -238,13 +238,13 @@ Project change history maintained alongside the code. Entries are newest first. 
 
 ### Changes in this update
 
-- Updated `scripts/prepare.sh` to match Machinarchy: require Go 1.27+, create `.env` securely from the repository template, and configure the checked-in hooks. Removed unrelated frontend/assets setup and automatic `go mod tidy`/dependency download behavior.
+- Updated `scripts/dev/setup-local.sh` to match Machinarchy: require Go 1.27+, create `.env` securely from the repository template, and configure the checked-in hooks. Removed unrelated frontend/assets setup and automatic `go mod tidy`/dependency download behavior.
 - Made setup preserve an existing non-default `core.hooksPath` by stopping for review instead of silently replacing it.
 - Updated the commit-message hook to validate conventional breaking-change syntax and reject invalid invocation; refreshed the Git-hook documentation to reference current paths and behavior.
 
 ### Validation
 
-- `bash -n scripts/prepare.sh .githooks/pre-commit .githooks/commit-msg` — passed.
+- `bash -n scripts/dev/setup-local.sh .githooks/pre-commit .githooks/commit-msg` — passed.
 - `git diff --check` — passed.
 - `shellcheck` — not run; executable is not installed.
 - Setup and pre-commit hooks were not executed; setup changes clone-local Git configuration and creates `.env`, while pre-commit runs the repository test suite.
