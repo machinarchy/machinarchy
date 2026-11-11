@@ -2,6 +2,194 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-11-11 — Phase D repository foundation and runtime composition
+
+### Changes in this update
+
+- Centralized API, Control Manager, and all-in-one process construction in `internal/bootstrap`; command entry points now load config, create signal contexts, and select a runtime role. All-in-one composes the existing API and worker components over one runtime.
+- Added shared structured logger/telemetry initialization, listener-ready startup, bounded HTTP/worker shutdown, startup-context propagation, and propagation of runtime cleanup failures. Added broker URL validation with a setting-specific error.
+- Updated runtime architecture documentation and added lifecycle/configuration tests. The Agent remains an explicit placeholder; no Agent runtime was added. No domain, API behavior, persistence schema, broker behavior, or security policy was changed.
+
+### Validation
+
+- `gofmt` and `git diff --check` — passed.
+- `go test ./...` — passed.
+- `go test -race ./internal/bootstrap ./internal/config ./internal/transport/http` — passed.
+- `go vet ./...` — passed.
+- `go build ./cmd/api ./cmd/controlmanager ./cmd/monolit ./cmd/machinarchy ./cmd/agent` — passed.
+- `go run ./cmd/machinarchy --help` — passed. Runtime lifecycle tests cover API, Control Manager, and all-in-one component topologies; an external DB/NATS-backed process launch was not run.
+- No PostgreSQL-specific integration startup, benchmark, or security test was run.
+
+## 2026-11-11 — Phase C engineering roadmap and backlog
+
+### Changes in this update
+
+- Added `docs/architecture/phase-c-implementation-roadmap.md` with ten milestone outcomes, a 40-item GitHub-ready backlog, dependencies, acceptance/testing/documentation criteria, priority matrix, critical paths, deferred capabilities, and Definition of Done.
+- Recorded approval-metadata reconciliation and product/security decision gates without introducing new architecture decisions. No source code, tests, migrations, or deployment files were changed.
+- Phase D has not started and remains gated on owner approval.
+
+### Validation
+
+- `git diff --check` — passed. No tests, builds, benchmarks, or security checks were run because this update is documentation only.
+
+## 2026-11-11 — Phase B repository gap analysis
+
+### Changes in this update
+
+- Added `docs/architecture/phase-b-repository-gap-analysis.md`, mapping the current repository to the approved architecture baseline, classifying implementation gaps and actions, recording risks and potential breaking changes, preserving existing test contracts, and ordering future implementation work.
+- No source code, tests, configuration, or package layout were changed. No tests, builds, benchmarks, or security checks were run. The Go package listing could not be completed because the sandbox denied writes to the Go cache; dependency-cycle status remains unverified.
+- Phase C is not started and remains gated on owner approval.
+
+### Validation
+
+- `git diff --check` — passed. No tests, builds, benchmarks, or security checks were run.
+
+## 2026-11-11 — Implementation architecture baseline proposal
+
+### Changes in this update
+
+- Consolidated approved Phase 1–11 architecture decisions, ADR precedence, Phase 12 integration status, initial implementation scope, mandatory engineering/security/database/testing requirements, production-only conditions, deferred/rejected capabilities, known implementation gaps, and remaining owner decisions into `docs/architecture/implementation-baseline.md`.
+- Read the supplied implementation execution prompt and repository guidance. No source code, migrations, deployment files, or tests were changed.
+- The baseline is proposed for owner approval; Phase B remains gated on that approval.
+
+### Validation
+
+- `git diff --check` and whitespace checks of the baseline and changelog passed. No tests or implementation checks were run because this update is documentation only.
+
+## 2026-11-11 — Phase 12 architecture validation and final blueprint
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 11 on its proposed deployment/scaling baseline.
+- Added the integrated architecture review, package/dependency model, 16 end-to-end failure/recovery traces, cross-phase conflict register, architecture classifications, staged implementation roadmap, complete ADR index, acceptance checklist, and ADR-053. Amended ADR-007 and older Phase 1/3 text to align broker timing with the accepted ADR-018/Phase 4 and Phase 11 decisions. No source code, schema, manifests, or runtime behavior changed.
+- The blueprint remains owner-approval pending. It recommends persist-first Host registration with asynchronous reachability, Control Manager ownership of durable Operation workers, and optional/deferred JetStream; these are target contracts, not implemented behavior.
+
+### Validation
+
+- `git diff --check` and documentation whitespace checks passed. No tests, architecture automation, load tests, or recovery exercises were run because this update is documentation only.
+
+## 2026-11-11 — Phase 11 deployment, scalability and future evolution proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 10 on its observability, reliability, and SRE design baseline.
+- Added all-in-one, standalone API/Control Manager, and PostgreSQL multi-replica topologies; SQLite/PostgreSQL deployment boundaries; DB-backed lease/fencing requirements; JetStream adoption criteria; future Agent enrollment/heartbeat lifecycle; optional container/Kubernetes guidance; upgrade compatibility; and explicit 100/1,000/10,000 Host planning assumptions with no benchmark claims. Added ADRs 047–052. No code, deployment manifests, migrations, Agents, or coordination mechanisms were implemented.
+
+### Validation
+
+- `git diff --check` and documentation whitespace checks passed. No tests, load tests, benchmarks, or restore exercises were run because this update is documentation only.
+
+## 2026-11-11 — Phase 10 observability, reliability and SRE proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 9 on its security architecture baseline, including production deny-by-default SSH egress.
+- Added observability architecture, current telemetry assessment, metrics catalog, logging/tracing conventions, health/readiness model, proposed SLOs, failure behavior, shutdown/drain sequence, backup/recovery procedures, operational requirements, and ADRs 042–046. No source code, dashboards, alerts, telemetry instruments, or operational procedures were implemented.
+
+### Validation
+
+- `git diff --check` and documentation whitespace checks passed. No tests, benchmarks, restore exercises, or security checks were run because this update is documentation only.
+
+## 2026-11-11 — Phase 9 security architecture review
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 8 on its proposed API, CLI, and application interaction baseline.
+- Added the privileged-control-plane threat model, trust boundaries, authentication and resource authorization requirements, secret/key handling, SSH and egress controls, API and configuration protections, audit model, attack scenarios, risk priorities, and security acceptance criteria. Added ADRs 036–041. No source code, runtime security controls, or tests changed.
+- Challenged the earlier private-network-allowed default: production SSH egress should deny by default and require explicit destination and port policy plus independent network enforcement. Existing Phase 6 choices (shared SQLite/PostgreSQL database, global configuration, database-backed encrypted secrets, API/CLI management) remain intact.
+
+### Validation
+
+- `git diff --check` and documentation whitespace checks passed. No tests, penetration tests, or implementation checks were run because this update is documentation only.
+
+## 2026-11-11 — Phase 8 API, CLI and application interaction proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 7 on the recommended Host connector and execution defaults.
+- Added API/runtime boundaries, endpoint inventory, resource and Operation lifecycle semantics, configuration/secret interfaces, validation/error/pagination contracts, authorization, CLI hierarchy and exit codes, interaction diagrams, and four draft ADRs. No HTTP handler, CLI command, or API schema was implemented.
+
+### Validation
+
+- `git diff --check` and whitespace checks of the new design documents passed. No tests or implementation checks were run because this update contains documentation only.
+
+## 2026-11-11 — Phase 7 host access and execution architecture proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 6 on the confirmed configuration/secrets constraints and recommended defaults.
+- Added capability-oriented Host connector boundaries, Go SSH lifecycle and trust model, Secret Store resolution, bounded connections and command execution, network restrictions, Agent integration boundary, failure taxonomy, current implementation assessment, and four ADRs. These defaults were accepted when Phase 8 was authorized. No implementation or package changes were made.
+
+### Validation
+
+- `git diff --check` and whitespace checks of the new design documents passed. No tests or implementation checks were run because this update contains documentation only.
+
+## 2026-11-11 — Phase 6 configuration and secrets management proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 5 on its recommended persistence defaults.
+- Added bootstrap/runtime configuration ownership, revision and snapshot propagation, hot-reload classifications, a database-backed envelope-encrypted Secret Store, API/CLI contracts, failure/security handling, Go package boundaries, and five ADRs. The user-confirmed global scope, shared database, external key, event-plus-poll propagation, and API/CLI constraints are preserved. These constraints and recommended defaults were accepted when Phase 7 was authorized. No source code, runtime config subsystem, or migration changed.
+
+### Validation
+
+- `git diff --check` and whitespace checks of the new design documents passed. No tests or schema validation were run because this update contains documentation only.
+
+## 2026-11-11 — Phase 5 persistence and data architecture proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 4 on its recommended event defaults, including the transactional outbox, durable consumer deduplication where needed, and deferral of NATS/Kafka until justified. Phase 5’s recommended persistence defaults were accepted when Phase 6 was authorized.
+- Added the persistence boundaries, logical schema, transaction and concurrency contracts, migration/startup strategy, SQLite/PostgreSQL comparison, recovery/backup guidance, current-state observations, and four draft ADRs. No source code, package layout, repository implementation, or migration changed.
+
+### Validation
+
+- `git diff --check` passed. No tests or schema validation were run because this update contains documentation only.
+
+## 2026-11-11 — Phase 4 event-driven architecture proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 3 on its recommended initial topology, resync interval, and bounded Host worker count.
+- Added the event taxonomy, envelope/versioning contract, transactional outbox and consumer strategy, delivery guarantees, retry/retention policy, database behavior, and future broker criteria. Added three ADRs, including deferral of NATS adoption. These defaults were approved when Phase 5 was authorized. No code or package layout changed.
+
+### Validation
+
+- Not run: this documentation-only messaging proposal was not checked with automated tooling.
+
+## 2026-11-11 — Phase 3 hybrid control loop proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 2 on the recommended domain baseline.
+- Added a level-triggered, edge-driven controller manager design covering resource-key workqueues, deduplication, bounded workers, retries, recovery, resynchronization, shutdown, replica coordination, failure handling, metrics, and Kubernetes pattern comparison. Added three ADRs. These defaults are approved design assumptions, not implementation. No code or package layout changed.
+
+### Validation
+
+- Not run: this documentation-only controller proposal was not checked with automated tooling.
+
+## 2026-11-11 — Phase 2 domain model proposal
+
+### Changes in this update
+
+- Recorded approval to proceed from Phase 1 on its recommended modular-monolith baseline; the Phase 1 defaults remain the working assumptions for this design.
+- Added a domain/resource lifecycle model for Host, Operation, conditions, generations, revisions, concurrency, deletion, and domain events, plus four ADRs. These are approved design decisions, not implementation changes.
+
+### Validation
+
+- Not run: this documentation-only domain proposal was not checked with automated tooling.
+
+## 2026-11-11 — Phase 1 target architecture proposal
+
+### Changes in this update
+
+- Added a proposed target architecture covering component ownership, runtime composition, deployment modes, package boundaries, dependency direction, and a distributed evolution path.
+- Added ADRs for modular-monolith boundaries, Control Manager and operation-worker ownership, persistence/messaging, and configuration/secrets. These Phase 1 decisions were accepted when approval to proceed to Phase 2 was given; no implementation or package reorganization was performed.
+
+### Validation
+
+- Not run: this documentation-only architecture proposal was not checked with automated tooling.
+
 ## 2026-10-29 — Command execution foundation: structured, pinned, audited runs
 
 ### Changes in this update

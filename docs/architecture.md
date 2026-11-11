@@ -16,6 +16,8 @@ SQLite and PostgreSQL adapters
 
 `internal/domain` contains the core entities and interfaces. Services depend on those ports and injected adapters. HTTP handlers translate requests to service or repository calls, and the process entry points in `cmd/` construct the dependency graph. SQLite and PostgreSQL implement the same storage contracts. Schema changes live in embedded, engine-specific SQL migrations.
 
+The API, Control Manager, and all-in-one entry points load and validate bootstrap configuration, create a signal-cancelable context, then delegate role composition to `internal/bootstrap`. Bootstrap installs the shared structured logger and telemetry providers, opens the runtime, constructs only the selected role's components, and owns cleanup. The all-in-one mode shares one runtime and composes the existing API server and Control Manager engine. The HTTP listener reports readiness only after binding; shutdown drains HTTP requests, cancels and waits for workers, closes runtime resources, then flushes telemetry. The CLI remains a separate API client and does not initialize server infrastructure. The Agent executable remains an explicit not-implemented placeholder.
+
 ## Processes and dependencies
 
 - `machinarchy-api` serves application HTTP routes and requires a database and NATS JetStream connection during startup.

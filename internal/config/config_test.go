@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -113,6 +114,25 @@ func TestLoadPostgresRequirements(t *testing.T) {
 
 		if cfg.Database.Engine != Postgres || cfg.Database.MaxOpenConns != 20 || cfg.Database.MaxIdleConns != 5 {
 			t.Fatalf("unexpected PostgreSQL config: %+v", cfg.Database)
+		}
+	})
+}
+
+func TestLoadEventBrokerURLValidation(t *testing.T) {
+	t.Run("rejects malformed endpoint with actionable setting name", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BROKER_URL", "not-a-nats-url")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MACHINARCHY_BROKER_URL") {
+			t.Fatalf("Load() error = %v, want a useful broker URL validation error", err)
+		}
+	})
+
+	t.Run("accepts a comma-separated NATS endpoint list", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BROKER_URL", "nats://nats-a:4222,tls://nats-b:4222")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
 		}
 	})
 }

@@ -298,6 +298,12 @@ func (s *Server) metricsEndpoint(c echo.Context) error {
 
 // Start binds the requested address and serves until shutdown or listener failure.
 func (s *Server) Start(address string) error {
+	return s.StartWithReady(address, nil)
+}
+
+// StartWithReady binds before invoking ready, allowing the process lifecycle to
+// avoid racing shutdown against listener creation.
+func (s *Server) StartWithReady(address string, ready func()) error {
 	if s == nil || s.httpServer == nil {
 		return errors.New("HTTP server is not initialized")
 	}
@@ -309,6 +315,9 @@ func (s *Server) Start(address string) error {
 		return fmt.Errorf("listen on %q: %w", address, err)
 	}
 	s.httpServer.Addr = address
+	if ready != nil {
+		ready()
+	}
 	slog.Info("HTTP server listening", "address", listener.Addr().String())
 	return s.httpServer.Serve(listener)
 }

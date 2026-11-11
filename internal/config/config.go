@@ -202,8 +202,24 @@ func Load() (Config, error) {
 	if err := cfg.validateDatabase(); err != nil {
 		return Config{}, err
 	}
+	if err := validateEventBrokerURL(cfg.EventBroker.URL); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func validateEventBrokerURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("MACHINARCHY_BROKER_URL is required")
+	}
+	for _, endpoint := range strings.Split(raw, ",") {
+		parsed, err := url.Parse(strings.TrimSpace(endpoint))
+		if err != nil || (parsed.Scheme != "nats" && parsed.Scheme != "tls") || parsed.Hostname() == "" {
+			return errors.New("MACHINARCHY_BROKER_URL must contain NATS endpoints using nats:// or tls:// with a host")
+		}
+	}
+	return nil
 }
 
 // loadSSHTargetPolicy reads the destination policy applied to every SSH dial.

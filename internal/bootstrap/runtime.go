@@ -33,6 +33,9 @@ func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	if ctx == nil {
 		return nil, errors.New("runtime context is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("runtime startup canceled: %w", err)
+	}
 
 	stores, err := store.Open(ctx, store.Config{
 		Engine: string(cfg.Database.Engine), SQLitePath: cfg.Database.Path,
@@ -43,6 +46,10 @@ func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open datastore: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(fmt.Errorf("runtime startup canceled: %w", err),
+			wrapCloseError("close datastore after canceled startup", stores.Close()))
+	}
 
 	eventBroker, err := broker.NewEventBroker(cfg.EventBroker.URL)
 	if err != nil {
@@ -51,6 +58,11 @@ func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
 			fmt.Errorf("connect event broker: %w", err),
 			wrapCloseError("close datastore after broker startup failure", closeErr),
 		)
+	}
+	if err := ctx.Err(); err != nil {
+		eventBroker.Close()
+		return nil, errors.Join(fmt.Errorf("runtime startup canceled: %w", err),
+			wrapCloseError("close datastore after canceled startup", stores.Close()))
 	}
 
 	return &Runtime{stores: stores, eventBroker: eventBroker}, nil
@@ -61,25 +73,24 @@ func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
-	var runErr error
+	var closeErrors []error
 	if r.runManager != nil {
 		// Let executing runs record their outcome before the database closes.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		runErr = r.runManager.Close(ctx)
+		if err := r.runManager.Close(ctx); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close run executors: %w", err))
+		}
 		cancel()
 	}
 	if r.eventBroker != nil {
 		r.eventBroker.Close()
 	}
-	if runErr != nil {
-		slog.Error("run executors did not stop cleanly", "error", runErr)
-	}
 	if r.stores != nil {
 		if err := r.stores.Close(); err != nil {
-			return fmt.Errorf("close datastore: %w", err)
+			closeErrors = append(closeErrors, fmt.Errorf("close datastore: %w", err))
 		}
 	}
-	return nil
+	return errors.Join(closeErrors...)
 }
 
 // NewControlManager creates the background event processor over this runtime's
@@ -94,9 +105,13 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 // NewAPIServer constructs the API adapter. Additional readiness checks are
 // included when the API and a worker run together in one process.
 func (r *Runtime) NewAPIServer(
+	ctx context.Context,
 	cfg config.Config,
 	additionalReadiness ...httpserver.ReadinessChecker,
 ) (*httpserver.Server, error) {
+	if ctx == nil {
+		return nil, errors.New("API startup context is required")
+	}
 	if r == nil || r.stores == nil || r.eventBroker == nil {
 		return nil, errors.New("runtime is not initialized")
 	}
@@ -106,7 +121,7 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("configure SSH concurrency limit: %w", err)
 	}
 	authService := service.NewAuthService(r.stores.Users, cfg.OperatorToken, 24*time.Hour)
-	if err := r.ensureOwner(cfg); err != nil {
+	if err := r.ensureOwner(ctx, cfg); err != nil {
 		return nil, err
 	}
 
@@ -125,12 +140,14 @@ func (r *Runtime) NewAPIServer(
 	if err != nil {
 		return nil, fmt.Errorf("construct run service: %w", err)
 	}
-	recoverCtx, cancelRecover := context.WithTimeout(context.Background(), 15*time.Second)
+	recoverCtx, cancelRecover := context.WithTimeout(ctx, 15*time.Second)
 	_, err = runManager.Recover(recoverCtx)
 	cancelRecover()
 	if err != nil {
-		_ = runManager.Close(context.Background())
-		return nil, err
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), 10*time.Second)
+		closeErr := runManager.Close(closeCtx)
+		cancelClose()
+		return nil, errors.Join(err, wrapCloseError("close run manager after recovery failure", closeErr))
 	}
 	r.runManager = runManager
 	repositories := httpv1.Repositories{
@@ -184,8 +201,11 @@ func wrapCloseError(operation string, err error) error {
 // ensureOwner creates the configured bootstrap owner when the default workspace
 // has none. Without bootstrap credentials it only warns, because every
 // self-registered account starts as a read-only member.
-func (r *Runtime) ensureOwner(cfg config.Config) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (r *Runtime) ensureOwner(parent context.Context, cfg config.Config) error {
+	if parent == nil {
+		return errors.New("owner bootstrap context is required")
+	}
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 
 	admin := cfg.BootstrapAdmin
