@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +71,32 @@ func TestRunComponentsGracefulShutdown(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestControlManagerRuntimeUsesDatabaseOutboxWithoutNATS(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenControlManager(context.Background(), config.Config{
+		Database:         config.DatabaseConfig{Engine: config.SQLite, Path: filepath.Join(dir, "control.db"), ConnectTimeout: time.Second},
+		EncryptionSecret: "control-manager-test-secret-that-is-at-least-32-bytes",
+	})
+	if err != nil {
+		t.Fatalf("OpenControlManager() without broker URL: %v", err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+	}()
+	engine, err := runtime.NewControlManager()
+	if err != nil {
+		t.Fatalf("NewControlManager(): %v", err)
+	}
+	if _, err := runtime.NewControlManagerOperationsServer(engine); err != nil {
+		t.Fatalf("create Control Manager health server: %v", err)
 	}
 }
 

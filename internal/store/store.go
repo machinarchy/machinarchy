@@ -12,6 +12,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
 	"github.com/machinarchy/machinarchy/internal/store/postgres"
 	"github.com/machinarchy/machinarchy/internal/store/sqlite"
 )
@@ -37,19 +38,21 @@ type Config struct {
 // Stores provides access to the configured persistence backends and manages
 // their lifecycle.
 type Stores struct {
-	DB            *sql.DB
-	engine        string
-	Users         domain.UserStore
-	Access        domain.AccessStore
-	Metrics       domain.MetricsStore
-	Hosts         domain.HostStore
-	Jobs          domain.JobStore
-	Environments  domain.EnvironmentStore
-	Audit         domain.AuditStore
-	Runs          domain.RunStore
-	ResourceHosts resource.HostRepository
-	Operations    resource.OperationRepository
-	logger        *slog.Logger
+	DB             *sql.DB
+	engine         string
+	Users          domain.UserStore
+	Access         domain.AccessStore
+	Metrics        domain.MetricsStore
+	Hosts          domain.HostStore
+	Jobs           domain.JobStore
+	Environments   domain.EnvironmentStore
+	Audit          domain.AuditStore
+	Runs           domain.RunStore
+	ResourceHosts  resource.HostRepository
+	Operations     resource.OperationRepository
+	Outbox         eventing.OutboxStore
+	ResourceLeases resource.ResourceLeaseStore
+	logger         *slog.Logger
 }
 
 // Open initializes the configured storage backends using the provided context
@@ -146,6 +149,8 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
 		stores.Operations = storeInstance.Resources
+		stores.Outbox = storeInstance.Resources
+		stores.ResourceLeases = storeInstance.Resources
 	case "postgres":
 		storeInstance, err := postgres.NewStore(db, cfg.EncryptionSecret, slog.Default())
 		if err != nil {
@@ -161,6 +166,8 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
 		stores.Operations = storeInstance.Resources
+		stores.Outbox = storeInstance.Resources
+		stores.ResourceLeases = storeInstance.Resources
 	}
 
 	return stores, nil
@@ -173,6 +180,14 @@ func (s *Stores) Close() error {
 		return nil
 	}
 	return s.DB.Close()
+}
+
+// Engine reports the configured database profile used for capability wiring.
+func (s *Stores) Engine() string {
+	if s == nil {
+		return ""
+	}
+	return s.engine
 }
 
 // Ping verifies connectivity to all configured storage backends.

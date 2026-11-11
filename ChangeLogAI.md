@@ -2,6 +2,25 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-11-11 — Phase F event infrastructure and control loop
+
+### Changes in this update
+
+- Added versioned command/event envelopes, transactional Host outbox records, per-consumer delivery claims, retry/quarantine state, retention, and PostgreSQL resource fencing/resync leases. SQLite remains the single-Control-Manager profile; PostgreSQL coordination uses database-backed claims and leases.
+- Replaced the Control Manager's new resource path with an outbox dispatcher, deduplicating bounded resource-key queue, bounded workers, retries with jitter and global rate limiting, startup/periodic resynchronization, latest-state controller reads, and graceful drain/cancellation. Imperative Operation execution remains separate.
+- Added a default Host controller that handles logical deletion and records `ConnectorUnavailable` for managed Hosts until a connector is wired. Existing legacy API/NATS Host flows are not dual-written to the canonical resource store and therefore are not reconciled by this path.
+- Added migration 000008 for SQLite and PostgreSQL, cross-engine outbox/coordination contracts, lifecycle and failure tests, and Phase F execution/sequence documentation. No NATS or Kafka dependency was introduced.
+
+### Validation
+
+- `gofmt`, `git diff --check`, focused Phase F package tests, `go test -race ./internal/controlmanager ./internal/eventing ./internal/store ./internal/bootstrap ./internal/config`, and `go vet ./...` — passed.
+- `go test ./...` — all listed packages passed except `internal/transport/http/TestOperationsServerStartsAndShutsDown`, which failed waiting for its listener to bind; no HTTP code was changed in this phase.
+- PostgreSQL integration tests were skipped because `MACHINARCHY_TEST_POSTGRES_URL` was not configured. Benchmarks and security checks were not run.
+
+### Known limitations
+
+- The initial Host controller does not perform remote convergence; it reports unavailable connector capability and retries. The legacy API Host model is not migrated to or synchronized with canonical resource records. Multi-replica PostgreSQL coordination is implemented but was not integration-tested against a live PostgreSQL instance.
+
 ## 2026-11-11 — Phase E domain and persistence foundation
 
 ### Changes in this update

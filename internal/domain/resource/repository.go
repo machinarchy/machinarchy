@@ -12,6 +12,7 @@ type HostRepository interface {
 	CreateHost(context.Context, *Host) error
 	GetHost(context.Context, int, ResourceID) (*Host, error)
 	ListHosts(context.Context, int, int) ([]Host, error)
+	ListHostKeys(context.Context, HostKeyCursor) ([]HostKey, error)
 	UpdateHostSpec(context.Context, int, ResourceID, uint64, uint64, HostSpec, time.Time) error
 	UpdateHostMetadata(context.Context, int, ResourceID, uint64, string, int, map[string]string, time.Time) error
 	ObserveHost(context.Context, int, ResourceID, uint64, HostPhase, []Condition, time.Time) error

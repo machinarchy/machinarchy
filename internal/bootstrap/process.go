@@ -31,7 +31,7 @@ type workerLifecycle interface {
 
 // RunAPI initializes and serves the standalone API process.
 func RunAPI(ctx context.Context, cfg config.Config) error {
-	return run(ctx, cfg, apiServiceName, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+	return runWithOpener(ctx, cfg, apiServiceName, Open, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
 		server, err := runtime.NewAPIServer(ctx, cfg)
 		return server, nil, err
 	})
@@ -40,7 +40,7 @@ func RunAPI(ctx context.Context, cfg config.Config) error {
 // RunControlManager initializes the standalone Control Manager and its
 // operations-only health server.
 func RunControlManager(ctx context.Context, cfg config.Config) error {
-	return run(ctx, cfg, controlManagerServiceName, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+	return runWithOpener(ctx, cfg, controlManagerServiceName, OpenControlManager, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
 		engine, err := runtime.NewControlManager()
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct control manager: %w", err)
@@ -56,7 +56,7 @@ func RunControlManager(ctx context.Context, cfg config.Config) error {
 // RunMonolith composes the API and Control Manager over one Runtime. It does
 // not duplicate their service or worker construction.
 func RunMonolith(ctx context.Context, cfg config.Config) error {
-	return run(ctx, cfg, monolithServiceName, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+	return runWithOpener(ctx, cfg, monolithServiceName, Open, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
 		engine, err := runtime.NewControlManager()
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct control manager: %w", err)
@@ -72,10 +72,16 @@ func RunMonolith(ctx context.Context, cfg config.Config) error {
 type componentFactory func(*Runtime) (httpLifecycle, workerLifecycle, error)
 
 func run(ctx context.Context, cfg config.Config, serviceName string, factory componentFactory) (retErr error) {
+	return runWithOpener(ctx, cfg, serviceName, Open, factory)
+}
+
+type runtimeOpener func(context.Context, config.Config) (*Runtime, error)
+
+func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, openRuntime runtimeOpener, factory componentFactory) (retErr error) {
 	if ctx == nil {
 		return errors.New("process context is required")
 	}
-	if factory == nil {
+	if factory == nil || openRuntime == nil {
 		return errors.New("process component factory is required")
 	}
 	if strings.TrimSpace(cfg.ListenAddr) == "" {
@@ -94,7 +100,7 @@ func run(ctx context.Context, cfg config.Config, serviceName string, factory com
 		}
 	}()
 
-	runtime, err := Open(ctx, cfg)
+	runtime, err := openRuntime(ctx, cfg)
 	if err != nil {
 		return err
 	}

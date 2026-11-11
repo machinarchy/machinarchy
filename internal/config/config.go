@@ -95,6 +95,16 @@ type EventBrokerConfig struct {
 
 // Load reads the configuration from environment variables, applies defaults, and validates the configuration values. It returns a Config struct or an error if validation fails.
 func Load() (Config, error) {
+	return load(true)
+}
+
+// LoadControlManager loads only settings required by the SQL-backed control
+// loop. The standalone manager does not connect to the legacy NATS adapter.
+func LoadControlManager() (Config, error) {
+	return load(false)
+}
+
+func load(requireLegacyBroker bool) (Config, error) {
 	cfg := Config{
 		ListenAddr:    GetEnv("MACHINARCHY_LISTEN_ADDR", ":8080"),
 		Environment:   Environment(strings.ToLower(GetEnv("MACHINARCHY_ENVIRONMENT", string(Development)))),
@@ -202,8 +212,10 @@ func Load() (Config, error) {
 	if err := cfg.validateDatabase(); err != nil {
 		return Config{}, err
 	}
-	if err := validateEventBrokerURL(cfg.EventBroker.URL); err != nil {
-		return Config{}, err
+	if requireLegacyBroker {
+		if err := validateEventBrokerURL(cfg.EventBroker.URL); err != nil {
+			return Config{}, err
+		}
 	}
 
 	return cfg, nil

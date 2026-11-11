@@ -30,6 +30,16 @@ type Runtime struct {
 
 // Open initializes the shared persistence and event infrastructure.
 func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
+	return open(ctx, cfg, true)
+}
+
+// OpenControlManager initializes only database-backed control-loop
+// infrastructure. It does not require or connect to NATS.
+func OpenControlManager(ctx context.Context, cfg config.Config) (*Runtime, error) {
+	return open(ctx, cfg, false)
+}
+
+func open(ctx context.Context, cfg config.Config, connectLegacyBroker bool) (*Runtime, error) {
 	if ctx == nil {
 		return nil, errors.New("runtime context is required")
 	}
@@ -51,18 +61,21 @@ func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
 			wrapCloseError("close datastore after canceled startup", stores.Close()))
 	}
 
-	eventBroker, err := broker.NewEventBroker(cfg.EventBroker.URL)
-	if err != nil {
-		closeErr := stores.Close()
-		return nil, errors.Join(
-			fmt.Errorf("connect event broker: %w", err),
-			wrapCloseError("close datastore after broker startup failure", closeErr),
-		)
-	}
-	if err := ctx.Err(); err != nil {
-		eventBroker.Close()
-		return nil, errors.Join(fmt.Errorf("runtime startup canceled: %w", err),
-			wrapCloseError("close datastore after canceled startup", stores.Close()))
+	var eventBroker *broker.EventBroker
+	if connectLegacyBroker {
+		eventBroker, err = broker.NewEventBroker(cfg.EventBroker.URL)
+		if err != nil {
+			closeErr := stores.Close()
+			return nil, errors.Join(
+				fmt.Errorf("connect legacy API event broker: %w", err),
+				wrapCloseError("close datastore after broker startup failure", closeErr),
+			)
+		}
+		if err := ctx.Err(); err != nil {
+			eventBroker.Close()
+			return nil, errors.Join(fmt.Errorf("runtime startup canceled: %w", err),
+				wrapCloseError("close datastore after canceled startup", stores.Close()))
+		}
 	}
 
 	return &Runtime{stores: stores, eventBroker: eventBroker}, nil
@@ -96,10 +109,27 @@ func (r *Runtime) Close() error {
 // NewControlManager creates the background event processor over this runtime's
 // host store and event connection.
 func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
-	if r == nil || r.stores == nil || r.eventBroker == nil {
+	if r == nil || r.stores == nil || r.stores.ResourceHosts == nil || r.stores.Outbox == nil {
 		return nil, errors.New("runtime is not initialized")
 	}
-	return controlmanager.NewEngine(r.stores.Hosts, r.eventBroker), nil
+	var leases = r.stores.ResourceLeases
+	if leases != nil && r.stores.Engine() == store.EngineSQLite {
+		leases = nil
+	}
+	engine, err := controlmanager.NewEngine(controlmanager.Dependencies{
+		Hosts: r.stores.ResourceHosts, Outbox: r.stores.Outbox, Leases: leases,
+	}, controlmanager.DefaultConfig())
+	if err != nil {
+		return nil, err
+	}
+	hostController, err := controlmanager.NewHostController(r.stores.ResourceHosts, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := engine.Register(hostController); err != nil {
+		return nil, err
+	}
+	return engine, nil
 }
 
 // NewAPIServer constructs the API adapter. Additional readiness checks are
@@ -168,10 +198,10 @@ func (r *Runtime) NewAPIServer(
 func (r *Runtime) NewControlManagerOperationsServer(
 	engine *controlmanager.Engine,
 ) (*httpserver.Server, error) {
-	if r == nil || r.stores == nil || r.eventBroker == nil {
+	if r == nil || r.stores == nil {
 		return nil, errors.New("runtime is not initialized")
 	}
-	return httpserver.NewOperationsServer(r.stores, r.eventBroker, engine)
+	return httpserver.NewOperationsServer(r.stores, engine)
 }
 
 // ConfigureLogging installs the common structured JSON logger.

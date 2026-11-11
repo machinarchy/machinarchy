@@ -1,43 +1,145 @@
-// Package controlmanager implements the control plane engine for the Machinarchy system, responsible for managing host states, processing telemetry events, and coordinating with other components via an event-driven architecture.
+// Package controlmanager runs the level-triggered, edge-driven resource
+// reconciliation pipeline. Imperative Operations use a separate worker path.
 package controlmanager
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
+	"golang.org/x/time/rate"
 )
 
-// EventPublisher defines the interface for publishing and subscribing to events in the control manager's event-driven architecture.
-type EventPublisher interface {
-	Publish(ctx context.Context, subject string, payload interface{}) error
-	Subscribe(ctx context.Context, subject string, handler func(context.Context, []byte) error) error
+var (
+	ErrDuplicateController      = errors.New("a controller is already registered for this resource kind")
+	ErrNoControllers            = errors.New("at least one controller must be registered before startup")
+	ErrHostConnectorUnavailable = errors.New("no Host convergence adapter is configured")
+)
+
+type ReconcileResult struct{ RequeueAfter time.Duration }
+
+type Controller interface {
+	Name() string
+	Kind() ResourceKind
+	Reconcile(context.Context, ResourceKey) (ReconcileResult, error)
 }
 
-// Engine represents the control manager engine that handles host state management, telemetry processing, and event coordination.
+type Config struct {
+	Workers             int
+	QueueCapacity       int
+	ResyncInterval      time.Duration
+	OutboxPollInterval  time.Duration
+	OutboxLeaseDuration time.Duration
+	ResourceLeaseTTL    time.Duration
+	ReconcileTimeout    time.Duration
+	ShutdownTimeout     time.Duration
+	PageSize            int
+	RateLimitPerSecond  rate.Limit
+	RateBurst           int
+}
+
+func DefaultConfig() Config {
+	return Config{Workers: 4, QueueCapacity: 1024, ResyncInterval: 5 * time.Minute,
+		OutboxPollInterval: 250 * time.Millisecond, OutboxLeaseDuration: 30 * time.Second,
+		ResourceLeaseTTL: 2 * time.Minute, ReconcileTimeout: 30 * time.Second,
+		ShutdownTimeout: 30 * time.Second, PageSize: 200, RateLimitPerSecond: 20, RateBurst: 20}
+}
+
+type Dependencies struct {
+	Hosts  resource.HostRepository
+	Outbox eventing.OutboxStore
+	Leases resource.ResourceLeaseStore // nil for the SQLite single-manager profile
+	Logger *slog.Logger
+}
+
 type Engine struct {
-	hostStore domain.HostStore
-	publisher EventPublisher
-	ready     atomic.Bool
+	deps           Dependencies
+	cfg            Config
+	queue          *ResourceQueue
+	limiter        *rate.Limiter
+	controllers    map[ResourceKind]Controller
+	ownerID        string
+	mu             sync.Mutex
+	resyncLease    resource.ResourceLease
+	hasResyncLease bool
+	started        bool
+	ready          atomic.Bool
+	initialScan    atomic.Bool
 }
 
-// NewEngine creates a new instance of the control manager engine with the provided host store and event publisher.
-func NewEngine(hostStore domain.HostStore, publisher EventPublisher) *Engine {
-	return &Engine{
-		hostStore: hostStore,
-		publisher: publisher,
+func NewEngine(deps Dependencies, cfg Config) (*Engine, error) {
+	if deps.Hosts == nil || deps.Outbox == nil {
+		return nil, errors.New("Control Manager requires Host and outbox repositories")
 	}
+	defaults := DefaultConfig()
+	if cfg.Workers <= 0 {
+		cfg.Workers = defaults.Workers
+	}
+	if cfg.QueueCapacity <= 0 {
+		cfg.QueueCapacity = defaults.QueueCapacity
+	}
+	if cfg.ResyncInterval <= 0 {
+		cfg.ResyncInterval = defaults.ResyncInterval
+	}
+	if cfg.OutboxPollInterval <= 0 {
+		cfg.OutboxPollInterval = defaults.OutboxPollInterval
+	}
+	if cfg.OutboxLeaseDuration <= 0 {
+		cfg.OutboxLeaseDuration = defaults.OutboxLeaseDuration
+	}
+	if cfg.ResourceLeaseTTL <= 0 {
+		cfg.ResourceLeaseTTL = defaults.ResourceLeaseTTL
+	}
+	if cfg.ReconcileTimeout <= 0 {
+		cfg.ReconcileTimeout = defaults.ReconcileTimeout
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		cfg.ShutdownTimeout = defaults.ShutdownTimeout
+	}
+	if cfg.PageSize <= 0 || cfg.PageSize > 500 {
+		cfg.PageSize = defaults.PageSize
+	}
+	if cfg.RateLimitPerSecond <= 0 {
+		cfg.RateLimitPerSecond = defaults.RateLimitPerSecond
+	}
+	if cfg.RateBurst <= 0 {
+		cfg.RateBurst = defaults.RateBurst
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	id, err := resource.NewResourceID()
+	if err != nil {
+		return nil, fmt.Errorf("generate Control Manager instance ID: %w", err)
+	}
+	return &Engine{deps: deps, cfg: cfg, limiter: rate.NewLimiter(cfg.RateLimitPerSecond, cfg.RateBurst),
+		controllers: make(map[ResourceKind]Controller), ownerID: string(id)}, nil
 }
 
-// ReadinessName returns the name of the control manager engine for readiness checks.
-func (e *Engine) ReadinessName() string { return "control-manager" }
+func (e *Engine) Register(controller Controller) error {
+	if e == nil || controller == nil || controller.Kind() == "" || controller.Name() == "" {
+		return errors.New("valid controller is required")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.started {
+		return errors.New("controllers cannot be registered after startup")
+	}
+	if _, ok := e.controllers[controller.Kind()]; ok {
+		return ErrDuplicateController
+	}
+	e.controllers[controller.Kind()] = controller
+	return nil
+}
 
-// CheckReadiness verifies that the control manager engine is ready to process events and manage host states.
+func (e *Engine) ReadinessName() string { return "control-manager" }
 func (e *Engine) CheckReadiness(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("readiness context is required")
@@ -45,93 +147,399 @@ func (e *Engine) CheckReadiness(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if e == nil || !e.ready.Load() {
-		return fmt.Errorf("control-manager subscriptions are not active")
+	if e == nil || !e.ready.Load() || !e.initialScan.Load() {
+		return errors.New("Control Manager recovery scan is incomplete")
 	}
 	return nil
 }
 
-// HandleHostHeartbeat processes incoming telemetry events from agents or push mechanisms.
-func (e *Engine) HandleHostHeartbeat(ctx context.Context, hostID int) error {
-	if e == nil || e.hostStore == nil {
-		return errors.New("control-manager host store is not configured")
+// Start owns the bounded dispatcher, scanner, and worker lifecycles until ctx
+// is canceled. Shutdown stops admissions first and drains queued/current work
+// up to ShutdownTimeout, then cancels remaining reconcile contexts.
+func (e *Engine) Start(ctx context.Context) error {
+	if e == nil || ctx == nil {
+		return errors.New("Control Manager and context are required")
 	}
-	if ctx == nil {
-		return errors.New("heartbeat context is required")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	host, err := e.hostStore.GetHostByID(ctx, hostID)
+	e.mu.Lock()
+	if e.started {
+		e.mu.Unlock()
+		return errors.New("Control Manager already started")
+	}
+	if len(e.controllers) == 0 {
+		e.mu.Unlock()
+		return ErrNoControllers
+	}
+	e.started = true
+	e.queue = NewResourceQueue(e.cfg.QueueCapacity, time.Second, 5*time.Minute)
+	e.mu.Unlock()
+
+	admissionCtx, stopAdmission := context.WithCancel(ctx)
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	var background sync.WaitGroup
+	var workers sync.WaitGroup
+	for i := 0; i < e.cfg.Workers; i++ {
+		workers.Add(1)
+		go func() { defer workers.Done(); e.worker(workCtx) }()
+	}
+	background.Add(1)
+	go func() { defer background.Done(); e.dispatchLoop(admissionCtx) }()
+
+	if err := e.resync(admissionCtx); err != nil {
+		e.deps.Logger.Error("Control Manager startup resync failed", "error_class", errorClass(err))
+		stopAdmission()
+		e.queue.Shutdown()
+		cancelWork()
+		workers.Wait()
+		background.Wait()
+		e.releaseResyncLease()
+		return fmt.Errorf("startup resync: %w", err)
+	}
+	e.initialScan.Store(true)
+	e.ready.Store(true)
+	background.Add(1)
+	go func() { defer background.Done(); e.periodicResync(admissionCtx) }()
+	<-ctx.Done()
+	e.ready.Store(false)
+	stopAdmission()
+	e.queue.Shutdown()
+	background.Wait()
+
+	finished := make(chan struct{})
+	go func() { workers.Wait(); close(finished) }()
+	drain := e.cfg.ShutdownTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < drain {
+			drain = remaining
+		}
+	}
+	timer := time.NewTimer(drain)
+	defer timer.Stop()
+	select {
+	case <-finished:
+	case <-timer.C:
+		e.deps.Logger.Warn("Control Manager drain deadline reached; canceling active reconciliations")
+		cancelWork()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			e.deps.Logger.Error("Control Manager workers did not stop after cancellation")
+		}
+	}
+	cancelWork()
+	e.releaseResyncLease()
+	return nil
+}
+
+func (e *Engine) dispatchLoop(ctx context.Context) {
+	ticker := time.NewTicker(e.cfg.OutboxPollInterval)
+	defer ticker.Stop()
+	nextPrune := time.Now().Add(24 * time.Hour)
+	for {
+		if err := e.dispatchBatch(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			e.deps.Logger.Warn("outbox dispatch failed", "error_class", errorClass(err))
+		}
+		if time.Now().After(nextPrune) {
+			if _, err := e.deps.Outbox.Prune(ctx, time.Now()); err != nil {
+				e.deps.Logger.Warn("outbox retention pass failed", "error_class", errorClass(err))
+			}
+			nextPrune = time.Now().Add(24 * time.Hour)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Engine) dispatchBatch(ctx context.Context) error {
+	claimed, err := e.deps.Outbox.Claim(ctx, eventing.ConsumerControlManager, e.ownerID, time.Now().UTC(), e.cfg.OutboxLeaseDuration, 32)
 	if err != nil {
 		return err
 	}
-	if host == nil || host.SSH == nil {
-		return domain.ErrHostNotFound
+	for _, delivery := range claimed {
+		if err := ctx.Err(); err != nil {
+			_ = e.deps.Outbox.Retry(context.Background(), eventing.ConsumerControlManager, e.ownerID, delivery.Envelope.ID, time.Now().Add(time.Second), "dispatcher_stopping")
+			continue
+		}
+		envelope := delivery.Envelope
+		if err := envelope.Validate(); err != nil {
+			if quarantineErr := e.deps.Outbox.Quarantine(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now(), "unsupported_or_invalid_event"); quarantineErr != nil {
+				return quarantineErr
+			}
+			continue
+		}
+		key := ResourceKey{Kind: ResourceKind(envelope.Subject.Kind), WorkspaceID: envelope.WorkspaceID, ID: string(envelope.Subject.ID)}
+		if _, ok := e.controllers[key.Kind]; !ok {
+			if quarantineErr := e.deps.Outbox.Quarantine(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now(), "no_registered_controller"); quarantineErr != nil {
+				return quarantineErr
+			}
+			continue
+		}
+		admission := e.queue.Add(key)
+		switch admission {
+		case QueueAccepted, QueueCoalesced:
+			if err := e.deps.Outbox.Acknowledge(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now()); err != nil {
+				return err
+			}
+		case QueueBackpressured:
+			if err := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(outboxRetryDelay(delivery.Attempt)), "queue_backpressured"); err != nil {
+				return err
+			}
+		case QueueShuttingDown:
+			if err := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(time.Second), "dispatcher_stopping"); err != nil {
+				return err
+			}
+		}
 	}
-
-	// If the host was disconnected, transition it back to Active via CAS
-	if host.SSH.Status == domain.HostStatusDisconnected {
-		err = e.hostStore.UpdateHostStatusWithGuard(ctx, hostID, domain.HostStatusDisconnected, domain.HostStatusActive)
-		if err != nil {
-			return err
-		}
-
-		// Publish event to the event mesh so other components react
-		event := domain.HostReconnectedEvent{
-			HostID:    hostID,
-			Hostname:  host.Hostname,
-			IP:        host.IPAddress,
-			Timestamp: time.Now().UTC(),
-		}
-		if e.publisher == nil {
-			return errors.New("control-manager event publisher is not configured")
-		}
-		if pubErr := e.publisher.Publish(ctx, "machinarchy.host.reconnected", event); pubErr != nil {
-			slog.Error("Failed to publish host reconnected event", "error", pubErr)
-		}
-
-		slog.Info("Host successfully re-integrated into the mesh", "host_id", hostID)
-	}
-
 	return nil
 }
 
-// Start initializes the control manager engine, sets up event subscriptions, and runs background workers to process events and manage host states.
-func (e *Engine) Start(ctx context.Context) error {
-	if e == nil || e.publisher == nil {
-		return errors.New("control-manager event publisher is not configured")
-	}
-	if ctx == nil {
-		return errors.New("control-manager context is required")
-	}
-	slog.Info("Control-manager engine initializing event subscriptions...")
-
-	// Example: Subscribe to host reconnected events
-	err := e.publisher.Subscribe(ctx, "machinarchy.host.reconnected", func(c context.Context, data []byte) error {
-		_ = c // Use the context for tracing or cancellation if needed
-		var event domain.HostReconnectedEvent
-		if err := json.Unmarshal(data, &event); err != nil {
-			return fmt.Errorf("unmarshal host reconnected event: %w", err)
+func (e *Engine) periodicResync(ctx context.Context) {
+	for {
+		delay := jitterInterval(e.cfg.ResyncInterval)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
-
-		slog.Info("Received HostReconnectedEvent in background worker",
-			"host_id", event.HostID,
-			"hostname", event.Hostname,
-		)
-
-		// TODO: Add your background state machine or reconciliation logic here!
-		return nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to host reconnected events: %w", err)
+		if err := e.resync(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			e.deps.Logger.Warn("periodic Control Manager resync failed", "error_class", errorClass(err))
+		}
 	}
-	e.ready.Store(true)
-	defer e.ready.Store(false)
+}
 
-	slog.Info("Control-manager background listeners active and waiting for signals.")
+func (e *Engine) resync(ctx context.Context) error {
+	var scanLease resource.ResourceLease
+	if e.deps.Leases != nil {
+		var acquired bool
+		var err error
+		scanLease, acquired, err = e.deps.Leases.AcquireResourceLease(ctx, resource.ResourceLease{
+			Kind: "resync", WorkspaceID: 1, ID: "managed-hosts", Owner: e.ownerID,
+		}, time.Now(), e.resyncLeaseTTL())
+		if err != nil {
+			return err
+		}
+		if !acquired {
+			return nil
+		} // Another PostgreSQL manager owns the full scan.
+		e.mu.Lock()
+		e.resyncLease, e.hasResyncLease = scanLease, true
+		e.mu.Unlock()
+	}
+	cursor := resource.HostKeyCursor{Limit: e.cfg.PageSize}
+	for {
+		if e.deps.Leases != nil {
+			renewed, ok, err := e.deps.Leases.RenewResourceLease(ctx, scanLease, time.Now(), e.resyncLeaseTTL())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("resync leadership lease lost")
+			}
+			scanLease = renewed
+			e.mu.Lock()
+			e.resyncLease = renewed
+			e.mu.Unlock()
+		}
+		page, err := e.deps.Hosts.ListHostKeys(ctx, cursor)
+		if err != nil {
+			return err
+		}
+		for _, host := range page {
+			key := ResourceKey{Kind: HostResourceKind, WorkspaceID: host.WorkspaceID, ID: string(host.ID)}
+			if _, ok := e.controllers[key.Kind]; !ok {
+				continue
+			}
+			for {
+				admission := e.queue.Add(key)
+				if admission == QueueAccepted || admission == QueueCoalesced {
+					break
+				}
+				if admission == QueueShuttingDown {
+					return context.Canceled
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(25 * time.Millisecond):
+				}
+			}
+			cursor.AfterWorkspaceID, cursor.AfterID = host.WorkspaceID, string(host.ID)
+		}
+		if len(page) < cursor.Limit {
+			return nil
+		}
+	}
+}
 
-	// Block until the graceful shutdown signal cancels the context
-	<-ctx.Done()
+func (e *Engine) resyncLeaseTTL() time.Duration {
+	ttl := 2 * e.cfg.ResyncInterval
+	if ttl < 2*time.Minute {
+		ttl = 2 * time.Minute
+	}
+	if ttl > time.Hour {
+		ttl = time.Hour
+	}
+	return ttl
+}
 
-	slog.Info("Control-manager engine stopping background workers.")
-	return nil
+func (e *Engine) releaseResyncLease() {
+	if e.deps.Leases == nil {
+		return
+	}
+	e.mu.Lock()
+	lease, ok := e.resyncLease, e.hasResyncLease
+	e.hasResyncLease = false
+	e.mu.Unlock()
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := e.deps.Leases.ReleaseResourceLease(ctx, lease); err != nil {
+		e.deps.Logger.Warn("resync lease release failed", "error_class", errorClass(err))
+	}
+}
+
+func (e *Engine) worker(ctx context.Context) {
+	for {
+		key, ok := e.queue.Get(ctx)
+		if !ok {
+			return
+		}
+		controller := e.controllers[key.Kind]
+		if controller == nil {
+			e.queue.Forget(key)
+			e.queue.Done(key)
+			continue
+		}
+		result, err := e.reconcile(ctx, controller, key)
+		if err != nil {
+			e.deps.Logger.Warn("resource reconciliation failed", "controller", controller.Name(), "error_class", errorClass(err))
+			if !isPermanent(err) {
+				_ = e.queue.AddRateLimited(key)
+			} else {
+				e.queue.Forget(key)
+			}
+		} else {
+			e.queue.Forget(key)
+			if result.RequeueAfter > 0 {
+				_ = e.queue.AddAfter(key, result.RequeueAfter)
+			}
+		}
+		e.queue.Done(key)
+	}
+}
+
+func (e *Engine) reconcile(parent context.Context, controller Controller, key ResourceKey) (result ReconcileResult, retErr error) {
+	ctx, cancel := context.WithTimeout(parent, e.cfg.ReconcileTimeout)
+	defer cancel()
+	if err := e.limiter.Wait(ctx); err != nil {
+		return result, err
+	}
+	var lease resource.ResourceLease
+	if e.deps.Leases != nil {
+		var acquired bool
+		lease, acquired, retErr = e.deps.Leases.AcquireResourceLease(ctx, resource.ResourceLease{
+			Kind: string(key.Kind), WorkspaceID: key.WorkspaceID, ID: key.ID, Owner: e.ownerID,
+		}, time.Now(), e.cfg.ResourceLeaseTTL)
+		if retErr != nil {
+			return result, retErr
+		}
+		if !acquired {
+			_ = e.queue.AddAfter(key, time.Second)
+			return result, nil
+		}
+		ctx = resource.WithLeaseFence(ctx, resource.LeaseFence{Kind: lease.Kind, WorkspaceID: lease.WorkspaceID, ID: lease.ID, Token: lease.Token})
+		leaseCtx, stopLease := context.WithCancel(ctx)
+		ctx = leaseCtx
+		lost := make(chan struct{})
+		var renewer sync.WaitGroup
+		renewer.Add(1)
+		go func() {
+			defer renewer.Done()
+			ticker := time.NewTicker(e.cfg.ResourceLeaseTTL / 3)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-leaseCtx.Done():
+					return
+				case <-ticker.C:
+					_, ok, err := e.deps.Leases.RenewResourceLease(leaseCtx, lease, time.Now(), e.cfg.ResourceLeaseTTL)
+					if err != nil || !ok {
+						close(lost)
+						stopLease()
+						return
+					}
+				}
+			}
+		}()
+		defer func() {
+			stopLease()
+			renewer.Wait()
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := e.deps.Leases.ReleaseResourceLease(releaseCtx, lease); err != nil && !errors.Is(err, context.Canceled) {
+				e.deps.Logger.Warn("resource lease release failed", "error_class", errorClass(err))
+			}
+			releaseCancel()
+			select {
+			case <-lost:
+				retErr = errors.Join(retErr, errors.New("resource lease lost"))
+			default:
+			}
+		}()
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			retErr = errors.New("controller panic")
+		}
+	}()
+	return controller.Reconcile(ctx, key)
+}
+
+func outboxRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Second
+	for i := 1; i < attempt && delay < 5*time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
+	}
+	delay = time.Duration(float64(delay) * (0.8 + rand.Float64()*0.4))
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
+	}
+	return delay
+}
+
+func jitterInterval(interval time.Duration) time.Duration {
+	return time.Duration(float64(interval) * (0.9 + rand.Float64()*0.2))
+}
+
+type permanentError struct{ error }
+
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err}
+}
+func isPermanent(err error) bool { var target permanentError; return errors.As(err, &target) }
+func errorClass(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if isPermanent(err) {
+		return "permanent"
+	}
+	return "transient"
 }

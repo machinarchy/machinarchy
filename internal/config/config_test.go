@@ -135,6 +135,13 @@ func TestLoadEventBrokerURLValidation(t *testing.T) {
 			t.Fatalf("Load() error = %v", err)
 		}
 	})
+	t.Run("Control Manager does not require a broker URL", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_BROKER_URL", "not-a-nats-url")
+		if _, err := LoadControlManager(); err != nil {
+			t.Fatalf("LoadControlManager() should ignore legacy broker settings: %v", err)
+		}
+	})
 }
 
 func TestLoadOperatorTokenValidation(t *testing.T) {

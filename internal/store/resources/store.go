@@ -16,6 +16,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
@@ -164,6 +165,9 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 		domain.AuditTargetResourceHost, string(host.Metadata.ID), map[string]string{"name": host.Metadata.Name}); err != nil {
 		return err
 	}
+	if err := s.appendHostEvent(ctx, tx, host, eventing.HostCreated, "created"); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit managed Host creation: %w", err)
 	}
@@ -281,7 +285,11 @@ func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource
 	if host.Metadata.Revision == expectedRevision {
 		return nil
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated)
+	eventType, change := eventing.HostSpecChanged, "spec-changed"
+	if host.Spec.Presence == resource.PresenceAbsent {
+		eventType, change = eventing.HostDeletionRequested, "deletion-requested"
+	}
+	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, eventType, change, nil)
 }
 
 func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ResourceID,
@@ -296,7 +304,7 @@ func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id reso
 	if err := host.UpdateMetadata(expectedRevision, name, environmentID, labels, now); err != nil {
 		return err
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated)
+	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, "", "", nil)
 }
 
 func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ResourceID,
@@ -308,10 +316,17 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.Re
 	if err := host.Observe(expectedGeneration, phase, conditions, now); err != nil {
 		return err
 	}
-	return s.writeHost(ctx, host, host.Metadata.Revision-1, domain.AuditResourceHostUpdated)
+	var fence *resource.LeaseFence
+	if value, ok := resource.LeaseFenceFromContext(ctx); ok {
+		fence = &value
+	}
+	if s.dialect == PostgreSQL && fence == nil {
+		return resource.ErrLeaseRequired
+	}
+	return s.writeHost(ctx, host, host.Metadata.Revision-1, domain.AuditResourceHostUpdated, "", "", fence)
 }
 
-func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction string) error {
+func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction, eventType, eventChange string, fence *resource.LeaseFence) error {
 	labels, err := encodeJSON(host.Metadata.Labels)
 	if err != nil {
 		return err
@@ -325,6 +340,11 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 		return fmt.Errorf("begin managed Host update: %w", err)
 	}
 	defer rollback(tx, s.logger, "managed Host update")
+	if fence != nil {
+		if err := s.verifyLeaseFence(ctx, tx, *fence, host.Metadata.WorkspaceID, host.Metadata.ID); err != nil {
+			return err
+		}
+	}
 	result, err := tx.ExecContext(ctx, s.bind(`UPDATE managed_hosts SET environment_id = ?, name = ?, labels = ?,
 		desired_presence = ?, access_profile_id = ?, access_profile_revision = ?, generation = ?, revision = ?,
 		observed_generation = ?, phase = ?, conditions = ?, last_observed_at = ?, deletion_timestamp = ?, updated_at = ?
@@ -342,6 +362,11 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 	if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, auditAction, domain.AuditTargetResourceHost,
 		string(host.Metadata.ID), map[string]string{"generation": fmt.Sprint(host.Metadata.Generation)}); err != nil {
 		return err
+	}
+	if eventType != "" {
+		if err := s.appendHostEvent(ctx, tx, host, eventType, eventChange); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit managed Host update: %w", err)
@@ -362,6 +387,11 @@ func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id resource.Res
 	if host.Metadata.Revision != expectedRevision {
 		return resource.ErrConflict
 	}
+	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
+		if err := s.verifyLeaseFence(ctx, tx, fence, workspaceID, id); err != nil {
+			return err
+		}
+	}
 	if err := s.audit(ctx, tx, workspaceID, domain.AuditResourceHostDeleted,
 		domain.AuditTargetResourceHost, string(id), map[string]string{"name": host.Metadata.Name}); err != nil {
 		return err
@@ -374,8 +404,57 @@ func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id resource.Res
 	if err := s.rowsAffected(result, resource.ErrConflict); err != nil {
 		return err
 	}
+	deleted := *host
+	deleted.Metadata.Revision = expectedRevision + 1
+	if err := s.appendHostEvent(ctx, tx, &deleted, eventing.HostDeleted, "deleted"); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit managed Host deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.Host, eventType, change string) error {
+	var correlationID string
+	var actor *eventing.Actor
+	if source, ok := domain.AuditActorFrom(ctx); ok {
+		correlationID = source.RequestID
+		if source.UserID > 0 || source.APITokenID > 0 {
+			actor = &eventing.Actor{UserID: source.UserID, APITokenID: source.APITokenID}
+		}
+	}
+	event, err := eventing.NewHostEvent(eventType, host.Metadata.WorkspaceID, eventing.Subject{
+		Kind: "host", ID: host.Metadata.ID, Generation: host.Metadata.Generation, Revision: host.Metadata.Revision,
+	}, change, host.Metadata.UpdatedAt, correlationID, correlationID, actor)
+	if err != nil {
+		return fmt.Errorf("construct Host integration event: %w", err)
+	}
+	payload := string(event.Data)
+	var actorUserID, actorTokenID any
+	if actor != nil {
+		if actor.UserID > 0 {
+			actorUserID = actor.UserID
+		}
+		if actor.APITokenID > 0 {
+			actorTokenID = actor.APITokenID
+		}
+	}
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_events (
+		event_id, event_type, schema_version, occurred_at, producer, workspace_id,
+		subject_kind, subject_id, subject_generation, subject_revision, correlation_id,
+		causation_id, actor_user_id, actor_token_id, payload, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), string(event.ID), event.Type, event.SchemaVersion,
+		s.nowText(event.OccurredAt), event.Producer, event.WorkspaceID, event.Subject.Kind, string(event.Subject.ID),
+		event.Subject.Generation, event.Subject.Revision, event.CorrelationID, event.CausationID,
+		actorUserID, actorTokenID, payload, s.nowText(event.OccurredAt))
+	if err != nil {
+		return fmt.Errorf("insert Host outbox event: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_deliveries (event_id, consumer_group, available_at_ns)
+		VALUES (?, ?, ?)`), string(event.ID), eventing.ConsumerControlManager, event.OccurredAt.UnixNano())
+	if err != nil {
+		return fmt.Errorf("create Host outbox delivery: %w", err)
 	}
 	return nil
 }
