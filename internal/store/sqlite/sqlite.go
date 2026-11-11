@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/machinarchy/machinarchy/internal/domain"
+	resourceStore "github.com/machinarchy/machinarchy/internal/store/resources"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 	// Import modernc.org/sqlite to register the SQLite database driver.
 	_ "modernc.org/sqlite"
@@ -25,6 +27,7 @@ type Config struct {
 // Store provides SQLite-backed persistence for Machinarchy.
 type Store struct {
 	DB            *sql.DB
+	Resources     *resourceStore.Store
 	encryptionKey []byte
 	logger        *slog.Logger
 }
@@ -43,7 +46,18 @@ func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{DB: db, encryptionKey: key, logger: logger}, nil
+	operationKey, err := crypto.DeriveKey(secret, "machinarchy-operation-spec-v1")
+	if err != nil {
+		return nil, fmt.Errorf("derive SQLite Operation spec encryption key: %w", err)
+	}
+	resources, err := resourceStore.New(db, resourceStore.SQLite, operationKey, logger,
+		func(ctx context.Context, tx *sql.Tx, event domain.AuditEvent) error {
+			return appendAudit(ctx, tx, event)
+		})
+	if err != nil {
+		return nil, fmt.Errorf("initialize SQLite managed resource repositories: %w", err)
+	}
+	return &Store{DB: db, encryptionKey: key, logger: logger, Resources: resources}, nil
 }
 
 // OpenDB opens a SQLite database using the provided configuration.

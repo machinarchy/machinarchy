@@ -13,6 +13,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	resourceStore "github.com/machinarchy/machinarchy/internal/store/resources"
 	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
@@ -20,6 +21,7 @@ import (
 // Store implements the domain store interfaces for PostgreSQL
 type Store struct {
 	db            *sql.DB
+	Resources     *resourceStore.Store
 	encryptionKey []byte
 	logger        *slog.Logger
 }
@@ -44,10 +46,22 @@ func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	operationKey, err := crypto.DeriveKey(secret, "machinarchy-operation-spec-v1")
+	if err != nil {
+		return nil, fmt.Errorf("derive PostgreSQL Operation spec encryption key: %w", err)
+	}
+	resources, err := resourceStore.New(db, resourceStore.PostgreSQL, operationKey, logger,
+		func(ctx context.Context, tx *sql.Tx, event domain.AuditEvent) error {
+			return appendAudit(ctx, tx, event)
+		})
+	if err != nil {
+		return nil, fmt.Errorf("initialize PostgreSQL managed resource repositories: %w", err)
+	}
 	return &Store{
 		db:            db,
 		encryptionKey: key,
 		logger:        logger,
+		Resources:     resources,
 	}, nil
 }
 

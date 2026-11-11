@@ -2,6 +2,21 @@
 
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
+## 2026-11-11 — Phase E domain and persistence foundation
+
+### Changes in this update
+
+- Added connector-neutral managed Host and Operation domain types with UUID identity, desired/observed state, generation/revision semantics, conditions, validation, and lifecycle transitions. Kept the existing SSH-shaped Host and Run APIs intact.
+- Added shared resource repository ports and SQLite/PostgreSQL persistence adapters, transactional audit writes, optimistic revision checks, encrypted Operation specifications and target output, target snapshots/results, workspace-safe environment references, indexes, and migration 000007 for each engine.
+- Added domain and cross-engine repository contract tests for resource creation/read/update/deletion, generation and status updates, concurrent stale-write rejection, Operation lifecycle/encryption, rollback, and migrations. The canonical tables are additive; legacy `hosts` and `runs` data are not migrated or redirected, and event/outbox publishing remains out of scope.
+
+### Validation
+
+- `gofmt` — passed for changed Go files.
+- `GOCACHE=/tmp/machinarchy-go-cache go test ./internal/domain/resource ./internal/store` — passed. SQLite migration and repository contracts ran; PostgreSQL contract tests were skipped because `MACHINARCHY_TEST_POSTGRES_URL` was not configured.
+- `GOCACHE=/tmp/machinarchy-go-cache go test -race ./internal/domain/resource ./internal/store`, `go vet ./...`, and `git diff --check` — passed.
+- `GOCACHE=/tmp/machinarchy-go-cache go test ./...` — all other packages passed, but `internal/transport/http/TestOperationsServerStartsAndShutsDown` failed waiting for its listener to bind. The same isolated test failed; no HTTP code was changed. Benchmarks and security checks were not run.
+
 ## 2026-11-11 — Phase D repository foundation and runtime composition
 
 ### Changes in this update

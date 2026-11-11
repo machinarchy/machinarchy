@@ -15,24 +15,31 @@ import (
 
 // Audit actions. Details never contain credentials; see SanitizeAuditDetails.
 const (
-	AuditUserCreated       = "user.created"
-	AuditMemberRoleChanged = "member.role_changed"
-	AuditHostCreated       = "host.created"
-	AuditHostUpdated       = "host.updated"
-	AuditHostDeleted       = "host.deleted"
-	AuditHostLabelsPatched = "host.labels_patched"
-	AuditAPITokenCreated   = "api_token.created"
-	AuditAPITokenRevoked   = "api_token.revoked"
+	AuditUserCreated         = "user.created"
+	AuditMemberRoleChanged   = "member.role_changed"
+	AuditHostCreated         = "host.created"
+	AuditHostUpdated         = "host.updated"
+	AuditHostDeleted         = "host.deleted"
+	AuditHostLabelsPatched   = "host.labels_patched"
+	AuditResourceHostCreated = "resource_host.created"
+	AuditResourceHostUpdated = "resource_host.updated"
+	AuditResourceHostDeleted = "resource_host.deleted"
+	AuditAPITokenCreated     = "api_token.created"
+	AuditAPITokenRevoked     = "api_token.revoked"
 
 	AuditRunCreated         = "run.created"
 	AuditRunCancelRequested = "run.cancel_requested"
 	AuditRunFinished        = "run.finished"
 	AuditRunInterrupted     = "run.interrupted"
+	AuditOperationCreated   = "operation.created"
+	AuditOperationUpdated   = "operation.updated"
 
-	AuditTargetUser     = "user"
-	AuditTargetHost     = "host"
-	AuditTargetAPIToken = "api_token"
-	AuditTargetRun      = "run"
+	AuditTargetUser         = "user"
+	AuditTargetHost         = "host"
+	AuditTargetResourceHost = "resource_host"
+	AuditTargetAPIToken     = "api_token"
+	AuditTargetRun          = "run"
+	AuditTargetOperation    = "operation"
 
 	AuditOutcomeSuccess = "success"
 
