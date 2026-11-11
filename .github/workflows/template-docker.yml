@@ -300,3 +300,20 @@ jobs:
             exit 1
           }
           cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
+
+      - name: Write container release summary
+        env:
+          IMAGE_REF: ${{ needs.docker-build-push.outputs.image_ref }}
+          IMAGE_DIGEST: ${{ needs.docker-build-push.outputs.image_digest }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "### Machinarchy container published"
+            echo
+            echo "- Image: \`${IMAGE_REF}:${RELEASE_VERSION}\`"
+            echo "- Digest: \`${IMAGE_DIGEST}\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- SBOM: generated"
+            echo "- Build provenance: generated"
+            echo "- Cosign keyless signature: published"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -181,16 +181,32 @@ jobs:
 
           ## Verify downloads
 
-          Linux:
+          ### 1. Verify SHA-256 checksum
+
+          Download the selected binary and `checksums.txt` from this release.
+
+          Linux AMD64:
 
           ```bash
-          sha256sum -c checksums.txt
+          grep -E '  machinarchy-linux-amd64$' checksums.txt | sha256sum --check -
           ```
 
-          macOS:
+          macOS Apple Silicon:
 
           ```bash
-          shasum -a 256 -c checksums.txt
+          grep -E '  machinarchy-darwin-arm64$' checksums.txt | shasum -a 256 -c -
+          ```
+
+          Replace the filename with the asset you downloaded.
+
+          ### 2. Verify GitHub build provenance
+
+          Install the [GitHub CLI](https://cli.github.com/), then verify the downloaded binary:
+
+          ```bash
+          gh attestation verify machinarchy-linux-amd64 \
+            --repo "${REPOSITORY}" \
+            --signer-workflow ${REPOSITORY}/.github/workflows/release.yml
           ```
 
           ## Changes
