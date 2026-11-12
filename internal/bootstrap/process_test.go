@@ -79,7 +79,9 @@ func TestControlManagerRuntimeUsesDatabaseOutboxWithoutNATS(t *testing.T) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := OpenControlManager(context.Background(), config.Config{
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime, err := OpenControlManager(ctx, config.Config{
 		Database:         config.DatabaseConfig{Engine: config.SQLite, Path: filepath.Join(dir, "control.db"), ConnectTimeout: time.Second},
 		EncryptionSecret: "control-manager-test-secret-that-is-at-least-32-bytes",
 	})
@@ -104,7 +106,9 @@ func TestRunComponentsReportsUnexpectedWorkerStopAndShutsDownServer(t *testing.T
 	server := newFakeHTTP()
 	wantErr := errors.New("worker startup failed")
 	worker := &fakeWorker{started: make(chan struct{}), stopped: make(chan struct{}), result: wantErr}
-	err := runComponents(context.Background(), "127.0.0.1:0", server, worker)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := runComponents(ctx, "127.0.0.1:0", server, worker)
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("runComponents() error = %v, want worker startup failure", err)
 	}
@@ -135,7 +139,9 @@ func TestRunComponentsDoesNotStartWorkerAfterStartupCancellation(t *testing.T) {
 func TestRunComponentsReportsListenerStartupFailure(t *testing.T) {
 	wantErr := errors.New("address already in use")
 	server := &fakeHTTP{startErr: wantErr, ready: make(chan struct{}), stopped: make(chan struct{})}
-	err := runComponents(context.Background(), "127.0.0.1:0", server, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := runComponents(ctx, "127.0.0.1:0", server, nil)
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("runComponents() error = %v, want listener startup error", err)
 	}
@@ -151,14 +157,14 @@ func TestRunComponentsRejectsMissingStartupDependencies(t *testing.T) {
 	if err := runComponents(context.Background(), " ", newFakeHTTP(), nil); err == nil {
 		t.Fatal("runComponents accepted an empty listen address")
 	}
-	if err := runComponents(nil, "127.0.0.1:0", newFakeHTTP(), nil); err == nil {
-		t.Fatal("runComponents accepted a nil context")
+	if err := runComponents(context.TODO(), "127.0.0.1:0", newFakeHTTP(), nil); err == nil {
+		t.Fatal("runComponents accepted a context.TODO()")
 	}
 }
 
 func TestOpenRejectsMissingOrCanceledStartupContext(t *testing.T) {
-	if _, err := Open(nil, config.Config{}); err == nil || !strings.Contains(err.Error(), "runtime context") {
-		t.Fatalf("Open(nil, ...) error = %v, want a useful context validation error", err)
+	if _, err := Open(context.TODO(), config.Config{}); err == nil || !strings.Contains(err.Error(), "runtime context") {
+		t.Fatalf("Open(context.TODO(), ...) error = %v, want a useful context validation error", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

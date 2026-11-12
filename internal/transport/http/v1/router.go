@@ -5,12 +5,15 @@ package v1
 import (
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
+	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	// Sub-domain packages
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/audit"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/auth"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/configuration"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/environments"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/fleet"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/history"
@@ -18,19 +21,23 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/runs"
+	secretapi "github.com/machinarchy/machinarchy/internal/transport/http/v1/secret"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/tokens"
 )
 
 // Repositories groups the domain ports required by the v1 HTTP transport.
 // Concrete database adapters are assembled at the process composition root.
 type Repositories struct {
-	Users        domain.UserStore
-	Metrics      domain.MetricsStore
-	Hosts        domain.HostStore
-	Jobs         domain.JobStore
-	Environments domain.EnvironmentStore
-	Access       domain.AccessStore
-	Audit        domain.AuditStore
+	Users         domain.UserStore
+	Metrics       domain.MetricsStore
+	Hosts         domain.HostStore
+	Jobs          domain.JobStore
+	Environments  domain.EnvironmentStore
+	Access        domain.AccessStore
+	Audit         domain.AuditStore
+	Configuration *runtimeconfig.Service
+	Secrets       *secrets.Service
+	SignupEnabled func() bool
 }
 
 // RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
@@ -51,6 +58,9 @@ func RegisterRoutes(
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
+	if repos.SignupEnabled != nil {
+		authHandler.SetSignupEnabledProvider(repos.SignupEnabled)
+	}
 	envHandler := environments.NewHandler(repos.Environments)
 	historyHandler := history.NewHandler(metricsServ, repos.Hosts)
 	hostHandler := host.NewHandler(repos.Hosts, repos.Jobs, repos.Environments, hostServ)
@@ -119,6 +129,14 @@ func RegisterRoutes(
 		auditGroup := apiv1.Group("/audit",
 			middleware.RequirePermission(domain.PermissionAuditRead), middleware.RequireHuman())
 		audit.RegisterRoutes(auditGroup, auditHandler)
+
+		// Configuration and Secret Store changes require a human workspace owner.
+		if repos.Configuration != nil {
+			configuration.RegisterRoutes(apiv1.Group("/runtime-config", middleware.RequireOwner(), middleware.RequireHuman()), configuration.NewHandler(repos.Configuration))
+		}
+		if repos.Secrets != nil {
+			secretapi.RegisterRoutes(apiv1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman()), secretapi.NewHandler(repos.Secrets))
+		}
 
 	}
 }

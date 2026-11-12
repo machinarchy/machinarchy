@@ -5,6 +5,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -13,16 +14,21 @@ import (
 
 // Handler handles HTTP requests for authentication operations.
 type Handler struct {
-	authService   domain.AuthService
-	secureCookie  bool
-	signupEnabled bool
+	authService    domain.AuthService
+	secureCookie   bool
+	signupEnabled  atomic.Bool
+	signupProvider func() bool
 }
 
 // NewHandler creates an authentication HTTP handler using the provided
 // authentication service and cookie and signup settings.
 func NewHandler(as domain.AuthService, secureCookie, signupEnabled bool) *Handler {
-	return &Handler{authService: as, secureCookie: secureCookie, signupEnabled: signupEnabled}
+	h := &Handler{authService: as, secureCookie: secureCookie}
+	h.signupEnabled.Store(signupEnabled)
+	return h
 }
+
+func (h *Handler) SetSignupEnabledProvider(provider func() bool) { h.signupProvider = provider }
 
 // SignUpRequest represents the payload required to register a new user.
 type SignUpRequest struct {
@@ -93,7 +99,11 @@ func clearAuthCookie(c echo.Context, secure bool) {
 // @Failure 500 {object} ErrorResponse
 // @Router /api/auth/signup [post]
 func (h *Handler) SignUp(c echo.Context) error {
-	if !h.signupEnabled {
+	enabled := h.signupEnabled.Load()
+	if h.signupProvider != nil {
+		enabled = h.signupProvider()
+	}
+	if !enabled {
 		return c.JSON(http.StatusForbidden, ErrorResponse{Error: "Account registration is disabled"})
 	}
 

@@ -13,6 +13,47 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// EncryptBytes seals binary data with AES-256-GCM and caller supplied
+// additional authenticated data. The returned value stores nonce || ciphertext.
+func EncryptBytes(plaintext, key, additionalData []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("AES-256-GCM key must be exactly 32 bytes")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, additionalData), nil
+}
+
+// DecryptBytes opens nonce || ciphertext using AES-256-GCM and verifies the
+// caller supplied additional authenticated data before returning plaintext.
+func DecryptBytes(sealed, key, additionalData []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("AES-256-GCM key must be exactly 32 bytes")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < gcm.NonceSize() {
+		return nil, errors.New("malformed encrypted payload")
+	}
+	return gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], additionalData)
+}
+
 // ErrInvalidKey indicates that a cryptographic key does not meet the minimum length requirement.
 var ErrInvalidKey = errors.New("cryptographic key must be at least 32 bytes")
 

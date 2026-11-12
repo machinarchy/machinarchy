@@ -1,5 +1,47 @@
 # ChangeLogAI
 
+## 2026-11-12 — Phase G bounded KEK rewrapping
+
+### Changes in this update
+
+- Added migration 000010 to version secret value AAD while retaining the original AAD key ID for legacy ciphertext.
+- Added resumable, owner-authorized batch rewrapping of stored DEKs to the active external KEK. Rewrapping leaves secret ciphertext and immutable version identifiers unchanged; each successful update is audited without key material or plaintext.
+- Exposed rewrapping through the Secret API and CLI and documented the staged keyring/restart/rewrap/removal procedure.
+
+### Validation
+
+- `gofmt` and focused `go test -count=1 -timeout 60s ./internal/store/management ./internal/runtimeconfig ./internal/transport/http/v1/secret ./internal/cli/api ./internal/cli/commands` — passed, including bounded-batch resume, authorization, and legacy ciphertext compatibility.
+- `go test -count=1 -timeout 2m ./...` — failed at `internal/transport/http/TestOperationsServerStartsAndShutsDown` waiting for its listener; other reported packages passed. PostgreSQL integration remains unavailable because no test URL is configured and Docker is unavailable. Lint checks were not run as directed.
+
+## 2026-11-12 — Phase G runtime retry and key handling hardening
+
+### Changes in this update
+
+- Bounded configuration notification polling to one second and added capped exponential retry backoff after database or apply failures, avoiding rapid repeated reload attempts while preserving periodic recovery checks.
+- Wipe temporary KEK copies after Secret Store use without modifying key-provider-owned buffers; added regression coverage for key ownership and retry backoff bounds.
+
+### Validation
+
+- `gofmt`, `git diff --check`, `go test -count=1 -timeout 60s ./internal/runtimeconfig ./internal/store/management`, focused API/CLI/bootstrap/config package tests — passed.
+- `go test -count=1 -timeout 2m ./...` — failed at the existing `internal/transport/http/TestOperationsServerStartsAndShutsDown` listener test; the other reported packages passed. No HTTP code was changed in this update.
+- PostgreSQL integration validation — blocked: `MACHINARCHY_TEST_POSTGRES_URL` is unset and the Docker daemon is unavailable. Lint checks were not run as directed for this work session.
+
+## 2026-11-12 — Phase G configuration/secrets and bootstrap lifecycle verification
+
+### Changes in this update
+
+- Implemented global typed runtime configuration revisions, compare-and-swap updates, history/rollback, SQL outbox hints, process application status, atomic snapshots, periodic checks, and safe hot-reload of logging, SSH target policy, operation admission policy, and signup behavior. Restart-only worker/pool settings are reported as restart-required and rejected when changed at runtime.
+- Added external bootstrap key/keyring file loading, encrypted versioned Secret Store records using per-version DEKs and AES-GCM authenticated data, owner/human authorization, metadata/audit endpoints, rotation, retirement, and CLI management through the API. Plaintext is write-only at the API and CLI.
+- Fixed bootstrap lifecycle validation so non-cancellable contexts are rejected before component startup; lifecycle tests use explicit cancellation contexts.
+
+### Validation
+
+- Bootstrap regression test and full bootstrap package tests — passed.
+- `go test -count=1 -timeout 2m ./...` — failed only at `internal/transport/http/TestOperationsServerStartsAndShutsDown` because its listener did not bind in this environment; all other listed packages passed.
+- PostgreSQL test script — blocked because Docker cannot connect to the local daemon. PostgreSQL behavior remains unverified.
+- `golangci-lint run` — not completed successfully; Go module cache writes under `/Users/mleus/go/pkg/mod/cache` are denied and package loading fails. No dependency files or lint rules were changed.
+- Full Phase G docs/changelog completion is recorded here; configuration examples and user-facing documentation updated separately in this change.
+
 Project change history maintained alongside the code. Entries are newest first. Each entry distinguishes changes made in that update from the implementation baseline and records only validation that was actually performed.
 
 ## 2026-11-11 — Phase F event infrastructure and control loop

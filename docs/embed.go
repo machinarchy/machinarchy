@@ -3,6 +3,7 @@ package docs
 
 import (
 	_ "embed"
+	"log/slog"
 	"net/http"
 )
 
@@ -16,6 +17,10 @@ func SpecHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(specification)
+		if _, err := w.Write(specification); err != nil {
+			slog.Debug("failed to write API specification response",
+				"error", err,
+			)
+		}
 	})
 }

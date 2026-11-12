@@ -4,17 +4,55 @@ run:
   timeout: 5m
 
 linters:
-  default: none
+  default: standard
+
   enable:
-    - govet
-    - errcheck
-    - staticcheck
-    - gosec
+    # Security
+    - gosec        # security: G204 (subprocess), G304 (file path), G306 (file perms), etc.
+
+    # Resource management
+    - bodyclose
+
+    # Error handling
+    - errorlint
+
+    # Code quality
+    - misspell
     - revive
+
   settings:
+    errcheck:
+      check-blank: true
+
     gosec:
-      severity: medium
-      confidence: medium
+      # Include all available security rules.
+      severity: low
+      confidence: low
+      excludes: []
+
+    govet:
+      # Enable all available analyzers.
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+
+  exclusions:
+    warn-unused: true
+
+    presets:
+      - comments
+      - std-error-handling
+
+    rules:
+      # Skip errcheck in test files.
+      - path: '(.+)_test\.go'
+        linters:
+          - errcheck
+          - gosec
+    # No blanket test-file exclusions.
+    # No std-error-handling preset.
+    # Add targeted exceptions only when justified.
 
 formatters:
   enable:

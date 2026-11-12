@@ -19,10 +19,17 @@ type HostController struct {
 }
 
 func NewHostController(hosts resource.HostRepository, converger HostConverger) (*HostController, error) {
+	return NewHostControllerWithResync(hosts, converger, 5*time.Minute)
+}
+
+func NewHostControllerWithResync(hosts resource.HostRepository, converger HostConverger, resync time.Duration) (*HostController, error) {
 	if hosts == nil {
-		return nil, errors.New("Host controller requires a Host repository")
+		return nil, errors.New("host controller requires a host repository")
 	}
-	return &HostController{hosts: hosts, converger: converger, connectorRetry: 5 * time.Minute}, nil
+	if resync <= 0 {
+		resync = 5 * time.Minute
+	}
+	return &HostController{hosts: hosts, converger: converger, connectorRetry: resync}, nil
 }
 
 func (c *HostController) Name() string       { return "host" }

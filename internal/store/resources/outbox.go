@@ -9,6 +9,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 func (s *Store) ListHostKeys(ctx context.Context, cursor resource.HostKeyCursor) ([]resource.HostKey, error) {
@@ -22,7 +23,7 @@ func (s *Store) ListHostKeys(ctx context.Context, cursor resource.HostKeyCursor)
 	if err != nil {
 		return nil, fmt.Errorf("list managed Host keys: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list host keys")
 	keys := make([]resource.HostKey, 0, limit)
 	for rows.Next() {
 		var key resource.HostKey
@@ -64,6 +65,8 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 	if err != nil {
 		return nil, fmt.Errorf("select pending outbox deliveries: %w", err)
 	}
+	defer utils.CloseRows(rows, s.logger, "query pending outbox deliveries")
+
 	events := make([]eventing.ClaimedEvent, 0)
 	for rows.Next() {
 		var event eventing.Envelope
@@ -74,7 +77,6 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		if err := rows.Scan(&eventID, &eventType, &schemaVersion, &occurred, &event.Producer,
 			&event.WorkspaceID, &subjectKind, &subjectID, &event.Subject.Generation, &event.Subject.Revision,
 			&event.CorrelationID, &event.CausationID, &actorUser, &actorToken, &payload, &attempts); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
 		event.ID, event.Type, event.SchemaVersion = resource.ResourceID(eventID), eventType, uint16(schemaVersion)
@@ -82,7 +84,6 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		event.Data = []byte(payload)
 		event.OccurredAt, err = time.Parse(time.RFC3339Nano, occurred)
 		if err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("parse outbox event timestamp: %w", err)
 		}
 		if actorUser.Valid || actorToken.Valid {
@@ -97,11 +98,7 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		events = append(events, eventing.ClaimedEvent{Envelope: event, Attempt: attempts + 1})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, fmt.Errorf("iterate pending outbox deliveries: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close pending outbox rows: %w", err)
 	}
 	for _, claimed := range events {
 		result, err := tx.ExecContext(ctx, s.bind(`UPDATE outbox_deliveries SET lease_owner = ?, lease_expires_at_ns = ?, attempts = attempts + 1

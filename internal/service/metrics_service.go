@@ -18,10 +18,11 @@ import (
 )
 
 type metricsService struct {
-	metricStore domain.MetricsStore
-	hostStore   domain.HostStore
-	sshLimit    *SSHCapacity
-	policy      netpolicy.Policy
+	metricStore    domain.MetricsStore
+	hostStore      domain.HostStore
+	sshLimit       *SSHCapacity
+	policy         netpolicy.Policy
+	policyProvider func() netpolicy.Policy
 }
 
 // NewMetricsService constructs a metrics service with default SSH connection testing and capacity.
@@ -40,7 +41,13 @@ func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, 
 		return nil, errors.New("metrics service dependencies and SSH capacity are required")
 	}
 	options := applyOptions(opts)
-	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity, policy: options.targetPolicy}, nil
+	return &metricsService{metricStore: ms, hostStore: hs, sshLimit: capacity, policy: options.targetPolicy, policyProvider: options.targetPolicyProvider}, nil
+}
+func (s *metricsService) targetPolicy() netpolicy.Policy {
+	if s.policyProvider != nil {
+		return s.policyProvider()
+	}
+	return s.policy
 }
 
 func (s *metricsService) GetHistory(ctx context.Context, workspaceID int, timeRange string) ([]domain.DataPoint, error) {
@@ -106,6 +113,7 @@ func (s *metricsService) GetLiveDiagnostics(ctx context.Context, workspaceID, ho
 		return nil, fmt.Errorf("%w: host has no supported SSH authentication method", domain.ErrInvalidInput)
 	}
 
+	policy := s.targetPolicy()
 	dialParams := sshclient.DialParams{
 		IP:                  host.IPAddress,
 		Port:                host.SSH.Port,
@@ -114,7 +122,7 @@ func (s *metricsService) GetLiveDiagnostics(ctx context.Context, workspaceID, ho
 		SecretData:          secretData,
 		Passphrase:          host.SSH.AuthType.Passphrase,
 		ExpectedFingerprint: host.SSH.AuthType.ExpectedFingerprint,
-		Dialer:              s.policy.DialContext,
+		Dialer:              policy.DialContext,
 	}
 
 	// 2. Execute Linux baseline collection telemetry matrix command block

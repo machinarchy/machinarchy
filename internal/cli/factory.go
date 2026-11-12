@@ -81,3 +81,15 @@ func (f *Factory) NewAPIClient(ctx context.Context) (api.Client, error) {
 	}
 	return client, nil
 }
+
+func (f *Factory) NewManagementClient(ctx context.Context) (api.ManagementClient, error) {
+	client, err := f.NewAPIClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	managementClient, ok := client.(api.ManagementClient)
+	if !ok {
+		return nil, errors.New("API client does not support configuration and Secret Store management")
+	}
+	return managementClient, nil
+}

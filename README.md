@@ -89,12 +89,13 @@ Human protected routes accept an `Authorization: Bearer <JWT>` header or the `au
 
 ## Configuration
 
-All settings use environment variables; the application does not load `.env` files itself. `.env.example` lists the available settings. Key requirements:
+Bootstrap settings use environment variables, a selected JSON file (`--config FILE`), and non-secret startup flags. Precedence is flags, environment, file, then defaults. The application does not load `.env` files itself. Encryption keys are accepted only through environment injection or protected key files, never command-line values or the JSON file. `.env.example` lists the available settings. Key requirements:
 
 | Variable | Purpose |
 | --- | --- |
 | `MACHINARCHY_OPERATOR_TOKEN` | JWT signing secret; required, at least 32 characters, no whitespace. |
-| `MACHINARCHY_ENCRYPTION_SECRET` | Secret for at-rest SSH credential encryption. Required in production and independent of the JWT secret. |
+| `MACHINARCHY_ENCRYPTION_SECRET` / `_FILE` | External root key source for database-backed Secret Store envelope encryption; independent of the JWT secret and required in every environment. File permissions must be `0600` or stricter. |
+| `MACHINARCHY_ENCRYPTION_KEY_ID` / `_KEYRING_FILE` | Current external KEK identifier and optional protected JSON map of previous KEKs for decrypting older versions. |
 | `MACHINARCHY_ENVIRONMENT` | `development` or `production`. |
 | `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `true` in development and `false` in production. |
 | `MACHINARCHY_LISTEN_ADDR` | HTTP bind address, default `:8080`. |
@@ -104,6 +105,8 @@ All settings use environment variables; the application does not load `.env` fil
 | `MACHINARCHY_BROKER_URL` | NATS URL, default `nats://localhost:4222`. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; required in production. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP/HTTP collector endpoint. |
+
+Runtime configuration is global and stored as immutable database revisions. Owners manage it through `machinarchy runtime-config get|history|validate|publish|rollback|status`; restart-required settings cannot be changed in a live revision. Secret values are write-only: use `machinarchy secret create NAME --value-stdin` and `rotate ID --expected-version N --value-stdin`. For KEK rotation, set the new external key as current, retain the old key in the protected keyring, restart server processes, then run `machinarchy secret rewrap --old-key-id OLD_ID` until `remaining` is zero. Keep the old key until dependent database backups expire. The API returns metadata only; retirement prevents further resolution while retaining ciphertext for database backup/retention handling. Runtime configuration and secret endpoints are owner and human-session restricted.
 
 Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL. Keep signup disabled except during controlled onboarding. Workspace scoping is implemented, while invitations, member removal, and durable audit events remain future work, and the PostgreSQL contract tests need their first verified run (`make test-postgres` or CI). See [the security assessment](docs/SECURITY.md) and [roadmap](docs/ROADMAP.md).
 

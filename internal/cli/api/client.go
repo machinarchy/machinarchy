@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,23 @@ type Client interface {
 	ListEnvironments(context.Context) ([]Environment, error)
 }
 
+// ManagementClient is the API-only surface for runtime configuration and
+// write-only Secret Store administration.
+type ManagementClient interface {
+	RuntimeConfig(context.Context) (json.RawMessage, error)
+	ConfigHistory(context.Context, uint64) (json.RawMessage, error)
+	ConfigStatus(context.Context) (json.RawMessage, error)
+	ValidateRuntimeConfig(context.Context, json.RawMessage) (json.RawMessage, error)
+	PublishRuntimeConfig(context.Context, uint64, json.RawMessage, string) (json.RawMessage, error)
+	RollbackRuntimeConfig(context.Context, uint64, uint64, string) (json.RawMessage, error)
+	ListSecrets(context.Context) (json.RawMessage, error)
+	CreateSecret(context.Context, json.RawMessage) (json.RawMessage, error)
+	SecretVersions(context.Context, string) (json.RawMessage, error)
+	RotateSecret(context.Context, string, uint64, string) (json.RawMessage, error)
+	RewrapSecrets(context.Context, string, int) (json.RawMessage, error)
+	DeleteSecret(context.Context, string) error
+}
+
 // HTTPClient is an immutable, concurrency-safe client for the Machinarchy API.
 type HTTPClient struct {
 	baseURL *url.URL
@@ -106,6 +124,10 @@ func (c *HTTPClient) ListEnvironments(ctx context.Context) ([]Environment, error
 }
 
 func (c *HTTPClient) get(ctx context.Context, endpoint string, destination any) error {
+	return c.request(ctx, http.MethodGet, endpoint, nil, destination)
+}
+
+func (c *HTTPClient) request(ctx context.Context, method, endpoint string, payload, destination any) error {
 	if c == nil || c.baseURL == nil || c.http == nil {
 		return errors.New("API client is not initialized")
 	}
@@ -113,12 +135,28 @@ func (c *HTTPClient) get(ctx context.Context, endpoint string, destination any) 
 		return errors.New("request context is required")
 	}
 	requestURL := *c.baseURL
-	requestURL.Path = path.Join(requestURL.Path, endpoint)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("parse API endpoint: %w", err)
+	}
+	requestURL.Path = path.Join(requestURL.Path, endpointURL.Path)
+	requestURL.RawQuery = endpointURL.RawQuery
+	var requestBody io.Reader
+	if payload != nil {
+		encoded, e := json.Marshal(payload)
+		if e != nil {
+			return fmt.Errorf("encode API request: %w", e)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), requestBody)
 	if err != nil {
 		return fmt.Errorf("create API request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 
 	response, err := c.http.Do(request)
@@ -141,10 +179,59 @@ func (c *HTTPClient) get(ctx context.Context, endpoint string, destination any) 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return apiResponseError(response.StatusCode, body)
 	}
+	if destination == nil {
+		return nil
+	}
 	if err := json.Unmarshal(body, destination); err != nil {
 		return fmt.Errorf("decode API response from %s: %w", endpoint, err)
 	}
 	return nil
+}
+
+func (c *HTTPClient) raw(ctx context.Context, method, path string, payload any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.request(ctx, method, path, payload, &out)
+	return out, err
+}
+func (c *HTTPClient) RuntimeConfig(ctx context.Context) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/api/v1/runtime-config", nil)
+}
+func (c *HTTPClient) ConfigHistory(ctx context.Context, before uint64) (json.RawMessage, error) {
+	p := "/api/v1/runtime-config/revisions"
+	if before > 0 {
+		p += fmt.Sprintf("?before=%d", before)
+	}
+	return c.raw(ctx, http.MethodGet, p, nil)
+}
+func (c *HTTPClient) ConfigStatus(ctx context.Context) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/api/v1/runtime-config/status", nil)
+}
+func (c *HTTPClient) ValidateRuntimeConfig(ctx context.Context, config json.RawMessage) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/api/v1/runtime-config/validate", map[string]json.RawMessage{"config": config})
+}
+func (c *HTTPClient) PublishRuntimeConfig(ctx context.Context, expected uint64, config json.RawMessage, note string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPut, "/api/v1/runtime-config", map[string]any{"expectedRevision": expected, "config": config, "changeNote": note})
+}
+func (c *HTTPClient) RollbackRuntimeConfig(ctx context.Context, expected, target uint64, note string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/api/v1/runtime-config/rollback", map[string]any{"expectedRevision": expected, "targetRevision": target, "changeNote": note})
+}
+func (c *HTTPClient) ListSecrets(ctx context.Context) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/api/v1/secrets", nil)
+}
+func (c *HTTPClient) CreateSecret(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/api/v1/secrets", input)
+}
+func (c *HTTPClient) SecretVersions(ctx context.Context, id string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodGet, "/api/v1/secrets/"+url.PathEscape(id)+"/versions", nil)
+}
+func (c *HTTPClient) RotateSecret(ctx context.Context, id string, expected uint64, value string) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/api/v1/secrets/"+url.PathEscape(id)+"/rotate", map[string]any{"expectedVersion": expected, "value": value})
+}
+func (c *HTTPClient) RewrapSecrets(ctx context.Context, oldKeyID string, batchSize int) (json.RawMessage, error) {
+	return c.raw(ctx, http.MethodPost, "/api/v1/secrets/rewrap", map[string]any{"oldKeyId": oldKeyID, "batchSize": batchSize})
+}
+func (c *HTTPClient) DeleteSecret(ctx context.Context, id string) error {
+	return c.request(ctx, http.MethodDelete, "/api/v1/secrets/"+url.PathEscape(id), nil, nil)
 }
 
 func apiResponseError(status int, body []byte) error {

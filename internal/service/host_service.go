@@ -26,11 +26,12 @@ type HostService interface {
 }
 
 type hostService struct {
-	repo      domain.HostStore
-	publisher EventPublisher
-	sshTester SSHConnectionTester
-	sshLimit  *SSHCapacity
-	policy    netpolicy.Policy
+	repo           domain.HostStore
+	publisher      EventPublisher
+	sshTester      SSHConnectionTester
+	sshLimit       *SSHCapacity
+	policy         netpolicy.Policy
+	policyProvider func() netpolicy.Policy
 }
 
 // EventPublisher defines the interface for publishing events to an external system.
@@ -73,7 +74,14 @@ func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPubl
 		return nil, errors.New("host service dependencies and SSH capacity are required")
 	}
 	options := applyOptions(opts)
-	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy}, nil
+	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy, policyProvider: options.targetPolicyProvider}, nil
+}
+
+func (s *hostService) targetPolicy() netpolicy.Policy {
+	if s.policyProvider != nil {
+		return s.policyProvider()
+	}
+	return s.policy
 }
 
 func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr error) {
@@ -104,7 +112,8 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 	// Reject literal addresses the policy forbids before any SSH capacity is
 	// spent. Hostnames are resolved and enforced at dial time, which pins the
 	// validated address.
-	if err := s.policy.CheckHost(h.IPAddress); err != nil {
+	policy := s.targetPolicy()
+	if err := policy.CheckHost(h.IPAddress); err != nil {
 		return err
 	}
 
@@ -124,7 +133,7 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 		SecretData:          secretData,
 		Passphrase:          h.SSH.AuthType.Passphrase,
 		ExpectedFingerprint: h.SSH.AuthType.ExpectedFingerprint,
-		Dialer:              s.policy.DialContext,
+		Dialer:              policy.DialContext,
 	}
 	// 3. Execute Bounded Cryptographic Network Test Verification Handshake
 	testCtx, cancel := context.WithTimeout(ctx, 7*time.Second)

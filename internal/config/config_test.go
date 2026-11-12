@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,6 +22,7 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_DATABASE_CONN_MAX_LIFETIME": "",
 		"MACHINARCHY_DATABASE_CONNECT_TIMEOUT":   "",
 		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
+		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                  "",
 		"MACHINARCHY_SSH_KNOWN_HOSTS":            "",
 		"MACHINARCHY_SSH_CONNECT_TIMEOUT":        "",
@@ -28,6 +31,45 @@ func setCommonEnv(t *testing.T) {
 
 	for key, value := range envs {
 		t.Setenv(key, value)
+	}
+}
+
+func TestBootstrapSourcesPrecedenceAndSecretRejection(t *testing.T) {
+	setCommonEnv(t)
+	path := filepath.Join(t.TempDir(), "bootstrap.json")
+	if err := os.WriteFile(path, []byte(`{"MACHINARCHY_LISTEN_ADDR":":9000","MACHINARCHY_LOG_LEVEL":"warn"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MACHINARCHY_LISTEN_ADDR", ":7000")
+	cfg, err := LoadCommandLine([]string{"--config", path, "--listen-addr", ":6000"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAddr != ":6000" || cfg.LogLevel != "warn" {
+		t.Fatalf("precedence result=%+v", cfg)
+	}
+	if err = os.WriteFile(path, []byte(`{"MACHINARCHY_OPERATOR_TOKEN":"0123456789abcdef0123456789abcdef"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = LoadWithOptions(LoadOptions{FilePath: path}); err == nil {
+		t.Fatal("bootstrap file accepted secret material")
+	}
+}
+
+func TestEncryptionKeyMustBeIndependentAndFileProtected(t *testing.T) {
+	setCommonEnv(t)
+	t.Setenv("MACHINARCHY_ENCRYPTION_SECRET", "")
+	t.Setenv("MACHINARCHY_ENCRYPTION_SECRET_FILE", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "independently") {
+		t.Fatalf("missing external encryption key err=%v", err)
+	}
+	path := filepath.Join(t.TempDir(), "root.key")
+	if err := os.WriteFile(path, []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MACHINARCHY_ENCRYPTION_SECRET_FILE", path)
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
 	}
 }
 

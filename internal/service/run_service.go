@@ -52,17 +52,20 @@ type RunManager interface {
 }
 
 type runService struct {
-	runs         domain.RunStore
-	hosts        domain.HostStore
-	environments domain.EnvironmentStore
-	sshLimit     *SSHCapacity
-	execution    domain.ExecutionPolicy
-	policy       netpolicy.Policy
-	runner       CommandRunner
+	runs              domain.RunStore
+	hosts             domain.HostStore
+	environments      domain.EnvironmentStore
+	sshLimit          *SSHCapacity
+	execution         domain.ExecutionPolicy
+	policy            netpolicy.Policy
+	policyProvider    func() netpolicy.Policy
+	executionProvider func() domain.ExecutionPolicy
+	runner            CommandRunner
 
 	heartbeatInterval time.Duration
 	staleAfter        time.Duration
 	maxActive         int32
+	defaultTimeout    int
 	instance          string
 
 	baseCtx    context.Context
@@ -105,14 +108,27 @@ func NewRunService(runs domain.RunStore, hosts domain.HostStore, environments do
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &runService{
 		runs: runs, hosts: hosts, environments: environments, sshLimit: sshLimit,
-		execution: execution, policy: options.targetPolicy, runner: runner,
+		execution: execution, policy: options.targetPolicy, policyProvider: options.targetPolicyProvider, executionProvider: options.executionPolicyProvider, runner: runner,
 		heartbeatInterval: options.heartbeatInterval, staleAfter: options.staleAfter,
-		maxActive: int32(options.maxActiveRuns), instance: hex.EncodeToString(idBytes),
+		maxActive: int32(options.maxActiveRuns), defaultTimeout: options.defaultRunTimeout, instance: hex.EncodeToString(idBytes),
 		baseCtx: ctx, baseCancel: cancel,
 	}
 	s.wg.Add(1)
 	go s.sweep()
 	return s, nil
+}
+
+func (s *runService) targetPolicy() netpolicy.Policy {
+	if s.policyProvider != nil {
+		return s.policyProvider()
+	}
+	return s.policy
+}
+func (s *runService) executionPolicy() domain.ExecutionPolicy {
+	if s.executionProvider != nil {
+		return s.executionProvider()
+	}
+	return s.execution
 }
 
 func authorizeRunExecute(principal domain.Principal) error {
@@ -161,10 +177,10 @@ func (s *runService) Submit(ctx context.Context, principal domain.Principal, req
 	if err := domain.ValidateArgv(request.Argv); err != nil {
 		return nil, err
 	}
-	if err := s.execution.Check(request.Argv[0]); err != nil {
+	if err := s.executionPolicy().Check(request.Argv[0]); err != nil {
 		return nil, err
 	}
-	timeout, concurrency, err := normalizeRunLimits(request)
+	timeout, concurrency, err := normalizeRunLimits(request, s.defaultTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -239,10 +255,10 @@ func (s *runService) Submit(ctx context.Context, principal domain.Principal, req
 	return run, nil
 }
 
-func normalizeRunLimits(request domain.RunRequest) (timeout, concurrency int, err error) {
+func normalizeRunLimits(request domain.RunRequest, defaultTimeout int) (timeout, concurrency int, err error) {
 	timeout, concurrency = request.TimeoutSeconds, request.Concurrency
 	if timeout == 0 {
-		timeout = domain.DefaultRunTimeout
+		timeout = defaultTimeout
 	}
 	if concurrency == 0 {
 		concurrency = domain.DefaultRunConcurrency
@@ -548,7 +564,11 @@ func (s *runService) runHost(ctx context.Context, run *domain.Run, target domain
 		return finish(domain.RunHostUpdate{Status: domain.RunHostFailed,
 			Error: "the host's connection details changed after the run was submitted; submit the run again"})
 	}
-	params, err := dialParamsForHost(host, s.policy.DialContext)
+	if len(run.Argv) == 0 || s.executionPolicy().Check(run.Argv[0]) != nil {
+		return finish(domain.RunHostUpdate{Status: domain.RunHostFailed, Error: "operation is no longer permitted by current runtime policy"})
+	}
+	policy := s.targetPolicy()
+	params, err := dialParamsForHost(host, policy.DialContext)
 	if err != nil {
 		return finish(domain.RunHostUpdate{Status: domain.RunHostFailed, Error: sshFailureMessage(err, "the host has no usable SSH credentials")})
 	}

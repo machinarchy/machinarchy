@@ -75,13 +75,26 @@ build-release: ## Build all binaries with release-oriented flags
 
 # The .env file is sourced as a trusted, shell-compatible local configuration
 # file. Do not put arbitrary untrusted content into it.
+
+# Forward extra positional arguments passed to any `run-*` target
+# (e.g., `make run-cli get hosts` or `make run-api -- --port 8080`).
+#
+# Caveats:
+# - Place `--` before CLI flags so Make does not intercept them.
+# - Arguments matching existing Makefile target names (e.g., `build`, `clean`)
+#   will also trigger those targets.
+ifneq ($(filter run-%,$(firstword $(MAKECMDGOALS))),)
+  RUN_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  $(eval $(RUN_ARGS):;@:)
+endif
+
 define run_with_env
 	@test -f "$(ENV_FILE)" || { \
 		echo "$(ENV_FILE) not found. Run 'make setup-local' first." >&2; \
 		exit 1; \
 	}; \
 	set -a; . "$(ENV_FILE)"; set +a; \
-	exec $(GO) run $(1)
+	exec $(GO) run $(1) $(RUN_ARGS)
 endef
 
 ##@ Run applications
@@ -94,7 +107,7 @@ run-controlmanager: ## Run control manager locally using .env
 run-monolit: ## Run monolith locally using .env
 	$(call run_with_env,./cmd/monolit)
 
-run-cli: ## Run CLI locally using .env
+run-cli: ## Run CLI locally using .env (e.g., make run-cli get hosts)
 	$(call run_with_env,./cmd/machinarchy)
 
 run-agent: ## Run agent locally using .env

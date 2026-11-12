@@ -21,7 +21,7 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.LoadControlManager()
+	cfg, err := config.LoadCommandLine(os.Args[1:], false)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}

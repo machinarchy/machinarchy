@@ -17,6 +17,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
@@ -247,7 +248,7 @@ func (s *Store) ListHosts(ctx context.Context, workspaceID int, limit int) ([]re
 	if err != nil {
 		return nil, fmt.Errorf("list managed Hosts: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query list hosts")
 	ids := make([]resource.ResourceID, 0)
 	for rows.Next() {
 		var id string
@@ -569,7 +570,7 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.R
 	if err != nil {
 		return nil, fmt.Errorf("read Operation targets: %w", err)
 	}
-	defer rows.Close()
+	defer utils.CloseRows(rows, s.logger, "query get operation")
 	byHost := make(map[resource.ResourceID]resource.OperationTargetSpec, len(operation.Spec.Targets))
 	for _, target := range operation.Spec.Targets {
 		byHost[target.HostID] = target

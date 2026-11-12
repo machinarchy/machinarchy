@@ -55,7 +55,12 @@ const (
 	HostSpecChanged       = "machinarchy.host.spec-changed"
 	HostDeletionRequested = "machinarchy.host.deletion-requested"
 	HostDeleted           = "machinarchy.host.deleted"
+	ConfigurationChanged  = "machinarchy.runtime-config.changed"
 )
+
+type RuntimeConfigChange struct {
+	Revision uint64 `json:"revision"`
+}
 
 func NewHostEvent(eventType string, workspaceID int, subject Subject, change string, now time.Time, correlationID, causationID string, actor *Actor) (Envelope, error) {
 	id, err := resource.NewResourceID()
@@ -75,13 +80,28 @@ func NewHostEvent(eventType string, workspaceID int, subject Subject, change str
 }
 
 func (e Envelope) Validate() error {
-	if e.ID.Validate() != nil || e.WorkspaceID <= 0 || e.Subject.Kind != "host" || e.Subject.ID.Validate() != nil ||
+	if e.ID.Validate() != nil || e.WorkspaceID <= 0 || e.Subject.ID.Validate() != nil ||
 		e.Subject.Generation == 0 || e.Subject.Revision == 0 || e.SchemaVersion == 0 || e.OccurredAt.IsZero() ||
 		strings.TrimSpace(e.Producer) == "" || strings.TrimSpace(e.Type) == "" || len(e.Type) > 128 || len(e.Data) == 0 || len(e.Data) > MaxEventPayloadBytes {
 		return errors.New("event envelope is missing required fields or exceeds bounds")
 	}
 	switch e.Type {
 	case HostCreated, HostSpecChanged, HostDeletionRequested, HostDeleted:
+		if e.Subject.Kind != "host" {
+			return errors.New("host event subject kind is invalid")
+		}
+		var payload HostChange
+		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Change == "" || len(payload.Change) > 64 {
+			return errors.New("event payload is invalid")
+		}
+	case ConfigurationChanged:
+		if e.Subject.Kind != "runtime-config" {
+			return errors.New("runtime configuration event subject kind is invalid")
+		}
+		var payload RuntimeConfigChange
+		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
+			return errors.New("runtime configuration event payload is invalid")
+		}
 	default:
 		return fmt.Errorf("unsupported Host event type %q", e.Type)
 	}
@@ -90,10 +110,6 @@ func (e Envelope) Validate() error {
 	}
 	if len(e.CorrelationID) > 128 || len(e.CausationID) > 128 {
 		return errors.New("event correlation identifiers exceed bounds")
-	}
-	var payload HostChange
-	if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Change == "" || len(payload.Change) > 64 {
-		return errors.New("event payload is invalid")
 	}
 	return nil
 }
@@ -127,7 +143,7 @@ func (c HostSpecUpdateCommand) Metadata() CommandMetadata { return c.Command }
 func (c HostSpecUpdateCommand) Validate() error {
 	if c.Command.ID == "" || len(c.Command.ID) > 128 || len(c.Command.CorrelationID) > 128 || len(c.Command.CausationID) > 128 ||
 		c.WorkspaceID <= 0 || c.HostID.Validate() != nil || c.ExpectedRevision == 0 || c.ExpectedGeneration == 0 {
-		return errors.New("Host spec update command requires workspace, resource identity, and concurrency preconditions")
+		return errors.New("host spec update command requires workspace, resource identity, and concurrency preconditions")
 	}
 	return c.Spec.Validate()
 }

@@ -34,6 +34,8 @@ type Controller interface {
 type Config struct {
 	Workers             int
 	QueueCapacity       int
+	RetryBaseDelay      time.Duration
+	RetryMaxDelay       time.Duration
 	ResyncInterval      time.Duration
 	OutboxPollInterval  time.Duration
 	OutboxLeaseDuration time.Duration
@@ -46,7 +48,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Workers: 4, QueueCapacity: 1024, ResyncInterval: 5 * time.Minute,
+	return Config{Workers: 4, QueueCapacity: 1024, RetryBaseDelay: time.Second, RetryMaxDelay: 5 * time.Minute, ResyncInterval: 5 * time.Minute,
 		OutboxPollInterval: 250 * time.Millisecond, OutboxLeaseDuration: 30 * time.Second,
 		ResourceLeaseTTL: 2 * time.Minute, ReconcileTimeout: 30 * time.Second,
 		ShutdownTimeout: 30 * time.Second, PageSize: 200, RateLimitPerSecond: 20, RateBurst: 20}
@@ -76,7 +78,7 @@ type Engine struct {
 
 func NewEngine(deps Dependencies, cfg Config) (*Engine, error) {
 	if deps.Hosts == nil || deps.Outbox == nil {
-		return nil, errors.New("Control Manager requires Host and outbox repositories")
+		return nil, errors.New("control manager requires Host and outbox repositories")
 	}
 	defaults := DefaultConfig()
 	if cfg.Workers <= 0 {
@@ -84,6 +86,12 @@ func NewEngine(deps Dependencies, cfg Config) (*Engine, error) {
 	}
 	if cfg.QueueCapacity <= 0 {
 		cfg.QueueCapacity = defaults.QueueCapacity
+	}
+	if cfg.RetryBaseDelay <= 0 {
+		cfg.RetryBaseDelay = defaults.RetryBaseDelay
+	}
+	if cfg.RetryMaxDelay < cfg.RetryBaseDelay {
+		cfg.RetryMaxDelay = defaults.RetryMaxDelay
 	}
 	if cfg.ResyncInterval <= 0 {
 		cfg.ResyncInterval = defaults.ResyncInterval
@@ -158,7 +166,7 @@ func (e *Engine) CheckReadiness(ctx context.Context) error {
 // up to ShutdownTimeout, then cancels remaining reconcile contexts.
 func (e *Engine) Start(ctx context.Context) error {
 	if e == nil || ctx == nil {
-		return errors.New("Control Manager and context are required")
+		return errors.New("control manager and context are required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -166,14 +174,14 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
-		return errors.New("Control Manager already started")
+		return errors.New("control manager already started")
 	}
 	if len(e.controllers) == 0 {
 		e.mu.Unlock()
 		return ErrNoControllers
 	}
 	e.started = true
-	e.queue = NewResourceQueue(e.cfg.QueueCapacity, time.Second, 5*time.Minute)
+	e.queue = NewResourceQueue(e.cfg.QueueCapacity, e.cfg.RetryBaseDelay, e.cfg.RetryMaxDelay)
 	e.mu.Unlock()
 
 	admissionCtx, stopAdmission := context.WithCancel(ctx)
@@ -262,6 +270,7 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 	}
 	for _, delivery := range claimed {
 		if err := ctx.Err(); err != nil {
+			//nolint:errcheck // Best-effort shutdown retry; the delivery can be reclaimed after its lease expires.
 			_ = e.deps.Outbox.Retry(context.Background(), eventing.ConsumerControlManager, e.ownerID, delivery.Envelope.ID, time.Now().Add(time.Second), "dispatcher_stopping")
 			continue
 		}

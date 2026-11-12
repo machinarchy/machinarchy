@@ -13,6 +13,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/store/management"
 	"github.com/machinarchy/machinarchy/internal/store/postgres"
 	"github.com/machinarchy/machinarchy/internal/store/sqlite"
 )
@@ -52,6 +53,7 @@ type Stores struct {
 	Operations     resource.OperationRepository
 	Outbox         eventing.OutboxStore
 	ResourceLeases resource.ResourceLeaseStore
+	Management     *management.Store
 	logger         *slog.Logger
 }
 
@@ -169,6 +171,15 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Outbox = storeInstance.Resources
 		stores.ResourceLeases = storeInstance.Resources
 	}
+	managementDialect := management.SQLite
+	if engine == EnginePostgres {
+		managementDialect = management.PostgreSQL
+	}
+	managementStore, err := management.New(db, managementDialect, slog.Default())
+	if err != nil {
+		return fail(fmt.Errorf("initialize configuration and Secret Store repositories: %w", err))
+	}
+	stores.Management = managementStore
 
 	return stores, nil
 }

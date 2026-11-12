@@ -14,6 +14,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	resourceStore "github.com/machinarchy/machinarchy/internal/store/resources"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
+
 	// Import modernc.org/sqlite to register the SQLite database driver.
 	_ "modernc.org/sqlite"
 )

@@ -3,15 +3,27 @@ package service
 import (
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/domain"
+
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
 type serviceOptions struct {
-	targetPolicy      netpolicy.Policy
-	commandRunner     CommandRunner
-	heartbeatInterval time.Duration
-	staleAfter        time.Duration
-	maxActiveRuns     int
+	targetPolicy            netpolicy.Policy
+	targetPolicyProvider    func() netpolicy.Policy
+	executionPolicyProvider func() domain.ExecutionPolicy
+	commandRunner           CommandRunner
+	heartbeatInterval       time.Duration
+	staleAfter              time.Duration
+	maxActiveRuns           int
+	defaultRunTimeout       int
+}
+
+func WithTargetPolicyProvider(provider func() netpolicy.Policy) Option {
+	return func(o *serviceOptions) { o.targetPolicyProvider = provider }
+}
+func WithExecutionPolicyProvider(provider func() domain.ExecutionPolicy) Option {
+	return func(o *serviceOptions) { o.executionPolicyProvider = provider }
 }
 
 // Option customizes service construction.
@@ -39,12 +51,17 @@ func WithMaxActiveRuns(limit int) Option {
 	return func(o *serviceOptions) { o.maxActiveRuns = limit }
 }
 
+func WithDefaultRunTimeout(seconds int) Option {
+	return func(o *serviceOptions) { o.defaultRunTimeout = seconds }
+}
+
 func applyOptions(opts []Option) serviceOptions {
 	options := serviceOptions{
 		targetPolicy:      netpolicy.Default(),
 		heartbeatInterval: defaultHeartbeatInterval,
 		staleAfter:        defaultStaleAfter,
 		maxActiveRuns:     defaultMaxActiveRuns,
+		defaultRunTimeout: domain.DefaultRunTimeout,
 	}
 	for _, opt := range opts {
 		if opt != nil {

@@ -135,6 +135,23 @@ func RequireHuman() echo.MiddlewareFunc {
 	}
 }
 
+// RequireOwner restricts management endpoints to workspace owners. It is
+// intentionally separate from authentication and requires a human session.
+func RequireOwner() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			principal, ok := Principal(c)
+			if !ok {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			}
+			if principal.Role != domain.RoleOwner || principal.APITokenID != 0 {
+				return c.JSON(http.StatusForbidden, map[string]string{"error": "permission denied"})
+			}
+			return next(c)
+		}
+	}
+}
+
 func tokenFromRequest(c echo.Context) string {
 	if token := bearerTokenFromRequest(c); token != "" {
 		return token

@@ -54,14 +54,17 @@ func printJSON(writer io.Writer, value any) error {
 	return encoder.Encode(value)
 }
 
-func printYAML(writer io.Writer, value any) error {
+func printYAML(writer io.Writer, value any) (err error) {
 	encoder := yaml.NewEncoder(writer)
 	encoder.SetIndent(2)
-	if err := encoder.Encode(value); err != nil {
-		_ = encoder.Close()
-		return err
-	}
-	return encoder.Close()
+
+	defer func() {
+		if closeErr := encoder.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close YAML encoder: %w", closeErr))
+		}
+	}()
+
+	return encoder.Encode(value)
 }
 
 func printHostTable(writer io.Writer, hosts []api.Host) error {

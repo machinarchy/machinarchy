@@ -138,6 +138,11 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 	if ctx == nil {
 		return errors.New("process context is required")
 	}
+	// Runtime process lifecycles must have an explicit cancellation owner. A
+	// Background/TODO context cannot shut down the listener or worker.
+	if ctx.Done() == nil {
+		return errors.New("process context must be cancellable")
+	}
 	if strings.TrimSpace(address) == "" {
 		return errors.New("process listen address is required")
 	}

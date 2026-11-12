@@ -268,7 +268,7 @@ The `[]byte` plaintext exists only inside the authorized process boundary for th
 
 Use a random per-secret-version 256-bit DEK. Encrypt secret bytes with AES-256-GCM under the DEK using a fresh nonce. Wrap the DEK with a KEK held outside the database; initial KEK provider reads a high-entropy root key/keyring from a mounted secret file or environment injection before database initialization. Use a distinct wrapping purpose and authenticated encryption. Store `kek_id`, key version, algorithm, nonce, ciphertext, wrapped DEK, and wrapping nonce. Include AAD binding ciphertext to `secret_id`, `secret_version`, purpose, algorithm, and schema version so records cannot be swapped undetected. Never reuse a GCM nonce with the same key; use the standard Go AEAD implementation and random nonce generation with documented per-key usage limits. AES-GCM provides confidentiality and authentication; NIST’s GCM guidance emphasizes IV uniqueness and authenticated encryption. [NIST SP 800-38D](https://csrc.nist.gov/pubs/sp/800/38/d/final) [Go `crypto/cipher`](https://pkg.go.dev/crypto/cipher)
 
-The database contains ciphertext and wrapped DEKs only. It does not contain the KEK or root key. Root provisioning must use an independent, protected channel; generate high-entropy key material, do not derive it from `MACHINARCHY_OPERATOR_TOKEN`, and do not log it. A mounted key file should have restrictive ownership/permissions and must not be committed to source control. Existing production `MACHINARCHY_ENCRYPTION_SECRET` can be a compatibility key source only during a documented transition; the target provider uses key IDs and an explicit keyring.
+The database contains ciphertext and wrapped DEKs only. It does not contain the KEK or root key. Root provisioning must use an independent, protected channel; generate high-entropy key material, do not derive it from `MACHINARCHY_OPERATOR_TOKEN`, and do not log it. A mounted key file should have restrictive ownership/permissions and must not be committed to source control. Existing production `MACHINARCHY_ENCRYPTION_SECRET` can be a compatibility key source only during a documented transition; the target provider uses key IDs and an explicit keyring. New value ciphertext uses stable AAD that does not include the KEK ID, so KEK rewrapping does not require decrypting secret values. A persisted AAD version preserves the legacy key-ID-bound format for existing rows.
 
 ### 6.3 Key rotation versus secret rotation
 
@@ -321,6 +321,7 @@ Configuration and Secret Management are separate application capabilities/routes
 | Secret metadata/list | `GET /api/v1/secrets`, `GET /api/v1/secrets/{id}` |
 | Create/update/rotate | `POST /api/v1/secrets`, `PUT /api/v1/secrets/{id}`, `POST /api/v1/secrets/{id}:rotate`; values accepted in request body, never echoed |
 | Delete | `DELETE /api/v1/secrets/{id}`; conflict if referenced unless caller first updates/removes references |
+| KEK rewrap | `POST /api/v1/secrets/rewrap` with `oldKeyId` and bounded `batchSize`; repeat until `remaining` is zero |
 
 Suggested permissions: `configuration:read`, `configuration:write`, `configuration:history`, `secrets:metadata`, and owner-only `secrets:write`. Start with owner-only config writes and all secret management until workspace/role semantics are explicitly changed. Mutations require human-session authentication/step-up policy where available; every update uses optimistic concurrency. Validate authz both in HTTP adapter and application service.
 
@@ -341,8 +342,11 @@ machinarchy secret list|describe NAME
 machinarchy secret create NAME --value-stdin
 machinarchy secret update NAME --value-stdin --expected-version N
 machinarchy secret rotate NAME --value-stdin --expected-version N
+machinarchy secret rewrap --old-key-id OLD_ID [--batch-size 100]
 machinarchy secret delete NAME --expected-version N
 ```
+
+For KEK rotation, install the new key as the current external key and retain the old key in the protected keyring. Restart server processes so new writes use the new key, then run `machinarchy secret rewrap --old-key-id OLD_ID` repeatedly until the response reports `remaining: 0`. Keep both keys available through the database backup recovery horizon; remove the old key only after retained database backups that require it have expired. Each batch is bounded and safe to repeat after interruption. Rewrapping changes only the wrapped DEK and its key ID; it does not decrypt or rewrite secret values.
 
 `config` commands must be named to distinguish local CLI context configuration from remote runtime configuration (current `machinarchy config` manages API contexts and tokens). Secret commands support stdin/protected file input and refuse secret values in normal output. Redact references where the caller lacks metadata permission. Print revision/version IDs and process application status, not secret contents.
 

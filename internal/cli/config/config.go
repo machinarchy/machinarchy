@@ -365,20 +365,33 @@ func (s *Store) save() error {
 		}
 	}()
 
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("secure temporary config: %w", err)
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write CLI config: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("sync CLI config: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close temporary config: %w", err)
+	// Write, sync, and close the temporary file.
+	writeErr := func() (retErr error) {
+		defer func() {
+			if err := file.Close(); err != nil {
+				retErr = errors.Join(
+					retErr,
+					fmt.Errorf("close temporary config: %w", err),
+				)
+			}
+		}()
+
+		if err := file.Chmod(0o600); err != nil {
+			return fmt.Errorf("secure temporary config: %w", err)
+		}
+
+		if _, err := file.Write(data); err != nil {
+			return fmt.Errorf("write CLI config: %w", err)
+		}
+
+		if err := file.Sync(); err != nil {
+			return fmt.Errorf("sync CLI config: %w", err)
+		}
+
+		return nil
+	}()
+	if writeErr != nil {
+		return writeErr
 	}
 	if err := os.Rename(tempPath, s.path); err != nil {
 		return fmt.Errorf("replace CLI config: %w", err)
