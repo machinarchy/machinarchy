@@ -1,5 +1,28 @@
 # ChangeLogAI
 
+## 2026-11-12 — Phase H scoped Secret Store resolution boundary
+
+### Changes in this update
+
+- Replaced purpose-only secret resolution with a typed workload/resource request and required an injected authorization port before any secret lookup or decryption.
+- Configured bootstrap with a deny-all resolver until the subsequent Access Profile milestone supplies a binding-aware authorizer; updated Secret Store tests to use explicit authorization fixtures.
+- Added a narrow `.gitignore` exception so the `internal/secrets` source package and this change appear in repository status/reviews.
+
+### Validation
+
+- `gofmt`, `git diff --check`, `GOCACHE=/tmp/machinarchy-go-cache go test -count=1 -timeout 60s ./internal/store/management ./internal/bootstrap` — passed. Lint checks were not run, consistent with the current work-session instruction to stop focusing on linters.
+
+## 2026-11-12 — Proposed Phase H Access Profile ADR
+
+### Changes in this update
+
+- Added proposed ADR-054 covering workspace-scoped reusable Access Profiles, immutable revisions, Host/Operation binding, scoped Secret Store authorization required by ADR-038, deletion/disable behavior, outbox fan-out, and SQLite/PostgreSQL persistence implications.
+- The ADR is explicitly proposed and requires owner approval; no implementation or migrations were changed.
+
+### Validation
+
+- Reviewed existing Host/Operation models, Secret Store contracts, ADR-028, ADR-038, and Phase 2/7 architecture documents. No tests were run because this update contains no code changes.
+
 ## 2026-11-12 — Phase G bounded KEK rewrapping
 
 ### Changes in this update

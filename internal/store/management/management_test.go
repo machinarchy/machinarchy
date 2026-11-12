@@ -197,7 +197,7 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 	f := openFixture(t, path)
 	root := []byte("0123456789abcdef0123456789abcdef")
 	provider := &secrets.StaticKeyProvider{KeyID: "external-v1", Key: root}
-	svc, err := secrets.New(f.repo, provider)
+	svc, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +210,11 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 		t.Fatal(err)
 	}
 	ref := secrets.Ref{ID: meta.ID, Version: 1}
-	plain, err := svc.Resolve(ctx, ref, secrets.PurposeSSHCredential)
+	plain, err := svc.Resolve(ctx, resolutionRequest(ref, secrets.PurposeSSHCredential))
 	if err != nil || string(plain) != "plain-secret-value" {
 		t.Fatalf("resolve=%q err=%v", plain, err)
 	}
-	if _, err = svc.Resolve(ctx, ref, secrets.PurposeOperation); !errors.Is(err, secrets.ErrUnauthorized) {
+	if _, err = svc.Resolve(ctx, resolutionRequest(ref, secrets.PurposeOperation)); !errors.Is(err, secrets.ErrUnauthorized) {
 		t.Fatalf("wrong-purpose resolution err=%v", err)
 	}
 	encoded, _ := json.Marshal(meta)
@@ -238,11 +238,11 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 	if err != nil || len(versions) != 2 {
 		t.Fatalf("secret versions=%d err=%v", len(versions), err)
 	}
-	wrong, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "external-v1", Key: []byte("abcdef0123456789abcdef0123456789")})
+	wrong, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "external-v1", Key: []byte("abcdef0123456789abcdef0123456789")}, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = wrong.Resolve(ctx, secrets.Ref{ID: meta.ID, Version: 2}, secrets.PurposeSSHCredential); err == nil {
+	if _, err = wrong.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 2}, secrets.PurposeSSHCredential)); err == nil {
 		t.Fatal("incorrect key decrypted secret")
 	}
 	if err = f.db.Close(); err != nil {
@@ -250,18 +250,18 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 	}
 	f = openFixture(t, path)
 	defer f.db.Close()
-	svc, err = secrets.New(f.repo, provider)
+	svc, err = secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := svc.Resolve(ctx, secrets.Ref{ID: meta.ID, Version: 2}, secrets.PurposeSSHCredential)
+	loaded, err := svc.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 2}, secrets.PurposeSSHCredential))
 	if err != nil || string(loaded) != "new-secret-value" {
 		t.Fatalf("restart recovery=%q err=%v", loaded, err)
 	}
 	if err = svc.Delete(ctx, owner, meta.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Resolve(ctx, secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential); !errors.Is(err, secrets.ErrNotFound) {
+	if _, err = svc.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential)); !errors.Is(err, secrets.ErrNotFound) {
 		t.Fatalf("retired secret remained resolvable: %v", err)
 	}
 }
@@ -271,7 +271,7 @@ func TestSecretServiceDoesNotWipeProviderOwnedKeyMaterial(t *testing.T) {
 	f := openFixture(t, filepath.Join(t.TempDir(), "key-copy.db"))
 	defer f.db.Close()
 	provider := sharedKeyProvider{keyID: "shared-v1", key: []byte("0123456789abcdef0123456789abcdef")}
-	svc, err := secrets.New(f.repo, provider)
+	svc, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestSecretServiceDoesNotWipeProviderOwnedKeyMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Resolve(ctx, secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential); err != nil {
+	if _, err = svc.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential)); err != nil {
 		t.Fatal(err)
 	}
 	if string(provider.key) != "0123456789abcdef0123456789abcdef" {
@@ -294,7 +294,7 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 	defer f.db.Close()
 	oldKey := []byte("0123456789abcdef0123456789abcdef")
 	newKey := []byte("abcdef0123456789abcdef0123456789")
-	oldService, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "kek-v1", Key: oldKey})
+	oldService, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "kek-v1", Key: oldKey}, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 	}
 	refs = append(refs, legacyRef)
 	provider := &secrets.StaticKeyProvider{KeyID: "kek-v2", Key: newKey, Previous: map[string][]byte{"kek-v1": oldKey}}
-	service, err := secrets.New(f.repo, provider)
+	service, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 		t.Fatalf("second rewrap=%+v err=%v", result, err)
 	}
 	for _, ref := range refs {
-		plain, resolveErr := service.Resolve(ctx, ref, secrets.PurposeSSHCredential)
+		plain, resolveErr := service.Resolve(ctx, resolutionRequest(ref, secrets.PurposeSSHCredential))
 		want := "secret-value"
 		if ref == legacyRef {
 			want = "legacy-secret-value"
@@ -365,6 +365,47 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 type sharedKeyProvider struct {
 	keyID string
 	key   []byte
+}
+
+type allowSecretResolution struct{}
+
+func (allowSecretResolution) AuthorizeSecretResolution(_ context.Context, request secrets.ResolutionRequest) error {
+	if request.WorkloadID == "" || request.WorkspaceID <= 0 || request.AccessProfileID == "" ||
+		request.AccessProfileRevision == 0 || request.HostID == "" {
+		return secrets.ErrUnauthorized
+	}
+	return nil
+}
+
+func resolutionRequest(ref secrets.Ref, purpose secrets.Purpose) secrets.ResolutionRequest {
+	return secrets.ResolutionRequest{WorkloadID: secrets.WorkloadOperationWorker, Ref: ref, Purpose: purpose,
+		WorkspaceID: 1, AccessProfileID: "00000000-0000-4000-8000-000000000002", AccessProfileRevision: 1,
+		HostID: "00000000-0000-4000-8000-000000000003", OperationID: "00000000-0000-4000-8000-000000000004"}
+}
+
+func TestSecretResolutionRequiresScopedWorkloadAuthorization(t *testing.T) {
+	ctx := context.Background()
+	f := openFixture(t, filepath.Join(t.TempDir(), "resolution-auth.db"))
+	defer f.db.Close()
+	owner := domain.Principal{UserID: 9, WorkspaceID: 1, Role: domain.RoleOwner}
+	creator, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, allowSecretResolution{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := creator.Create(ctx, owner, secrets.Input{Name: "scoped", Purpose: secrets.PurposeSSHCredential, Value: "secret-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, secrets.DenyAllResolutionAuthorizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential)); !errors.Is(err, secrets.ErrUnauthorized) {
+		t.Fatalf("unauthorized workload resolution err=%v", err)
+	}
+	if _, err = service.Resolve(ctx, secrets.ResolutionRequest{Ref: secrets.Ref{ID: meta.ID, Version: 1}, Purpose: secrets.PurposeSSHCredential}); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("unscoped resolution err=%v", err)
+	}
 }
 
 func (p sharedKeyProvider) Current(context.Context) (string, []byte, error) {

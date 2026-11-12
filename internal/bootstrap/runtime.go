@@ -160,7 +160,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		}
 		previousKeys[oldID] = oldKey
 	}
-	secretService, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: keyID, Key: root, Previous: previousKeys})
+	secretService, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: keyID, Key: root, Previous: previousKeys}, secrets.DenyAllResolutionAuthorizer{})
 	if err != nil {
 		return nil, err
 	}

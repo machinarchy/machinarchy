@@ -32,6 +32,7 @@
 *.key
 *.cert
 secrets/
+!internal/secrets/
 
 # 4. Logs & Metrics dumps
 *.log
