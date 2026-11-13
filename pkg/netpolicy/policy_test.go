@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,11 +22,11 @@ func TestDefaultPolicyDecisions(t *testing.T) {
 		{"8.8.8.8", true},
 		{"192.0.2.10", true}, // documentation range used in examples
 		{"2606:4700:4700::1111", true},
-		{"10.0.0.5", true},
-		{"172.16.4.9", true},
-		{"192.168.1.20", true},
-		{"100.64.0.7", true}, // CGNAT counts as private
-		{"fd12:3456::1", true},
+		{"10.0.0.5", false},
+		{"172.16.4.9", false},
+		{"192.168.1.20", false},
+		{"100.64.0.7", false}, // CGNAT counts as private
+		{"fd12:3456::1", false},
 		{"127.0.0.1", false},
 		{"::1", false},
 		{"169.254.10.10", false},
@@ -41,7 +42,7 @@ func TestDefaultPolicyDecisions(t *testing.T) {
 		{"ff02::1", false},
 		{"::ffff:127.0.0.1", false}, // IPv4-mapped loopback
 		{"::ffff:169.254.169.254", false},
-		{"::ffff:10.0.0.1", true},
+		{"::ffff:10.0.0.1", false},
 		{"fe80::1%eth0", false},
 	}
 	for _, tc := range tests {
@@ -143,10 +144,13 @@ func TestCheckHostOnlyInspectsLiterals(t *testing.T) {
 			t.Errorf("CheckHost(%q) = %v, want ErrTargetNotAllowed", host, err)
 		}
 	}
-	for _, host := range []string{"web-01.example.com", "localhost", "10.0.0.5"} {
+	for _, host := range []string{"web-01.example.com", "localhost"} {
 		if err := policy.CheckHost(host); err != nil {
-			t.Errorf("CheckHost(%q) = %v; hostnames are enforced at dial time and private is allowed", host, err)
+			t.Errorf("CheckHost(%q) = %v; hostnames are enforced at dial time", host, err)
 		}
+	}
+	if err := policy.CheckHost("10.0.0.5"); !errors.Is(err, domain.ErrTargetNotAllowed) {
+		t.Errorf("CheckHost(private) = %v; private is denied by default", err)
 	}
 }
 
@@ -166,7 +170,7 @@ func (f *fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.A
 
 func TestResolveRequiresEveryAnswerToBeAllowed(t *testing.T) {
 	resolver := &fakeResolver{answers: map[string][]netip.Addr{
-		"good.example":    {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("10.0.0.9")},
+		"good.example":    {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("1.1.1.1")},
 		"mixed.example":   {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("169.254.169.254")},
 		"loop.example":    {netip.MustParseAddr("127.0.0.1")},
 		"mapped.example":  {netip.MustParseAddr("::ffff:127.0.0.1")},
@@ -187,8 +191,8 @@ func TestResolveRequiresEveryAnswerToBeAllowed(t *testing.T) {
 		t.Error("a hostname with no addresses must fail")
 	}
 	before := resolver.calls.Load()
-	if _, err := policy.Resolve(context.Background(), "10.0.0.5"); err != nil {
-		t.Fatal(err)
+	if _, err := policy.Resolve(context.Background(), "10.0.0.5"); !errors.Is(err, domain.ErrTargetNotAllowed) {
+		t.Fatalf("private IP literal error = %v, want policy denial", err)
 	}
 	if resolver.calls.Load() != before {
 		t.Error("an IP literal must not trigger a DNS lookup")
@@ -241,10 +245,24 @@ func TestDialContextDialsTheValidatedAddressOnly(t *testing.T) {
 			t.Fatalf("the listener saw %d connections; a denied target must never be dialed", accepted.Load())
 		}
 	})
+	t.Run("port must be explicitly allowed before DNS resolution", func(t *testing.T) {
+		resolver.calls.Store(0)
+		policy := Policy{AllowedPorts: []uint16{22}, Resolver: resolver}
+		if _, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("svc.internal.test", port)); !errors.Is(err, domain.ErrTargetNotAllowed) {
+			t.Fatalf("disallowed port error = %v, want ErrTargetNotAllowed", err)
+		}
+		if resolver.calls.Load() != 0 {
+			t.Fatal("disallowed port triggered DNS resolution")
+		}
+	})
 
 	t.Run("allowed target resolves once and dials the pinned address", func(t *testing.T) {
 		resolver.calls.Store(0)
-		policy := Policy{AllowLoopback: true, Resolver: resolver}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy := Policy{AllowLoopback: true, Resolver: resolver, AllowedPorts: []uint16{uint16(portNumber)}}
 		conn, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("svc.internal.test", port))
 		if err != nil {
 			t.Fatalf("DialContext() error = %v", err)

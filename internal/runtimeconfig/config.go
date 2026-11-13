@@ -68,6 +68,7 @@ type SSH struct {
 	MaxConcurrent         int      `json:"maxConcurrent"`
 	AllowedCIDRs          []string `json:"allowedCIDRs"`
 	DeniedCIDRs           []string `json:"deniedCIDRs"`
+	AllowedPorts          []int    `json:"allowedPorts"`
 	AllowPrivate          bool     `json:"allowPrivate"`
 	AllowLoopback         bool     `json:"allowLoopback"`
 }
@@ -120,7 +121,7 @@ func Defaults() Config {
 		ControlManager: ControlManager{Workers: 4, ResyncSeconds: 300},
 		WorkQueue:      WorkQueue{Capacity: 1024, RetryBaseSeconds: 1, RetryMaxSeconds: 300, RatePerSecond: 20},
 		Reconciliation: Reconciliation{TimeoutSeconds: 30, ManagedHostResyncSeconds: 300},
-		SSH:            SSH{ConnectTimeoutSeconds: 10, MaxConcurrent: 32, AllowedCIDRs: []string{}, DeniedCIDRs: []string{}, AllowPrivate: true},
+		SSH:            SSH{ConnectTimeoutSeconds: 10, MaxConcurrent: 32, AllowedCIDRs: []string{}, DeniedCIDRs: []string{}, AllowedPorts: []int{}, AllowPrivate: false},
 		Operations:     Operations{Enabled: false, Workers: 2, TimeoutSeconds: 300, AllowedPrograms: []string{}},
 		Logging:        Logging{Level: "info"}, Features: Features{SignupEnabled: false}}
 }
@@ -152,6 +153,16 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%w: invalid SSH CIDR entry", ErrInvalid)
 		}
 	}
+	seenPorts := make(map[int]struct{}, len(c.SSH.AllowedPorts))
+	for _, port := range c.SSH.AllowedPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("%w: SSH allowed ports must be between 1 and 65535", ErrInvalid)
+		}
+		if _, exists := seenPorts[port]; exists {
+			return fmt.Errorf("%w: SSH allowed ports must be unique", ErrInvalid)
+		}
+		seenPorts[port] = struct{}{}
+	}
 	for _, program := range c.Operations.AllowedPrograms {
 		if strings.TrimSpace(program) == "" || strings.ContainsAny(program, " \t\r\n") {
 			return fmt.Errorf("%w: operation program entries must be executable names", ErrInvalid)
@@ -180,7 +191,7 @@ func Classifications() map[string]ApplyClass {
 		"workQueue.capacity": RestartRequired, "workQueue.retryBaseSeconds": RestartRequired, "workQueue.retryMaxSeconds": RestartRequired, "workQueue.ratePerSecond": RestartRequired,
 		"reconciliation.timeoutSeconds": RestartRequired, "reconciliation.managedHostResyncSeconds": RestartRequired,
 		"ssh.connectTimeoutSeconds": RestartRequired, "ssh.maxConcurrent": RestartRequired,
-		"ssh.allowedCIDRs": HotReloadable, "ssh.deniedCIDRs": HotReloadable, "ssh.allowPrivate": HotReloadable, "ssh.allowLoopback": HotReloadable,
+		"ssh.allowedCIDRs": HotReloadable, "ssh.deniedCIDRs": HotReloadable, "ssh.allowedPorts": HotReloadable, "ssh.allowPrivate": HotReloadable, "ssh.allowLoopback": HotReloadable,
 		"operations.enabled": HotReloadable, "operations.workers": RestartRequired, "operations.timeoutSeconds": RestartRequired, "operations.allowedPrograms": HotReloadable,
 		"logging.level": HotReloadable, "features.signupEnabled": HotReloadable,
 		"database.engine": RestartRequired, "database.path": RestartRequired, "database.url": RestartRequired,
@@ -229,6 +240,7 @@ func (m *SnapshotManager) Current() (Snapshot, bool) {
 func cloneSnapshot(s Snapshot) Snapshot {
 	s.Revision.Config.SSH.AllowedCIDRs = append([]string(nil), s.Revision.Config.SSH.AllowedCIDRs...)
 	s.Revision.Config.SSH.DeniedCIDRs = append([]string(nil), s.Revision.Config.SSH.DeniedCIDRs...)
+	s.Revision.Config.SSH.AllowedPorts = append([]int(nil), s.Revision.Config.SSH.AllowedPorts...)
 	s.Revision.Config.Operations.AllowedPrograms = append([]string(nil), s.Revision.Config.Operations.AllowedPrograms...)
 	return s
 }

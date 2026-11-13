@@ -56,11 +56,11 @@ type RunSpec struct {
 }
 
 type OperationTargetSpec struct {
-	HostID                ResourceID `json:"hostId"`
-	HostGeneration        uint64     `json:"hostGeneration"`
-	DisplayName           string     `json:"displayName"`
-	AccessProfileID       ResourceID `json:"accessProfileId,omitempty"`
-	AccessProfileRevision uint64     `json:"accessProfileRevision,omitempty"`
+	HostID                ID     `json:"hostId"`
+	HostGeneration        uint64 `json:"hostGeneration"`
+	DisplayName           string `json:"displayName"`
+	AccessProfileID       ID     `json:"accessProfileId,omitempty"`
+	AccessProfileRevision uint64 `json:"accessProfileRevision,omitempty"`
 }
 
 type OperationSpec struct {
@@ -72,6 +72,8 @@ type OperationSpec struct {
 type TargetResult struct {
 	ExitCode   *int   `json:"exitCode,omitempty"`
 	Output     string `json:"output,omitempty"`
+	Stdout     string `json:"stdout,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`
 	ErrorClass string `json:"errorClass,omitempty"`
 }
 
@@ -89,7 +91,7 @@ type OperationStatus struct {
 }
 
 type Operation struct {
-	ID          ResourceID      `json:"id"`
+	ID          ID              `json:"id"`
 	WorkspaceID int             `json:"workspaceId"`
 	Kind        OperationKind   `json:"kind"`
 	CreatedBy   ActorRef        `json:"createdBy"`
@@ -137,7 +139,7 @@ func (o *Operation) Validate() error {
 	if o.Spec.Run.TimeoutSeconds < 1 || o.Spec.Run.TimeoutSeconds > 900 || o.Spec.Run.Concurrency < 1 || o.Spec.Run.Concurrency > 20 {
 		return fmt.Errorf("%w: Run timeout or concurrency is outside supported bounds", ErrInvalidResource)
 	}
-	seen := make(map[ResourceID]struct{}, len(o.Spec.Targets))
+	seen := make(map[ID]struct{}, len(o.Spec.Targets))
 	for _, target := range o.Spec.Targets {
 		if err := target.HostID.Validate(); err != nil || target.HostGeneration == 0 || strings.TrimSpace(target.DisplayName) == "" {
 			return fmt.Errorf("%w: operation target identity, generation, and display name are required", ErrInvalidResource)
@@ -184,7 +186,7 @@ func (o *Operation) Validate() error {
 			if target.State == TargetPending || target.State == TargetRunning {
 				return fmt.Errorf("%w: unfinished target cannot have a result", ErrInvalidResource)
 			}
-			if len(target.Result.Output) > MaxTargetOutputBytes || len(target.Result.ErrorClass) > 128 {
+			if len(target.Result.Output)+len(target.Result.Stdout)+len(target.Result.Stderr) > MaxTargetOutputBytes || len(target.Result.ErrorClass) > 128 {
 				return fmt.Errorf("%w: operation target result exceeds bounds", ErrInvalidResource)
 			}
 		}
@@ -230,7 +232,7 @@ func (o *Operation) RequestCancel(now time.Time) error {
 	return nil
 }
 
-func (o *Operation) SetTargetState(hostID ResourceID, state TargetState, result *TargetResult) error {
+func (o *Operation) SetTargetState(hostID ID, state TargetState, result *TargetResult) error {
 	if o == nil || o.IsTerminal() || (o.Status.State != OperationRunning && o.Status.State != OperationCancelRequested) {
 		return ErrInvalidTransition
 	}
@@ -248,6 +250,13 @@ func (o *Operation) SetTargetState(hostID ResourceID, state TargetState, result 
 		if result != nil {
 			copyResult := *result
 			copyResult.Output = sanitizeMessage(copyResult.Output, MaxTargetOutputBytes)
+			remaining := MaxTargetOutputBytes - len(copyResult.Output)
+			copyResult.Stdout = sanitizeMessage(copyResult.Stdout, remaining)
+			remaining -= len(copyResult.Stdout)
+			if remaining < 0 {
+				remaining = 0
+			}
+			copyResult.Stderr = sanitizeMessage(copyResult.Stderr, remaining)
 			copyResult.ErrorClass = sanitizeMessage(copyResult.ErrorClass, 128)
 			target.Result = &copyResult
 		}

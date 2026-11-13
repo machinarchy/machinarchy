@@ -16,12 +16,77 @@ func TestManagedResourceContract(t *testing.T) {
 	for _, engine := range availableEngines(t) {
 		t.Run(engine, func(t *testing.T) {
 			t.Run("host revision and status", func(t *testing.T) { testResourceHost(t, newFixture(t, engine)) })
+			t.Run("Access Profile revision isolation and outbox", func(t *testing.T) { testAccessProfile(t, newFixture(t, engine)) })
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
 			t.Run("transaction rollback", func(t *testing.T) { testResourceRollback(t, newFixture(t, engine)) })
 			t.Run("outbox atomicity", func(t *testing.T) { testOutboxAtomicity(t, newFixture(t, engine)) })
 			t.Run("outbox retry and crash recovery", func(t *testing.T) { testOutboxRecovery(t, newFixture(t, engine)) })
 			t.Run("resource lease fencing", func(t *testing.T) { testResourceLease(t, newFixture(t, engine)) })
 		})
+	}
+}
+
+func testAccessProfile(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	workspace := f.newWorkspace(t, "profiles")
+	profile, first, err := resource.NewAccessProfile(workspace, "deploy", "SSH access", resource.AccessProfileSpec{
+		Connector: resource.ConnectorSSH, Username: "deploy", Authentication: resource.AuthenticationPassword,
+		Credential: resource.SecretReference{ID: "secret-credential", Version: 4}, Enabled: true,
+	}, 1, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, first); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.stores.ResourceProfiles.GetAccessProfile(ctx, workspace, profile.ID)
+	if err != nil || got.CurrentRevision != 1 {
+		t.Fatalf("profile=%+v err=%v", got, err)
+	}
+	if _, err = f.stores.ResourceProfiles.UpdateAccessProfile(ctx, workspace, profile.ID, 1, first.Spec, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.stores.ResourceProfiles.UpdateAccessProfile(ctx, workspace, profile.ID, 1, first.Spec, 1, time.Now()); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("stale profile update=%v", err)
+	}
+	rev1, err := f.stores.ResourceProfiles.GetAccessProfileRevision(ctx, workspace, profile.ID, 1)
+	if err != nil || rev1.Spec.Credential.Version != 4 {
+		t.Fatalf("immutable revision=%+v err=%v", rev1, err)
+	}
+	host, err := resource.NewHost(workspace, 0, "profile-host", nil, resource.HostSpec{AccessProfileID: profile.ID,
+		AccessTarget: resource.HostAccessTarget{Endpoint: "host.example:22", Trust: []string{"SHA256:host-key"}}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	storedHost, err := f.stores.ResourceHosts.GetHost(ctx, workspace, host.Metadata.ID)
+	if err != nil || storedHost.Spec.AccessTarget.Endpoint != host.Spec.AccessTarget.Endpoint || len(storedHost.Spec.AccessTarget.Trust) != 1 {
+		t.Fatalf("persisted Host access target=%+v err=%v", storedHost, err)
+	}
+	keys, err := f.stores.ResourceProfiles.ListHostsByAccessProfile(ctx, workspace, profile.ID)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("profile references=%v err=%v", keys, err)
+	}
+	if err = f.stores.ResourceProfiles.DeleteAccessProfile(ctx, workspace, profile.ID, 1, time.Now()); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("referenced profile deletion=%v", err)
+	}
+	if workspaceOther := f.newWorkspace(t, "other-profile-workspace"); workspaceOther == workspace {
+		t.Fatal("workspace fixture reused identity")
+	} else {
+		foreignHost, createErr := resource.NewHost(workspaceOther, 0, "foreign-profile-host", nil, resource.HostSpec{AccessProfileID: profile.ID}, time.Now())
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if createErr = f.stores.ResourceHosts.CreateHost(ctx, foreignHost); !errors.Is(createErr, resource.ErrAccessProfileNotFound) {
+			t.Fatalf("cross-workspace profile assignment=%v", createErr)
+		}
+	}
+	var events int
+	db := f.raw(t)
+	if err = db.QueryRowContext(ctx, f.pick(`SELECT COUNT(*) FROM outbox_events WHERE event_type=?`, `SELECT COUNT(*) FROM outbox_events WHERE event_type=$1`), eventing.AccessProfileChanged).Scan(&events); err != nil || events != 2 {
+		t.Fatalf("profile outbox events=%d err=%v", events, err)
 	}
 }
 
@@ -59,7 +124,7 @@ func testResourceHost(t *testing.T, f *fixture) {
 	}
 	observeCtx := ctx
 	if f.engine == "postgres" {
-		lease, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.ResourceLease{Kind: "host", WorkspaceID: host.Metadata.WorkspaceID,
+		lease, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.Lease{Kind: "host", WorkspaceID: host.Metadata.WorkspaceID,
 			ID: string(host.Metadata.ID), Owner: "contract-test"}, time.Now(), time.Minute)
 		if err != nil || !ok {
 			t.Fatalf("acquire observation lease = %v, %v", ok, err)
@@ -113,13 +178,25 @@ func testResourceHost(t *testing.T, f *fixture) {
 func testResourceOperation(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	workspaceID := f.newWorkspace(t, "operation-workspace")
-	hostID, err := resource.NewResourceID()
+	now := time.Now().UTC()
+	profile, profileRevision, err := resource.NewAccessProfile(workspaceID, "operation-profile", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Username: "deploy", Authentication: resource.AuthenticationPassword, Credential: resource.SecretReference{ID: "operation-secret", Version: 1}, Enabled: true}, 7, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
+	if err = f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, profileRevision); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resource.NewHost(workspaceID, 0, "operation-host", nil, resource.HostSpec{AccessProfileID: profile.ID}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	hostID := host.Metadata.ID
 	op, err := resource.NewRunOperation(workspaceID, resource.ActorRef{UserID: 7}, resource.OperationSpec{
-		Targets: []resource.OperationTargetSpec{{HostID: hostID, HostGeneration: 1, DisplayName: "target"}},
+		Targets: []resource.OperationTargetSpec{{HostID: hostID, HostGeneration: host.Metadata.Generation, DisplayName: "target", AccessProfileID: profile.ID, AccessProfileRevision: profileRevision.Revision}},
 		Run:     &resource.RunSpec{Argv: []string{"/usr/bin/printf", "hello"}, TimeoutSeconds: 30, Concurrency: 1},
 	}, now)
 	if err != nil {
@@ -324,7 +401,7 @@ func testOutboxRecovery(t *testing.T, f *fixture) {
 
 func testResourceLease(t *testing.T, f *fixture) {
 	if f.engine != "postgres" {
-		if _, ok, err := f.stores.ResourceLeases.AcquireResourceLease(context.Background(), resource.ResourceLease{}, time.Now(), time.Second); !errors.Is(err, resource.ErrLeaseUnsupported) || ok {
+		if _, ok, err := f.stores.ResourceLeases.AcquireResourceLease(context.Background(), resource.Lease{}, time.Now(), time.Second); !errors.Is(err, resource.ErrLeaseUnsupported) || ok {
 			t.Fatalf("SQLite lease acquisition = %v, %v", ok, err)
 		}
 		return
@@ -336,18 +413,18 @@ func testResourceLease(t *testing.T, f *fixture) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	first, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.ResourceLease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-a"}, now, time.Second)
+	first, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.Lease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-a"}, now, time.Second)
 	if err != nil || !ok || first.Token != 1 {
 		t.Fatalf("first lease = %+v, %v, %v", first, ok, err)
 	}
-	if _, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.ResourceLease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-b"}, now.Add(time.Millisecond), time.Second); err != nil || ok {
+	if _, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.Lease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-b"}, now.Add(time.Millisecond), time.Second); err != nil || ok {
 		t.Fatalf("contended lease acquired = %v, %v", ok, err)
 	}
 	renewed, ok, err := f.stores.ResourceLeases.RenewResourceLease(ctx, first, now.Add(100*time.Millisecond), time.Second)
 	if err != nil || !ok || renewed.Token != first.Token {
 		t.Fatalf("renew lease = %+v, %v, %v", renewed, ok, err)
 	}
-	second, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.ResourceLease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-b"}, now.Add(2*time.Second), time.Second)
+	second, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.Lease{Kind: "host", WorkspaceID: workspaceID, ID: string(id), Owner: "manager-b"}, now.Add(2*time.Second), time.Second)
 	if err != nil || !ok || second.Token != first.Token+1 {
 		t.Fatalf("expired lease takeover = %+v, %v, %v", second, ok, err)
 	}

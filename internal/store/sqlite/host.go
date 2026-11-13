@@ -60,7 +60,7 @@ func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
-			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
 		}
 		return fmt.Errorf("insert host: %w", err)
 	}
@@ -316,7 +316,7 @@ func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
-			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
 		}
 		return fmt.Errorf("update host %s: %w", host.ID, err)
 	}

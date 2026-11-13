@@ -39,22 +39,23 @@ type Config struct {
 // Stores provides access to the configured persistence backends and manages
 // their lifecycle.
 type Stores struct {
-	DB             *sql.DB
-	engine         string
-	Users          domain.UserStore
-	Access         domain.AccessStore
-	Metrics        domain.MetricsStore
-	Hosts          domain.HostStore
-	Jobs           domain.JobStore
-	Environments   domain.EnvironmentStore
-	Audit          domain.AuditStore
-	Runs           domain.RunStore
-	ResourceHosts  resource.HostRepository
-	Operations     resource.OperationRepository
-	Outbox         eventing.OutboxStore
-	ResourceLeases resource.ResourceLeaseStore
-	Management     *management.Store
-	logger         *slog.Logger
+	DB               *sql.DB
+	engine           string
+	Users            domain.UserStore
+	Access           domain.AccessStore
+	Metrics          domain.MetricsStore
+	Hosts            domain.HostStore
+	Jobs             domain.JobStore
+	Environments     domain.EnvironmentStore
+	Audit            domain.AuditStore
+	Runs             domain.RunStore
+	ResourceHosts    resource.HostRepository
+	ResourceProfiles resource.AccessProfileRepository
+	Operations       resource.OperationRepository
+	Outbox           eventing.OutboxStore
+	ResourceLeases   resource.LeaseStore
+	Management       *management.Store
+	logger           *slog.Logger
 }
 
 // Open initializes the configured storage backends using the provided context
@@ -150,6 +151,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Audit = storeInstance
 		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
+		stores.ResourceProfiles = storeInstance.Resources
 		stores.Operations = storeInstance.Resources
 		stores.Outbox = storeInstance.Resources
 		stores.ResourceLeases = storeInstance.Resources
@@ -167,6 +169,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		stores.Audit = storeInstance
 		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
+		stores.ResourceProfiles = storeInstance.Resources
 		stores.Operations = storeInstance.Resources
 		stores.Outbox = storeInstance.Resources
 		stores.ResourceLeases = storeInstance.Resources

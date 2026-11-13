@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 	"github.com/machinarchy/machinarchy/pkg/sshclient"
 )
 
@@ -86,7 +87,7 @@ func newBulkService(t *testing.T, store *bulkFakeStore, tester *bulkFakeTester, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewHostServiceWithTesterAndCapacity(store, nil, tester, limit)
+	svc, err := NewHostServiceWithTesterAndCapacity(store, nil, tester, limit, WithTargetPolicy(netpolicy.Policy{AllowPrivate: true}))
 	if err != nil {
 		t.Fatal(err)
 	}

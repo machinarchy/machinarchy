@@ -47,6 +47,9 @@ type ResourceQueue struct {
 	delayed     map[ResourceKey]time.Time
 	requeues    map[ResourceKey]int
 	wake        chan struct{}
+	shutdownCh  chan struct{}
+	waiting     int
+	waitChange  chan struct{}
 	stop        chan struct{}
 	stopped     chan struct{}
 	shutdown    bool
@@ -66,8 +69,8 @@ func NewResourceQueue(capacity int, baseBackoff, maxBackoff time.Duration) *Reso
 		maxBackoff = 5 * time.Minute
 	}
 	q := &ResourceQueue{capacity: capacity, dirty: make(map[ResourceKey]bool), processing: make(map[ResourceKey]bool),
-		delayed: make(map[ResourceKey]time.Time), requeues: make(map[ResourceKey]int), wake: make(chan struct{}, 1),
-		stop: make(chan struct{}), stopped: make(chan struct{}), baseBackoff: baseBackoff, maxBackoff: maxBackoff}
+		delayed: make(map[ResourceKey]time.Time), requeues: make(map[ResourceKey]int), wake: make(chan struct{}, 1), shutdownCh: make(chan struct{}),
+		stop: make(chan struct{}), stopped: make(chan struct{}), waitChange: make(chan struct{}, 1), baseBackoff: baseBackoff, maxBackoff: maxBackoff}
 	go q.scheduleDelayed()
 	return q
 }
@@ -149,7 +152,7 @@ func (q *ResourceQueue) AddRateLimited(key ResourceKey) Admission {
 		backoff = q.maxBackoff
 	}
 	// Jitter avoids synchronized retry waves while retaining the configured cap.
-	jittered := time.Duration(float64(backoff) * (0.8 + rand.Float64()*0.4))
+	jittered := time.Duration(float64(backoff) * (0.8 + rand.Float64()*0.4)) // #nosec G404 -- non-security retry jitter
 	if jittered > q.maxBackoff {
 		jittered = q.maxBackoff
 	}
@@ -176,12 +179,21 @@ func (q *ResourceQueue) Get(ctx context.Context) (ResourceKey, bool) {
 			q.mu.Unlock()
 			return ResourceKey{}, false
 		}
+		q.waiting++
+		select {
+		case q.waitChange <- struct{}{}:
+		default:
+		}
 		q.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return ResourceKey{}, false
+		case <-q.shutdownCh:
 		case <-q.wake:
 		}
+		q.mu.Lock()
+		q.waiting--
+		q.mu.Unlock()
 	}
 }
 
@@ -221,6 +233,7 @@ func (q *ResourceQueue) Shutdown() {
 			}
 		}
 		q.mu.Unlock()
+		close(q.shutdownCh)
 		close(q.stop)
 		q.signal()
 		<-q.stopped

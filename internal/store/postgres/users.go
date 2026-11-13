@@ -59,7 +59,7 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 	).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, fmt.Errorf("%w: %v", domain.ErrUserAlreadyExists, err)
+			return nil, fmt.Errorf("%w: %w", domain.ErrUserAlreadyExists, err)
 		}
 		return nil, fmt.Errorf("insert user: %w", err)
 	}

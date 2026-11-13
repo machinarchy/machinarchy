@@ -20,7 +20,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 		Scan(&environment.ID, &environment.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
 		}
 		return fmt.Errorf("insert environment: %w", err)
 	}
@@ -82,7 +82,7 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 		environment.Name, environment.Description, environment.ID, environment.WorkspaceID)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
 		}
 		return fmt.Errorf("update environment %d: %w", environment.ID, err)
 	}

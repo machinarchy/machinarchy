@@ -207,7 +207,7 @@ func (s *Store) configEvent(ctx context.Context, tx *sql.Tx, rev uint64, now tim
 	if err != nil {
 		return err
 	}
-	subjectID := resource.ResourceID("00000000-0000-4000-8000-000000000001")
+	subjectID := resource.ID("00000000-0000-4000-8000-000000000001")
 	payload, err := json.Marshal(map[string]uint64{"revision": rev})
 	if err != nil {
 		return fmt.Errorf("marshal revision payload: %w", err)
@@ -319,7 +319,10 @@ func (s *Store) AppendSecretVersion(ctx context.Context, id string, expected uin
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get sv affected rows: %w", err)
+	}
 	if n != 1 {
 		return secrets.ErrConflict
 	}
@@ -445,7 +448,10 @@ func (s *Store) RetireSecret(ctx context.Context, id string, actor int) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get rs affected rows: %w", err)
+	}
 	if n != 1 {
 		return secrets.ErrNotFound
 	}

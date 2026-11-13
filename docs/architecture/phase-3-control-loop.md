@@ -64,7 +64,7 @@ Controller Manager responsibilities:
 type ResourceKey struct {
     Kind      ResourceKind
     Workspace WorkspaceID
-    ID        ResourceID
+    ID        ID
 }
 
 type ResourceKind string

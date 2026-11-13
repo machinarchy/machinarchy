@@ -3,6 +3,7 @@ package resource
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -44,7 +45,7 @@ type Condition struct {
 }
 
 type HostMetadata struct {
-	ID                ResourceID        `json:"id"`
+	ID                ID                `json:"id"`
 	WorkspaceID       int               `json:"workspaceId"`
 	EnvironmentID     int               `json:"environmentId,omitempty"`
 	Name              string            `json:"name"`
@@ -58,8 +59,16 @@ type HostMetadata struct {
 
 type HostSpec struct {
 	Presence        DesiredPresence `json:"presence"`
-	AccessProfileID ResourceID      `json:"accessProfileId,omitempty"`
+	AccessProfileID ID              `json:"accessProfileId,omitempty"`
 	ProfileRevision uint64          `json:"profileRevision,omitempty"`
+	// AccessTarget is host-owned connector-neutral location and trust material.
+	// Its interpretation is restricted to the selected connector adapter.
+	AccessTarget HostAccessTarget `json:"accessTarget,omitempty"`
+}
+
+type HostAccessTarget struct {
+	Endpoint string   `json:"endpoint,omitempty"`
+	Trust    []string `json:"trust,omitempty"`
 }
 
 type HostStatus struct {
@@ -146,7 +155,15 @@ func (s HostSpec) Validate() error {
 	}
 	if s.AccessProfileID != "" {
 		if err := s.AccessProfileID.Validate(); err != nil {
-			return fmt.Errorf("%w: access profile ID: %v", ErrInvalidResource, err)
+			return fmt.Errorf("%w: access profile ID: %w", ErrInvalidResource, err)
+		}
+	}
+	if len(s.AccessTarget.Endpoint) > 512 || len(s.AccessTarget.Trust) > 8 {
+		return fmt.Errorf("%w: Host access target exceeds supported bounds", ErrInvalidResource)
+	}
+	for _, value := range s.AccessTarget.Trust {
+		if strings.TrimSpace(value) == "" || len(value) > 256 {
+			return fmt.Errorf("%w: Host trust value is invalid", ErrInvalidResource)
 		}
 	}
 	return nil
@@ -165,7 +182,7 @@ func (h *Host) UpdateSpec(expectedGeneration uint64, next HostSpec, now time.Tim
 	if next.Presence == "" {
 		next.Presence = PresenceManaged
 	}
-	if h.Spec == next {
+	if reflect.DeepEqual(h.Spec, next) {
 		return nil
 	}
 	h.Spec = next
@@ -229,7 +246,7 @@ func (h *Host) RequestDeletion(expectedGeneration uint64, now time.Time) error {
 		return fmt.Errorf("%w: Host is required", ErrInvalidResource)
 	}
 	return h.UpdateSpec(expectedGeneration, HostSpec{Presence: PresenceAbsent, AccessProfileID: h.Spec.AccessProfileID,
-		ProfileRevision: h.Spec.ProfileRevision}, now)
+		ProfileRevision: h.Spec.ProfileRevision, AccessTarget: h.Spec.AccessTarget}, now)
 }
 
 func NormalizeConditions(previous, next []Condition, generation uint64, now time.Time) ([]Condition, error) {

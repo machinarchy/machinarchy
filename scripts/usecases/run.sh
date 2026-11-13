@@ -1,820 +1,603 @@
 #!/usr/bin/env bash
-# ============================================================================
-# MACHINARCHY - END-TO-END API / HOST / CLI / FLEET USE CASE
-# ============================================================================
-# Safe by default: this script authenticates, inspects current resources and
-# previews the selected fleet. It does NOT create resources or execute remote
-# commands unless explicitly requested.
-#
-# Examples:
-#   ./scripts/usecases/run.sh
-#   ./scripts/usecases/run.sh --apply
-#   ./scripts/usecases/run.sh --apply --configure-cli
-#   ./scripts/usecases/run.sh --execute --target-hash <64-char-sha256>
-#   ./scripts/usecases/run.sh --apply --configure-cli --execute \
-#       --target-hash <64-char-sha256>
-#
-# Configuration is read from the process environment. This script does not
-# source .env automatically because sourcing a file executes shell code.
-# For a trusted local .env file, run:
-#   set -a; . ./.env; set +a
-#   ./scripts/usecases/run.sh --apply --configure-cli
-# ============================================================================
+# Run one documented Machinarchy use case against an existing API.
+# Safe default: inventory reads only. Mutations require --apply; remote commands
+# additionally require --execute. The script never sources .env files.
 
 set -Eeuo pipefail
 
-# ----------------------------------------------------------------------------
-# Defaults and configuration
-# ----------------------------------------------------------------------------
-
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 API_URL="${MACHINARCHY_API_URL:-${API_URL:-http://localhost:8080}}"
-API_TOKEN="${MACHINARCHY_API_TOKEN:-${API_TOKEN:-}}"
-ADMIN_USERNAME="${MACHINARCHY_BOOTSTRAP_ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD:-}"
-
+BEARER_TOKEN="${MACHINARCHY_API_TOKEN:-${API_TOKEN:-}}"
+USE_CASE="inventory"
+APPLY=0
+EXECUTE=0
 ENVIRONMENT_NAME="${MACHINARCHY_ENVIRONMENT_NAME:-development}"
 ENVIRONMENT_DESCRIPTION="${MACHINARCHY_ENVIRONMENT_DESCRIPTION:-${ENVIRONMENT_NAME} hosts}"
-
-HOST_NAME="${MACHINARCHY_HOST_NAME:-${HOST_NAME:-}}"
-HOST_ADDRESS="${MACHINARCHY_HOST_ADDRESS:-${HOST_IP:-}}"
-SSH_USERNAME="${MACHINARCHY_SSH_USERNAME:-${SSH_USERNAME:-}}"
-SSH_PORT="${MACHINARCHY_SSH_PORT:-${SSH_PORT:-22}}"
-SSH_HOST_FINGERPRINT="${MACHINARCHY_SSH_HOST_FINGERPRINT:-}"
-HOST_PASSWORD="${MACHINARCHY_HOST_SSH_PASSWORD:-}"
-
-TOKEN_NAME="${MACHINARCHY_AUTOMATION_TOKEN_NAME:-host-inventory-read}"
-TOKEN_FILE="${MACHINARCHY_AUTOMATION_TOKEN_FILE:-data/.secrets/host-inventory-read.token}"
-TOKEN_ROLE="${MACHINARCHY_AUTOMATION_TOKEN_ROLE:-reader}"
-TOKEN_EXPIRY_HOURS="${MACHINARCHY_AUTOMATION_TOKEN_EXPIRY_HOURS:-168}"
-AUTOMATION_TOKEN="${MACHINARCHY_AUTOMATION_TOKEN:-}"
-CLI_TOKEN=""
-
-# Keep credentials in this process only; do not pass inherited secret
-# environment variables to curl, Go tooling or other child processes.
-unset MACHINARCHY_API_TOKEN MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD \
-    MACHINARCHY_HOST_SSH_PASSWORD MACHINARCHY_AUTOMATION_TOKEN 2>/dev/null || true
-export -n API_TOKEN 2>/dev/null || true
-
-RUN_CONCURRENCY="${MACHINARCHY_RUN_CONCURRENCY:-5}"
-TARGETS_HASH="${MACHINARCHY_EXPECT_TARGETS_HASH:-${TARGET_HASH:-}}"
-SELECTOR="environment=${ENVIRONMENT_NAME}"
-
 API_CONNECT_TIMEOUT="${MACHINARCHY_API_CONNECT_TIMEOUT:-5}"
 API_REQUEST_TIMEOUT="${MACHINARCHY_API_REQUEST_TIMEOUT:-30}"
+POLL_TIMEOUT="${MACHINARCHY_OPERATION_POLL_TIMEOUT:-30}"
+POLL_INTERVAL="${MACHINARCHY_OPERATION_POLL_INTERVAL:-2}"
+TEMP_DIR=""
+AUTH_CONFIG=""
 
-APPLY=0
-CONFIGURE_CLI=0
-EXECUTE=0
+# Do not pass credentials from the environment to curl, jq, Go, or other child
+# processes. The bearer token is supplied only through a mode-600 curl config.
+unset MACHINARCHY_API_TOKEN API_TOKEN 2>/dev/null || true
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-TEMP_FILES=()
-GO="go"
-# ----------------------------------------------------------------------------
-# Logging and cleanup
-# ----------------------------------------------------------------------------
+info() { printf '→ %s\n' "$*" >&2; }
+success() { printf '✓ %s\n' "$*" >&2; }
+warn() { printf '⚠ %s\n' "$*" >&2; }
+error() { printf '✗ %s\n' "$*" >&2; }
 
-info()    { printf '→ %s\n' "$1"; }
-success() { printf '✓ %s\n' "$1"; }
-warn()    { printf '⚠ %s\n' "$1" >&2; }
-error()   { printf '✗ %s\n' "$1" >&2; }
+cleanup() {
+    local status=$?
+    if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
+        rm -rf -- "$TEMP_DIR"
+    fi
+    unset BEARER_TOKEN
+    return "$status"
+}
+trap cleanup EXIT
 
 on_error() {
     local status=$?
-    error "Command failed near line ${BASH_LINENO[0]:-unknown} (exit code ${status})."
+    error "Use case '$USE_CASE' failed near line ${BASH_LINENO[0]:-unknown} (exit ${status})."
     exit "$status"
 }
-
-make_temp_file() {
-    TEMP_FILE="$(mktemp "${TMPDIR:-/tmp}/machinarchy.XXXXXX")"
-    chmod 600 "$TEMP_FILE"
-    TEMP_FILES[${#TEMP_FILES[@]}]="$TEMP_FILE"
-}
-
-cleanup() {
-    local file
-    for file in "${TEMP_FILES[@]}"; do
-        [[ -n "$file" ]] && rm -f "$file"
-    done
-    unset ADMIN_PASSWORD HOST_PASSWORD API_TOKEN CLI_TOKEN AUTOMATION_TOKEN
-}
-
 trap on_error ERR
-trap cleanup EXIT
-
-# ----------------------------------------------------------------------------
-# Arguments
-# ----------------------------------------------------------------------------
 
 usage() {
     cat <<'USAGE'
-Machinarchy end-to-end use-case runner
+Machinarchy documented use-case runner
 
 Usage:
-  scripts/usecases/run.sh [options]
+  scripts/usecases/run.sh [--use-case NAME] [--apply] [--execute]
+
+Use cases:
+  inventory          Read legacy environments/Hosts through the API (default).
+  cli-inventory      Configure a temporary CLI context and list legacy Hosts.
+  legacy-host        Inspect or register a legacy SSH Host.
+  managed-host       Create an encrypted SSH Secret, Access Profile, and Host.
+  managed-operation Submit and track an Operation for a managed Host.
+  legacy-run         Preview and optionally execute a selector-based legacy Run.
+  runtime-config     Read configuration; optionally validate and publish a file.
+  secrets            List secret metadata; optionally create or rotate a secret.
+  token              Issue a short-lived reader/operator token and save it safely.
 
 Options:
-  --apply                  Create missing automation token, environment and host.
-  --configure-cli          Configure the local Machinarchy CLI context and list hosts.
-  --execute                Submit the sample remote commands after fleet preview.
-  --target-hash HASH       Expected fleet-target SHA-256 hash for --execute.
-  --all                    Equivalent to --apply --configure-cli --execute.
-  --help                   Show this help.
+  --use-case NAME    Select exactly one use case.
+  --apply            Allow resource/configuration/secret mutations for the
+                     selected use case. Managed-host creates new resources.
+  --execute          Submit remote commands (required for managed-operation and
+                     legacy-run; still requires --apply).
+  --help             Show this help.
 
-Safe default:
-  Without options, the script authenticates, inspects resources and previews
-  the selected environment. It does not create resources or run remote commands.
+Required common environment:
+  MACHINARCHY_API_TOKEN       Authorized API bearer credential. Never printed
+                              by the runner. Token/Secret/runtime-config
+                              administration requires a human owner session.
+  MACHINARCHY_API_URL         API base URL (default http://localhost:8080).
 
-Required environment variables when applicable:
-  MACHINARCHY_API_TOKEN                         Existing bootstrap/operator API token
-  MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD          Used for login if API token is absent
-  MACHINARCHY_HOST_NAME                         Host name to register
-  MACHINARCHY_HOST_ADDRESS                      Host IP address or DNS name
-  MACHINARCHY_SSH_USERNAME                      SSH username
-  MACHINARCHY_SSH_HOST_FINGERPRINT              Trusted SHA256 host-key fingerprint
-  MACHINARCHY_HOST_SSH_PASSWORD                 SSH password (prompted if omitted)
-  MACHINARCHY_EXPECT_TARGETS_HASH               Expected fleet hash for --execute
-
-Common configuration:
-  MACHINARCHY_API_URL                            Default: http://localhost:8080
-  MACHINARCHY_ENVIRONMENT_NAME                  Default: development
-  MACHINARCHY_AUTOMATION_TOKEN_FILE             Default: data/.secrets/host-inventory-read.token
-
-The API paths and JSON field names in this script follow the supplied example.
-Verify them against the current Machinarchy API contract before using this
-workflow against a shared or production environment.
+See docs/examples/example-usecases.md for payloads, permissions, and workflow
+details. This script does not source .env files.
 USAGE
 }
 
 parse_arguments() {
-    while [[ $# -gt 0 ]]; do
+    while (($#)); do
         case "$1" in
-            --apply)
-                APPLY=1
-                ;;
-            --configure-cli)
-                CONFIGURE_CLI=1
-                ;;
-            --execute)
-                EXECUTE=1
-                ;;
-            --target-hash)
-                if [[ $# -lt 2 || -z "$2" ]]; then
-                    error "--target-hash requires a value."
-                    exit 2
-                fi
-                TARGETS_HASH="$2"
+            --use-case)
+                (($# >= 2)) || { error '--use-case requires a name'; return 2; }
+                USE_CASE="$2"
                 shift
                 ;;
-            --all)
-                APPLY=1
-                CONFIGURE_CLI=1
-                EXECUTE=1
-                ;;
-            --help|-h)
-                usage
-                exit 0
-                ;;
-            *)
-                error "Unknown option: $1"
-                usage
-                exit 2
-                ;;
+            --apply) APPLY=1 ;;
+            --execute) EXECUTE=1 ;;
+            --help|-h) usage; exit 0 ;;
+            *) error "Unknown option: $1"; usage; return 2 ;;
         esac
         shift
     done
 }
 
-# ----------------------------------------------------------------------------
-# Prerequisites and input validation
-# ----------------------------------------------------------------------------
-
 require_command() {
-    local command_name="$1"
-    if ! command -v "$command_name" >/dev/null 2>&1; then
-        error "Required command not found: ${command_name}"
-        return 1
-    fi
-}
-
-check_prerequisites() {
-    info "Checking local prerequisites..."
-    require_command curl
-    require_command jq
-
-    if [[ "$CONFIGURE_CLI" -eq 1 ]]; then
-        require_command go
-    fi
-
-    if [[ "$APPLY" -eq 1 && -n "$HOST_NAME" ]]; then
-        require_command ssh-keyscan
-        require_command ssh-keygen
-    fi
-
-    if ! curl --help all 2>/dev/null | grep -q -- '--write-out'; then
-        error "A curl build with --write-out support is required."
-        return 1
-    fi
-
-    success "Required tools are available."
+    command -v "$1" >/dev/null 2>&1 || { error "Required command not found: $1"; return 1; }
 }
 
 validate_configuration() {
-    while [[ "$API_URL" == */ ]]; do
-        API_URL="${API_URL%/}"
+    while [[ "$API_URL" == */ ]]; do API_URL="${API_URL%/}"; done
+    [[ "$API_URL" == http://* || "$API_URL" == https://* ]] || {
+        error 'MACHINARCHY_API_URL must be an absolute http:// or https:// URL.'
+        return 2
+    }
+    [[ "$API_URL" != *[[:space:]]* ]] || { error 'API URL cannot contain whitespace.'; return 2; }
+    [[ "$ENVIRONMENT_NAME" != '' ]] || { error 'MACHINARCHY_ENVIRONMENT_NAME cannot be empty.'; return 2; }
+    for value in "$API_CONNECT_TIMEOUT" "$API_REQUEST_TIMEOUT" "$POLL_TIMEOUT" "$POLL_INTERVAL"; do
+        [[ "$value" =~ ^[0-9]+$ ]] && ((value > 0)) || {
+            error 'API and polling timeout settings must be positive integers.'
+            return 2
+        }
     done
-
-    case "$API_URL" in
-        http://*|https://*) ;;
-        *) error "MACHINARCHY_API_URL must start with http:// or https://"; return 1 ;;
+    case "$USE_CASE" in
+        inventory|cli-inventory|legacy-host|managed-host|managed-operation|legacy-run|runtime-config|secrets|token) ;;
+        *) error "Unknown use case '$USE_CASE'."; usage; return 2 ;;
     esac
-
-    if [[ "$API_URL" == http://* ]]; then
-        warn "API traffic is using plain HTTP. Use HTTPS when connecting beyond localhost or a trusted isolated development network."
+    if [[ "$EXECUTE" -eq 1 && "$APPLY" -ne 1 ]]; then
+        error '--execute requires --apply as a separate mutation confirmation.'
+        return 2
     fi
-
-    if [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]] || (( SSH_PORT < 1 || SSH_PORT > 65535 )); then
-        error "SSH port must be an integer between 1 and 65535."
-        return 1
+    if [[ "$EXECUTE" -eq 1 && "$USE_CASE" != managed-operation && "$USE_CASE" != legacy-run ]]; then
+        error '--execute is supported only by managed-operation and legacy-run.'
+        return 2
     fi
-
-    if [[ ! "$TOKEN_EXPIRY_HOURS" =~ ^[0-9]+$ ]] || (( TOKEN_EXPIRY_HOURS < 1 )); then
-        error "Automation token expiry must be a positive integer number of hours."
-        return 1
-    fi
-
-    if [[ ! "$RUN_CONCURRENCY" =~ ^[0-9]+$ ]] || (( RUN_CONCURRENCY < 1 )); then
-        error "Run concurrency must be a positive integer."
-        return 1
-    fi
-
-    if [[ ! "$API_CONNECT_TIMEOUT" =~ ^[0-9]+$ ]] || (( API_CONNECT_TIMEOUT < 1 )); then
-        error "API connect timeout must be a positive integer."
-        return 1
-    fi
-
-    if [[ ! "$API_REQUEST_TIMEOUT" =~ ^[0-9]+$ ]] || (( API_REQUEST_TIMEOUT < 1 )); then
-        error "API request timeout must be a positive integer."
-        return 1
-    fi
-
-    if [[ "$EXECUTE" -eq 1 && ! "$TARGETS_HASH" =~ ^[a-fA-F0-9]{64}$ ]]; then
-        error "--execute requires a 64-character SHA-256 target hash. Preview the fleet first, then pass --target-hash or MACHINARCHY_EXPECT_TARGETS_HASH."
-        return 1
-    fi
-
-    if [[ -z "$API_TOKEN" && -z "$ADMIN_PASSWORD" && ! -t 0 ]]; then
-        error "Set MACHINARCHY_API_TOKEN or MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD when running non-interactively."
-        return 1
-    fi
-}
-
-prompt_secret() {
-    local prompt="$1"
-    local value=""
-
-    if [[ ! -t 0 ]]; then
-        error "Cannot prompt for ${prompt} without an interactive terminal. Supply the corresponding environment variable."
-        return 1
-    fi
-
-    printf '%s' "$prompt" >&2
-    IFS= read -r -s value
-    printf '\n' >&2
-    printf '%s' "$value"
-}
-
-# ----------------------------------------------------------------------------
-# HTTP helper
-# ----------------------------------------------------------------------------
-
-# Usage: api_request METHOD PATH [BEARER_TOKEN] [JSON_BODY]
-# Tokens are written to a mode-600 temporary curl config file rather than
-# passed directly in curl's command-line arguments.
-api_request() {
-    local method="$1"
-    local path="$2"
-    local bearer_token="${3:-}"
-    local json_body="${4:-}"
-    local response_file auth_file status detail escaped_token
-    local -a curl_args
-
-    make_temp_file
-    response_file="$TEMP_FILE"
-
-    curl_args=(
-        --silent
-        --show-error
-        --connect-timeout "$API_CONNECT_TIMEOUT"
-        --max-time "$API_REQUEST_TIMEOUT"
-        --request "$method"
-        --output "$response_file"
-        --write-out '%{http_code}'
-        --header 'Accept: application/json'
-        "$API_URL$path"
-    )
-
-    if [[ -n "$bearer_token" ]]; then
-        if [[ "$bearer_token" == *$'\n'* || "$bearer_token" == *$'\r'* ]]; then
-            error "Bearer token contains an invalid newline character."
-            return 1
+    if [[ "$USE_CASE" == managed-operation || "$USE_CASE" == legacy-run ]]; then
+        if [[ "$EXECUTE" -ne 1 ]]; then
+            warn "Use case '$USE_CASE' will only inspect/preview; pass --apply --execute to submit remote commands."
         fi
-
-        make_temp_file
-        auth_file="$TEMP_FILE"
-        escaped_token="${bearer_token//\\/\\\\}"
-        escaped_token="${escaped_token//\"/\\\"}"
-        printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" > "$auth_file"
-        curl_args=(--config "$auth_file" "${curl_args[@]}")
     fi
-
-    if [[ -n "$json_body" ]]; then
-        status="$(printf '%s' "$json_body" | curl "${curl_args[@]}" --header 'Content-Type: application/json' --data-binary @-)" || {
-            error "Network request failed: ${method} ${path}"
-            return 1
-        }
-    else
-        status="$(curl "${curl_args[@]}")" || {
-            error "Network request failed: ${method} ${path}"
-            return 1
-        }
+    if [[ -z "$BEARER_TOKEN" ]]; then
+        error 'Set MACHINARCHY_API_TOKEN to an authorized API bearer token.'
+        return 2
     fi
+    if [[ "$API_URL" == http://* ]]; then
+        case "$API_URL" in
+            http://localhost*|http://127.0.0.1*|http://\[::1\]*) ;;
+            *) warn 'Bearer token will travel over plain HTTP; use HTTPS outside isolated local development.' ;;
+        esac
+    fi
+}
 
+initialize() {
+    require_command curl
+    require_command jq
+    if [[ "$USE_CASE" == cli-inventory || "$USE_CASE" == runtime-config || "$USE_CASE" == secrets ]]; then
+        require_command go
+    fi
+    TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/machinarchy-usecases.XXXXXX")"
+    chmod 700 "$TEMP_DIR"
+    AUTH_CONFIG="$TEMP_DIR/curl-auth.conf"
+    local escaped="${BEARER_TOKEN//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    [[ "$BEARER_TOKEN" != *$'\n'* && "$BEARER_TOKEN" != *$'\r'* ]] || {
+        error 'API token contains an invalid newline.'
+        return 2
+    }
+    printf 'header = "Authorization: Bearer %s"\n' "$escaped" > "$AUTH_CONFIG"
+    chmod 600 "$AUTH_CONFIG"
+
+    info "Checking API readiness at $API_URL/healthz/ready..."
+    if ! curl --silent --show-error --fail --connect-timeout "$API_CONNECT_TIMEOUT" \
+        --max-time "$API_REQUEST_TIMEOUT" "$API_URL/healthz/ready" >/dev/null; then
+        error "Machinarchy API is unavailable or not ready at $API_URL. Check the URL and API/database health."
+        return 1
+    fi
+}
+
+# Request output is returned on stdout. Error responses are sanitized to status
+# and a short public error field; response bodies are stored in the private temp dir.
+api_request() {
+    local method="$1" path="$2" body_file="${3:-}"
+    local response_file status message
+    response_file="$TEMP_DIR/response.$RANDOM.$RANDOM"
+    local -a args=(--silent --show-error --connect-timeout "$API_CONNECT_TIMEOUT"
+        --max-time "$API_REQUEST_TIMEOUT" --config "$AUTH_CONFIG" --request "$method"
+        --output "$response_file" --write-out '%{http_code}' --header 'Accept: application/json')
+    if [[ -n "$body_file" ]]; then
+        [[ -f "$body_file" ]] || { error "Request body file is missing: $body_file"; return 1; }
+        args+=(--header 'Content-Type: application/json' --data-binary "@$body_file")
+    fi
+    if ! status="$(curl "${args[@]}" "$API_URL$path")"; then
+        error "Network request failed: $method $path"
+        return 1
+    fi
     case "$status" in
-        2??)
-            cat "$response_file"
-            ;;
+        2??) cat "$response_file" ;;
         *)
-            detail="$(jq -r '.message // .error // empty' "$response_file" 2>/dev/null || true)"
-            if [[ -n "$detail" ]]; then
-                error "API request failed: ${method} ${path} (HTTP ${status}): ${detail}"
-            else
-                error "API request failed: ${method} ${path} (HTTP ${status})."
+            message="$(jq -r '.message // .error // empty' "$response_file" 2>/dev/null || true)"
+            if [[ -n "$message" ]]; then error "API request failed: $method $path (HTTP $status): $message"
+            else error "API request failed: $method $path (HTTP $status)."
             fi
             return 1
             ;;
     esac
 }
 
-# ----------------------------------------------------------------------------
-# Authentication
-# ----------------------------------------------------------------------------
-
-authenticate() {
-    if [[ -n "$API_TOKEN" ]]; then
-        success "Using the supplied Machinarchy API token."
-        return 0
-    fi
-
-    if [[ -z "$ADMIN_PASSWORD" ]]; then
-        ADMIN_PASSWORD="$(prompt_secret "Bootstrap admin password: ")"
-    fi
-
-    make_temp_file
-    local password_file="$TEMP_FILE"
-    printf '%s' "$ADMIN_PASSWORD" > "$password_file"
-    unset ADMIN_PASSWORD MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD
-
-    local login_payload login_response
-    login_payload="$(jq -n \
-        --arg username "$ADMIN_USERNAME" \
-        --rawfile password "$password_file" \
-        '{username: $username, password: $password}')"
-
-    rm -f "$password_file"
-
-    info "Authenticating with the Machinarchy API..."
-    login_response="$(api_request POST /api/auth/login '' "$login_payload")"
-    API_TOKEN="$(printf '%s' "$login_response" | jq -er '.token | strings | select(length > 0)')" || {
-        error "Login response did not contain a non-empty .token field."
-        return 1
-    }
-
-    success "API authentication successful."
-}
-
-# ----------------------------------------------------------------------------
-# JSON helpers
-# ----------------------------------------------------------------------------
-
-array_id_by_name() {
-    local json="$1"
-    local name="$2"
-
-    printf '%s' "$json" | jq -r --arg name "$name" '
-        if type != "array" then
-            error("Expected an array response")
-        else
-            ([.[] | select(.name == $name) | .id | select(. != null)][0] // "")
-            | if type == "number" or type == "string" then tostring else "" end
-        end
-    '
-}
-
-response_id() {
-    printf '%s' "$1" | jq -er '
-        if (.id | type) == "string" or (.id | type) == "number" then
-            .id | tostring
-        else
-            error("Response does not contain a string or numeric .id")
-        end
-    '
-}
-
-# ----------------------------------------------------------------------------
-# Automation token management
-# ----------------------------------------------------------------------------
-
-write_secret_file() {
+write_json_file() {
     local destination="$1"
-    local secret="$2"
-    local directory temporary_file
-
-    directory="$(dirname "$destination")"
-    (umask 077; mkdir -p "$directory")
-    chmod 700 "$directory"
-
-    if [[ -L "$destination" ]]; then
-        error "Refusing to write automation token through a symbolic link: $destination"
-        return 1
-    fi
-
-    temporary_file="$(mktemp "$directory/.machinarchy-token.XXXXXX")"
-    chmod 600 "$temporary_file"
-    printf '%s' "$secret" > "$temporary_file"
-    mv -f "$temporary_file" "$destination"
+    shift
+    jq -n "$@" > "$destination"
     chmod 600 "$destination"
 }
 
-resolve_automation_token() {
-    local tokens_json existing_token_id token_response token_payload
-
-    CLI_TOKEN="$AUTOMATION_TOKEN"
-
-    if [[ -z "$CLI_TOKEN" && -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" ]]; then
-        CLI_TOKEN="$(cat "$TOKEN_FILE")"
-        if [[ -z "$CLI_TOKEN" ]]; then
-            error "Automation token file is empty: $TOKEN_FILE"
-            return 1
-        fi
-    fi
-
-    if [[ -n "$CLI_TOKEN" ]]; then
-        success "Automation token supplied or loaded from the protected local token file."
-        return 0
-    fi
-
-    if [[ "$APPLY" -ne 1 && "$CONFIGURE_CLI" -ne 1 ]]; then
-        return 0
-    fi
-
-    info "Checking for automation token '$TOKEN_NAME'..."
-    tokens_json="$(api_request GET /api/v1/tokens "$API_TOKEN")"
-    existing_token_id="$(array_id_by_name "$tokens_json" "$TOKEN_NAME")"
-
-    if [[ -n "$existing_token_id" ]]; then
-        error "Token '$TOKEN_NAME' already exists, but its secret is not available locally."
-        error "The API normally returns a token secret only at creation time. Set MACHINARCHY_AUTOMATION_TOKEN or provide its protected token file."
-        return 1
-    fi
-
-    if [[ "$APPLY" -ne 1 ]]; then
-        warn "Automation token '$TOKEN_NAME' does not exist. Use --apply to create it."
-        return 0
-    fi
-
-    token_payload="$(jq -n \
-        --arg name "$TOKEN_NAME" \
-        --arg role "$TOKEN_ROLE" \
-        --argjson expiresInHours "$TOKEN_EXPIRY_HOURS" \
-        '{name: $name, role: $role, expiresInHours: $expiresInHours}')"
-
-    info "Creating a least-privilege automation token..."
-    token_response="$(api_request POST /api/v1/tokens "$API_TOKEN" "$token_payload")"
-    CLI_TOKEN="$(printf '%s' "$token_response" | jq -er '.token | strings | select(length > 0)')" || {
-        error "Token creation response did not contain a non-empty .token field."
-        return 1
-    }
-
-    write_secret_file "$TOKEN_FILE" "$CLI_TOKEN"
-    success "Automation token created and stored in $TOKEN_FILE (permissions 600)."
-    # Never print token_response: it contains the one-time token secret.
-}
-
-# ----------------------------------------------------------------------------
-# Environment management
-# ----------------------------------------------------------------------------
+begin_case() { info "Starting use case: $1"; }
+finish_case() { success "Use case succeeded: $1"; }
 
 ensure_environment() {
-    local environments_json create_payload create_response
-
-    info "Looking up environment '$ENVIRONMENT_NAME'..."
-    environments_json="$(api_request GET /api/v1/environments "$API_TOKEN")"
-    ENVIRONMENT_ID="$(array_id_by_name "$environments_json" "$ENVIRONMENT_NAME")"
-
-    if [[ -n "$ENVIRONMENT_ID" ]]; then
-        success "Environment exists: $ENVIRONMENT_NAME (ID: $ENVIRONMENT_ID)"
+    local response id body
+    response="$(api_request GET /api/v1/environments)"
+    id="$(printf '%s' "$response" | jq -er --arg name "$ENVIRONMENT_NAME" \
+        '[.[] | select(.name == $name) | .id][0] // empty' 2>/dev/null || true)"
+    if [[ -n "$id" ]]; then
+        ENVIRONMENT_ID="$id"
+        info "Environment '$ENVIRONMENT_NAME' exists (ID $ENVIRONMENT_ID)."
         return 0
     fi
-
     if [[ "$APPLY" -ne 1 ]]; then
-        warn "Environment '$ENVIRONMENT_NAME' does not exist. Re-run with --apply to create it."
-        return 0
+        warn "Environment '$ENVIRONMENT_NAME' does not exist; pass --apply to create it."
+        return 1
     fi
-
-    create_payload="$(jq -n \
-        --arg name "$ENVIRONMENT_NAME" \
-        --arg description "$ENVIRONMENT_DESCRIPTION" \
-        '{name: $name, description: $description}')"
-
-    info "Creating environment '$ENVIRONMENT_NAME'..."
-    create_response="$(api_request POST /api/v1/environments "$API_TOKEN" "$create_payload")"
-    ENVIRONMENT_ID="$(response_id "$create_response")"
-
-    success "Environment created: $ENVIRONMENT_NAME (ID: $ENVIRONMENT_ID)"
+    body="$TEMP_DIR/environment.json"
+    write_json_file "$body" --arg name "$ENVIRONMENT_NAME" --arg description "$ENVIRONMENT_DESCRIPTION" \
+        '{name:$name,description:$description}'
+    response="$(api_request POST /api/v1/environments "$body")"
+    ENVIRONMENT_ID="$(printf '%s' "$response" | jq -er '.id | tostring')"
+    success "Created environment '$ENVIRONMENT_NAME' (ID $ENVIRONMENT_ID)."
 }
 
-# ----------------------------------------------------------------------------
-# SSH host-key verification and host registration
-# ----------------------------------------------------------------------------
-
-verify_ssh_host_fingerprint() {
-    local scan_file
-
-    require_command ssh-keyscan
-    require_command ssh-keygen
-
-    if [[ -z "$SSH_HOST_FINGERPRINT" ]]; then
-        error "MACHINARCHY_SSH_HOST_FINGERPRINT is required to register an SSH host."
-        error "Obtain the fingerprint through a trusted channel; do not trust ssh-keyscan output by itself."
-        return 1
-    fi
-
-    if [[ ! "$SSH_HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]]; then
-        error "SSH host fingerprint must use the SHA256:<fingerprint> format."
-        return 1
-    fi
-
-    if [[ -z "$HOST_ADDRESS" || "$HOST_ADDRESS" == -* || "$HOST_ADDRESS" == *[!A-Za-z0-9._:-]* ]]; then
-        error "Set a valid MACHINARCHY_HOST_ADDRESS (IP address or DNS name)."
-        return 1
-    fi
-
-    make_temp_file
-    scan_file="$TEMP_FILE"
-
-    info "Scanning SSH host key for $HOST_ADDRESS:$SSH_PORT..."
-    if ! ssh-keyscan -T 5 -p "$SSH_PORT" "$HOST_ADDRESS" > "$scan_file" 2>/dev/null; then
-        error "Unable to retrieve an SSH host key from $HOST_ADDRESS:$SSH_PORT."
-        return 1
-    fi
-
-    if ! ssh-keygen -lf "$scan_file" -E sha256 2>/dev/null \
-        | awk '{print $2}' \
-        | grep -Fxq -- "$SSH_HOST_FINGERPRINT"; then
-        error "SSH host-key fingerprint does not match the trusted fingerprint."
-        error "Expected: $SSH_HOST_FINGERPRINT"
-        return 1
-    fi
-
-    success "SSH host-key fingerprint verified."
+usecase_inventory() {
+    local environments hosts
+    begin_case 'API inventory read'
+    environments="$(api_request GET /api/v1/environments)"
+    hosts="$(api_request GET /api/v1/hosts)"
+    hosts="$(api_request GET /api/v1/hosts)"
+    managed_hosts="$(api_request GET /api/v1/managed/hosts/8dc195e6-775e-42a4-b1c9-3e5f940b5e53)"
+    jq -e 'type == "array"' >/dev/null <<<"$environments" || { error 'Environment API did not return an array.'; return 1; }
+    jq -e 'type == "array"' >/dev/null <<<"$hosts" || { error 'Host API did not return an array.'; return 1; }
+    # jq -e 'type == "array"' >/dev/null <<<"$managed_hosts" || { error 'Host API did not return an array.'; return 1; }
+    jq -n --argjson environments "$environments" --argjson hosts "$hosts" --argjson managed_hosts "$managed_hosts" \
+        '{environments:$environments,hosts:$hosts,managed_hosts:$managed_hosts}'
+    finish_case 'API inventory read'
 }
 
-ensure_host() {
-    local hosts_json create_payload create_response environment_id_json
-    local host_password password_file
-
-    info "Fetching registered hosts..."
-    hosts_json="$(api_request GET /api/v1/hosts "$API_TOKEN")"
-
-    if [[ -z "$HOST_NAME" ]]; then
-        printf '%s\n' "$hosts_json" | jq '
-            if type == "array" then
-                map(del(.secretData, .password, .privateKey, .token))
-            else
-                .
-            end
-        '
-        if [[ "$APPLY" -eq 1 ]]; then
-            warn "Host registration skipped: set MACHINARCHY_HOST_NAME to register a host."
-        else
-            info "Set MACHINARCHY_HOST_NAME to check or register a specific host."
-        fi
-        return 0
-    fi
-
-    info "Looking up host '$HOST_NAME'..."
-    HOST_ID="$(array_id_by_name "$hosts_json" "$HOST_NAME")"
-
-    if [[ -n "$HOST_ID" ]]; then
-        success "Host already exists: $HOST_NAME (ID: $HOST_ID)"
-        return 0
-    fi
-
-    if [[ "$APPLY" -ne 1 ]]; then
-        warn "Host '$HOST_NAME' does not exist. Re-run with --apply to register it."
-        return 0
-    fi
-
-    if [[ -z "$ENVIRONMENT_ID" ]]; then
-        error "Cannot register host because environment '$ENVIRONMENT_NAME' is not available."
-        return 1
-    fi
-
-    if [[ -z "$HOST_ADDRESS" || -z "$SSH_USERNAME" ]]; then
-        error "Set MACHINARCHY_HOST_ADDRESS and MACHINARCHY_SSH_USERNAME before registering a host."
-        return 1
-    fi
-
-    verify_ssh_host_fingerprint
-
-    host_password="$HOST_PASSWORD"
-    if [[ -z "$host_password" ]]; then
-        host_password="$(prompt_secret "SSH password for ${SSH_USERNAME}@${HOST_ADDRESS}: ")"
-    fi
-    if [[ -z "$host_password" ]]; then
-        error "SSH password cannot be empty for PASSWORD authentication."
-        return 1
-    fi
-
-    make_temp_file
-    password_file="$TEMP_FILE"
-    printf '%s' "$host_password" > "$password_file"
-    unset host_password HOST_PASSWORD MACHINARCHY_HOST_SSH_PASSWORD
-
-    # Preserve numeric IDs as JSON numbers and UUID/string IDs as JSON strings.
-    environment_id_json="$(jq -n --arg id "$ENVIRONMENT_ID" \
-        '$id | if test("^[0-9]+$") then tonumber else . end')"
-
-    create_payload="$(jq -n \
-        --arg name "$HOST_NAME" \
-        --arg ip "$HOST_ADDRESS" \
-        --arg username "$SSH_USERNAME" \
-        --arg fingerprint "$SSH_HOST_FINGERPRINT" \
-        --argjson environmentId "$environment_id_json" \
-        --argjson port "$SSH_PORT" \
-        --rawfile secretData "$password_file" \
-        '{
-            environmentId: $environmentId,
-            name: $name,
-            ip: $ip,
-            connection: "SSH",
-            port: $port,
-            username: $username,
-            authMethod: "PASSWORD",
-            secretData: $secretData,
-            expectedFingerprint: $fingerprint,
-            labels: {owner: "platform"}
-        }')"
-
-    rm -f "$password_file"
-
-    info "Registering SSH host '$HOST_NAME'..."
-    create_response="$(api_request POST /api/v1/hosts "$API_TOKEN" "$create_payload")"
-    HOST_ID="$(response_id "$create_response")"
-
-    success "Host registered: $HOST_NAME (ID: $HOST_ID)"
-}
-
-# ----------------------------------------------------------------------------
-# CLI configuration
-# ----------------------------------------------------------------------------
-
-configure_cli() {
-    if [[ "$CONFIGURE_CLI" -ne 1 ]]; then
-        return 0
-    fi
-
-    if [[ -z "$CLI_TOKEN" ]]; then
-        error "No automation token is available for CLI configuration."
-        error "Supply MACHINARCHY_AUTOMATION_TOKEN, provide the token file, or run with --apply."
-        return 1
-    fi
-
-    info "Configuring the local Machinarchy CLI..."
-
+configure_temporary_cli() {
+    local cli_config="$TEMP_DIR/cli-config.yaml"
     (
         cd "$PROJECT_ROOT"
-        "$GO" run ./cmd/machinarchy config set-cluster local --server "$API_URL"
-        printf '%s' "$CLI_TOKEN" | "$GO" run ./cmd/machinarchy config set-credentials local --token-stdin
-        "$GO" run ./cmd/machinarchy config set-context local \
-            --cluster local --user local --env "$ENVIRONMENT_NAME"
-        "$GO" run ./cmd/machinarchy config use-context local
-
-        info "Fetching hosts through the CLI..."
-        "$GO" run ./cmd/machinarchy get hosts
-        "$GO" run ./cmd/machinarchy get hosts -n "$ENVIRONMENT_NAME" -o json | jq .
+        go run ./cmd/machinarchy --config "$cli_config" config set-cluster local --server "$API_URL" >&2
+        printf '%s' "$BEARER_TOKEN" | go run ./cmd/machinarchy --config "$cli_config" config set-credentials local --token-stdin >&2
+        go run ./cmd/machinarchy --config "$cli_config" config set-context local \
+            --cluster local --user local --env "$ENVIRONMENT_NAME" >&2
+        go run ./cmd/machinarchy --config "$cli_config" config use-context local >&2
+        go run ./cmd/machinarchy --config "$cli_config" get hosts -o json
     )
-
-    success "Machinarchy CLI context configured."
 }
 
-# ----------------------------------------------------------------------------
-# Fleet preview and remote runs
-# ----------------------------------------------------------------------------
-
-preview_targets() {
-    local preview_payload preview_response
-
-    preview_payload="$(jq -n --arg selector "$SELECTOR" '{selector: $selector}')"
-
-    info "Previewing fleet targets for selector: $SELECTOR"
-    preview_response="$(api_request POST /api/v1/fleet/targets/preview "$API_TOKEN" "$preview_payload")"
-    printf '%s\n' "$preview_response" | jq .
+usecase_cli_inventory() {
+    begin_case 'temporary CLI context and inventory list'
+    configure_temporary_cli | jq .
+    finish_case 'temporary CLI context and inventory list'
 }
 
-run_remote_command() {
-    local timeout_seconds="$1"
-    shift
-
-    local run_payload run_response run_id run_status
-
-    run_payload="$(jq -n \
-        --arg selector "$SELECTOR" \
-        --arg expectedTargetsHash "$TARGETS_HASH" \
-        --argjson timeoutSeconds "$timeout_seconds" \
-        --argjson concurrency "$RUN_CONCURRENCY" \
-        --args \
-        '{
-            argv: $ARGS.positional,
-            selector: $selector,
-            expectTargetsHash: $expectedTargetsHash,
-            timeoutSeconds: $timeoutSeconds,
-            concurrency: $concurrency
-        }' -- "$@")"
-
-    info "Submitting remote command: $*"
-    run_response="$(api_request POST /api/v1/runs "$API_TOKEN" "$run_payload")"
-    printf '%s\n' "$run_response" | jq .
-
-    run_id="$(printf '%s' "$run_response" | jq -r 'if .id == null then "" else (.id | tostring) end')"
-
-    if [[ -n "$run_id" && "$run_id" != *[!A-Za-z0-9._~-]* ]]; then
-        info "Fetching run details for ID $run_id..."
-        run_status="$(api_request GET "/api/v1/runs/$run_id" "$API_TOKEN")"
-        printf '%s\n' "$run_status" | jq .
-    else
-        warn "Run response did not contain a usable .id; skipping run-detail lookup."
-    fi
-}
-
-execute_sample_runs() {
-    if [[ "$EXECUTE" -ne 1 ]]; then
+usecase_legacy_host() {
+    local environments hosts existing body response password_file auth_method
+    begin_case 'legacy Host inventory and registration'
+    environments="$(api_request GET /api/v1/environments)"
+    hosts="$(api_request GET /api/v1/hosts)"
+    printf '%s\n' "$hosts" | jq .
+    if [[ -z "${MACHINARCHY_HOST_NAME:-}" ]]; then
+        info 'Set MACHINARCHY_HOST_NAME to select a Host for registration.'
+        finish_case 'legacy Host inventory read'
         return 0
     fi
-
-    warn "Remote execution is enabled for selector: $SELECTOR"
-    warn "Commands will be sent as argv arrays (not through a local shell)."
-
-    # Read-only diagnostic examples. These still execute on the selected hosts.
-    run_remote_command 30 systemctl status nginx
-    run_remote_command 10 date
-    run_remote_command 10 df -h /
-
-    success "Sample remote commands submitted."
+    existing="$(printf '%s' "$hosts" | jq -r --arg name "$MACHINARCHY_HOST_NAME" '[.[] | select(.name == $name)][0].id // empty')"
+    if [[ -n "$existing" ]]; then
+        info "Legacy Host '$MACHINARCHY_HOST_NAME' already exists (ID $existing); no change made."
+        finish_case 'legacy Host inventory and registration'
+        return 0
+    fi
+    [[ "$APPLY" -eq 1 ]] || { warn 'Host is absent; pass --apply to register it.'; return 1; }
+    [[ -n "${MACHINARCHY_HOST_ADDRESS:-}" && -n "${MACHINARCHY_SSH_USERNAME:-}" ]] || {
+        error 'Set MACHINARCHY_HOST_ADDRESS and MACHINARCHY_SSH_USERNAME to register a legacy Host.'; return 2;
+    }
+    [[ "${MACHINARCHY_SSH_HOST_FINGERPRINT:-}" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]] || {
+        error 'Set MACHINARCHY_SSH_HOST_FINGERPRINT to a trusted SHA256 fingerprint.'; return 2;
+    }
+    ensure_environment
+    password_file=""
+    if [[ -n "${MACHINARCHY_HOST_SSH_KEY_FILE:-}" ]]; then
+        [[ -r "$MACHINARCHY_HOST_SSH_KEY_FILE" ]] || { error 'SSH key file is unreadable.'; return 2; }
+        password_file="$MACHINARCHY_HOST_SSH_KEY_FILE"
+        auth_method=PRIVATE_KEY
+    elif [[ -n "${MACHINARCHY_HOST_SSH_PASSWORD:-}" ]]; then
+        password_file="$TEMP_DIR/ssh-password"
+        printf '%s' "$MACHINARCHY_HOST_SSH_PASSWORD" > "$password_file"
+        chmod 600 "$password_file"
+        unset MACHINARCHY_HOST_SSH_PASSWORD
+        auth_method=PASSWORD
+    else
+        error 'Set MACHINARCHY_HOST_SSH_KEY_FILE or MACHINARCHY_HOST_SSH_PASSWORD.'; return 2
+    fi
+    body="$TEMP_DIR/legacy-host.json"
+    write_json_file "$body" --arg name "$MACHINARCHY_HOST_NAME" \
+        --arg ip "$MACHINARCHY_HOST_ADDRESS" --arg username "$MACHINARCHY_SSH_USERNAME" \
+        --arg fingerprint "$MACHINARCHY_SSH_HOST_FINGERPRINT" --arg method "$auth_method" \
+        --argjson env "$ENVIRONMENT_ID" --argjson port "${MACHINARCHY_SSH_PORT:-22}" \
+        --rawfile secretData "$password_file" \
+        '{environmentId:$env,name:$name,ip:$ip,connection:"SSH",port:$port,
+          username:$username,authMethod:$method,secretData:$secretData,
+          expectedFingerprint:$fingerprint,labels:{owner:"platform"}}'
+    response="$(api_request POST /api/v1/hosts "$body")"
+    printf '%s\n' "$response" | jq '{id,name,ip_address,connection,ssh}'
+    finish_case 'legacy Host registration'
 }
 
-# ----------------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------------
+usecase_managed_host() {
+    local name address username port fingerprint auth key_file secret_file auth_method
+    local secret_body secret_response profile_body profile_response host_body host_response
+    begin_case 'managed Host, Secret, and Access Profile creation'
+    [[ "$APPLY" -eq 1 ]] || { error 'Managed Host creation mutates state; pass --apply.'; return 2; }
+    name="${MACHINARCHY_HOST_NAME:-}"
+    address="${MACHINARCHY_HOST_ADDRESS:-}"
+    username="${MACHINARCHY_SSH_USERNAME:-}"
+    port="${MACHINARCHY_SSH_PORT:-22}"
+    fingerprint="${MACHINARCHY_SSH_HOST_FINGERPRINT:-}"
+    key_file="${MACHINARCHY_HOST_SSH_KEY_FILE:-}"
+    auth="${MACHINARCHY_SSH_AUTH_METHOD:-private-key}"
+    [[ -n "$name" && -n "$address" && -n "$username" ]] || {
+        error 'Set MACHINARCHY_HOST_NAME, MACHINARCHY_HOST_ADDRESS, and MACHINARCHY_SSH_USERNAME.'; return 2;
+    }
+    [[ "$port" =~ ^[0-9]+$ ]] && ((port > 0 && port < 65536)) || { error 'Invalid SSH port.'; return 2; }
+    [[ "$fingerprint" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]] || { error 'Set a trusted SHA256 SSH fingerprint.'; return 2; }
+    [[ "$auth" == private-key || "$auth" == password ]] || { error 'MACHINARCHY_SSH_AUTH_METHOD must be private-key or password.'; return 2; }
+    if [[ "$auth" == private-key ]]; then
+        [[ -n "$key_file" && -r "$key_file" ]] || { error 'Set readable MACHINARCHY_HOST_SSH_KEY_FILE.'; return 2; }
+        secret_file="$key_file"
+    else
+        [[ -n "${MACHINARCHY_HOST_SSH_PASSWORD:-}" ]] || { error 'Set MACHINARCHY_HOST_SSH_PASSWORD.'; return 2; }
+        secret_file="$TEMP_DIR/ssh-password"
+        printf '%s' "$MACHINARCHY_HOST_SSH_PASSWORD" > "$secret_file"
+        chmod 600 "$secret_file"
+        unset MACHINARCHY_HOST_SSH_PASSWORD
+    fi
+    secret_body="$TEMP_DIR/secret.json"
+    write_json_file "$secret_body" --arg name "${MACHINARCHY_SECRET_NAME:-managed-host-ssh}" \
+        --arg purpose ssh-credential --rawfile value "$secret_file" \
+        '{name:$name,purpose:$purpose,value:$value}'
+    secret_response="$(api_request POST /api/v1/secrets "$secret_body")"
+    local secret_id secret_version profile_name
+    secret_id="$(printf '%s' "$secret_response" | jq -er '.id')"
+    secret_version="$(printf '%s' "$secret_response" | jq -er '.currentVersion')"
+    profile_name="${MACHINARCHY_ACCESS_PROFILE_NAME:-${name}-ssh}"
+    auth_method=private-key
+    [[ "$auth" == password ]] && auth_method=password
+    profile_body="$TEMP_DIR/profile.json"
+    write_json_file "$profile_body" --arg name "$profile_name" --arg username "$username" \
+        --arg method "$auth_method" --arg secretId "$secret_id" --argjson version "$secret_version" \
+        '{name:$name,spec:{connectorKind:"ssh",username:$username,authenticationMethod:$method,
+          credential:{id:$secretId,version:$version},enabled:true}}'
+    profile_response="$(api_request POST /api/v1/managed/access-profiles "$profile_body")"
+    local profile_id profile_revision
+    profile_id="$(printf '%s' "$profile_response" | jq -er '.id')"
+    profile_revision="$(printf '%s' "$profile_response" | jq -er '.currentRevision')"
+    host_body="$TEMP_DIR/managed-host.json"
+    write_json_file "$host_body" --arg name "$name" --arg profileId "$profile_id" \
+        --arg endpoint "$address:$port" --arg fingerprint "$fingerprint" \
+        '{name:$name,labels:{owner:"platform"},spec:{presence:"Managed",accessProfileId:$profileId,
+          accessTarget:{endpoint:$endpoint,trust:[$fingerprint]}}}'
+    host_response="$(api_request POST /api/v1/managed/hosts "$host_body")"
+    printf '%s\n' "$host_response" | jq '{metadata,spec,status}'
+    info "Created Secret $secret_id version $secret_version; Access Profile $profile_id revision $profile_revision."
+    warn 'Managed Host and Access Profile create routes have no list/get-or-create workflow; rerunning --apply creates additional resources.'
+    finish_case 'managed Host, Secret, and Access Profile creation'
+}
+
+usecase_managed_operation() {
+    local host_id argv_json body response operation_id result state elapsed
+    begin_case 'managed Operation submission and tracking'
+    host_id="${MACHINARCHY_MANAGED_HOST_ID:-}"
+    [[ -n "$host_id" ]] || { error 'Set MACHINARCHY_MANAGED_HOST_ID.'; return 2; }
+    if [[ "$EXECUTE" -ne 1 ]]; then
+        info "Ready to submit a managed Operation for Host $host_id; remote execution was not requested."
+        finish_case 'managed Operation preflight'
+        return 0
+    fi
+    argv_json="${MACHINARCHY_OPERATION_ARGV_JSON:-[\"uname\",\"-a\"]}"
+    jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' <<<"$argv_json" >/dev/null || {
+        error 'MACHINARCHY_OPERATION_ARGV_JSON must be a non-empty JSON string array.'; return 2;
+    }
+    body="$TEMP_DIR/operation.json"
+    write_json_file "$body" --arg hostId "$host_id" --argjson argv "$argv_json" \
+        --argjson timeout "${MACHINARCHY_OPERATION_TIMEOUT_SECONDS:-30}" \
+        --argjson concurrency "${MACHINARCHY_OPERATION_CONCURRENCY:-1}" \
+        '{hostIds:[$hostId],run:{argv:$argv,timeoutSeconds:$timeout,concurrency:$concurrency}}'
+    response="$(api_request POST /api/v1/managed/operations "$body")"
+    operation_id="$(printf '%s' "$response" | jq -er '.id')"
+    printf '%s\n' "$response" | jq '{id,status,createdAt}'
+    info "Operation $operation_id accepted; polling for up to ${POLL_TIMEOUT}s."
+    elapsed=0
+    while ((elapsed < POLL_TIMEOUT)); do
+        result="$(api_request GET "/api/v1/managed/operations/$operation_id")"
+        state="$(printf '%s' "$result" | jq -r '.status.state // empty')"
+        case "$state" in
+            Succeeded|PartiallySucceeded|Failed|Cancelled|TimedOut|Interrupted)
+                printf '%s\n' "$result" | jq .
+                [[ "$state" == Succeeded ]] || { error "Operation reached terminal state $state (ID $operation_id)."; return 1; }
+                finish_case "managed Operation $operation_id"
+                return 0
+                ;;
+        esac
+        sleep "$POLL_INTERVAL"
+        elapsed=$((elapsed + POLL_INTERVAL))
+    done
+    warn "Operation remains $state after ${POLL_TIMEOUT}s; it is durable and can be queried at /api/v1/managed/operations/$operation_id."
+    finish_case "managed Operation accepted (ID $operation_id)"
+}
+
+usecase_legacy_run() {
+    local selector preview_body preview preview_hash expected run_body run_response run_id
+    begin_case 'legacy Run preview and optional execution'
+    selector="environment=${ENVIRONMENT_NAME}"
+    preview_body="$TEMP_DIR/preview.json"
+    write_json_file "$preview_body" --arg selector "$selector" '{selector:$selector}'
+    preview="$(api_request POST /api/v1/fleet/targets/preview "$preview_body")"
+    printf '%s\n' "$preview" | jq .
+    preview_hash="$(printf '%s' "$preview" | jq -er '.targetsHash')"
+    [[ "$EXECUTE" -eq 1 ]] || { finish_case 'legacy Run target preview'; return 0; }
+    expected="${MACHINARCHY_EXPECT_TARGETS_HASH:-}"
+    [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || { error 'Set MACHINARCHY_EXPECT_TARGETS_HASH to the reviewed preview hash before execution.'; return 2; }
+    [[ "$expected" == "$preview_hash" ]] || {
+        error 'Fresh target preview differs from MACHINARCHY_EXPECT_TARGETS_HASH; review the new target set and retry.'; return 1;
+    }
+    local argv_json
+    argv_json="${MACHINARCHY_RUN_ARGV_JSON:-[\"uptime\"]}"
+    jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' <<<"$argv_json" >/dev/null || {
+        error 'MACHINARCHY_RUN_ARGV_JSON must be a non-empty JSON string array.'; return 2;
+    }
+    run_body="$TEMP_DIR/run.json"
+    write_json_file "$run_body" --arg selector "$selector" --arg hash "$expected" \
+        --argjson argv "$argv_json" --argjson timeout "${MACHINARCHY_RUN_TIMEOUT_SECONDS:-30}" \
+        --argjson concurrency "${MACHINARCHY_RUN_CONCURRENCY:-5}" \
+        '{selector:$selector,expectTargetsHash:$hash,argv:$argv,timeoutSeconds:$timeout,concurrency:$concurrency}'
+    run_response="$(api_request POST /api/v1/runs "$run_body")"
+    run_id="$(printf '%s' "$run_response" | jq -er '.id | tostring')"
+    printf '%s\n' "$run_response" | jq .
+    info "Run $run_id accepted; checking current result."
+    api_request GET "/api/v1/runs/$run_id" | jq .
+    finish_case "legacy Run $run_id accepted"
+}
+
+usecase_runtime_config() {
+    local config_file="${MACHINARCHY_RUNTIME_CONFIG_FILE:-}" expected="${MACHINARCHY_EXPECTED_CONFIG_REVISION:-}"
+    begin_case 'runtime configuration inspection and optional publication'
+    configure_temporary_cli >/dev/null
+    local cli_config="$TEMP_DIR/cli-config.yaml"
+    (
+        cd "$PROJECT_ROOT"
+        go run ./cmd/machinarchy --config "$cli_config" runtime-config get -o json
+        go run ./cmd/machinarchy --config "$cli_config" runtime-config status
+        go run ./cmd/machinarchy --config "$cli_config" runtime-config history
+    )
+    if [[ -n "$config_file" ]]; then
+        [[ -r "$config_file" ]] || { error 'MACHINARCHY_RUNTIME_CONFIG_FILE is not readable.'; return 2; }
+        (
+            cd "$PROJECT_ROOT"
+            go run ./cmd/machinarchy --config "$cli_config" runtime-config validate --file "$config_file"
+        )
+        if [[ "$APPLY" -eq 1 ]]; then
+            [[ "$expected" =~ ^[0-9]+$ ]] && ((expected > 0)) || {
+                error 'Set MACHINARCHY_EXPECTED_CONFIG_REVISION to publish safely.'; return 2;
+            }
+            (
+                cd "$PROJECT_ROOT"
+                go run ./cmd/machinarchy --config "$cli_config" runtime-config publish \
+                    --expected-revision "$expected" --file "$config_file" \
+                    --change-note "Published by use-case runner"
+            )
+        fi
+    elif [[ "$APPLY" -eq 1 ]]; then
+        local rollback_target="${MACHINARCHY_ROLLBACK_TARGET_REVISION:-}"
+        [[ "$expected" =~ ^[0-9]+$ && "$rollback_target" =~ ^[0-9]+$ ]] && ((expected > 0 && rollback_target > 0)) || {
+            error 'For --apply without a config file, set MACHINARCHY_EXPECTED_CONFIG_REVISION and MACHINARCHY_ROLLBACK_TARGET_REVISION to roll back.'
+            return 2
+        }
+        (
+            cd "$PROJECT_ROOT"
+            go run ./cmd/machinarchy --config "$cli_config" runtime-config rollback \
+                --expected-revision "$expected" --target-revision "$rollback_target" \
+                --change-note "Rollback by use-case runner"
+        )
+    fi
+    finish_case 'runtime configuration inspection'
+}
+
+usecase_secrets() {
+    local cli_config="$TEMP_DIR/cli-config.yaml" secret_id="${MACHINARCHY_SECRET_ID:-}"
+    local expected_version="${MACHINARCHY_EXPECTED_SECRET_VERSION:-}"
+    begin_case 'Secret Store metadata and optional mutation'
+    configure_temporary_cli >/dev/null
+    (
+        cd "$PROJECT_ROOT"
+        go run ./cmd/machinarchy --config "$cli_config" secret list
+        if [[ -n "$secret_id" ]]; then
+            go run ./cmd/machinarchy --config "$cli_config" secret versions "$secret_id"
+        fi
+        if [[ "$APPLY" -eq 1 ]]; then
+            if [[ -n "${MACHINARCHY_SECRET_VALUE_FILE:-}" ]]; then
+                [[ -r "$MACHINARCHY_SECRET_VALUE_FILE" ]] || { error 'Secret value file is unreadable.'; exit 2; }
+                if [[ -n "$secret_id" ]]; then
+                    [[ "$expected_version" =~ ^[0-9]+$ ]] && ((expected_version > 0)) || {
+                        error 'Set MACHINARCHY_EXPECTED_SECRET_VERSION to rotate an existing secret.'; exit 2;
+                    }
+                    go run ./cmd/machinarchy --config "$cli_config" secret rotate "$secret_id" \
+                        --expected-version "$expected_version" --value-stdin \
+                        < "$MACHINARCHY_SECRET_VALUE_FILE"
+                else
+                    go run ./cmd/machinarchy --config "$cli_config" secret create \
+                        "${MACHINARCHY_SECRET_NAME:-usecase-secret}" --value-stdin \
+                        < "$MACHINARCHY_SECRET_VALUE_FILE"
+                fi
+            else
+                if [[ "${MACHINARCHY_RETIRE_SECRET:-false}" == true && -n "$secret_id" ]]; then
+                    go run ./cmd/machinarchy --config "$cli_config" secret delete "$secret_id"
+                else
+                    error 'For --apply, set MACHINARCHY_SECRET_VALUE_FILE to create, or SECRET_ID + EXPECTED_SECRET_VERSION + VALUE_FILE to rotate; set MACHINARCHY_RETIRE_SECRET=true to retire a secret.'
+                    exit 2
+                fi
+            fi
+        fi
+    )
+    finish_case 'Secret Store metadata and optional creation'
+}
+
+usecase_token() {
+    local name role expiry body response token destination directory temporary
+    begin_case 'one-time API token issuance'
+    [[ "$APPLY" -eq 1 ]] || { error 'Token issuance mutates access state; pass --apply.'; return 2; }
+    name="${MACHINARCHY_AUTOMATION_TOKEN_NAME:-usecase-reader}"
+    role="${MACHINARCHY_AUTOMATION_TOKEN_ROLE:-reader}"
+    expiry="${MACHINARCHY_AUTOMATION_TOKEN_EXPIRY_HOURS:-168}"
+    [[ "$role" == reader || "$role" == operator ]] || { error 'Token role must be reader or operator.'; return 2; }
+    [[ "$expiry" =~ ^[0-9]+$ ]] && ((expiry > 0 && expiry <= 8760)) || {
+        error 'Token lifetime must be between 1 and 8760 hours.'; return 2;
+    }
+    destination="${MACHINARCHY_AUTOMATION_TOKEN_FILE:-$HOME/.config/machinarchy/usecase-token}"
+    directory="$(dirname "$destination")"
+    mkdir -p "$directory"
+    chmod 700 "$directory"
+    [[ ! -L "$destination" && ! -e "$destination" ]] || {
+        error "Refusing to overwrite an existing or symlink token file: $destination"; return 2;
+    }
+    body="$TEMP_DIR/token.json"
+    write_json_file "$body" --arg name "$name" --arg role "$role" --argjson expires "$expiry" \
+        '{name:$name,role:$role,expiresInHours:$expires}'
+    response="$(api_request POST /api/v1/tokens "$body")"
+    token="$(printf '%s' "$response" | jq -er '.token | strings | select(length > 0)')"
+    temporary="$(mktemp "$directory/.machinarchy-token.XXXXXX")"
+    chmod 600 "$temporary"
+    printf '%s' "$token" > "$temporary"
+    mv -- "$temporary" "$destination"
+    chmod 600 "$destination"
+    unset token response
+    success "Issued $role token '$name' and saved it to $destination (mode 600); the token value was not printed."
+    finish_case 'one-time API token issuance'
+}
 
 main() {
-    cd "$PROJECT_ROOT"
     parse_arguments "$@"
-
-    info "============================================================"
-    info "Machinarchy end-to-end use case"
-    info "Project:     $PROJECT_ROOT"
-    info "API:         $API_URL"
-    info "Environment: $ENVIRONMENT_NAME"
-    info "Mode:        $([[ "$APPLY" -eq 1 ]] && printf 'apply' || printf 'inspect')"
-    info "============================================================"
-
-    check_prerequisites
+    require_command curl
+    require_command jq
+    [[ "$APPLY" -ne 1 || "$USE_CASE" != inventory && "$USE_CASE" != cli-inventory ]] || {
+        error "--apply has no mutation for use case '$USE_CASE'."; return 2;
+    }
+    [[ "$EXECUTE" -ne 1 || "$APPLY" -eq 1 ]] || { error '--execute requires --apply.'; return 2; }
     validate_configuration
-    authenticate
-
-    if [[ "$APPLY" -eq 1 || "$CONFIGURE_CLI" -eq 1 ]]; then
-        resolve_automation_token
-    elif [[ -n "$AUTOMATION_TOKEN" || -f "$TOKEN_FILE" ]]; then
-        resolve_automation_token
-    fi
-
-    ensure_environment
-    ensure_host
-    configure_cli
-    preview_targets
-    execute_sample_runs
-
-    info "============================================================"
-    success "Use-case workflow completed."
-
-    if [[ "$APPLY" -ne 1 ]]; then
-        info "No resources were created. Use --apply to create missing resources."
-    fi
-    if [[ "$EXECUTE" -ne 1 ]]; then
-        info "No remote commands were executed. Use --execute with a fresh --target-hash to run the sample diagnostics."
-    fi
-    info "============================================================"
+    case "$USE_CASE" in
+        cli-inventory|runtime-config|secrets) require_command go ;;
+    esac
+    initialize
+    info "Machinarchy use-case runner (project $PROJECT_ROOT)"
+    info "API: $API_URL | environment: $ENVIRONMENT_NAME"
+    case "$USE_CASE" in
+        inventory) usecase_inventory ;;
+        cli-inventory) usecase_cli_inventory ;;
+        legacy-host) usecase_legacy_host ;;
+        managed-host) usecase_managed_host ;;
+        managed-operation) usecase_managed_operation ;;
+        legacy-run) usecase_legacy_run ;;
+        runtime-config) usecase_runtime_config ;;
+        secrets) usecase_secrets ;;
+        token) usecase_token ;;
+    esac
 }
 
 main "$@"

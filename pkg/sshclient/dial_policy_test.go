@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
-	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
 func loopbackListener(t *testing.T) (port int, accepted *atomic.Int32) {
@@ -61,7 +60,7 @@ func TestTestConnectionUsesInjectedDialer(t *testing.T) {
 	defer cancel()
 
 	params := testParams(port)
-	params.Dialer = netpolicy.Policy{AllowLoopback: true}.DialContext
+	params.Dialer = loopbackDialer
 	err := TestConnection(ctx, params)
 	if err == nil || errors.Is(err, domain.ErrTargetNotAllowed) {
 		t.Fatalf("error = %v; the dial should be permitted and then fail during the SSH handshake", err)

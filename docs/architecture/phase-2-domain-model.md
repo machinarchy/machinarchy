@@ -38,12 +38,12 @@ classDiagram
 
 ## Host identity and value objects
 
-Host identity is an opaque, stable `ResourceID` assigned by Machinarchy. Name, DNS name, network address, connector identity, labels, and environment are attributes or references; they are not the primary identity. A name is unique within its workspace by policy and may be changed without changing Host ID. Address reuse must not make a new machine the old Host.
+Host identity is an opaque, stable `ID` assigned by Machinarchy. Name, DNS name, network address, connector identity, labels, and environment are attributes or references; they are not the primary identity. A name is unique within its workspace by policy and may be changed without changing Host ID. Address reuse must not make a new machine the old Host.
 
 The owner is the workspace/tenant boundary, not the creating user. `CreatedBy` is audit attribution. A Host may reference at most one Environment in the same workspace; environment deletion must reject or explicitly reassign dependent Hosts rather than silently cascading. A Host references one AccessProfile; profile ownership and sharing rules need a product decision. Host names are unique within a workspace by policy; cross-Host uniqueness is coordinated by application and persistence, not a single Host value object.
 
 ```go
-type ResourceID string
+type ID string
 type WorkspaceID string
 
 type Host struct {
@@ -53,11 +53,11 @@ type Host struct {
 }
 
 type ResourceMetadata struct {
-    ID        ResourceID
+    ID        ID
     Workspace WorkspaceID
     Name      string
     Labels    map[string]string
-    EnvironmentID *ResourceID
+    EnvironmentID *ID
     Generation uint64
     Revision   uint64
     DeletionTimestamp *time.Time
@@ -71,13 +71,13 @@ type HostSpec struct {
 }
 
 type ConnectorBinding struct {
-    ProfileID ResourceID
+    ProfileID ID
 }
 
 type ConnectorKind string
 
 type AccessProfile struct {
-    ID             ResourceID
+    ID             ID
     Workspace      WorkspaceID
     Kind           ConnectorKind // e.g. "ssh" or "agent"; no wire details here
     Revision       uint64
@@ -209,7 +209,7 @@ const (
 )
 
 type Operation struct {
-    ID          ResourceID
+    ID          ID
     Workspace   WorkspaceID
     Kind        OperationKind
     CreatedBy   ActorRef
@@ -236,10 +236,10 @@ type ActorRef struct {
 }
 
 type OperationTargetSpec struct {
-    HostID             ResourceID
+    HostID             ID
     HostGeneration     uint64
     DisplayName        string
-    ConnectorProfileID ResourceID
+    ConnectorProfileID ID
     ConnectorProfileRevision uint64
 }
 
@@ -256,7 +256,7 @@ const (
 )
 
 type OperationTargetStatus struct {
-    HostID ResourceID
+    HostID ID
     State  OperationTargetState
     Result *OperationTargetResult
 }

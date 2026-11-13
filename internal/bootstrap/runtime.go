@@ -17,6 +17,8 @@ import (
 	"github.com/machinarchy/machinarchy/internal/controlmanager"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/hostaccess"
+	"github.com/machinarchy/machinarchy/internal/operationworker"
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
@@ -31,14 +33,15 @@ import (
 // Runtime owns the process-local database and event broker connections.
 // Close it only after all servers and workers using it have stopped.
 type Runtime struct {
-	stores        *store.Stores
-	eventBroker   *broker.EventBroker
-	runManager    service.RunManager
-	configuration *runtimeconfig.Service
-	snapshots     *runtimeconfig.SnapshotManager
-	secrets       *secrets.Service
-	configCancel  context.CancelFunc
-	configWG      sync.WaitGroup
+	stores           *store.Stores
+	eventBroker      *broker.EventBroker
+	runManager       service.RunManager
+	configuration    *runtimeconfig.Service
+	snapshots        *runtimeconfig.SnapshotManager
+	secrets          *secrets.Service
+	operationSecrets *secrets.Service
+	configCancel     context.CancelFunc
+	configWG         sync.WaitGroup
 }
 
 // Open initializes the shared persistence and event infrastructure.
@@ -134,6 +137,9 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	for _, prefix := range cfg.SSHTargetPolicy.Deny {
 		defaults.SSH.DeniedCIDRs = append(defaults.SSH.DeniedCIDRs, prefix.String())
 	}
+	for _, port := range cfg.SSHTargetPolicy.AllowedPorts {
+		defaults.SSH.AllowedPorts = append(defaults.SSH.AllowedPorts, int(port))
+	}
 	defaults.Operations.Enabled = cfg.Execution.Enabled
 	for program := range cfg.Execution.Programs {
 		defaults.Operations.AllowedPrograms = append(defaults.Operations.AllowedPrograms, program)
@@ -160,12 +166,27 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		}
 		previousKeys[oldID] = oldKey
 	}
-	secretService, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: keyID, Key: root, Previous: previousKeys}, secrets.DenyAllResolutionAuthorizer{})
+	bindings := runtimeProfileBindings{profiles: stores.ResourceProfiles, hosts: stores.ResourceHosts, operations: stores.Operations}
+	cmAuthorizer, err := secrets.NewProfileAuthorizer(bindings, secrets.WorkloadControlManager)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Control Manager Secret Store authorization: %w", err)
+	}
+	operationAuthorizer, err := secrets.NewProfileAuthorizer(bindings, secrets.WorkloadOperationWorker)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Operation worker Secret Store authorization: %w", err)
+	}
+	keyProvider := &secrets.StaticKeyProvider{KeyID: keyID, Key: root, Previous: previousKeys}
+	secretService, err := secrets.New(stores.Management, keyProvider, cmAuthorizer)
+	if err != nil {
+		return nil, err
+	}
+	operationSecretService, err := secrets.New(stores.Management, keyProvider, operationAuthorizer)
 	if err != nil {
 		return nil, err
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	runtime := &Runtime{stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService, configCancel: cancel}
+	runtime := &Runtime{stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
+		operationSecrets: operationSecretService, configCancel: cancel}
 	runtime.configWG.Add(1)
 	go func() {
 		defer runtime.configWG.Done()
@@ -174,6 +195,25 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		}
 	}()
 	return runtime, nil
+}
+
+type runtimeProfileBindings struct {
+	profiles   resource.AccessProfileRepository
+	hosts      resource.HostRepository
+	operations resource.OperationRepository
+}
+
+func (b runtimeProfileBindings) GetAccessProfile(ctx context.Context, workspace int, id resource.ID) (*resource.AccessProfile, error) {
+	return b.profiles.GetAccessProfile(ctx, workspace, id)
+}
+func (b runtimeProfileBindings) GetAccessProfileRevision(ctx context.Context, workspace int, id resource.ID, revision uint64) (*resource.AccessProfileRevision, error) {
+	return b.profiles.GetAccessProfileRevision(ctx, workspace, id, revision)
+}
+func (b runtimeProfileBindings) GetHost(ctx context.Context, workspace int, id resource.ID) (*resource.Host, error) {
+	return b.hosts.GetHost(ctx, workspace, id)
+}
+func (b runtimeProfileBindings) GetOperation(ctx context.Context, workspace int, id resource.ID) (*resource.Operation, error) {
+	return b.operations.GetOperation(ctx, workspace, id)
 }
 
 // Close releases shared infrastructure. Stop servers and workers before calling it.
@@ -227,7 +267,7 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 		engineConfig.RateLimitPerSecond = rate.Limit(c.WorkQueue.RatePerSecond)
 	}
 	engine, err := controlmanager.NewEngine(controlmanager.Dependencies{
-		Hosts: r.stores.ResourceHosts, Outbox: r.stores.Outbox, Leases: leases,
+		Hosts: r.stores.ResourceHosts, Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Leases: leases,
 	}, engineConfig)
 	if err != nil {
 		return nil, err
@@ -236,7 +276,20 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if snap, ok := r.configuration.Snapshot(); ok {
 		hostResync = time.Duration(snap.Revision.Config.Reconciliation.ManagedHostResyncSeconds) * time.Second
 	}
-	hostController, err := controlmanager.NewHostControllerWithResync(r.stores.ResourceHosts, nil, hostResync)
+	sshLimit := service.DefaultSSHConcurrency
+	if snap, ok := r.configuration.Snapshot(); ok {
+		sshLimit = snap.Revision.Config.SSH.MaxConcurrent
+	}
+	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.secrets, r.targetPolicyProvider(netpolicy.Default()), sshLimit,
+		30*time.Second, secrets.WorkloadControlManager)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
+	}
+	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed Host reconciler: %w", err)
+	}
+	hostController, err := controlmanager.NewHostControllerWithOperations(r.stores.ResourceHosts, converger, hostResync, r.stores.Operations)
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +297,41 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 		return nil, err
 	}
 	return engine, nil
+}
+
+// NewOperationWorker constructs the independently bounded imperative execution
+// pool. It shares persistence with the Control Manager but not its queue.
+func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
+	if r == nil || r.stores == nil || r.stores.Operations == nil || r.stores.ResourceHosts == nil || r.stores.ResourceProfiles == nil || r.stores.Outbox == nil {
+		return nil, errors.New("runtime is not initialized for Operation execution")
+	}
+	concurrency := service.DefaultSSHConcurrency
+	workers := 4
+	if snap, ok := r.configuration.Snapshot(); ok {
+		concurrency = snap.Revision.Config.SSH.MaxConcurrent
+		workers = snap.Revision.Config.ControlManager.Workers
+	}
+	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.operationSecrets, r.targetPolicyProvider(netpolicy.Default()),
+		concurrency, 15*time.Minute, secrets.WorkloadOperationWorker)
+	if err != nil {
+		return nil, fmt.Errorf("construct Operation SSH connector: %w", err)
+	}
+	queue, ok := r.stores.Operations.(resource.OperationQueueRepository)
+	if !ok {
+		return nil, errors.New("operation repository does not support durable queue discovery")
+	}
+	recovery, ok := r.stores.Operations.(resource.OperationRecoveryRepository)
+	if !ok {
+		return nil, errors.New("operation repository does not support startup recovery")
+	}
+	operationLeases := r.stores.ResourceLeases
+	if r.stores.Engine() == store.EngineSQLite {
+		operationLeases = nil
+	}
+	return operationworker.New(operationworker.Dependencies{Operations: r.stores.Operations, Queue: queue, Hosts: r.stores.ResourceHosts,
+		Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Connector: connector,
+		ExecutionPolicy: r.executionPolicyProvider(domain.ExecutionPolicy{}), Logger: slog.Default(), Leases: operationLeases,
+		Recovery: recovery}, workers)
 }
 
 // NewAPIServer constructs the API adapter. Additional readiness checks are
@@ -298,10 +386,15 @@ func (r *Runtime) NewAPIServer(
 		return nil, errors.Join(err, wrapCloseError("close run manager after recovery failure", closeErr))
 	}
 	r.runManager = runManager
+	managedResources, err := service.NewManagedResourceService(r.stores.ResourceHosts, r.stores.ResourceProfiles, r.stores.Operations,
+		r.executionPolicyProvider(domain.ExecutionPolicy{}), r.secrets)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed resource application service: %w", err)
+	}
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Metrics: r.stores.Metrics, Hosts: r.stores.Hosts,
 		Jobs: r.stores.Jobs, Environments: r.stores.Environments, Access: r.stores.Access,
-		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets,
+		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
 		SignupEnabled: func() bool {
 			if snapshot, ok := r.configuration.Snapshot(); ok {
 				return snapshot.Revision.Config.Features.SignupEnabled
@@ -376,7 +469,18 @@ func (r *Runtime) targetPolicyProvider(fallback netpolicy.Policy) func() netpoli
 		if err != nil {
 			slog.Warn("parse denied CIDRs", "error", err)
 		}
-		return netpolicy.Policy{AllowPrivate: cfg.AllowPrivate, AllowLoopback: cfg.AllowLoopback, Allow: allowed, Deny: denied, DialTimeout: time.Duration(cfg.ConnectTimeoutSeconds) * time.Second}
+		ports := make([]uint16, 0, len(cfg.AllowedPorts))
+		for _, port := range cfg.AllowedPorts {
+			if port < 1 || port > int(^uint16(0)) {
+				slog.Warn("invalid allowed port: must be between 1 and 65535",
+					"port", port,
+				)
+				continue
+			}
+
+			ports = append(ports, uint16(port))
+		}
+		return netpolicy.Policy{AllowPrivate: cfg.AllowPrivate, AllowLoopback: cfg.AllowLoopback, Allow: allowed, Deny: denied, AllowedPorts: ports, DialTimeout: time.Duration(cfg.ConnectTimeoutSeconds) * time.Second}
 	}
 }
 func (r *Runtime) executionPolicyProvider(fallback domain.ExecutionPolicy) func() domain.ExecutionPolicy {

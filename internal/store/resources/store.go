@@ -130,11 +130,20 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 	if err := host.Validate(); err != nil {
 		return err
 	}
+	if host.Spec.AccessProfileID != "" {
+		if err := s.validateHostAccessProfile(ctx, s.db, host.Metadata.WorkspaceID, host.Spec.AccessProfileID); err != nil {
+			return err
+		}
+	}
 	labels, err := encodeJSON(host.Metadata.Labels)
 	if err != nil {
 		return err
 	}
 	conditions, err := encodeJSON(host.Status.Conditions)
+	if err != nil {
+		return err
+	}
+	accessTarget, err := encodeJSON(host.Spec.AccessTarget)
 	if err != nil {
 		return err
 	}
@@ -147,18 +156,18 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 	}
 	defer rollback(tx, s.logger, "managed Host creation")
 	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO managed_hosts (
-		id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id,
+		id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
 		access_profile_revision, generation, revision, observed_generation, phase, conditions,
 		last_observed_at, deletion_timestamp, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		string(host.Metadata.ID), host.Metadata.WorkspaceID, nullablePositiveID(host.Metadata.EnvironmentID), host.Metadata.Name,
-		labels, string(host.Spec.Presence), string(host.Spec.AccessProfileID), host.Spec.ProfileRevision,
+		labels, string(host.Spec.Presence), string(host.Spec.AccessProfileID), accessTarget, host.Spec.ProfileRevision,
 		host.Metadata.Generation, host.Metadata.Revision, host.Status.ObservedGeneration, string(host.Status.Phase),
 		conditions, nullableTimeText(s, host.Status.LastObservedAt), nullableTimeText(s, host.Metadata.DeletionTimestamp),
 		s.nowText(host.Metadata.CreatedAt), s.nowText(host.Metadata.UpdatedAt))
 	if err != nil {
 		if isUniqueError(err) {
-			return fmt.Errorf("%w: %v", domain.ErrHostAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
 		}
 		return fmt.Errorf("insert managed Host: %w", err)
 	}
@@ -175,7 +184,7 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 	return nil
 }
 
-func (s *Store) GetHost(ctx context.Context, workspaceID int, id resource.ResourceID) (*resource.Host, error) {
+func (s *Store) GetHost(ctx context.Context, workspaceID int, id resource.ID) (*resource.Host, error) {
 	if workspaceID <= 0 || id.Validate() != nil {
 		return nil, fmt.Errorf("%w: workspace and canonical Host ID are required", resource.ErrInvalidResource)
 	}
@@ -186,19 +195,19 @@ type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ResourceID) (*resource.Host, error) {
-	const query = `SELECT id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id,
+func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ID) (*resource.Host, error) {
+	const query = `SELECT id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
 		access_profile_revision, generation, revision, observed_generation, phase, conditions,
 		last_observed_at, deletion_timestamp, created_at, updated_at
 		FROM managed_hosts WHERE workspace_id = ? AND id = ?`
 	var host resource.Host
-	var labelsText, conditionsText, presence, profileID, phase string
+	var labelsText, conditionsText, presence, profileID, accessTarget, phase string
 	var environmentID sql.NullInt64
 	var lastObserved, deletion sql.NullString
 	var created, updated string
 	err := q.QueryRowContext(ctx, s.bind(query), workspaceID, string(id)).Scan(
 		&host.Metadata.ID, &host.Metadata.WorkspaceID, &environmentID, &host.Metadata.Name,
-		&labelsText, &presence, &profileID, &host.Spec.ProfileRevision, &host.Metadata.Generation,
+		&labelsText, &presence, &profileID, &accessTarget, &host.Spec.ProfileRevision, &host.Metadata.Generation,
 		&host.Metadata.Revision, &host.Status.ObservedGeneration, &phase, &conditionsText,
 		&lastObserved, &deletion, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -211,7 +220,10 @@ func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id r
 		host.Metadata.EnvironmentID = int(environmentID.Int64)
 	}
 	host.Spec.Presence = resource.DesiredPresence(presence)
-	host.Spec.AccessProfileID = resource.ResourceID(profileID)
+	host.Spec.AccessProfileID = resource.ID(profileID)
+	if err := decodeJSON(accessTarget, &host.Spec.AccessTarget); err != nil {
+		return nil, err
+	}
 	host.Status.Phase = resource.HostPhase(phase)
 	if err := decodeJSON(labelsText, &host.Metadata.Labels); err != nil {
 		return nil, err
@@ -249,13 +261,13 @@ func (s *Store) ListHosts(ctx context.Context, workspaceID int, limit int) ([]re
 		return nil, fmt.Errorf("list managed Hosts: %w", err)
 	}
 	defer utils.CloseRows(rows, s.logger, "query list hosts")
-	ids := make([]resource.ResourceID, 0)
+	ids := make([]resource.ID, 0)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		ids = append(ids, resource.ResourceID(id))
+		ids = append(ids, resource.ID(id))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate managed Hosts: %w", err)
@@ -271,7 +283,7 @@ func (s *Store) ListHosts(ctx context.Context, workspaceID int, limit int) ([]re
 	return hosts, nil
 }
 
-func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource.ResourceID,
+func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource.ID,
 	expectedRevision, expectedGeneration uint64, spec resource.HostSpec, now time.Time) error {
 	host, err := s.getHost(ctx, s.db, workspaceID, id)
 	if err != nil {
@@ -283,6 +295,11 @@ func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource
 	if err := host.UpdateSpec(expectedGeneration, spec, now); err != nil {
 		return err
 	}
+	if host.Spec.AccessProfileID != "" {
+		if err := s.validateHostAccessProfile(ctx, s.db, workspaceID, host.Spec.AccessProfileID); err != nil {
+			return err
+		}
+	}
 	if host.Metadata.Revision == expectedRevision {
 		return nil
 	}
@@ -293,7 +310,7 @@ func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource
 	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, eventType, change, nil)
 }
 
-func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ResourceID,
+func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ID,
 	expectedRevision uint64, name string, environmentID int, labels map[string]string, now time.Time) error {
 	host, err := s.getHost(ctx, s.db, workspaceID, id)
 	if err != nil {
@@ -308,7 +325,7 @@ func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id reso
 	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, "", "", nil)
 }
 
-func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ResourceID,
+func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID,
 	expectedGeneration uint64, phase resource.HostPhase, conditions []resource.Condition, now time.Time) error {
 	host, err := s.getHost(ctx, s.db, workspaceID, id)
 	if err != nil {
@@ -336,6 +353,10 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 	if err != nil {
 		return err
 	}
+	accessTarget, err := encodeJSON(host.Spec.AccessTarget)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin managed Host update: %w", err)
@@ -347,10 +368,10 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 		}
 	}
 	result, err := tx.ExecContext(ctx, s.bind(`UPDATE managed_hosts SET environment_id = ?, name = ?, labels = ?,
-		desired_presence = ?, access_profile_id = ?, access_profile_revision = ?, generation = ?, revision = ?,
+		desired_presence = ?, access_profile_id = ?, access_profile_revision = ?, access_target = ?, generation = ?, revision = ?,
 		observed_generation = ?, phase = ?, conditions = ?, last_observed_at = ?, deletion_timestamp = ?, updated_at = ?
 		WHERE workspace_id = ? AND id = ? AND revision = ?`), nullablePositiveID(host.Metadata.EnvironmentID), host.Metadata.Name, labels,
-		string(host.Spec.Presence), string(host.Spec.AccessProfileID), host.Spec.ProfileRevision,
+		string(host.Spec.Presence), string(host.Spec.AccessProfileID), host.Spec.ProfileRevision, accessTarget,
 		host.Metadata.Generation, host.Metadata.Revision, host.Status.ObservedGeneration, string(host.Status.Phase),
 		conditions, nullableTimeText(s, host.Status.LastObservedAt), nullableTimeText(s, host.Metadata.DeletionTimestamp),
 		s.nowText(host.Metadata.UpdatedAt), host.Metadata.WorkspaceID, string(host.Metadata.ID), expectedRevision)
@@ -375,17 +396,35 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 	return nil
 }
 
-func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id resource.ResourceID, expectedRevision uint64) error {
+func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id resource.ID, expectedRevision uint64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin managed Host deletion: %w", err)
 	}
 	defer rollback(tx, s.logger, "managed Host deletion")
+	if s.dialect == PostgreSQL {
+		var lockedID string
+		if err = tx.QueryRowContext(ctx, s.bind(`SELECT id FROM managed_hosts WHERE workspace_id=? AND id=? FOR UPDATE`), workspaceID, string(id)).Scan(&lockedID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrHostNotFound
+			}
+			return fmt.Errorf("lock managed Host for deletion: %w", err)
+		}
+	}
 	host, err := s.getHost(ctx, tx, workspaceID, id)
 	if err != nil {
 		return err
 	}
 	if host.Metadata.Revision != expectedRevision {
+		return resource.ErrConflict
+	}
+	var activeOperations int
+	if err = tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(DISTINCT o.id) FROM operations o JOIN operation_targets t ON t.operation_id=o.id
+		WHERE o.workspace_id=? AND t.host_id=? AND o.state IN (?,?,?)`), workspaceID, string(id), string(resource.OperationQueued),
+		string(resource.OperationRunning), string(resource.OperationCancelRequested)).Scan(&activeOperations); err != nil {
+		return fmt.Errorf("check active Operations before Host deletion: %w", err)
+	}
+	if activeOperations > 0 {
 		return resource.ErrConflict
 	}
 	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
@@ -484,6 +523,9 @@ func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operati
 		return fmt.Errorf("begin Operation creation: %w", err)
 	}
 	defer rollback(tx, s.logger, "Operation creation")
+	if err = s.validateOperationTargets(ctx, tx, operation); err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO operations (
 		id, workspace_id, kind, state, revision, actor_user_id, actor_token_id, spec_encrypted,
 		cancel_asked, conditions, created_at, started_at, finished_at
@@ -493,7 +535,7 @@ func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operati
 		conditionsJSON, s.nowText(operation.CreatedAt), nullableTimeText(s, operation.StartedAt), nullableTimeText(s, operation.FinishedAt))
 	if err != nil {
 		if isUniqueError(err) {
-			return fmt.Errorf("%w: %v", resource.ErrConflict, err)
+			return fmt.Errorf("%w: %w", resource.ErrConflict, err)
 		}
 		return fmt.Errorf("insert Operation: %w", err)
 	}
@@ -517,13 +559,159 @@ func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operati
 		domain.AuditTargetOperation, string(operation.ID), map[string]string{"kind": string(operation.Kind)}); err != nil {
 		return err
 	}
+	eventID, err := resource.NewResourceID()
+	if err != nil {
+		return fmt.Errorf("generate Operation event identity: %w", err)
+	}
+	payload, err := json.Marshal(eventing.OperationChange{Revision: operation.Revision})
+	if err != nil {
+		return fmt.Errorf("encode Operation event: %w", err)
+	}
+	nowText := s.nowText(operation.CreatedAt)
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_events(event_id,event_type,schema_version,occurred_at,producer,workspace_id,subject_kind,subject_id,subject_generation,subject_revision,correlation_id,causation_id,actor_user_id,actor_token_id,payload,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+		string(eventID), eventing.OperationCreated, 1, nowText, "machinarchy.operations", operation.WorkspaceID,
+		"operation", string(operation.ID), operation.Revision, operation.Revision, "", "", operation.CreatedBy.UserID,
+		nullableActorToken(operation.CreatedBy.APITokenID), string(payload), nowText)
+	if err != nil {
+		return fmt.Errorf("append Operation outbox event: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_deliveries(event_id,consumer_group,attempts,available_at_ns) VALUES(?,?,0,?)`),
+		string(eventID), eventing.ConsumerOperationWorker, operation.CreatedAt.UTC().UnixNano()); err != nil {
+		return fmt.Errorf("schedule Operation worker notification: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Operation creation: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.ResourceID) (*resource.Operation, error) {
+func (s *Store) validateOperationTargets(ctx context.Context, tx *sql.Tx, operation *resource.Operation) error {
+	for _, target := range operation.Spec.Targets {
+		query := `SELECT generation,desired_presence,access_profile_id FROM managed_hosts WHERE workspace_id=? AND id=?`
+		if s.dialect == PostgreSQL {
+			query += ` FOR SHARE`
+		}
+		var generation uint64
+		var presence, profileID string
+		if err := tx.QueryRowContext(ctx, s.bind(query), operation.WorkspaceID, string(target.HostID)).Scan(&generation, &presence, &profileID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrHostNotFound
+			}
+			return fmt.Errorf("read Operation target Host: %w", err)
+		}
+		if generation != target.HostGeneration || resource.DesiredPresence(presence) != resource.PresenceManaged || resource.ID(profileID) != target.AccessProfileID || target.AccessProfileID == "" {
+			return fmt.Errorf("%w: Operation target Host snapshot is stale or unconfigured", resource.ErrInvalidResource)
+		}
+		profileQuery := `SELECT current_revision FROM access_profiles WHERE workspace_id=? AND id=? AND deleted_at IS NULL`
+		if s.dialect == PostgreSQL {
+			profileQuery += ` FOR SHARE`
+		}
+		var current uint64
+		if err := tx.QueryRowContext(ctx, s.bind(profileQuery), operation.WorkspaceID, string(target.AccessProfileID)).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrAccessProfileNotFound
+			}
+			return fmt.Errorf("read Operation Access Profile head: %w", err)
+		}
+		if current != target.AccessProfileRevision {
+			return resource.ErrConflict
+		}
+		var document string
+		if err := tx.QueryRowContext(ctx, s.bind(`SELECT document FROM access_profile_revisions WHERE workspace_id=? AND profile_id=? AND revision=?`),
+			operation.WorkspaceID, string(target.AccessProfileID), target.AccessProfileRevision).Scan(&document); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrAccessProfileNotFound
+			}
+			return fmt.Errorf("read Operation Access Profile revision: %w", err)
+		}
+		var revision resource.AccessProfileRevision
+		if err := json.Unmarshal([]byte(document), &revision.Spec); err != nil {
+			return fmt.Errorf("decode Operation Access Profile revision: %w", err)
+		}
+		if !revision.Spec.Enabled {
+			return resource.ErrInvalidResource
+		}
+	}
+	return nil
+}
+
+func nullableActorToken(id int) any {
+	if id <= 0 {
+		return nil
+	}
+	return id
+}
+
+func (s *Store) ListQueuedOperations(ctx context.Context, limit int) ([]resource.OperationKey, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT workspace_id, id FROM operations WHERE state = ? ORDER BY created_at, id LIMIT ?`), string(resource.OperationQueued), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list queued Operations: %w", err)
+	}
+	defer utils.CloseRows(rows, s.logger, "query queued Operations")
+	keys := make([]resource.OperationKey, 0, limit)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err := rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, fmt.Errorf("scan queued Operation key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate queued Operation keys: %w", err)
+	}
+	return keys, nil
+}
+
+func (s *Store) ListRunningOperations(ctx context.Context, limit int) ([]resource.OperationKey, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT workspace_id,id FROM operations WHERE state IN (?,?) ORDER BY started_at,id LIMIT ?`),
+		string(resource.OperationRunning), string(resource.OperationCancelRequested), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list running Operations: %w", err)
+	}
+	defer utils.CloseRows(rows, s.logger, "query running Operations")
+	keys := make([]resource.OperationKey, 0, limit)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err = rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (s *Store) ListActiveOperationsForHost(ctx context.Context, workspace int, hostID resource.ID) ([]resource.OperationKey, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT DISTINCT o.workspace_id,o.id FROM operations o JOIN operation_targets t ON t.operation_id=o.id
+		WHERE o.workspace_id=? AND t.host_id=? AND o.state IN (?,?,?) ORDER BY o.id`), workspace, string(hostID),
+		string(resource.OperationQueued), string(resource.OperationRunning), string(resource.OperationCancelRequested))
+	if err != nil {
+		return nil, fmt.Errorf("list active Operations for Host: %w", err)
+	}
+	defer utils.CloseRows(rows, s.logger, "query active operations for host")
+	keys := make([]resource.OperationKey, 0)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err = rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.ID) (*resource.Operation, error) {
 	if workspaceID <= 0 || id.Validate() != nil {
 		return nil, fmt.Errorf("%w: workspace and Operation ID are required", resource.ErrInvalidResource)
 	}
@@ -571,11 +759,11 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.R
 		return nil, fmt.Errorf("read Operation targets: %w", err)
 	}
 	defer utils.CloseRows(rows, s.logger, "query get operation")
-	byHost := make(map[resource.ResourceID]resource.OperationTargetSpec, len(operation.Spec.Targets))
+	byHost := make(map[resource.ID]resource.OperationTargetSpec, len(operation.Spec.Targets))
 	for _, target := range operation.Spec.Targets {
 		byHost[target.HostID] = target
 	}
-	targetsByHost := make(map[resource.ResourceID]resource.OperationTarget, len(operation.Spec.Targets))
+	targetsByHost := make(map[resource.ID]resource.OperationTarget, len(operation.Spec.Targets))
 	for rows.Next() {
 		var hostID, displayName, profileID, targetState, output, errorClass string
 		var generation, profileRevision uint64
@@ -589,13 +777,21 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.R
 				return nil, fmt.Errorf("decrypt Operation target output: %w", err)
 			}
 		}
-		spec, ok := byHost[resource.ResourceID(hostID)]
-		if !ok || spec.HostGeneration != generation || spec.DisplayName != displayName || spec.AccessProfileID != resource.ResourceID(profileID) || spec.AccessProfileRevision != profileRevision {
+		spec, ok := byHost[resource.ID(hostID)]
+		if !ok || spec.HostGeneration != generation || spec.DisplayName != displayName || spec.AccessProfileID != resource.ID(profileID) || spec.AccessProfileRevision != profileRevision {
 			return nil, fmt.Errorf("stored Operation target does not match immutable spec")
 		}
 		target := resource.OperationTarget{Spec: spec, State: resource.TargetState(targetState)}
 		if exitCode.Valid || output != "" || errorClass != "" {
 			target.Result = &resource.TargetResult{Output: output, ErrorClass: errorClass}
+			var streams struct {
+				Stdout string `json:"stdout"`
+				Stderr string `json:"stderr"`
+			}
+			if json.Unmarshal([]byte(output), &streams) == nil && (streams.Stdout != "" || streams.Stderr != "") {
+				target.Result.Output = ""
+				target.Result.Stdout, target.Result.Stderr = streams.Stdout, streams.Stderr
+			}
 			if exitCode.Valid {
 				value := int(exitCode.Int64)
 				target.Result.ExitCode = &value
@@ -645,6 +841,11 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 		return fmt.Errorf("begin Operation update: %w", err)
 	}
 	defer rollback(tx, s.logger, "Operation update")
+	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
+		if err := s.verifyLeaseFence(ctx, tx, fence, operation.WorkspaceID, operation.ID); err != nil {
+			return err
+		}
+	}
 	result, err := tx.ExecContext(ctx, s.bind(`UPDATE operations SET state = ?, revision = ?, cancel_asked = ?, conditions = ?, started_at = ?, finished_at = ?
 		WHERE workspace_id = ? AND id = ? AND revision = ?`), string(operation.Status.State), operation.Revision,
 		s.boolValue(operation.Status.CancelAsked), conditionsJSON, nullableTimeText(s, operation.StartedAt), nullableTimeText(s, operation.FinishedAt),
@@ -693,10 +894,21 @@ func nullableInt(result *resource.TargetResult, value func(*resource.TargetResul
 	return *value(result)
 }
 func (s *Store) encryptTargetOutput(result *resource.TargetResult) (string, error) {
-	if result == nil || result.Output == "" {
+	if result == nil || (result.Output == "" && result.Stdout == "" && result.Stderr == "") {
 		return "", nil
 	}
-	return crypto.Encrypt(result.Output, s.key)
+	value := result.Output
+	if result.Stdout != "" || result.Stderr != "" {
+		data, err := json.Marshal(struct {
+			Stdout string `json:"stdout"`
+			Stderr string `json:"stderr"`
+		}{Stdout: result.Stdout, Stderr: result.Stderr})
+		if err != nil {
+			return "", fmt.Errorf("encode Operation output streams: %w", err)
+		}
+		value = string(data)
+	}
+	return crypto.Encrypt(value, s.key)
 }
 func targetErrorClass(result *resource.TargetResult) string {
 	if result == nil {

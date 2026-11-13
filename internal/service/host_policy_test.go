@@ -57,7 +57,15 @@ func TestRegisterHostHonorsConfiguredPolicy(t *testing.T) {
 func TestBulkRegisterReportsPolicyDenialsPerRecord(t *testing.T) {
 	store := &bulkFakeStore{}
 	tester := &bulkFakeTester{}
-	svc := newBulkService(t, store, tester, 8)
+	capacity, err := NewSSHCapacity(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewHostServiceWithTesterAndCapacity(store, nil, tester, capacity,
+		WithTargetPolicy(netpolicy.Policy{AllowPrivate: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := svc.BulkRegisterHosts(context.Background(), 1, []domain.BulkHostEntry{
 		bulkHost("ok-1", "10.0.0.1"),

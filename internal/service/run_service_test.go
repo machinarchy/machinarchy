@@ -101,7 +101,7 @@ func TestSubmitChecksPermissionAndPolicyBeforeTouchingTheInventory(t *testing.T)
 			if len(store.runs) != 0 || runner.callCount() != 0 {
 				t.Error("a rejected request must not store a run or contact a host")
 			}
-			if tc.want != domain.ErrInvalidInput && hosts.listCalls != 0 {
+			if !errors.Is(tc.want, domain.ErrInvalidInput) && hosts.listCalls != 0 {
 				t.Error("permission and policy failures must be decided before the inventory is read")
 			}
 		})

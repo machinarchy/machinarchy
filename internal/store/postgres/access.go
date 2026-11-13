@@ -120,7 +120,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) erro
 		token.CreatedAt, token.ExpiresAt).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("%w: %v", domain.ErrAPITokenAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrAPITokenAlreadyExists, err)
 		}
 		return fmt.Errorf("insert API token: %w", err)
 	}

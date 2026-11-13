@@ -2,6 +2,7 @@ package controlmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -28,7 +29,7 @@ func (f *fakeHostKeys) ListHostKeys(_ context.Context, cursor resource.HostKeyCu
 	})
 	filtered := make([]resource.HostKey, 0, cursor.Limit)
 	for _, key := range keys {
-		if key.WorkspaceID < cursor.AfterWorkspaceID || (key.WorkspaceID == cursor.AfterWorkspaceID && key.ID <= resource.ResourceID(cursor.AfterID)) {
+		if key.WorkspaceID < cursor.AfterWorkspaceID || (key.WorkspaceID == cursor.AfterWorkspaceID && key.ID <= resource.ID(cursor.AfterID)) {
 			continue
 		}
 		filtered = append(filtered, key)
@@ -43,9 +44,9 @@ type fakeOutbox struct {
 	mu          sync.Mutex
 	deliveries  []eventing.ClaimedEvent
 	claimed     bool
-	acks        []resource.ResourceID
-	retries     []resource.ResourceID
-	quarantined []resource.ResourceID
+	acks        []resource.ID
+	retries     []resource.ID
+	quarantined []resource.ID
 }
 
 func (f *fakeOutbox) Claim(_ context.Context, _, _ string, _ time.Time, _ time.Duration, _ int) ([]eventing.ClaimedEvent, error) {
@@ -57,19 +58,19 @@ func (f *fakeOutbox) Claim(_ context.Context, _, _ string, _ time.Time, _ time.D
 	f.claimed = true
 	return append([]eventing.ClaimedEvent(nil), f.deliveries...), nil
 }
-func (f *fakeOutbox) Acknowledge(_ context.Context, _, _ string, id resource.ResourceID, _ time.Time) error {
+func (f *fakeOutbox) Acknowledge(_ context.Context, _, _ string, id resource.ID, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.acks = append(f.acks, id)
 	return nil
 }
-func (f *fakeOutbox) Retry(_ context.Context, _, _ string, id resource.ResourceID, _ time.Time, _ string) error {
+func (f *fakeOutbox) Retry(_ context.Context, _, _ string, id resource.ID, _ time.Time, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retries = append(f.retries, id)
 	return nil
 }
-func (f *fakeOutbox) Quarantine(_ context.Context, _, _ string, id resource.ResourceID, _ time.Time, _ string) error {
+func (f *fakeOutbox) Quarantine(_ context.Context, _, _ string, id resource.ID, _ time.Time, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.quarantined = append(f.quarantined, id)
@@ -116,6 +117,7 @@ func TestEngineUsesLatestStateForDuplicateAndOutOfOrderEventsAndResyncsMisses(t 
 	var observed sync.Map
 	engine := newTestEngine(t, keys, outbox, 2)
 	engine.controllers[HostResourceKind] = controllerFunc{name: "latest-state", kind: HostResourceKind, run: func(ctx context.Context, key ResourceKey) (ReconcileResult, error) {
+		_ = ctx
 		calls.Add(1)
 		// This represents the current-state database read; event generations are
 		// deliberately not part of the key passed to the controller.
@@ -206,7 +208,11 @@ func TestEngineSerializesConcurrentReconcileForSameKey(t *testing.T) {
 	engine.controllers[HostResourceKind] = controllerFunc{name: "serial", kind: HostResourceKind, run: func(ctx context.Context, _ ResourceKey) (ReconcileResult, error) {
 		call := calls.Add(1)
 		count := active.Add(1)
-		for current := maxActive.Load(); count > current && !maxActive.CompareAndSwap(current, count); current = maxActive.Load() {
+		for {
+			current := maxActive.Load()
+			if count <= current || maxActive.CompareAndSwap(current, count) {
+				break
+			}
 		}
 		defer active.Add(-1)
 		if call == 1 {
@@ -361,5 +367,50 @@ func TestEngineQuarantinesUnsupportedVersion(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("manager did not stop")
+	}
+}
+
+type fakeProfileHosts struct{ hosts []resource.HostKey }
+
+func (f fakeProfileHosts) ListHostsByAccessProfile(context.Context, int, resource.ID) ([]resource.HostKey, error) {
+	return append([]resource.HostKey(nil), f.hosts...), nil
+}
+
+func TestEngineFansOutAccessProfileNotificationToHosts(t *testing.T) {
+	profileID, _ := resource.NewResourceID()
+	hostID, _ := resource.NewResourceID()
+	eventID, _ := resource.NewResourceID()
+	data, _ := json.Marshal(eventing.AccessProfileChange{Revision: 2})
+	envelope := eventing.Envelope{ID: eventID, Type: eventing.AccessProfileChanged, SchemaVersion: 1, OccurredAt: time.Now(),
+		Producer: "test", WorkspaceID: 8, Subject: eventing.Subject{Kind: "access-profile", ID: profileID, Generation: 2, Revision: 2}, Data: data}
+	outbox := &fakeOutbox{deliveries: []eventing.ClaimedEvent{{Envelope: envelope, Attempt: 1}}}
+	engine := newTestEngine(t, &fakeHostKeys{}, outbox, 1)
+	engine.deps.Profiles = fakeProfileHosts{hosts: []resource.HostKey{{WorkspaceID: 8, ID: hostID}}}
+	reconciled := make(chan ResourceKey, 1)
+	engine.controllers[HostResourceKind] = controllerFunc{name: "capture", kind: HostResourceKind, run: func(_ context.Context, key ResourceKey) (ReconcileResult, error) {
+		reconciled <- key
+		return ReconcileResult{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	go func() { finished <- engine.Start(ctx) }()
+	select {
+	case key := <-reconciled:
+		if key.WorkspaceID != 8 || key.ID != string(hostID) {
+			t.Fatalf("reconciled wrong key: %+v", key)
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Access Profile event did not schedule Host reconciliation")
+	}
+	outbox.mu.Lock()
+	acknowledged := len(outbox.acks)
+	outbox.mu.Unlock()
+	if acknowledged != 1 {
+		t.Fatalf("Access Profile event acknowledgements=%d", acknowledged)
+	}
+	cancel()
+	if err := <-finished; err != nil {
+		t.Fatal(err)
 	}
 }

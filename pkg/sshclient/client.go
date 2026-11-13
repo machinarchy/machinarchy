@@ -61,19 +61,36 @@ func TestConnection(ctx context.Context, params DialParams) error {
 // key. Output is capped to prevent an untrusted remote command from consuming
 // unbounded memory in the API process.
 func ExecuteRemoteCommand(ctx context.Context, params DialParams, command string) (string, error) {
+	result, err := ExecuteRemoteCommandDetailed(ctx, params, command)
+	return result.Stdout + result.Stderr, err
+}
+
+// ExecutionResult preserves stdout and stderr independently. Output is capped
+// per stream; Truncated reports whether either stream exceeded the cap.
+type ExecutionResult struct {
+	Stdout    string
+	Stderr    string
+	Truncated bool
+}
+
+// ExecuteRemoteCommandDetailed executes a command with strict pinned host-key
+// validation, bounded output, and cancellation that closes an active session.
+func ExecuteRemoteCommandDetailed(ctx context.Context, params DialParams, command string) (ExecutionResult, error) {
 	if strings.TrimSpace(command) == "" {
-		return "", fmt.Errorf("%w: command is required", domain.ErrInvalidInput)
+		return ExecutionResult{}, fmt.Errorf("%w: command is required", domain.ErrInvalidInput)
 	}
 
 	client, cleanup, err := dial(ctx, params)
 	if err != nil {
-		return "", err
+		return ExecutionResult{}, err
 	}
 	defer cleanup()
+	stopCancellation := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancellation()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("create SSH session: %w", err)
+		return ExecutionResult{}, fmt.Errorf("create SSH session: %w", err)
 	}
 	defer func() {
 		if err := session.Close(); err != nil {
@@ -81,11 +98,16 @@ func ExecuteRemoteCommand(ctx context.Context, params DialParams, command string
 		}
 	}()
 
-	output := &limitedBuffer{limit: maxCommandOutputBytes}
-	session.Stdout = output
-	session.Stderr = output
+	stdout := &limitedBuffer{limit: maxCommandOutputBytes / 2}
+	stderr := &limitedBuffer{limit: maxCommandOutputBytes / 2}
+	session.Stdout = stdout
+	session.Stderr = stderr
 	err = session.Run(command)
-	return output.String(), err
+	result := ExecutionResult{Stdout: stdout.String(), Stderr: stderr.String(), Truncated: stdout.Truncated() || stderr.Truncated()}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return result, ctxErr
+	}
+	return result, err
 }
 
 // ExitStatus reports the exit status of a remote command that ran and exited
@@ -130,10 +152,13 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 		stopCancellation()
 		_ = netConn.Close()
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = netConn.SetDeadline(deadline)
-	} else {
-		_ = netConn.SetDeadline(time.Now().Add(defaultHandshakeTimeout))
+	deadline := time.Now().Add(defaultHandshakeTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		deadline = ctxDeadline
+	}
+
+	if err := netConn.SetDeadline(deadline); err != nil {
+		return nil, nil, fmt.Errorf("set SSH handshake deadline: %w", err)
 	}
 
 	clientConfig := &ssh.ClientConfig{
@@ -201,7 +226,7 @@ func authMethods(params DialParams) ([]ssh.AuthMethod, error) {
 			signer, err = ssh.ParsePrivateKeyWithPassphrase([]byte(params.SecretData), []byte(params.Passphrase))
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: parse SSH private key: %v", domain.ErrInvalidInput, err)
+			return nil, fmt.Errorf("%w: parse SSH private key: %w", domain.ErrInvalidInput, err)
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
 	default:
@@ -273,4 +298,10 @@ func (b *limitedBuffer) String() string {
 		result += "\n[output truncated]"
 	}
 	return result
+}
+
+func (b *limitedBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
 }

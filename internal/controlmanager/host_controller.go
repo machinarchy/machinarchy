@@ -16,6 +16,8 @@ type HostController struct {
 	hosts          resource.HostRepository
 	converger      HostConverger
 	connectorRetry time.Duration
+	operations     resource.OperationRepository
+	operationRefs  resource.OperationHostReferenceRepository
 }
 
 func NewHostController(hosts resource.HostRepository, converger HostConverger) (*HostController, error) {
@@ -23,13 +25,21 @@ func NewHostController(hosts resource.HostRepository, converger HostConverger) (
 }
 
 func NewHostControllerWithResync(hosts resource.HostRepository, converger HostConverger, resync time.Duration) (*HostController, error) {
+	return NewHostControllerWithOperations(hosts, converger, resync, nil)
+}
+
+func NewHostControllerWithOperations(hosts resource.HostRepository, converger HostConverger, resync time.Duration, operations resource.OperationRepository) (*HostController, error) {
 	if hosts == nil {
 		return nil, errors.New("host controller requires a host repository")
 	}
 	if resync <= 0 {
 		resync = 5 * time.Minute
 	}
-	return &HostController{hosts: hosts, converger: converger, connectorRetry: resync}, nil
+	controller := &HostController{hosts: hosts, converger: converger, connectorRetry: resync, operations: operations}
+	if lister, ok := operations.(resource.OperationHostReferenceRepository); ok {
+		controller.operationRefs = lister
+	}
+	return controller, nil
 }
 
 func (c *HostController) Name() string       { return "host" }
@@ -48,6 +58,34 @@ func (c *HostController) Reconcile(ctx context.Context, key ResourceKey) (Reconc
 		return ReconcileResult{}, err
 	}
 	if host.Spec.Presence == resource.PresenceAbsent {
+		if c.operationRefs != nil && c.operations != nil {
+			keys, listErr := c.operationRefs.ListActiveOperationsForHost(ctx, key.WorkspaceID, id)
+			if listErr != nil {
+				return ReconcileResult{}, listErr
+			}
+			for _, operationKey := range keys {
+				operation, getErr := c.operations.GetOperation(ctx, operationKey.WorkspaceID, operationKey.ID)
+				if errors.Is(getErr, resource.ErrOperationNotFound) {
+					continue
+				}
+				if getErr != nil {
+					return ReconcileResult{}, getErr
+				}
+				if operation.IsTerminal() || operation.Status.CancelAsked {
+					continue
+				}
+				expected := operation.Revision
+				if err := operation.RequestCancel(time.Now()); err != nil {
+					return ReconcileResult{}, err
+				}
+				if err := c.operations.UpdateOperation(ctx, operation, expected); err != nil && !errors.Is(err, resource.ErrConflict) {
+					return ReconcileResult{}, err
+				}
+			}
+			if len(keys) > 0 {
+				return ReconcileResult{RequeueAfter: time.Second}, nil
+			}
+		}
 		return ReconcileResult{}, c.hosts.DeleteHost(ctx, key.WorkspaceID, id, host.Metadata.Revision)
 	}
 	if c.converger == nil {
@@ -70,6 +108,11 @@ func (c *HostController) Reconcile(ctx context.Context, key ResourceKey) (Reconc
 	}
 	if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, phase, conditions, time.Now()); err != nil {
 		return ReconcileResult{}, err
+	}
+	for _, condition := range conditions {
+		if condition.Type == "Ready" && condition.Status != resource.ConditionTrue {
+			return ReconcileResult{RequeueAfter: c.connectorRetry}, nil
+		}
 	}
 	return ReconcileResult{}, nil
 }

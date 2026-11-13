@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +21,17 @@ const serverPassword = "correct horse battery"
 
 // loopbackDialer permits the loopback address the test server listens on; the
 // production default refuses it (see dial_policy_test.go).
-var loopbackDialer = netpolicy.Policy{AllowLoopback: true}.DialContext
+func loopbackDialer(ctx context.Context, network, address string) (net.Conn, error) {
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("invalid test listener port")
+	}
+	return (netpolicy.Policy{AllowLoopback: true, AllowedPorts: []uint16{uint16(port)}}).DialContext(ctx, network, address)
+}
 
 func passwordParams(s *sshtest.Server) DialParams {
 	return DialParams{

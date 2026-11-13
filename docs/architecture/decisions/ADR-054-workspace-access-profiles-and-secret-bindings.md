@@ -1,6 +1,6 @@
 # ADR-054: Workspace-scoped Access Profiles and immutable secret bindings
 
-**Status:** Proposed for owner review; not approved for implementation
+**Status:** Approved by owner for implementation on 2026-11-12
 **Date:** 2026-11-12
 
 ## Context
@@ -51,7 +51,7 @@ The managed Host resource references an Access Profile, and ADR-028 requires con
 
 ```go
 type AccessProfile struct {
-    ID          resource.ResourceID
+    ID          resource.ID
     WorkspaceID int
     Name        string
     Revision    uint64
@@ -108,6 +108,6 @@ The Host application use case resolves a Host and its current profile, validates
 
 This ADR requires a scoped Secret Store resolver and Access Profile persistence before managed Host SSH reconciliation can be enabled. The first implementation supports SSH only. Existing legacy Host and Run services remain unchanged while migration is staged. A profile revision fan-out may enqueue many Hosts, so queue deduplication and periodic resync remain required. Retained SecretRefs do not guarantee plaintext availability: external KEK recovery remains governed by ADR-026.
 
-## Approval required
+## Implementation status
 
-Approve or amend the proposed ownership, write permissions, Host-owned endpoint/trust representation, disable/delete behavior, and Operation snapshot policy before implementation begins.
+This ADR is approved for implementation as of 2026-11-12. The current implementation supports SSH password and private-key credentials through version-pinned SecretRefs. Private-key passphrases, alternate connectors, cross-workspace sharing, legacy Host migration, and automatic replay of uncertain Operations are outside this milestone.

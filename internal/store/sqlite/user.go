@@ -59,7 +59,7 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
 		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
-			return nil, fmt.Errorf("%w: %v", domain.ErrUserAlreadyExists, err)
+			return nil, fmt.Errorf("%w: %w", domain.ErrUserAlreadyExists, err)
 		}
 		return nil, fmt.Errorf("insert user: %w", err)
 	}

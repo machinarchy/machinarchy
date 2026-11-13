@@ -14,7 +14,8 @@
 //  5. Link-local unicast (169.254.0.0/16, fe80::/10) is denied.
 //  6. Private ranges (RFC 1918, CGNAT 100.64.0.0/10, fc00::/7) are allowed only
 //     when AllowPrivate is set.
-//  7. Everything else (public addresses) is allowed.
+//  7. Everything else (public addresses) is allowed by address policy.
+//  8. TCP ports are denied unless explicitly present in AllowedPorts.
 //
 // A hostname is allowed only if every address it resolves to is allowed.
 //
@@ -27,6 +28,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,15 +47,16 @@ type Policy struct {
 	AllowLoopback bool
 	Allow         []netip.Prefix
 	Deny          []netip.Prefix
+	AllowedPorts  []uint16
 	// Resolver defaults to net.DefaultResolver.
 	Resolver Resolver
 	// DialTimeout bounds one connection attempt; it defaults to 10 seconds.
 	DialTimeout time.Duration
 }
 
-// Default allows public and private destinations and denies loopback,
-// link-local, metadata, multicast, and unspecified addresses.
-func Default() Policy { return Policy{AllowPrivate: true} }
+// Default allows public destinations by address only. Every TCP port remains
+// denied until explicitly listed; private and special ranges remain restricted.
+func Default() Policy { return Policy{} }
 
 var (
 	cgnat = netip.MustParsePrefix("100.64.0.0/10")
@@ -167,7 +170,14 @@ func (p Policy) DialContext(ctx context.Context, network, address string) (net.C
 	}
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid target address: %v", domain.ErrInvalidInput, err)
+		return nil, fmt.Errorf("%w: invalid target address: %w", domain.ErrInvalidInput, err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return nil, fmt.Errorf("%w: invalid target port", domain.ErrInvalidInput)
+	}
+	if err := p.CheckPort(uint16(portNumber)); err != nil {
+		return nil, err
 	}
 	addrs, err := p.Resolve(ctx, host)
 	if err != nil {
@@ -190,6 +200,19 @@ func (p Policy) DialContext(ctx context.Context, network, address string) (net.C
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// CheckPort denies every port unless it appears in the explicit allowlist.
+func (p Policy) CheckPort(port uint16) error {
+	if port == 0 {
+		return fmt.Errorf("%w: invalid target port", domain.ErrTargetNotAllowed)
+	}
+	for _, allowed := range p.AllowedPorts {
+		if port == allowed {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: target port is not permitted by the network policy", domain.ErrTargetNotAllowed)
 }
 
 // ParsePrefixes parses a comma-separated list of CIDRs or single IP addresses.

@@ -50,7 +50,7 @@ type EventEnvelope struct {
 
 type ResourceSubject struct {
     Kind       ResourceKind
-    ID         ResourceID
+    ID         ID
     Generation uint64
     Revision   uint64
 }

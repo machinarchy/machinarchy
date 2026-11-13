@@ -49,7 +49,11 @@ func RunControlManager(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct control manager operations server: %w", err)
 		}
-		return server, engine, nil
+		operations, err := runtime.NewOperationWorker()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
+		}
+		return server, combinedWorkers{engine, operations}, nil
 	})
 }
 
@@ -65,15 +69,44 @@ func RunMonolith(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct API server: %w", err)
 		}
-		return server, engine, nil
+		operations, err := runtime.NewOperationWorker()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
+		}
+		return server, combinedWorkers{engine, operations}, nil
 	})
+}
+
+type combinedWorkers []workerLifecycle
+
+func (workers combinedWorkers) Start(ctx context.Context) error {
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errorsChannel := make(chan error, len(workers))
+	for _, worker := range workers {
+		go func(component workerLifecycle) { errorsChannel <- component.Start(childCtx) }(worker)
+	}
+	var firstErr error
+	for range workers {
+		select {
+		case err := <-errorsChannel:
+			if err != nil && firstErr == nil {
+				firstErr = err
+				cancel()
+			}
+		case <-ctx.Done():
+			cancel()
+		}
+	}
+
+	return firstErr
 }
 
 type componentFactory func(*Runtime) (httpLifecycle, workerLifecycle, error)
 
-func run(ctx context.Context, cfg config.Config, serviceName string, factory componentFactory) (retErr error) {
-	return runWithOpener(ctx, cfg, serviceName, Open, factory)
-}
+// func run(ctx context.Context, cfg config.Config, serviceName string, factory componentFactory) (retErr error) {
+// 	return runWithOpener(ctx, cfg, serviceName, Open, factory)
+// }
 
 type runtimeOpener func(context.Context, config.Config) (*Runtime, error)
 
@@ -162,7 +195,6 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 	select {
 	case <-serverReady:
 	case err := <-serverErrors:
-		serverFinished = true
 		if ctx.Err() == nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), componentShutdownTimeout)
 			defer cancel()
@@ -177,7 +209,6 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 		select {
 		case <-serverReady:
 		case err := <-serverErrors:
-			serverFinished = true
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("start HTTP server during shutdown: %w", err)
 			}

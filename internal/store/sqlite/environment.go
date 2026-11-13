@@ -24,7 +24,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
 		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
-			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
 		}
 		return fmt.Errorf("insert environment: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
 		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
-			return fmt.Errorf("%w: %v", domain.ErrEnvironmentAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
 		}
 		return fmt.Errorf("update environment %d: %w", environment.ID, err)
 	}

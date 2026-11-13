@@ -17,10 +17,10 @@ type HostKeyCursor struct {
 
 type HostKey struct {
 	WorkspaceID int
-	ID          ResourceID
+	ID          ID
 }
 
-type ResourceLease struct {
+type Lease struct {
 	Kind        string
 	WorkspaceID int
 	ID          string
@@ -33,10 +33,10 @@ type HostKeyLister interface {
 	ListHostKeys(context.Context, HostKeyCursor) ([]HostKey, error)
 }
 
-type ResourceLeaseStore interface {
-	AcquireResourceLease(context.Context, ResourceLease, time.Time, time.Duration) (ResourceLease, bool, error)
-	RenewResourceLease(context.Context, ResourceLease, time.Time, time.Duration) (ResourceLease, bool, error)
-	ReleaseResourceLease(context.Context, ResourceLease) error
+type LeaseStore interface {
+	AcquireResourceLease(context.Context, Lease, time.Time, time.Duration) (Lease, bool, error)
+	RenewResourceLease(context.Context, Lease, time.Time, time.Duration) (Lease, bool, error)
+	ReleaseResourceLease(context.Context, Lease) error
 }
 
 type LeaseFence struct {

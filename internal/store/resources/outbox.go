@@ -74,13 +74,16 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		var schemaVersion int
 		var actorUser, actorToken sql.NullInt64
 		var attempts int
+		if schemaVersion < 0 || schemaVersion > int(^uint16(0)) {
+			return nil, fmt.Errorf("schema version %d is out of uint16 range", schemaVersion)
+		}
 		if err := rows.Scan(&eventID, &eventType, &schemaVersion, &occurred, &event.Producer,
 			&event.WorkspaceID, &subjectKind, &subjectID, &event.Subject.Generation, &event.Subject.Revision,
 			&event.CorrelationID, &event.CausationID, &actorUser, &actorToken, &payload, &attempts); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
-		event.ID, event.Type, event.SchemaVersion = resource.ResourceID(eventID), eventType, uint16(schemaVersion)
-		event.Subject.Kind, event.Subject.ID = subjectKind, resource.ResourceID(subjectID)
+		event.ID, event.Type, event.SchemaVersion = resource.ID(eventID), eventType, uint16(schemaVersion)
+		event.Subject.Kind, event.Subject.ID = subjectKind, resource.ID(subjectID)
 		event.Data = []byte(payload)
 		event.OccurredAt, err = time.Parse(time.RFC3339Nano, occurred)
 		if err != nil {
@@ -117,7 +120,7 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 	return events, nil
 }
 
-func (s *Store) Acknowledge(ctx context.Context, consumer, owner string, id resource.ResourceID, now time.Time) error {
+func (s *Store) Acknowledge(ctx context.Context, consumer, owner string, id resource.ID, now time.Time) error {
 	result, err := s.db.ExecContext(ctx, s.bind(`UPDATE outbox_deliveries SET delivered_at_ns = ?, lease_owner = '', lease_expires_at_ns = 0, last_error_class = ''
 		WHERE event_id = ? AND consumer_group = ? AND lease_owner = ? AND delivered_at_ns = 0 AND quarantined_at_ns = 0`),
 		now.UTC().UnixNano(), string(id), consumer, owner)
@@ -127,7 +130,7 @@ func (s *Store) Acknowledge(ctx context.Context, consumer, owner string, id reso
 	return s.rowsAffected(result, resource.ErrConflict)
 }
 
-func (s *Store) Retry(ctx context.Context, consumer, owner string, id resource.ResourceID, availableAt time.Time, failureClass string) error {
+func (s *Store) Retry(ctx context.Context, consumer, owner string, id resource.ID, availableAt time.Time, failureClass string) error {
 	result, err := s.db.ExecContext(ctx, s.bind(`UPDATE outbox_deliveries SET available_at_ns = ?, lease_owner = '', lease_expires_at_ns = 0, last_error_class = ?
 		WHERE event_id = ? AND consumer_group = ? AND lease_owner = ? AND delivered_at_ns = 0 AND quarantined_at_ns = 0`),
 		availableAt.UnixNano(), boundedFailure(failureClass), string(id), consumer, owner)
@@ -137,7 +140,7 @@ func (s *Store) Retry(ctx context.Context, consumer, owner string, id resource.R
 	return s.rowsAffected(result, resource.ErrConflict)
 }
 
-func (s *Store) Quarantine(ctx context.Context, consumer, owner string, id resource.ResourceID, now time.Time, failureClass string) error {
+func (s *Store) Quarantine(ctx context.Context, consumer, owner string, id resource.ID, now time.Time, failureClass string) error {
 	result, err := s.db.ExecContext(ctx, s.bind(`UPDATE outbox_deliveries SET quarantined_at_ns = ?, lease_owner = '', lease_expires_at_ns = 0, last_error_class = ?
 		WHERE event_id = ? AND consumer_group = ? AND lease_owner = ? AND delivered_at_ns = 0 AND quarantined_at_ns = 0`),
 		now.UTC().UnixNano(), boundedFailure(failureClass), string(id), consumer, owner)
@@ -177,7 +180,7 @@ func boundedFailure(value string) string {
 	return value
 }
 
-func (s *Store) AcquireResourceLease(ctx context.Context, lease resource.ResourceLease, now time.Time, ttl time.Duration) (resource.ResourceLease, bool, error) {
+func (s *Store) AcquireResourceLease(ctx context.Context, lease resource.Lease, now time.Time, ttl time.Duration) (resource.Lease, bool, error) {
 	if s.dialect != PostgreSQL {
 		return lease, false, resource.ErrLeaseUnsupported
 	}
@@ -205,7 +208,7 @@ func (s *Store) AcquireResourceLease(ctx context.Context, lease resource.Resourc
 	return lease, true, nil
 }
 
-func (s *Store) RenewResourceLease(ctx context.Context, lease resource.ResourceLease, now time.Time, ttl time.Duration) (resource.ResourceLease, bool, error) {
+func (s *Store) RenewResourceLease(ctx context.Context, lease resource.Lease, now time.Time, ttl time.Duration) (resource.Lease, bool, error) {
 	if s.dialect != PostgreSQL {
 		return lease, false, resource.ErrLeaseUnsupported
 	}
@@ -230,7 +233,7 @@ func (s *Store) RenewResourceLease(ctx context.Context, lease resource.ResourceL
 	return lease, true, nil
 }
 
-func (s *Store) ReleaseResourceLease(ctx context.Context, lease resource.ResourceLease) error {
+func (s *Store) ReleaseResourceLease(ctx context.Context, lease resource.Lease) error {
 	if s.dialect != PostgreSQL {
 		return resource.ErrLeaseUnsupported
 	}
@@ -242,15 +245,15 @@ func (s *Store) ReleaseResourceLease(ctx context.Context, lease resource.Resourc
 	return nil
 }
 
-func validateLease(lease resource.ResourceLease, ttl time.Duration) error {
+func validateLease(lease resource.Lease, ttl time.Duration) error {
 	if lease.Kind == "" || lease.WorkspaceID <= 0 || lease.ID == "" || lease.Owner == "" || ttl <= 0 || ttl > time.Hour {
 		return errors.New("resource lease identity, owner, and bounded positive TTL are required")
 	}
 	return nil
 }
 
-func (s *Store) verifyLeaseFence(ctx context.Context, tx *sql.Tx, fence resource.LeaseFence, workspaceID int, id resource.ResourceID) error {
-	if s.dialect != PostgreSQL || fence.Kind != "host" || fence.WorkspaceID != workspaceID || fence.ID != string(id) || fence.Token == 0 {
+func (s *Store) verifyLeaseFence(ctx context.Context, tx *sql.Tx, fence resource.LeaseFence, workspaceID int, id resource.ID) error {
+	if s.dialect != PostgreSQL || (fence.Kind != "host" && fence.Kind != "operation") || fence.WorkspaceID != workspaceID || fence.ID != string(id) || fence.Token == 0 {
 		return resource.ErrLeaseRequired
 	}
 	var token, expiresAt int64
@@ -263,7 +266,7 @@ func (s *Store) verifyLeaseFence(ctx context.Context, tx *sql.Tx, fence resource
 	if err != nil {
 		return fmt.Errorf("verify resource lease fence: %w", err)
 	}
-	if uint64(token) != fence.Token || expiresAt <= time.Now().UTC().UnixNano() {
+	if token < 0 || uint64(token) != fence.Token || expiresAt <= time.Now().UTC().UnixNano() {
 		return resource.ErrLeaseRequired
 	}
 	return nil

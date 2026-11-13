@@ -1,5 +1,51 @@
 # ChangeLogAI
 
+## 2026-11-12 — Refresh implemented API and CLI use cases
+
+### Changes in this update
+
+- Rewrote `docs/examples/example-usecases.md` against the current API, CLI, managed Host/Access Profile/Operation, legacy Host/Run, runtime configuration, and Secret Store implementations. Clarified the distinct legacy and managed workflows, corrected endpoint and response semantics, and documented current limitations instead of planned functionality.
+
+### Validation
+
+- Cross-checked documented routes, payload fields, CLI commands, authorization requirements, and lifecycle behavior against handlers, services, runtime composition, and CLI command registrations.
+- `bash -n` over all 26 shell examples and `git diff --check` — passed.
+- `GOCACHE=/tmp/machinarchy-doc-gocache go test -count=1 ./internal/cli/...` and `GOCACHE=/tmp/machinarchy-doc-gocache go run ./cmd/machinarchy --help` — passed. No live API calls or full application tests were run; the examples require a configured Machinarchy service and credentials.
+
+## 2026-11-12 — Phase H managed Host access and Operations
+
+### Changes in this update
+
+- Completed the managed Host Access Profile path from approved ADR-054: workspace-bound immutable profile revisions, SQLite/PostgreSQL migrations, binding-aware Secret Store authorization, Host-owned endpoint/trust, and durable profile-change notifications that fan out reconciliation.
+- Added the connector-neutral HostConnector and Go SSH adapter with pinned host-key verification, version-pinned SecretRef resolution, bounded connections, context deadlines, argv quoting, separate bounded stdout/stderr capture, safe error classes, and cancellation cleanup. Wired managed Host reconciliation into Control Manager and canonical managed Host/Profile/Operation HTTP application routes.
+- Added a separate bounded Operation worker with durable outbox scheduling and level scans, authorization/policy checks, cancellation, encrypted persisted results, PostgreSQL lease fencing, and restart recovery that marks uncertain executions Interrupted rather than replaying commands. Optimistic conflicts during cancellation, target updates, and finalization reload and retry; Host deletion cancels active Operations and waits for terminal state before removal.
+- Changed SSH egress defaults to deny private/loopback ranges and all TCP ports unless explicitly configured. Added bootstrap and hot-reloadable runtime port allowlists; updated legacy test fixtures to opt in where they intentionally use private LAN addresses and ephemeral test ports. Updated architecture, security, environment-example, ADR-054, and Phase H documentation.
+
+### Validation
+
+- `GOCACHE=/tmp/machinarchy-go-cache go test -count=1 -timeout 90s ./internal/domain/resource ./internal/secrets ./internal/hostaccess ./internal/operationworker ./internal/controlmanager ./internal/store ./internal/service ./internal/bootstrap ./internal/transport/http/v1/managedresource ./pkg/netpolicy ./pkg/sshclient` — passed.
+- `GOCACHE=/tmp/machinarchy-go-cache go test -count=1 -run '^TestManagedHostAndOperationEndToEnd$' -v -timeout 30s ./internal/hostaccess` with local-listener permission — passed, covering registration, persistence/outbox, SSH reconciliation, Operation execution/result, cancellation, restart recovery, and Host deletion.
+- `GOCACHE=/tmp/machinarchy-go-cache go test -race -count=3 -run '^TestManagedHostAndOperationEndToEnd$' -timeout 2m ./internal/hostaccess` with local-listener permission — passed, including long-running command and cancellation conflict coverage.
+- `GOCACHE=/tmp/machinarchy-go-cache go test -count=1 -timeout 2m ./...` with local-listener permission — passed. The same command without that permission failed only at the existing HTTP listener bind test because this sandbox disallows socket binding.
+- `git diff --check` — passed. PostgreSQL integration was not run: `MACHINARCHY_TEST_POSTGRES_URL` is unset and Docker daemon access is denied. Lint checks were not run, per the current instruction to stop focusing on linters.
+
+### Known limitations
+
+- PostgreSQL migration, transaction, and multi-manager lease behavior still require integration validation against a live PostgreSQL service. Deployments must mirror application CIDR/port policy in an independent egress firewall. Encrypted private-key passphrases and automatic retry of uncertain remote commands are unsupported. Existing legacy Host and Run records are preserved and are not automatically migrated into managed Host resources.
+
+## 2026-11-12 — Phase H.2 Access Profile domain and persistence foundation
+
+### Changes in this update
+
+- Added workspace-owned Access Profile domain/revision types, optimistic head update and repository contract; added SQLite/PostgreSQL migration 000011 for profile heads/revisions and Host lookup indexing.
+- Added transactional profile create/revision, audit and outbox event persistence, workspace-bound Host profile validation, tombstone deletion checks, and a binding-aware Secret Store authorizer for Control Manager and Operation worker contexts.
+- Added SQLite resource contract coverage for immutable revisions, stale update conflict, Host reference lookup, cross-workspace assignment rejection, referenced-profile deletion conflict, and profile outbox events.
+
+### Validation
+
+- `GOCACHE=/tmp/machinarchy-go-cache go test -count=1 -timeout 60s ./internal/store -run '^TestManagedResourceContract/sqlite/Access_Profile_revision_isolation_and_outbox$'` — passed.
+- Initial broader focused run exposed the outbox schema requirement that subject generation be positive; profile events now use their revision as generation. PostgreSQL integration was skipped because `MACHINARCHY_TEST_POSTGRES_URL` is unset. Full H.2 validation remains incomplete.
+
 ## 2026-11-12 — Phase H scoped Secret Store resolution boundary
 
 ### Changes in this update

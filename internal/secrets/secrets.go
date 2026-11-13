@@ -121,7 +121,7 @@ func (DenyAllResolutionAuthorizer) AuthorizeSecretResolution(context.Context, Re
 type Purpose string
 
 const (
-	PurposeSSHCredential Purpose = "ssh-credential"
+	PurposeSSHCredential Purpose = "ssh-credential" // #nosec G101 -- purpose identifier, not credential material
 	PurposeOperation     Purpose = "operation"
 	PurposeConfiguration Purpose = "runtime-configuration"
 )

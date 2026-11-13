@@ -255,8 +255,9 @@ func newSecretDelete(f *cli.Factory) *cobra.Command {
 }
 
 func readManagementInput(cmd *cobra.Command, file string) (json.RawMessage, error) {
-	var r io.Reader = cmd.InOrStdin()
+	r := cmd.InOrStdin()
 	if file != "" {
+		// #nosec G304 -- file is an operator-configured configuration file path.
 		f, e := os.Open(file)
 		if e != nil {
 			return nil, e

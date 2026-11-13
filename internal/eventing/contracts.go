@@ -14,15 +14,18 @@ import (
 )
 
 const (
-	ConsumerControlManager = "control-manager"
-	MaxEventPayloadBytes   = 64 << 10
+	ConsumerControlManager  = "control-manager"
+	ConsumerOperationWorker = "operation-worker"
+	MaxEventPayloadBytes    = 64 << 10
+	AccessProfileChanged    = "machinarchy.access-profile.changed"
+	OperationCreated        = "machinarchy.operation.created"
 )
 
 type Subject struct {
-	Kind       string              `json:"kind"`
-	ID         resource.ResourceID `json:"id"`
-	Generation uint64              `json:"generation"`
-	Revision   uint64              `json:"revision"`
+	Kind       string      `json:"kind"`
+	ID         resource.ID `json:"id"`
+	Generation uint64      `json:"generation"`
+	Revision   uint64      `json:"revision"`
 }
 
 type Actor struct {
@@ -33,21 +36,27 @@ type Actor struct {
 // Envelope is an immutable integration fact. Data contains a typed payload for
 // Type and SchemaVersion; resource notifications must not embed snapshots.
 type Envelope struct {
-	ID            resource.ResourceID `json:"id"`
-	Type          string              `json:"type"`
-	SchemaVersion uint16              `json:"schemaVersion"`
-	OccurredAt    time.Time           `json:"occurredAt"`
-	Producer      string              `json:"producer"`
-	WorkspaceID   int                 `json:"workspaceId"`
-	Subject       Subject             `json:"subject"`
-	CorrelationID string              `json:"correlationId"`
-	CausationID   string              `json:"causationId"`
-	Actor         *Actor              `json:"actor,omitempty"`
-	Data          json.RawMessage     `json:"data"`
+	ID            resource.ID     `json:"id"`
+	Type          string          `json:"type"`
+	SchemaVersion uint16          `json:"schemaVersion"`
+	OccurredAt    time.Time       `json:"occurredAt"`
+	Producer      string          `json:"producer"`
+	WorkspaceID   int             `json:"workspaceId"`
+	Subject       Subject         `json:"subject"`
+	CorrelationID string          `json:"correlationId"`
+	CausationID   string          `json:"causationId"`
+	Actor         *Actor          `json:"actor,omitempty"`
+	Data          json.RawMessage `json:"data"`
 }
 
 type HostChange struct {
 	Change string `json:"change"`
+}
+type AccessProfileChange struct {
+	Revision uint64 `json:"revision"`
+}
+type OperationChange struct {
+	Revision uint64 `json:"revision"`
 }
 
 const (
@@ -102,6 +111,22 @@ func (e Envelope) Validate() error {
 		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
 			return errors.New("runtime configuration event payload is invalid")
 		}
+	case AccessProfileChanged:
+		if e.Subject.Kind != "access-profile" {
+			return errors.New("access profile event subject kind is invalid")
+		}
+		var payload AccessProfileChange
+		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
+			return errors.New("access profile event payload is invalid")
+		}
+	case OperationCreated:
+		if e.Subject.Kind != "operation" {
+			return errors.New("operation event subject kind is invalid")
+		}
+		var payload OperationChange
+		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
+			return errors.New("operation event payload is invalid")
+		}
 	default:
 		return fmt.Errorf("unsupported Host event type %q", e.Type)
 	}
@@ -131,7 +156,7 @@ type Command interface {
 type HostSpecUpdateCommand struct {
 	Command            CommandMetadata
 	WorkspaceID        int
-	HostID             resource.ResourceID
+	HostID             resource.ID
 	ExpectedRevision   uint64
 	ExpectedGeneration uint64
 	Spec               resource.HostSpec
@@ -152,9 +177,9 @@ func (c HostSpecUpdateCommand) Validate() error {
 // Claim is at-least-once: expired claims may be returned again after a crash.
 type OutboxStore interface {
 	Claim(context.Context, string, string, time.Time, time.Duration, int) ([]ClaimedEvent, error)
-	Acknowledge(context.Context, string, string, resource.ResourceID, time.Time) error
-	Retry(context.Context, string, string, resource.ResourceID, time.Time, string) error
-	Quarantine(context.Context, string, string, resource.ResourceID, time.Time, string) error
+	Acknowledge(context.Context, string, string, resource.ID, time.Time) error
+	Retry(context.Context, string, string, resource.ID, time.Time, string) error
+	Quarantine(context.Context, string, string, resource.ID, time.Time, string) error
 	Prune(context.Context, time.Time) (int64, error)
 }
 

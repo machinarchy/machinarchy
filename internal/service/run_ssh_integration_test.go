@@ -12,7 +12,6 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/testutil/sshtest"
-	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
 const runSSHPassword = "correct horse battery"
@@ -82,7 +81,7 @@ func TestRunAgainstRealSSHServers(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc, err := NewRunService(store, hosts, noEnvironments{}, capacity, allowAllPrograms(t),
-		WithTargetPolicy(netpolicy.Policy{AllowLoopback: true}), WithRunTiming(20*time.Millisecond, 400*time.Millisecond))
+		WithTargetPolicy(loopbackPolicy(good.Port, exits.Port, imposter.Port, slow.Port)), WithRunTiming(20*time.Millisecond, 400*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +176,12 @@ func TestRunWithManyHostsAgainstRealServers(t *testing.T) {
 	}
 	store := newMemRunStore()
 	capacity, _ := NewSSHCapacity(4)
+	ports := make([]int, 0, len(hostList))
+	for _, host := range hostList {
+		ports = append(ports, host.SSH.Port)
+	}
 	svc, err := NewRunService(store, newRunHosts(hostList...), noEnvironments{}, capacity, allowAllPrograms(t),
-		WithTargetPolicy(netpolicy.Policy{AllowLoopback: true}), WithRunTiming(20*time.Millisecond, 400*time.Millisecond))
+		WithTargetPolicy(loopbackPolicy(ports...)), WithRunTiming(20*time.Millisecond, 400*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}

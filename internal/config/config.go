@@ -154,33 +154,67 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 func LoadCommandLine(args []string, requireLegacyBroker bool) (Config, error) {
 	flags := map[string]string{}
 	file := ""
-	allowed := map[string]string{"--listen-addr": "MACHINARCHY_LISTEN_ADDR", "--environment": "MACHINARCHY_ENVIRONMENT", "--database-engine": "MACHINARCHY_DATABASE_ENGINE", "--database-path": "MACHINARCHY_DATABASE_PATH", "--database-url": "MACHINARCHY_DATABASE_URL", "--database-max-open-conns": "MACHINARCHY_DATABASE_MAX_OPEN_CONNS", "--database-max-idle-conns": "MACHINARCHY_DATABASE_MAX_IDLE_CONNS", "--database-conn-max-lifetime": "MACHINARCHY_DATABASE_CONN_MAX_LIFETIME", "--database-connect-timeout": "MACHINARCHY_DATABASE_CONNECT_TIMEOUT", "--log-level": "MACHINARCHY_LOG_LEVEL", "--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED", "--broker-url": "MACHINARCHY_BROKER_URL", "--encryption-key-id": "MACHINARCHY_ENCRYPTION_KEY_ID", "--encryption-secret-file": "MACHINARCHY_ENCRYPTION_SECRET_FILE", "--encryption-keyring-file": "MACHINARCHY_ENCRYPTION_KEYRING_FILE", "--ssh-allow-private": "MACHINARCHY_SSH_ALLOW_PRIVATE", "--ssh-allow-loopback": "MACHINARCHY_SSH_ALLOW_LOOPBACK", "--ssh-allowed-cidrs": "MACHINARCHY_SSH_ALLOWED_CIDRS", "--ssh-denied-cidrs": "MACHINARCHY_SSH_DENIED_CIDRS", "--execution-enabled": "MACHINARCHY_EXECUTION_ENABLED", "--execution-allowed-programs": "MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS"}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
+	allowed := map[string]string{
+		"--listen-addr":    "MACHINARCHY_LISTEN_ADDR",
+		"--environment":    "MACHINARCHY_ENVIRONMENT",
+		"--log-level":      "MACHINARCHY_LOG_LEVEL",
+		"--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED",
+
+		"--broker-url": "MACHINARCHY_BROKER_URL",
+
+		"--database-engine":            "MACHINARCHY_DATABASE_ENGINE",
+		"--database-path":              "MACHINARCHY_DATABASE_PATH",
+		"--database-url":               "MACHINARCHY_DATABASE_URL",
+		"--database-max-open-conns":    "MACHINARCHY_DATABASE_MAX_OPEN_CONNS",
+		"--database-max-idle-conns":    "MACHINARCHY_DATABASE_MAX_IDLE_CONNS",
+		"--database-conn-max-lifetime": "MACHINARCHY_DATABASE_CONN_MAX_LIFETIME",
+		"--database-connect-timeout":   "MACHINARCHY_DATABASE_CONNECT_TIMEOUT",
+
+		"--encryption-key-id":       "MACHINARCHY_ENCRYPTION_KEY_ID",      // #nosec G101 -- key identifier, not key material
+		"--encryption-secret-file":  "MACHINARCHY_ENCRYPTION_SECRET_FILE", // #nosec G101 -- configuration setting, not secret material
+		"--encryption-keyring-file": "MACHINARCHY_ENCRYPTION_KEYRING_FILE",
+
+		"--ssh-allow-private":          "MACHINARCHY_SSH_ALLOW_PRIVATE",
+		"--ssh-allow-loopback":         "MACHINARCHY_SSH_ALLOW_LOOPBACK",
+		"--ssh-allowed-cidrs":          "MACHINARCHY_SSH_ALLOWED_CIDRS",
+		"--ssh-denied-cidrs":           "MACHINARCHY_SSH_DENIED_CIDRS",
+		"--execution-enabled":          "MACHINARCHY_EXECUTION_ENABLED",
+		"--execution-allowed-programs": "MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS",
+	}
+	for len(args) > 0 {
+		arg := args[0]
+		args = args[1:]
+
 		if arg == "--config" {
-			if i+1 >= len(args) {
+			if len(args) == 0 {
 				return Config{}, errors.New("--config requires a file path")
 			}
-			i++
-			file = args[i]
+
+			file = args[0]
+			args = args[1:]
 			continue
 		}
+
 		if strings.HasPrefix(arg, "--config=") {
 			file = strings.TrimPrefix(arg, "--config=")
 			continue
 		}
+
 		name, value, has := strings.Cut(arg, "=")
 		envKey, ok := allowed[name]
 		if !ok {
 			return Config{}, fmt.Errorf("unknown startup flag %q", name)
 		}
+
 		if !has {
-			if i+1 >= len(args) {
+			if len(args) == 0 {
 				return Config{}, fmt.Errorf("%s requires a value", name)
 			}
-			i++
-			value = args[i]
+
+			value = args[0]
+			args = args[1:]
 		}
+
 		flags[envKey] = value
 	}
 	return LoadWithOptions(LoadOptions{FilePath: file, Flags: flags, RequireLegacyBroker: requireLegacyBroker})
@@ -254,6 +288,7 @@ func loadWithGetter(requireLegacyBroker bool, get func(string, ...string) string
 		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 			return Config{}, errors.New("MACHINARCHY_ENCRYPTION_SECRET_FILE must be a regular file with permissions 0600 or stricter")
 		}
+		// #nosec G304 -- keyFile is an operator-configured local path.
 		data, readErr := os.ReadFile(keyFile)
 		if readErr != nil {
 			return Config{}, errors.New("unable to read encryption key file")
@@ -274,6 +309,7 @@ func loadWithGetter(requireLegacyBroker bool, get func(string, ...string) string
 		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 			return Config{}, errors.New("MACHINARCHY_ENCRYPTION_KEYRING_FILE must be a regular file with permissions 0600 or stricter")
 		}
+		// #nosec G304 -- ringFile is an operator-configured local keyring path.
 		raw, readErr := os.ReadFile(ringFile)
 		if readErr != nil {
 			return Config{}, errors.New("unable to read encryption keyring file")
@@ -362,10 +398,10 @@ func validateEventBrokerURL(raw string) error {
 }
 
 // loadSSHTargetPolicy reads the destination policy applied to every SSH dial.
-// Private networks are allowed by default because Machinarchy manages private
-// infrastructure; loopback and link-local stay denied unless allowed explicitly.
+// Destination access is deny-by-default. Operators explicitly enable private
+// ranges or configure permitted CIDRs for the deployment.
 func loadSSHTargetPolicy(get func(string, ...string) string) (netpolicy.Policy, error) {
-	allowPrivate, err := strconv.ParseBool(get("MACHINARCHY_SSH_ALLOW_PRIVATE", "true"))
+	allowPrivate, err := strconv.ParseBool(get("MACHINARCHY_SSH_ALLOW_PRIVATE", "false"))
 	if err != nil {
 		return netpolicy.Policy{}, errors.New("MACHINARCHY_SSH_ALLOW_PRIVATE must be true or false")
 	}
@@ -381,7 +417,33 @@ func loadSSHTargetPolicy(get func(string, ...string) string) (netpolicy.Policy, 
 	if err != nil {
 		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_DENIED_CIDRS: %w", err)
 	}
-	return netpolicy.Policy{AllowPrivate: allowPrivate, AllowLoopback: allowLoopback, Allow: allow, Deny: deny}, nil
+	ports, err := parseAllowedPorts(get("MACHINARCHY_SSH_ALLOWED_PORTS"))
+	if err != nil {
+		return netpolicy.Policy{}, fmt.Errorf("MACHINARCHY_SSH_ALLOWED_PORTS: %w", err)
+	}
+	return netpolicy.Policy{AllowPrivate: allowPrivate, AllowLoopback: allowLoopback, Allow: allow, Deny: deny, AllowedPorts: ports}, nil
+}
+
+func parseAllowedPorts(value string) ([]uint16, error) {
+	var ports []uint16
+	seen := make(map[uint16]struct{})
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		port, err := strconv.Atoi(item)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, errors.New("ports must be integers from 1 through 65535")
+		}
+		parsed := uint16(port)
+		if _, exists := seen[parsed]; exists {
+			return nil, errors.New("ports must be unique")
+		}
+		seen[parsed] = struct{}{}
+		ports = append(ports, parsed)
+	}
+	return ports, nil
 }
 
 // GetEnv retrieves the value of the environment variable named by the key. If the variable is present in the environment, its value is returned. Otherwise, it returns the provided default value if specified, or an empty string if no default is given.

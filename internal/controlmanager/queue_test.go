@@ -87,3 +87,48 @@ func TestResourceQueueDelayedRetryAndCancellation(t *testing.T) {
 	}
 	q.Done(key)
 }
+
+func TestResourceQueueShutdownWakesAllIdleWorkers(t *testing.T) {
+	q := NewResourceQueue(4, time.Millisecond, time.Second)
+	const workers = 4
+	results := make(chan bool, workers)
+	started := make(chan struct{}, workers)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for i := 0; i < workers; i++ {
+		go func() {
+			started <- struct{}{}
+			_, ok := q.Get(ctx)
+			results <- ok
+		}()
+	}
+	for i := 0; i < workers; i++ {
+		<-started
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		q.mu.Lock()
+		waiting := q.waiting
+		q.mu.Unlock()
+		if waiting == workers {
+			break
+		}
+		select {
+		case <-q.waitChange:
+		case <-deadline.C:
+			t.Fatal("workers did not enter Get")
+		}
+	}
+	q.Shutdown()
+	for i := 0; i < workers; i++ {
+		select {
+		case ok := <-results:
+			if ok {
+				t.Fatal("empty queue returned work during shutdown")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Shutdown did not wake every idle worker")
+		}
+	}
+}

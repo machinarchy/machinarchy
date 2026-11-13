@@ -40,7 +40,15 @@ func hostFor(server *sshtest.Server, name, password, fingerprint string) *domain
 	}
 }
 
-var allowLoopback = netpolicy.Policy{AllowLoopback: true}
+func loopbackPolicy(ports ...int) netpolicy.Policy {
+	policy := netpolicy.Policy{AllowLoopback: true}
+	for _, port := range ports {
+		if port > 0 && port <= 65535 {
+			policy.AllowedPorts = append(policy.AllowedPorts, uint16(port))
+		}
+	}
+	return policy
+}
 
 func TestRegisterHostAgainstARealSSHServer(t *testing.T) {
 	ctx := context.Background()
@@ -48,7 +56,7 @@ func TestRegisterHostAgainstARealSSHServer(t *testing.T) {
 	t.Run("verified host is stored as active", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Password: integrationPassword})
 		store := &bulkFakeStore{}
-		svc := realSSHService(t, store, allowLoopback)
+		svc := realSSHService(t, store, loopbackPolicy(server.Port))
 
 		host := hostFor(server, "web-01", integrationPassword, server.Fingerprint)
 		if err := svc.RegisterHost(ctx, host); err != nil {
@@ -65,7 +73,7 @@ func TestRegisterHostAgainstARealSSHServer(t *testing.T) {
 	t.Run("wrong fingerprint returns the real key and stores nothing", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Password: integrationPassword})
 		store := &bulkFakeStore{}
-		svc := realSSHService(t, store, allowLoopback)
+		svc := realSSHService(t, store, loopbackPolicy(server.Port))
 
 		err := svc.RegisterHost(ctx, hostFor(server, "web-02", integrationPassword, "SHA256:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"))
 		var unknown *domain.ErrHostKeyUnknown
@@ -80,7 +88,7 @@ func TestRegisterHostAgainstARealSSHServer(t *testing.T) {
 	t.Run("wrong password stores nothing", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Password: integrationPassword})
 		store := &bulkFakeStore{}
-		svc := realSSHService(t, store, allowLoopback)
+		svc := realSSHService(t, store, loopbackPolicy(server.Port))
 
 		err := svc.RegisterHost(ctx, hostFor(server, "web-03", "wrong password", server.Fingerprint))
 		if !errors.Is(err, domain.ErrAuthenticationFailed) || len(store.created) != 0 {
@@ -104,7 +112,7 @@ func TestRegisterHostAgainstARealSSHServer(t *testing.T) {
 
 	t.Run("a hung host cannot stall registration", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Mode: sshtest.ModeSilent})
-		svc := realSSHService(t, &bulkFakeStore{}, allowLoopback)
+		svc := realSSHService(t, &bulkFakeStore{}, loopbackPolicy(server.Port))
 
 		callCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
 		defer cancel()
@@ -136,7 +144,7 @@ func TestBulkRegisterEndToEndAgainstRealServers(t *testing.T) {
 	}
 
 	store := &bulkFakeStore{}
-	svc := realSSHService(t, store, allowLoopback)
+	svc := realSSHService(t, store, loopbackPolicy(good.Port, wrongKey.Port, wrongPassword.Port, refusedPort))
 	res, err := svc.BulkRegisterHosts(context.Background(), 1, []domain.BulkHostEntry{
 		{Host: hostFor(good, "ok", integrationPassword, good.Fingerprint)},
 		{Host: hostFor(wrongKey, "wrong-key", integrationPassword, "SHA256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")},

@@ -132,7 +132,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, token *domain.APIToken) erro
 	if err != nil {
 		var sqliteErr *sqliteDriver.Error
 		if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY) {
-			return fmt.Errorf("%w: %v", domain.ErrAPITokenAlreadyExists, err)
+			return fmt.Errorf("%w: %w", domain.ErrAPITokenAlreadyExists, err)
 		}
 		return fmt.Errorf("insert API token: %w", err)
 	}

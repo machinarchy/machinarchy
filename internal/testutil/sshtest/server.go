@@ -48,6 +48,9 @@ type Options struct {
 	// returns the exit status. ctx is cancelled when the client disconnects or
 	// the server closes. A nil Exec succeeds without output.
 	Exec func(ctx context.Context, command string, out io.Writer) int
+	// ExecStreams can independently write ordinary output and SSH extended-data
+	// stderr for connector integration tests. When set, it takes precedence.
+	ExecStreams func(ctx context.Context, command string, stdout, stderr io.Writer) int
 }
 
 // Server is a running test server.
@@ -201,10 +204,14 @@ func (s *Server) handle(conn net.Conn) {
 	}()
 	switch s.opts.Mode {
 	case ModeSilent:
-		_, _ = io.Copy(io.Discard, conn) // returns when the client or Close drops the connection
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			slog.Debug("silent connection ended with error", "error", err)
+		}
 		return
 	case ModeGarbage:
-		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		if _, err := conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")); err != nil {
+			slog.Debug("failed to write invalid HTTP response", "error", err)
+		}
 		return
 	}
 
@@ -215,14 +222,24 @@ func (s *Server) handle(conn net.Conn) {
 	connCtx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	go func() {
-		_ = serverConn.Wait()
+		if err := serverConn.Wait(); err != nil {
+			slog.Debug("SSH server connection closed", "error", err)
+		}
 		cancel()
 	}()
 	go ssh.DiscardRequests(requests)
 
 	for newChannel := range channels {
-		if newChannel.ChannelType() != "session" {
-			_ = newChannel.Reject(ssh.UnknownChannelType, "only session channels are supported")
+		channelType := newChannel.ChannelType()
+
+		if channelType != "session" {
+			if err := newChannel.Reject(ssh.UnknownChannelType, "only session channels are supported"); err != nil {
+				slog.Debug("failed to reject unsupported SSH channel",
+					"channel_type", channelType,
+					"error", err,
+				)
+				return
+			}
 			continue
 		}
 		channel, channelRequests, err := newChannel.Accept()
@@ -242,22 +259,47 @@ func (s *Server) session(ctx context.Context, channel ssh.Channel, requests <-ch
 	for request := range requests {
 		if request.Type != "exec" {
 			if request.WantReply {
-				_ = request.Reply(false, nil)
+				if err := request.Reply(false, nil); err != nil {
+					slog.Debug("failed to reject SSH request",
+						"request_type", request.Type,
+						"error", err,
+					)
+					return
+				}
 			}
 			continue
 		}
 		var payload struct{ Command string }
 		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
-			_ = request.Reply(false, nil)
+			if request.WantReply {
+				if replyErr := request.Reply(false, nil); replyErr != nil {
+					slog.Debug("failed to reject malformed SSH exec request",
+						"error", replyErr,
+					)
+				}
+			}
 			return
 		}
-		_ = request.Reply(true, nil)
+		if request.WantReply {
+			if err := request.Reply(true, nil); err != nil {
+				slog.Debug("failed to accept SSH exec request", "error", err)
+				return
+			}
+		}
 		s.execs.Add(1)
 		status := 0
-		if s.opts.Exec != nil {
+		if s.opts.ExecStreams != nil {
+			status = s.opts.ExecStreams(ctx, payload.Command, channel, channel.Stderr())
+		} else if s.opts.Exec != nil {
 			status = s.opts.Exec(ctx, payload.Command, channel)
 		}
-		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
+		if _, err := channel.SendRequest(
+			"exit-status",
+			false,
+			ssh.Marshal(struct{ Status uint32 }{uint32(status)}),
+		); err != nil {
+			slog.Debug("failed to send SSH exit status", "error", err)
+		}
 		return
 	}
 }

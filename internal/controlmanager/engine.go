@@ -55,9 +55,12 @@ func DefaultConfig() Config {
 }
 
 type Dependencies struct {
-	Hosts  resource.HostRepository
+	Hosts    resource.HostRepository
+	Profiles interface {
+		ListHostsByAccessProfile(context.Context, int, resource.ID) ([]resource.HostKey, error)
+	}
 	Outbox eventing.OutboxStore
-	Leases resource.ResourceLeaseStore // nil for the SQLite single-manager profile
+	Leases resource.LeaseStore // nil for the SQLite single-manager profile
 	Logger *slog.Logger
 }
 
@@ -69,7 +72,7 @@ type Engine struct {
 	controllers    map[ResourceKind]Controller
 	ownerID        string
 	mu             sync.Mutex
-	resyncLease    resource.ResourceLease
+	resyncLease    resource.Lease
 	hasResyncLease bool
 	started        bool
 	ready          atomic.Bool
@@ -156,7 +159,7 @@ func (e *Engine) CheckReadiness(ctx context.Context) error {
 		return err
 	}
 	if e == nil || !e.ready.Load() || !e.initialScan.Load() {
-		return errors.New("Control Manager recovery scan is incomplete")
+		return errors.New("control manager recovery scan is incomplete")
 	}
 	return nil
 }
@@ -281,6 +284,40 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 			}
 			continue
 		}
+		if envelope.Type == eventing.AccessProfileChanged {
+			if e.deps.Profiles == nil {
+				if retryErr := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(outboxRetryDelay(delivery.Attempt)), "profile_repository_unavailable"); retryErr != nil {
+					return retryErr
+				}
+				continue
+			}
+			profileID := envelope.Subject.ID
+			hosts, listErr := e.deps.Profiles.ListHostsByAccessProfile(ctx, envelope.WorkspaceID, profileID)
+			if listErr != nil {
+				if retryErr := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(outboxRetryDelay(delivery.Attempt)), "profile_host_lookup_failed"); retryErr != nil {
+					return retryErr
+				}
+				continue
+			}
+			backpressured := false
+			for _, host := range hosts {
+				admission := e.queue.Add(ResourceKey{Kind: HostResourceKind, WorkspaceID: host.WorkspaceID, ID: string(host.ID)})
+				if admission == QueueBackpressured || admission == QueueShuttingDown {
+					backpressured = true
+					break
+				}
+			}
+			if backpressured {
+				if retryErr := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(outboxRetryDelay(delivery.Attempt)), "profile_fanout_backpressured"); retryErr != nil {
+					return retryErr
+				}
+				continue
+			}
+			if err := e.deps.Outbox.Acknowledge(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now()); err != nil {
+				return err
+			}
+			continue
+		}
 		key := ResourceKey{Kind: ResourceKind(envelope.Subject.Kind), WorkspaceID: envelope.WorkspaceID, ID: string(envelope.Subject.ID)}
 		if _, ok := e.controllers[key.Kind]; !ok {
 			if quarantineErr := e.deps.Outbox.Quarantine(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now(), "no_registered_controller"); quarantineErr != nil {
@@ -324,11 +361,11 @@ func (e *Engine) periodicResync(ctx context.Context) {
 }
 
 func (e *Engine) resync(ctx context.Context) error {
-	var scanLease resource.ResourceLease
+	var scanLease resource.Lease
 	if e.deps.Leases != nil {
 		var acquired bool
 		var err error
-		scanLease, acquired, err = e.deps.Leases.AcquireResourceLease(ctx, resource.ResourceLease{
+		scanLease, acquired, err = e.deps.Leases.AcquireResourceLease(ctx, resource.Lease{
 			Kind: "resync", WorkspaceID: 1, ID: "managed-hosts", Owner: e.ownerID,
 		}, time.Now(), e.resyncLeaseTTL())
 		if err != nil {
@@ -452,10 +489,10 @@ func (e *Engine) reconcile(parent context.Context, controller Controller, key Re
 	if err := e.limiter.Wait(ctx); err != nil {
 		return result, err
 	}
-	var lease resource.ResourceLease
+	var lease resource.Lease
 	if e.deps.Leases != nil {
 		var acquired bool
-		lease, acquired, retErr = e.deps.Leases.AcquireResourceLease(ctx, resource.ResourceLease{
+		lease, acquired, retErr = e.deps.Leases.AcquireResourceLease(ctx, resource.Lease{
 			Kind: string(key.Kind), WorkspaceID: key.WorkspaceID, ID: key.ID, Owner: e.ownerID,
 		}, time.Now(), e.cfg.ResourceLeaseTTL)
 		if retErr != nil {
@@ -523,7 +560,7 @@ func outboxRetryDelay(attempt int) time.Duration {
 	if delay > 5*time.Minute {
 		delay = 5 * time.Minute
 	}
-	delay = time.Duration(float64(delay) * (0.8 + rand.Float64()*0.4))
+	delay = time.Duration(float64(delay) * (0.8 + rand.Float64()*0.4)) // #nosec G404 -- non-security retry jitter
 	if delay > 5*time.Minute {
 		delay = 5 * time.Minute
 	}
@@ -531,7 +568,7 @@ func outboxRetryDelay(attempt int) time.Duration {
 }
 
 func jitterInterval(interval time.Duration) time.Duration {
-	return time.Duration(float64(interval) * (0.9 + rand.Float64()*0.2))
+	return time.Duration(float64(interval) * (0.9 + rand.Float64()*0.2)) // #nosec G404 -- non-security retry jitter
 }
 
 type permanentError struct{ error }

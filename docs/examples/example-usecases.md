@@ -1,205 +1,372 @@
-# Machinarchy use cases: workspaces, API tokens, and SSH hosts
+# Machinarchy use cases
 
-This guide walks through creating an environment, registering an SSH host through the API, and inspecting it from the API and CLI.
+This guide demonstrates the currently implemented API and CLI workflows for workspace inventory, managed Hosts, SSH Access Profiles, Operations, runtime configuration, and encrypted secrets. It distinguishes the legacy Host/Run API from the newer managed-resource API because they use different resource models and execution paths.
 
-> **Command execution:** Running commands through the API is available but off by default, and the CLI has no `exec` command yet (see [Running a command on several hosts](#running-a-command-on-several-hosts)). Without it enabled, connect with OpenSSH from your workstation after verifying the host key; that session is outside Machinarchy's API, audit trail, and run tracking.
+## Prerequisites and access
 
-## Prerequisites
+- A running Machinarchy API. Local development commonly uses `http://localhost:8080`; use HTTPS outside a trusted local environment.
+- A human owner JWT for owner-only member, runtime-configuration, Access Profile, and Secret Store administration. Inventory and Run actions also support authorized operator credentials.
+- `curl`, `jq`, and the Machinarchy CLI (`go run ./cmd/machinarchy` from the repository, or an installed binary).
+- Network access from the API/Control Manager to managed SSH targets and a trusted way to obtain each target's SSH host-key fingerprint.
 
-- A running Machinarchy API, for example `http://localhost:8080` in local development.
-- A human owner JWT from the API's signup or login endpoint for setup and token management. Do not use `MACHINARCHY_OPERATOR_TOKEN`; that is the server's signing secret, not an API user token.
-- `curl` and `jq` for the API examples.
-- Network access from the API server to the SSH host on the configured port.
-- SSH credentials with permission to log in to the host.
+The current application uses a single workspace. Signup creates reader membership; the configured bootstrap administrator establishes the initial owner. Workspace-scoped managed resources and Access Profiles are isolated using the authenticated principal's workspace. See the [architecture guide](../architecture.md), [security architecture](../architecture/phase-9-security-architecture.md), and [CLI configuration guide](cli/configuration.md) for deployment and credential details.
 
-All accounts share one workspace. Self-registered accounts are read-only `reader` members; the first owner is created from the `MACHINARCHY_BOOTSTRAP_ADMIN_*` settings and promotes other members with `PUT /api/v1/members/{id}/role`. Signup does not send invitations or provide workspace switching. In production, signup is disabled by default; have an operator bootstrap the owner account deliberately. Set the API endpoint and temporary owner JWT for setup. Supply long-lived automation credentials from a secret manager at runtime rather than saving them in project files or shell startup scripts.
-
-Replace these sample values:
+Set local request variables. Keep real bearer tokens outside source files and shell history:
 
 ```sh
 export API_URL='http://localhost:8080'
-export API_TOKEN='paste-a-user-jwt-here'
-export HOST_NAME='web-01'
-export HOST_IP='192.0.2.10'
-export SSH_USERNAME='deploy'
-export SSH_KEY_FILE="$HOME/.ssh/id_ed25519"
-export SSH_PORT=22
+export OWNER_TOKEN='paste-owner-jwt-here'
+export OPERATOR_TOKEN='paste-authorized-operator-token-here'
 ```
 
-Use HTTPS for remote or production deployments. Do not paste real secrets into shared terminals, tickets, or shell scripts committed to source control.
+## 1. Create a short-lived API token
 
-## 1. Issue an API token for automation
+An owner can create a reader token for inventory queries or an operator token for permitted inventory changes and Run execution. Tokens cannot have the owner role; effective access is constrained by the issuer's workspace membership. The plaintext token is returned at creation and stored server-side as a hash. The default lifetime is 30 days and the maximum is 365 days.
 
-Use the human owner JWT to create an `operator` token for inventory updates or a `reader` token for read-only inventory and operational data. Tokens cannot have the owner role, and their effective access is capped by the issuer's current workspace membership. The plaintext is returned once and stored server-side only as a SHA-256 hash. The default lifetime is 30 days; the maximum is 365 days.
-
-Create a short-lived read-only token and copy the `token` value from the response directly into your secret manager:
+Create a reader token and transfer the returned `token` value directly to your approved credential store:
 
 ```sh
 curl --silent --show-error --fail-with-body \
   --request POST "$API_URL/api/v1/tokens" \
-  --header "Authorization: Bearer $API_TOKEN" \
+  --header "Authorization: Bearer $OWNER_TOKEN" \
   --header 'Content-Type: application/json' \
-  --data '{"name":"host-inventory-read","role":"reader","expiresInHours":168}' | jq .
+  --data '{"name":"inventory-read","role":"reader","expiresInHours":168}' | jq .
 ```
 
-Use that provisioned token for API/CLI automation, while retaining the human JWT for token administration. `GET /api/v1/tokens` lists the current user's token metadata; `DELETE /api/v1/tokens/{id}` revokes a token. Send secrets only in an HTTPS `Authorization: Bearer` header. Do not put them in URLs, committed files, shell history, or logs.
+`GET /api/v1/tokens` returns token metadata for the caller, and `DELETE /api/v1/tokens/{id}` revokes a token. Do not put bearer tokens in URLs or normal logs.
 
-## 2. Create an environment through the API
+## 2. Use the CLI to inspect legacy inventory
 
-Host registration accepts an `environmentId`. Create an environment and capture the ID from its response:
+The current `get` command lists legacy Hosts and environments through the HTTP API. It supports table, JSON, and YAML output. The optional environment filter resolves a name or numeric ID by calling the API for environments.
+
+Configure a named CLI context. `--token-stdin` reads the token without placing it in the command arguments:
+
+```sh
+go run ./cmd/machinarchy config set-cluster local --server "$API_URL"
+printf '%s' "$OPERATOR_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
+go run ./cmd/machinarchy config set-context local --cluster local --user local --env production
+go run ./cmd/machinarchy config use-context local
+```
+
+Then inspect Hosts:
+
+```sh
+go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy get hosts web-01 -o yaml
+go run ./cmd/machinarchy get hosts -n production -o json | jq .
+```
+
+The CLI currently has no managed Host or Operation commands. Use the API examples below for those resources. The CLI's `config` command manages local API contexts; it is separate from `runtime-config`, which manages server runtime settings.
+
+## 3. Register a legacy SSH Host
+
+The legacy `POST /api/v1/hosts` endpoint accepts SSH credentials in `secretData`, verifies connectivity and the expected host-key fingerprint before persistence, and never returns the credential. This is distinct from the managed Host and Access Profile flow in the next section.
+
+Create an environment and record its numeric ID:
 
 ```sh
 ENVIRONMENT_JSON=$(curl --silent --show-error --fail-with-body \
   --request POST "$API_URL/api/v1/environments" \
-  --header "Authorization: Bearer $API_TOKEN" \
+  --header "Authorization: Bearer $OWNER_TOKEN" \
   --header 'Content-Type: application/json' \
-  --data '{"name":"production","description":"Production hosts"}')
-
+  --data '{"name":"production","description":"Production legacy inventory"}')
 printf '%s\n' "$ENVIRONMENT_JSON" | jq .
 export ENVIRONMENT_ID=$(printf '%s' "$ENVIRONMENT_JSON" | jq -r '.id')
 ```
 
-If the environment already exists, list environments and set `ENVIRONMENT_ID` to its ID:
+Obtain the fingerprint independently from a trusted console or host administrator. `ssh-keyscan` only observes a key presented on the network; it does not authenticate that key:
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  "$API_URL/api/v1/environments" \
-  --header "Authorization: Bearer $API_TOKEN" | jq .
-```
-
-## 3. Verify the SSH host key
-
-Registration requires the host's expected SHA-256 SSH host-key fingerprint. Obtain the fingerprint through a trusted channel, such as your cloud provider's console or the host administrator. You can inspect the key presented over the network with:
-
-```sh
+export HOST_IP='192.0.2.10'
+export SSH_PORT=22
 ssh-keyscan -p "$SSH_PORT" "$HOST_IP" 2>/dev/null | ssh-keygen -lf - -E sha256
+export SSH_HOST_FINGERPRINT='SHA256:replace-with-independently-verified-value'
+export SSH_USERNAME='deploy'
+export SSH_KEY_FILE="$HOME/.ssh/id_ed25519"
 ```
 
-`ssh-keyscan` only reports what the network endpoint presented; it does not authenticate that key. Compare the result against the fingerprint obtained through your trusted channel. Do not blindly trust a fingerprint returned by an unverified connection.
-
-Set the verified value, including the `SHA256:` prefix:
-
-```sh
-export SSH_HOST_FINGERPRINT='SHA256:replace-with-verified-fingerprint'
-```
-
-## 4. Register the SSH host through the API
-
-The API accepts either an IP address or hostname, an SSH username, an authentication method, its secret, and the expected host-key fingerprint. This example reads a private key from a file and streams the generated JSON request to `curl`, so the private-key contents are not placed in command arguments or printed in the terminal:
+Create the Host. The JSON request is streamed to curl so the private-key content is not printed or put in a command-line argument:
 
 ```sh
 jq -n \
-  --arg name "$HOST_NAME" \
+  --arg name 'legacy-web-01' \
   --arg ip "$HOST_IP" \
   --arg username "$SSH_USERNAME" \
   --arg fingerprint "$SSH_HOST_FINGERPRINT" \
   --argjson environmentId "$ENVIRONMENT_ID" \
   --argjson port "$SSH_PORT" \
   --rawfile privateKey "$SSH_KEY_FILE" \
-  '{
-    environmentId: $environmentId,
-    name: $name,
-    ip: $ip,
-    connection: "SSH",
-    port: $port,
-    username: $username,
-    authMethod: "PRIVATE_KEY",
-    secretData: $privateKey,
-    expectedFingerprint: $fingerprint,
-    labels: {"owner": "platform"}
-  }' |
+  '{environmentId:$environmentId,name:$name,ip:$ip,connection:"SSH",port:$port,
+    username:$username,authMethod:"PRIVATE_KEY",secretData:$privateKey,
+    expectedFingerprint:$fingerprint,labels:{owner:"platform"}}' |
 curl --silent --show-error --fail-with-body \
   --request POST "$API_URL/api/v1/hosts" \
-  --header "Authorization: Bearer $API_TOKEN" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
   --header 'Content-Type: application/json' \
   --data-binary @- | jq .
 ```
 
-The example uses `SSH_PORT` in the payload; an omitted port defaults to 22. For password authentication, set `authMethod` to `PASSWORD` and provide the SSH password as `secretData`. For an encrypted private key, include its `passphrase` field as well. Manage those secrets with a secret manager or another protected input mechanism; avoid putting them directly in a shell command.
+The implemented payload fields are `environmentId`, `name`, optional `hostname` or `ip`, optional `connection`, `labels`, `port`, `username`, `authMethod` (`PASSWORD` or `PRIVATE_KEY`), `secretData`, optional `passphrase`, and `expectedFingerprint`. Port defaults to 22. Password authentication uses the same `secretData` field. The legacy Host service verifies and persists synchronously; it is not the managed Host desired-state reconciler.
 
-The registration service attempts an SSH connection, verifies the supplied fingerprint, and authenticates before saving the host. A successful response has HTTP `201` and normally reports SSH status `ACTIVE`. The SSH credential is not returned in the host response.
-
-Common failures:
-
-- `412 Precondition Failed`: the presented host key does not match the supplied fingerprint. Verify the fingerprint independently, then retry with the verified value.
-- `401 Unauthorized`: the API JWT is invalid, or the SSH login was rejected. Check the response body to distinguish API authentication from SSH authentication failure.
-- `503 Service Unavailable`: the bounded SSH verification capacity is exhausted or unavailable; retry after the service recovers.
-
-## 5. Inspect the registered host through the API
-
-List registered hosts. The response omits SSH passwords and private keys:
+List legacy Hosts and optionally filter with the server's selector syntax:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  "$API_URL/api/v1/hosts" \
-  --header "Authorization: Bearer $API_TOKEN" | jq .
+  "$API_URL/api/v1/hosts?selector=environment%3Dproduction%2Crole%3Dweb" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" | jq .
 ```
 
-The current API does not implement `GET /api/v1/hosts/{id}`. Use the collection response to find a host by `id` or `name`.
+The legacy Host collection currently returns an array rather than a paginated envelope. `GET /api/v1/hosts/{id}` is not implemented; use the collection to inspect a Host. Host list responses omit credential material.
 
-## 6. Configure the CLI and list hosts
+## 4. Create a managed Host with an Access Profile
 
-The current CLI can list hosts, but it does not create hosts or run remote commands. Configure a context with the API base URL and a `reader` or `operator` API token. Keep the owner JWT for token administration rather than routine CLI use:
+Managed Hosts keep endpoint and SSH trust on the Host resource and refer to a workspace-scoped Access Profile. The Profile contains connector/authentication settings and a version-pinned SecretRef; it does not contain plaintext credentials. Profile creation and updates require an owner. Managed Host creation and updates require inventory-write authorization.
+
+First create an encrypted SSH credential. The CLI reads secret values from standard input and the API response contains metadata, not the secret value:
 
 ```sh
-go run ./cmd/machinarchy config set-cluster local --server "$API_URL"
-printf '%s' "$API_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local --env production
-go run ./cmd/machinarchy config use-context local
+export SSH_KEY_FILE="$HOME/.ssh/id_ed25519"
+SECRET_JSON=$(go run ./cmd/machinarchy secret create managed-web-key \
+  --description 'SSH identity for managed web hosts' \
+  --value-stdin < "$SSH_KEY_FILE")
+printf '%s\n' "$SECRET_JSON" | jq '{id, name, purpose, currentVersion}'
+export SECRET_ID=$(printf '%s' "$SECRET_JSON" | jq -r '.id')
+export SECRET_VERSION=$(printf '%s' "$SECRET_JSON" | jq -r '.currentVersion')
 ```
 
-List or find the host from the CLI:
+Alternatively, the owner-only Secret API accepts `POST /api/v1/secrets` with `{"name":"managed-web-key","description":"...","purpose":"ssh-credential","value":"..."}`. Prefer the CLI stdin flow or another protected input channel. Secret values are write-only; do not use `GET` expecting plaintext.
+
+Create an Access Profile pinned to that secret version:
 
 ```sh
-go run ./cmd/machinarchy get hosts
-go run ./cmd/machinarchy get hosts "$HOST_NAME"
-go run ./cmd/machinarchy get hosts -n production -o json | jq .
+PROFILE_JSON=$(curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/managed/access-profiles" \
+  --header "Authorization: Bearer $OWNER_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data "$(jq -n \
+    --arg name 'linux-deploy' \
+    --arg secretId "$SECRET_ID" \
+    --argjson secretVersion "$SECRET_VERSION" \
+    '{name:$name,description:"Pinned SSH profile for Linux deployment hosts",
+      spec:{connectorKind:"ssh",username:"deploy",authenticationMethod:"private-key",
+        credential:{id:$secretId,version:$secretVersion},enabled:true}}')")
+printf '%s\n' "$PROFILE_JSON" | jq .
+export PROFILE_ID=$(printf '%s' "$PROFILE_JSON" | jq -r '.id')
+export PROFILE_REVISION=$(printf '%s' "$PROFILE_JSON" | jq -r '.currentRevision')
 ```
 
-See [CLI configuration](cli/configuration.md) for named contexts and credential handling.
-
-## 7. Run a command directly with OpenSSH
-
-Until Machinarchy adds a command-submission feature, use the local `ssh` client directly. Before connecting, ensure the host's verified key is in your OpenSSH `known_hosts` file. Keep strict host-key checking enabled:
+Create a managed Host with a network endpoint and the independently verified SHA-256 fingerprint in its trust list:
 
 ```sh
-ssh -i "$SSH_KEY_FILE" \
-  -p "$SSH_PORT" \
-  -o StrictHostKeyChecking=yes \
-  "$SSH_USERNAME@$HOST_IP" \
-  'uname -a'
+HOST_JSON=$(curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/managed/hosts" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data "$(jq -n \
+    --arg name 'managed-web-01' \
+    --arg profileId "$PROFILE_ID" \
+    --arg fingerprint "$SSH_HOST_FINGERPRINT" \
+    --arg endpoint "$HOST_IP:$SSH_PORT" \
+    '{name:$name,labels:{role:"web",environment:"production"},
+      spec:{presence:"Managed",accessProfileId:$profileId,
+        accessTarget:{endpoint:$endpoint,trust:[$fingerprint]}}}')")
+printf '%s\n' "$HOST_JSON" | jq .
+export MANAGED_HOST_ID=$(printf '%s' "$HOST_JSON" | jq -r '.metadata.id')
 ```
 
-You can replace `uname -a` with a command you are authorized to run. The command executes from your workstation over a separate SSH connection; Machinarchy does not receive, authorize, record, or return its output. Do not disable host-key checking to work around a mismatch.
-
-## Running a command on several hosts
-
-Execution is disabled until an operator opts in, with an explicit list of the programs that may run:
+`POST /api/v1/managed/hosts` persists desired state and emits a durable resource-change notification. It does not claim that SSH verification has completed. The Control Manager reconciles the Host, loads the latest resource and current Profile revision, resolves the authorized version-pinned SecretRef, and records observed conditions. Inspect the resource with:
 
 ```sh
-MACHINARCHY_EXECUTION_ENABLED=true
-MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS=uptime,/usr/bin/df,systemctl
+curl --silent --show-error --fail-with-body \
+  "$API_URL/api/v1/managed/hosts/$MANAGED_HOST_ID" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" | jq '{metadata,spec,status}'
 ```
 
-Use `*` instead of a list only if you deliberately want any program allowed. Starting a run needs the `runs:execute` permission (owners and operators, including operator API tokens). The workflow is preview, run, watch:
+The reconciler verifies SSH access and updates `status.conditions`/`observedGeneration`; it does not configure the remote machine. It uses the Access Profile's current revision; a Host's optional `profileRevision` field is not used to pin reconciliation to an older revision. An unavailable or disabled Profile, rejected host key, invalid SecretRef, network failure, or SSH authentication failure leaves the resource observable as not ready and eligible for retry. Keep the returned Profile revision and SecretRef version in your change record.
+
+## 5. Submit and track a managed Operation
+
+Managed Operations are separate from Host desired state and from legacy Runs. Submit an explicit host ID list and argv. The application validates execution authorization and the configured program policy, resolves the current Host/Profile binding, and durably creates the Operation before returning `202 Accepted`.
 
 ```sh
-# 1. Preview exactly which hosts a rule targets, and note the targetsHash.
-curl -sS -X POST "$API/api/v1/fleet/targets/preview" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"selector":"environment=production,role=web"}'
-
-# 2. Optionally rehearse the run: dryRun validates and plans without storing or contacting anything.
-# 3. Start it, bound to the reviewed hosts. A command is an argument list, not a shell string.
-curl -sS -X POST "$API/api/v1/runs" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"argv":["systemctl","status","nginx"],"selector":"environment=production,role=web", "expectTargetsHash":"<targetsHash from the preview>","timeoutSeconds":30,"concurrency":5}'
-# -> 202 with the run and a Location header; if the rule now matches different hosts, 409 returns the new hash.
-
-# 4. Watch it, then read the per-host results (output is shown to executors only).
-curl -sS "$API/api/v1/runs/42" -H "Authorization: Bearer $TOKEN"
-
-# 5. Stop it if needed. This closes running sessions; a command already sent may still run on its host.
-curl -sS -X POST "$API/api/v1/runs/42/cancel" -H "Authorization: Bearer $TOKEN"
+OPERATION_JSON=$(curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/managed/operations" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data "$(jq -n --arg hostId "$MANAGED_HOST_ID" \
+    '{hostIds:[$hostId],run:{argv:["uname","-a"],timeoutSeconds:30,concurrency:1}}')")
+printf '%s\n' "$OPERATION_JSON" | jq '{id,state:.status.state,createdAt}'
+export OPERATION_ID=$(printf '%s' "$OPERATION_JSON" | jq -r '.id')
 ```
 
-Things to know: there is no shell, so `["echo", "a;b", "$(id)"]` prints those words literally; commands are never retried, and a timed-out, cancelled, or interrupted host may or may not have run the command, which the result says; output is combined stdout and stderr, capped at 64 KiB per host and stripped of terminal escape sequences; and arguments are visible to other operators and on the remote process list, so do not put secrets in them. Hosts whose address or port changed after you submitted are refused rather than contacted.
+Poll for status and bounded target results:
 
+```sh
+curl --silent --show-error --fail-with-body \
+  "$API_URL/api/v1/managed/operations/$OPERATION_ID" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" | jq .
+```
+
+Request cancellation when needed:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/managed/operations/$OPERATION_ID/cancel" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" | jq .
+```
+
+Cancellation is a request; the final state is recorded by the worker. A command may already have started remotely, so cancellation does not prove that it had no effect. If a worker loses control after dispatch, the operation is marked interrupted rather than automatically replayed. Operation output and arguments are sensitive operational data; do not put credentials in argv. The CLI currently does not expose managed Operation submit/watch/cancel commands.
+
+The managed SSH connector accepts program argv without invoking a remote shell, bounds connection/execution concurrency and timeouts, enforces pinned host keys and configured egress policy, and bounds captured output. Do not interpret a successful Operation as proof of a broader machine configuration state; use a Host controller for desired-state convergence.
+
+## 6. Use the legacy Run API for selector-based commands
+
+The older `/api/v1/runs` workflow remains implemented for legacy Hosts. It supports target preview, selector or explicit targets, a target hash precondition, dry-run, asynchronous execution, polling and cancellation. It is separate from managed Operations and does not convert legacy Hosts into managed resources.
+
+Execution is disabled by default. An operator must set these variables in the API process environment before starting (or restarting) the API, and configure allowed executable names/paths:
+
+```sh
+export MACHINARCHY_EXECUTION_ENABLED=true
+export MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS=uptime,/usr/bin/df,systemctl
+```
+
+Preview a target rule:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/fleet/targets/preview" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data '{"selector":"environment=production,role=web"}' | jq .
+```
+
+Use the returned `targetsHash` when submitting so a changed target set is rejected for review:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --request POST "$API_URL/api/v1/runs" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data '{"argv":["systemctl","status","nginx"],"selector":"environment=production,role=web","expectTargetsHash":"<copy-preview-hash>","timeoutSeconds":30,"concurrency":5}' | jq .
+```
+
+The accepted response is `202` with a Run and `Location: /api/v1/runs/{id}`. `dryRun:true` returns a plan with `200` and does not persist or contact a Host. Poll with `GET /api/v1/runs/{id}` and cancel with `POST /api/v1/runs/{id}/cancel`. Commands are argument arrays, not shell strings; there is no shell expansion. Runs are not automatically retried. The API currently returns combined stdout/stderr with a 64 KiB per-host cap and removes terminal escape sequences. Do not put secrets in arguments: arguments may be visible to authorized operators and on the remote process list.
+
+## 7. Publish and inspect runtime configuration
+
+Runtime configuration is global, persisted as immutable revisions, and managed separately from bootstrap-only settings. The API supports validation, history, status, compare-and-swap publication and rollback. The CLI commands `runtime-config get|history|status|validate|publish|rollback` communicate through the API.
+
+Read the active configuration and process-application status:
+
+```sh
+go run ./cmd/machinarchy runtime-config get -o json
+go run ./cmd/machinarchy runtime-config status
+go run ./cmd/machinarchy runtime-config history --before 10
+```
+
+Prepare a configuration JSON document using the schema returned by `runtime-config get`; validate it before publication. Runtime fields evolve with the typed schema, so do not copy an unverified sample into production:
+
+```sh
+go run ./cmd/machinarchy runtime-config validate --file runtime-config.json
+go run ./cmd/machinarchy runtime-config publish \
+  --expected-revision 12 --change-note 'Adjust managed SSH policy' \
+  --file runtime-config.json
+```
+
+`--expected-revision` is required and prevents overwriting a concurrent update. Publication may return `201` when applied or `202` with application pending. Processes retain their last known good snapshot if applying a new revision fails; check status for per-process applied revisions and failures. Rollback creates a new revision copied from an earlier revision rather than mutating history:
+
+```sh
+go run ./cmd/machinarchy runtime-config rollback \
+  --expected-revision 13 --target-revision 12 \
+  --change-note 'Restore previous configuration'
+```
+
+Classifications indicate whether settings are hot-reloadable, trigger reconciliation, or require restart. Bootstrap settings such as database connection and encryption key provisioning are not changed through runtime configuration.
+
+## 8. Rotate and retire an SSH Secret
+
+List secret metadata and version metadata without retrieving secret plaintext:
+
+```sh
+go run ./cmd/machinarchy secret list
+go run ./cmd/machinarchy secret versions "$SECRET_ID"
+```
+
+Add a new version from protected stdin. The command uses the expected current version for optimistic concurrency:
+
+```sh
+export NEW_SSH_KEY_FILE="$HOME/.ssh/id_ed25519_rotation"
+ROTATED_SECRET=$(go run ./cmd/machinarchy secret rotate "$SECRET_ID" \
+  --expected-version "$SECRET_VERSION" --value-stdin < "$NEW_SSH_KEY_FILE"
+)
+printf '%s\n' "$ROTATED_SECRET" | jq '{id, currentVersion}'
+export NEW_SECRET_VERSION=$(printf '%s' "$ROTATED_SECRET" | jq -r '.currentVersion')
+```
+
+Rotation does not rewrite an Access Profile's pinned SecretRef. To adopt the new credential, publish a new Access Profile revision referring to the new secret version; the Host reconciler then checks the latest profile. Profile revision updates create durable notifications for Hosts that reference the Profile.
+
+Update the profile with its current revision as the optimistic concurrency value:
+
+```sh
+PROFILE_UPDATE=$(curl --silent --show-error --fail-with-body \
+  --request PUT "$API_URL/api/v1/managed/access-profiles/$PROFILE_ID" \
+  --header "Authorization: Bearer $OWNER_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data "$(jq -n \
+    --arg secretId "$SECRET_ID" \
+    --argjson expectedRevision "$PROFILE_REVISION" \
+    --argjson secretVersion "$NEW_SECRET_VERSION" \
+    '{expectedRevision:$expectedRevision,
+      spec:{connectorKind:"ssh",username:"deploy",authenticationMethod:"private-key",
+        credential:{id:$secretId,version:$secretVersion},enabled:true}}')")
+printf '%s\n' "$PROFILE_UPDATE" | jq .
+export PROFILE_REVISION=$(printf '%s' "$PROFILE_UPDATE" | jq -r '.revision')
+```
+
+The current Profile API exposes create and update, but not list, get, history, or delete routes. An update returns the newly created immutable revision. To disable a Profile, update it with `enabled:false` and the current expected revision; the current revision is then unavailable for new authorized use. `machinarchy secret delete ID` retires the entire Secret, including all its versions. Use it only when no Profile or operation can still require that Secret. Retired ciphertext follows the configured retention behavior. Secret values never appear in normal API responses, events, configuration history, logs, or CLI output.
+
+## 9. Remove a managed Host
+
+Managed Host deletion is requested by updating desired presence to `Absent` with the current resource revision and generation. The Control Manager then cancels active Operations targeting the Host and removes the record after they reach terminal states. The current managed HTTP surface exposes `PUT /api/v1/managed/hosts/{id}` for desired-state updates; it does not expose a dedicated `DELETE` route.
+
+Read current metadata first, then submit the required concurrency values and an absent desired state while retaining the access binding fields:
+
+```sh
+HOST_STATE=$(curl --silent --show-error --fail-with-body \
+  "$API_URL/api/v1/managed/hosts/$MANAGED_HOST_ID" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN")
+printf '%s\n' "$HOST_STATE" | jq '{metadata,spec,status}'
+```
+
+The update request requires the full HostSpec:
+
+```sh
+jq -n \
+  --arg profileId "$PROFILE_ID" \
+  --arg fingerprint "$SSH_HOST_FINGERPRINT" \
+  --arg endpoint "$HOST_IP:$SSH_PORT" \
+  --argjson revision "$(printf '%s' "$HOST_STATE" | jq -r '.metadata.revision')" \
+  --argjson generation "$(printf '%s' "$HOST_STATE" | jq -r '.metadata.generation')" \
+  '{revision:$revision,generation:$generation,
+    spec:{presence:"Absent",accessProfileId:$profileId,
+      accessTarget:{endpoint:$endpoint,trust:[$fingerprint]}}}' |
+curl --silent --show-error --fail-with-body \
+  --request PUT "$API_URL/api/v1/managed/hosts/$MANAGED_HOST_ID" \
+  --header "Authorization: Bearer $OPERATOR_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data-binary @-
+```
+
+The current handler responds with `204 No Content` when the desired-state update is accepted. A subsequent `GET` may return not found after reconciliation deletes the record. Legacy Host deletion is a separate synchronous `DELETE /api/v1/hosts/{id}` workflow.
+
+## Implemented boundaries and limitations
+
+- The API is the external boundary; the CLI uses HTTP and does not access stores, SSH, controllers, or workers directly.
+- Legacy Hosts and Runs remain supported alongside managed Hosts, Access Profiles, and Operations. Their routes and resource semantics are distinct.
+- Managed Host reconciliation verifies SSH reachability/authentication and records observed status; it does not apply machine configuration.
+- The managed API currently has no list endpoint for managed Hosts, Access Profiles, or Operations, and the CLI has no managed resource/Operation commands.
+- The legacy Host list is unpaginated; the legacy Run list uses `before_id` and `limit`, not the target uniform cursor envelope.
+- Managed operation execution and cross-replica behavior should be deployed with PostgreSQL for distributed Control Manager instances. SQLite targets a single-node deployment.
+- PostgreSQL behavior and external secret-key recovery must be verified for the deployment. See [database testing guidance](../../CONTRIBUTING.md) and [secret key operations](../architecture/phase-6-config-secrets.md).
+
+These examples describe implemented contracts as present in the repository; consult the API's `/openapi.json` and command `--help` output on the deployed version before automating against a different release.

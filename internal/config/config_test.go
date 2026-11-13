@@ -291,14 +291,14 @@ func TestLoadBootstrapAdmin(t *testing.T) {
 }
 
 func TestLoadSSHTargetPolicy(t *testing.T) {
-	t.Run("defaults allow private networks only", func(t *testing.T) {
+	t.Run("defaults deny private and loopback networks", func(t *testing.T) {
 		setCommonEnv(t)
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
 		policy := cfg.SSHTargetPolicy
-		if !policy.AllowPrivate || policy.AllowLoopback || len(policy.Allow) != 0 || len(policy.Deny) != 0 {
+		if policy.AllowPrivate || policy.AllowLoopback || len(policy.Allow) != 0 || len(policy.Deny) != 0 || len(policy.AllowedPorts) != 0 {
 			t.Fatalf("unexpected default policy: %+v", policy)
 		}
 	})
@@ -309,12 +309,13 @@ func TestLoadSSHTargetPolicy(t *testing.T) {
 		t.Setenv("MACHINARCHY_SSH_ALLOW_LOOPBACK", "true")
 		t.Setenv("MACHINARCHY_SSH_ALLOWED_CIDRS", "10.20.0.0/16, 192.0.2.7")
 		t.Setenv("MACHINARCHY_SSH_DENIED_CIDRS", "10.20.99.0/24")
+		t.Setenv("MACHINARCHY_SSH_ALLOWED_PORTS", "22,2222")
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
 		policy := cfg.SSHTargetPolicy
-		if policy.AllowPrivate || !policy.AllowLoopback || len(policy.Allow) != 2 || len(policy.Deny) != 1 {
+		if policy.AllowPrivate || !policy.AllowLoopback || len(policy.Allow) != 2 || len(policy.Deny) != 1 || len(policy.AllowedPorts) != 2 || policy.AllowedPorts[0] != 22 || policy.AllowedPorts[1] != 2222 {
 			t.Fatalf("unexpected policy: %+v", policy)
 		}
 	})
@@ -325,6 +326,7 @@ func TestLoadSSHTargetPolicy(t *testing.T) {
 			"MACHINARCHY_SSH_ALLOW_LOOPBACK": "sometimes",
 			"MACHINARCHY_SSH_ALLOWED_CIDRS":  "10.0.0.0/8,banana",
 			"MACHINARCHY_SSH_DENIED_CIDRS":   "300.1.1.1/8",
+			"MACHINARCHY_SSH_ALLOWED_PORTS":  "22,65536",
 		} {
 			t.Run(key, func(t *testing.T) {
 				setCommonEnv(t)
