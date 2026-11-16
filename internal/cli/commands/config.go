@@ -1,4 +1,3 @@
-// Package commands provides configuration parsing and validation for the application.
 package commands
 
 import (
@@ -8,10 +7,12 @@ import (
 	"text/tabwriter"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/config"
 	"github.com/spf13/cobra"
 )
 
-const maxCredentialInput = 64 << 10
+const maxCredentialInput = config.MaxTokenBytes
 
 // NewConfigCommand registers configuration and context management commands.
 func NewConfigCommand(factory *cli.Factory) *cobra.Command {
@@ -39,7 +40,7 @@ func newCurrentContextCommand(factory *cli.Factory) *cobra.Command {
 		RunE: func(command *cobra.Command, _ []string) error {
 			name := factory.Config().CurrentContext()
 			if name == "" {
-				return fmt.Errorf("no current context is selected")
+				return clierr.Usagef("no current context is selected")
 			}
 			_, err := fmt.Fprintln(command.OutOrStdout(), name)
 			return err
@@ -96,7 +97,7 @@ func newSetClusterCommand(factory *cli.Factory) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if strings.TrimSpace(server) == "" {
-				return fmt.Errorf("--server is required")
+				return clierr.Usagef("--server is required")
 			}
 			if err := factory.Config().SetCluster(args[0], server); err != nil {
 				return err
@@ -119,7 +120,7 @@ func newSetCredentialsCommand(factory *cli.Factory) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if tokenStdin == (strings.TrimSpace(token) != "") {
-				return fmt.Errorf("provide exactly one of --token or --token-stdin")
+				return clierr.Usagef("provide exactly one of --token or --token-stdin")
 			}
 			if tokenStdin {
 				data, err := io.ReadAll(io.LimitReader(command.InOrStdin(), maxCredentialInput+1))
@@ -127,7 +128,7 @@ func newSetCredentialsCommand(factory *cli.Factory) *cobra.Command {
 					return fmt.Errorf("read credential from stdin: %w", err)
 				}
 				if len(data) > maxCredentialInput {
-					return fmt.Errorf("credential input exceeds %d bytes", maxCredentialInput)
+					return clierr.Usagef("credential input exceeds %d bytes", maxCredentialInput)
 				}
 				token = string(data)
 			}
@@ -161,7 +162,7 @@ func newSetContextCommand(factory *cli.Factory) *cobra.Command {
 		},
 		RunE: func(command *cobra.Command, args []string) error {
 			if strings.TrimSpace(cluster) == "" || strings.TrimSpace(user) == "" {
-				return fmt.Errorf("--cluster and --user are required; example: machinarchy config set-context %s --cluster local --user local", args[0])
+				return clierr.Usagef("--cluster and --user are required; example: machinarchy config set-context %s --cluster local --user local", args[0])
 			}
 			if err := factory.Config().SetContext(args[0], cluster, user, environment); err != nil {
 				return err

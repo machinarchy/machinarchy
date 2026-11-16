@@ -1,5 +1,25 @@
 # ChangeLogAI
 
+## 2026-11-14 — CLI foundation and API client (Phase 2)
+
+### Changes in this update
+
+- Added `internal/cli/clierr`: classified CLI errors with stable exit codes (0 ok, 1 failure, 2 usage/config/input, 3 auth, 4 API/network/timeout, 6 not found, 7 conflict, 130 interrupted; 5 reserved for wait deadlines) and remediation hints.
+- Reworked `internal/cli/api/client.go` around one request path: bearer authentication, `Accept`/`User-Agent` headers applied in a single place; configurable per-request timeout (`--request-timeout`, default 30s); caller-context cancellation; response bodies always closed; bounded success and error bodies; escaped path segments preserved (an identifier containing `/` can no longer change the route; dot and empty segments are rejected); redirects are no longer followed so the token cannot be replayed elsewhere; 202/204 empty bodies handled; token validated before use. Resource methods and the `Client`/`ManagementClient` interfaces are unchanged.
+- Added `api.APIError` (status, sanitised message, request ID, `Retry-After`, structured fields) with status-to-exit-code mapping and hints; transport failures now report the cause without repeating the request URL.
+- `internal/cli/config`: the YAML document is parsed directly (Viper now only resolves flag/environment overrides), so context, cluster and user names keep their exact case and dots; config errors are classified and carry hints; added request-timeout, quiet, no-headers and no-input settings, an explicit-output accessor, `LoadSettings` (no file read), `ValidateToken`, size-bounded reads, and a stderr warning (never fatal) when a config file containing tokens is readable by other users. `--yes` is never read from the environment or config file. Undocumented top-level preference keys in the YAML file (`output`, `server`, ...) are no longer honoured; the documented format is unchanged.
+- `internal/cli/output`: added a shared `Printer` (table, JSON, YAML, `--no-headers`, `--quiet`); `PrintHosts`/`PrintHost` remain and produce identical output.
+- `internal/cli/factory.go`: `Printer`, `OutputFormat` (per-command default), `Confirm`/`RequireConfirmation` (never prompts without a terminal or with `--no-input`), config warnings on stderr.
+- `internal/cli/root.go`, `run.go`, `cmd/machinarchy/main.go`: added global flags `--server`, `--request-timeout`, `--quiet/-q`, `--no-headers`, `--no-input`, `--yes/-y`; `--output` now defaults to "per command" instead of a fixed `table` (existing behaviour preserved); global settings are validated before any command runs; duplicate or reserved command names panic at registration; `help`, `completion`, `version` and group help no longer read the config file; command groups are strict: an unknown subcommand (for example `secret lst`) now exits 2 instead of printing help and exiting 0; `cli.Run` owns error presentation (`Error:` / `Hint:`), maps errors to exit codes, and Ctrl-C now exits 130 (previously 0).
+- Commands: `get hosts` uses the shared printer and classified errors (host/environment not found = 6, ambiguous = 2); `config` and `runtime-config`/`secret` input errors are usage errors (2); `writeJSON` tolerates an empty body; added `machinarchy version`.
+- Tests: new unit tests for clierr, the API client (headers, serialization, error classification, redirects, cancellation, timeouts, body closure, size limits, path escaping), config (names, precedence, permissions, errors), output, factory/confirmation, root/exit codes, command registration/help/compatibility, `get hosts`, `config` end to end, and management commands against a real HTTP test server; plus an ADR-035 guard test that fails if CLI code imports application, database or transport packages or uses `net/http` outside `internal/cli/api`.
+- Docs: `docs/cli/configuration.md`, `commands.md`, `troubleshooting.md` updated (global flags, precedence, environment variables, exit codes, command groups, `version`, config-file security). Corrected the documented default config path to `.machinarchy/config.yaml` to match the code.
+
+### Validation
+
+- **Not compiled and not run.** The authoring environment had no Go toolchain and no network access, so `go build`, `go vet`, `gofmt`, `golangci-lint` and `go test` were NOT executed. All code and tests were checked by reading and by a delimiter-balance script only; compile and test failures are possible and must be checked with `go build ./... && go test ./internal/cli/... ./cmd/...` before merging.
+- Behaviour that depends on Cobra or Viper internals (group typo handling, flag/environment precedence, `help` skipping the config file) was reasoned from their documented behaviour, not observed.
+
 ## 2026-11-12 — Refresh implemented API and CLI use cases
 
 ### Changes in this update

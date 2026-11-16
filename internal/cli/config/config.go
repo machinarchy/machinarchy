@@ -1,67 +1,102 @@
 // Package config handles the CLI's kubeconfig-style contexts independently of
 // the server's runtime configuration.
+//
+// The on-disk document is parsed directly as YAML so that context, cluster,
+// and user names are preserved exactly (Viper would case-fold map keys and
+// split them on dots). Viper is used only to resolve flag and environment
+// overrides with the documented precedence: flag, environment, config file,
+// default.
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 const (
 	defaultAPIVersion = "machinarchy.io/v1"
 	maxConfigSize     = 1 << 20
+
+	// MaxTokenBytes is the largest accepted API token.
+	MaxTokenBytes = 64 << 10
+
+	// DefaultRequestTimeout bounds one API request when no timeout is set.
+	DefaultRequestTimeout = 30 * time.Second
+
+	envPrefix = "MACHINARCHY_CLI"
+
+	// flagYes is deliberately never bound to the environment or the config
+	// file: a confirmation bypass must be an explicit per-invocation choice.
+	flagYes = "yes"
+
+	setupHint = "Set up an API endpoint, token, and context first:\n" +
+		"  machinarchy config set-cluster local --server http://localhost:8080\n" +
+		"  printf '%s' \"$MACHINARCHY_USER_TOKEN\" | machinarchy config set-credentials local --token-stdin\n" +
+		"  machinarchy config set-context local --cluster local --user local\n" +
+		"  machinarchy config use-context local"
+
+	fileHint = "Fix or remove the file, or point --config (or MACHINARCHY_CONFIG) at another file."
 )
 
 // File is the on-disk, kubeconfig-style CLI configuration.
 type File struct {
-	APIVersion     string             `mapstructure:"apiVersion" yaml:"apiVersion"`
-	CurrentContext string             `mapstructure:"current-context" yaml:"current-context"`
-	Contexts       map[string]Context `mapstructure:"contexts" yaml:"contexts"`
-	Clusters       map[string]Cluster `mapstructure:"clusters" yaml:"clusters"`
-	Users          map[string]User    `mapstructure:"users" yaml:"users"`
+	APIVersion     string             `yaml:"apiVersion"`
+	CurrentContext string             `yaml:"current-context"`
+	Contexts       map[string]Context `yaml:"contexts"`
+	Clusters       map[string]Cluster `yaml:"clusters"`
+	Users          map[string]User    `yaml:"users"`
 }
 
 // Context selects a cluster, credential, and optional Machinarchy environment.
 type Context struct {
-	Cluster     string `mapstructure:"cluster" yaml:"cluster"`
-	User        string `mapstructure:"user" yaml:"user"`
-	Environment string `mapstructure:"environment" yaml:"environment,omitempty"`
+	Cluster     string `yaml:"cluster"`
+	User        string `yaml:"user"`
+	Environment string `yaml:"environment,omitempty"`
 }
 
 // Cluster stores the API server base URL.
 type Cluster struct {
-	Server string `mapstructure:"server" yaml:"server"`
+	Server string `yaml:"server"`
 }
 
 // User stores an API bearer token.
 type User struct {
-	Token string `mapstructure:"token" yaml:"token"`
+	Token string `yaml:"token"`
 }
 
 // Target is the resolved endpoint and credential for a single CLI operation.
 type Target struct {
-	ContextName string
-	Server      string
-	Token       string
-	Environment string
+	ContextName    string
+	Server         string
+	Token          string
+	Environment    string
+	RequestTimeout time.Duration
 }
 
-// Store holds one immutable-in-use Viper configuration and its typed document.
-// A command updates and saves it only through the methods below.
+// Store holds the typed config document and the flag/environment overrides.
+// A command updates and saves the document only through the methods below.
 type Store struct {
-	path string
-	v    *viper.Viper
-	doc  File
+	path     string
+	v        *viper.Viper
+	doc      File
+	warnings []string
 }
 
 // ResolvePath applies precedence: --config, MACHINARCHY_CONFIG, then the
@@ -75,47 +110,118 @@ func ResolvePath(explicit string) (string, error) {
 	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve user config directory: %w", err)
+		return "", clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("resolve user config directory: %w", err),
+			"Set MACHINARCHY_CONFIG or pass --config.")
 	}
 	return filepath.Join(configDir, ".machinarchy", "config.yaml"), nil
 }
 
 // Load reads the YAML config, then binds environment variables and command
-// flags using Viper's normal precedence rules.
+// flags. A missing file is not an error; a damaged one is.
 func Load(path string, flags *pflag.FlagSet) (*Store, error) {
 	resolvedPath, err := ResolvePath(path)
 	if err != nil {
 		return nil, err
 	}
 
+	doc, warnings, err := readDocument(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := newViper(flags)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Store{path: resolvedPath, v: v, doc: doc, warnings: warnings}, nil
+}
+
+// LoadSettings binds only flags and environment variables and reads no file.
+// Commands that must work with a missing or damaged config file (help,
+// version, completion) use it so global flags still apply.
+func LoadSettings(flags *pflag.FlagSet) (*Store, error) {
+	v, err := newViper(flags)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Store{v: v, doc: newDocument()}, nil
+}
+
+func newViper(flags *pflag.FlagSet) (*viper.Viper, error) {
 	v := viper.New()
-	v.SetConfigFile(resolvedPath)
-	v.SetConfigType("yaml")
-	v.SetEnvPrefix("MACHINARCHY_CLI")
+	v.SetEnvPrefix(envPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	v.AutomaticEnv()
 
-	if err := v.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("read CLI config %q: %w", resolvedPath, err)
-		}
-	}
-	if flags != nil {
-		if err := v.BindPFlags(flags); err != nil {
-			return nil, fmt.Errorf("bind CLI flags: %w", err)
-		}
+	if flags == nil {
+		return v, nil
 	}
 
-	doc := File{
+	var bindErr error
+	flags.VisitAll(func(flag *pflag.Flag) {
+		if bindErr != nil || flag.Name == flagYes {
+			return
+		}
+		if err := v.BindPFlag(flag.Name, flag); err != nil {
+			bindErr = fmt.Errorf("bind CLI flag --%s: %w", flag.Name, err)
+		}
+	})
+
+	return v, bindErr
+}
+
+func newDocument() File {
+	return File{
 		APIVersion: defaultAPIVersion,
 		Contexts:   make(map[string]Context),
 		Clusters:   make(map[string]Cluster),
 		Users:      make(map[string]User),
 	}
-	if err := v.Unmarshal(&doc); err != nil {
-		return nil, fmt.Errorf("decode CLI config %q: %w", resolvedPath, err)
+}
+
+func readDocument(path string) (File, []string, error) {
+	doc := newDocument()
+
+	file, err := os.Open(path) // #nosec G304 -- path is the operator-selected CLI config file.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return doc, nil, nil
+		}
+		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
 	}
+	defer utils.CloseWithLog(file, "CLI config file")
+
+	info, err := file.Stat()
+	if err != nil {
+		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
+	}
+	if info.IsDir() {
+		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("CLI config %q is a directory", path), fileHint)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigSize+1))
+	if err != nil {
+		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
+	}
+	if len(data) > maxConfigSize {
+		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("CLI config %q exceeds the maximum supported size", path), fileHint)
+	}
+
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return File{}, nil, clierr.Wrap(clierr.ExitUsage,
+				fmt.Errorf("parse CLI config %q: %w", path, err), fileHint)
+		}
+	}
+
 	if doc.APIVersion == "" {
 		doc.APIVersion = defaultAPIVersion
 	}
@@ -129,33 +235,62 @@ func Load(path string, flags *pflag.FlagSet) (*Store, error) {
 		doc.Users = make(map[string]User)
 	}
 
-	return &Store{path: resolvedPath, v: v, doc: doc}, nil
+	return doc, permissionWarnings(path, info, doc), nil
+}
+
+// permissionWarnings reports a config file that stores tokens but is readable
+// by other users. It never fails the command, so existing setups keep working.
+func permissionWarnings(path string, info os.FileInfo, doc File) []string {
+	if runtime.GOOS == "windows" || info.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+
+	for _, user := range doc.Users {
+		if user.Token != "" {
+			return []string{fmt.Sprintf(
+				"CLI config %s is readable by other users (mode %04o) and contains API tokens; restrict it with: chmod 600 %s",
+				path, info.Mode().Perm(), path)}
+		}
+	}
+
+	return nil
+}
+
+// Warnings returns non-fatal problems found while loading the config file.
+func (s *Store) Warnings() []string {
+	if s == nil {
+		return nil
+	}
+
+	return s.warnings
 }
 
 // Resolve combines the selected context with explicit flags and environment
 // overrides. The returned token is never included in error messages.
-// Resolve returns the target selected by flags, environment, or current context.
 func (s *Store) Resolve() (Target, error) {
 	if s == nil || s.v == nil {
 		return Target{}, errors.New("CLI config is not loaded")
 	}
 
-	contextName := strings.TrimSpace(s.v.GetString("context"))
+	contextName := s.ContextName()
 	if contextName == "" {
-		contextName = strings.TrimSpace(s.doc.CurrentContext)
+		return Target{}, clierr.Wrap(clierr.ExitUsage,
+			errors.New("no active context is configured"), setupHint)
 	}
-	context, ok := s.doc.Contexts[contextName]
-	if !ok || contextName == "" {
-		return Target{}, errors.New("no active context is configured\n\nSet up an API endpoint, token, and context first:\n  machinarchy config set-cluster local --server http://localhost:8080\n  printf '%s' \"$MACHINARCHY_USER_TOKEN\" | machinarchy config set-credentials local --token-stdin\n  machinarchy config set-context local --cluster local --user local\n  machinarchy config use-context local")
+	selected, ok := s.doc.Contexts[contextName]
+	if !ok {
+		return Target{}, clierr.Wrap(clierr.ExitUsage,
+			fmt.Errorf("context %q does not exist", contextName),
+			"List configured contexts with 'machinarchy config get-contexts'.\n\n"+setupHint)
 	}
 
-	cluster, clusterOK := s.doc.Clusters[context.Cluster]
+	cluster, clusterOK := s.doc.Clusters[selected.Cluster]
 	if !clusterOK {
-		return Target{}, fmt.Errorf("context %q references unknown cluster %q", contextName, context.Cluster)
+		return Target{}, clierr.Usagef("context %q references unknown cluster %q", contextName, selected.Cluster)
 	}
-	user, userOK := s.doc.Users[context.User]
+	user, userOK := s.doc.Users[selected.User]
 	if !userOK {
-		return Target{}, fmt.Errorf("context %q references unknown user %q", contextName, context.User)
+		return Target{}, clierr.Usagef("context %q references unknown user %q", contextName, selected.User)
 	}
 
 	server := strings.TrimSpace(s.v.GetString("server"))
@@ -165,31 +300,40 @@ func (s *Store) Resolve() (Target, error) {
 	if err := ValidateServer(server); err != nil {
 		return Target{}, err
 	}
+
 	token := strings.TrimSpace(s.v.GetString("token"))
 	if token == "" {
 		token = user.Token
 	}
 	if token == "" {
-		return Target{}, errors.New("no API token configured; set credentials or MACHINARCHY_CLI_TOKEN")
+		return Target{}, clierr.Wrap(clierr.ExitUsage,
+			errors.New("no API token configured; set credentials or MACHINARCHY_CLI_TOKEN"),
+			"Store a token with: printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin")
 	}
-	if len(token) > 64<<10 || strings.ContainsAny(token, " \t\r\n") {
-		return Target{}, errors.New("API token is invalid; tokens must not contain whitespace or exceed 64 KiB")
+	if err := ValidateToken(token); err != nil {
+		return Target{}, err
 	}
+
+	timeout, err := s.RequestTimeout()
+	if err != nil {
+		return Target{}, err
+	}
+
 	environment := strings.TrimSpace(s.v.GetString("env"))
 	if environment == "" {
-		environment = context.Environment
+		environment = selected.Environment
 	}
 
 	return Target{
-		ContextName: contextName,
-		Server:      strings.TrimRight(server, "/"),
-		Token:       token,
-		Environment: environment,
+		ContextName:    contextName,
+		Server:         strings.TrimRight(server, "/"),
+		Token:          token,
+		Environment:    environment,
+		RequestTimeout: timeout,
 	}, nil
 }
 
-// ContextName returns the effective context, including a --context override.
-// ContextName returns the active context name, including any command override.
+// ContextName returns the active context name, including any --context override.
 func (s *Store) ContextName() string {
 	if s == nil || s.v == nil {
 		return ""
@@ -200,8 +344,7 @@ func (s *Store) ContextName() string {
 	return s.doc.CurrentContext
 }
 
-// Environment returns the effective environment filter, including --env.
-// Environment returns the active Machinarchy environment filter.
+// Environment returns the active Machinarchy environment filter, including --env.
 func (s *Store) Environment() string {
 	if s == nil || s.v == nil {
 		return ""
@@ -209,27 +352,67 @@ func (s *Store) Environment() string {
 	if environment := strings.TrimSpace(s.v.GetString("env")); environment != "" {
 		return environment
 	}
-	if context, ok := s.doc.Contexts[s.ContextName()]; ok {
-		return context.Environment
+	if selected, ok := s.doc.Contexts[s.ContextName()]; ok {
+		return selected.Environment
 	}
 	return ""
 }
 
-// OutputFormat returns the selected resource output format.
+// OutputFormat returns the selected resource output format, defaulting to
+// "table". Use OutputExplicit to learn whether the user chose one.
 func (s *Store) OutputFormat() string {
+	if format := s.OutputExplicit(); format != "" {
+		return format
+	}
+	return "table"
+}
+
+// OutputExplicit returns the output format chosen by flag or environment, or
+// an empty string when the command's own default should apply.
+func (s *Store) OutputExplicit() string {
 	if s == nil || s.v == nil {
-		return "table"
+		return ""
 	}
-	format := strings.ToLower(strings.TrimSpace(s.v.GetString("output")))
-	if format == "" {
-		return "table"
-	}
-	return format
+	return strings.ToLower(strings.TrimSpace(s.v.GetString("output")))
 }
 
 // Verbose reports whether debug logging is enabled.
 func (s *Store) Verbose() bool {
 	return s != nil && s.v != nil && s.v.GetBool("verbose")
+}
+
+// Quiet reports whether status output should be suppressed.
+func (s *Store) Quiet() bool {
+	return s != nil && s.v != nil && s.v.GetBool("quiet")
+}
+
+// NoHeaders reports whether table headers should be omitted.
+func (s *Store) NoHeaders() bool {
+	return s != nil && s.v != nil && s.v.GetBool("no-headers")
+}
+
+// NoInput reports whether interactive prompts are disabled.
+func (s *Store) NoInput() bool {
+	return s != nil && s.v != nil && s.v.GetBool("no-input")
+}
+
+// RequestTimeout returns the per-request HTTP timeout.
+func (s *Store) RequestTimeout() (time.Duration, error) {
+	if s == nil || s.v == nil {
+		return DefaultRequestTimeout, nil
+	}
+
+	raw := strings.TrimSpace(s.v.GetString("request-timeout"))
+	if raw == "" {
+		return DefaultRequestTimeout, nil
+	}
+
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return 0, clierr.Usagef("invalid request timeout %q; use a positive duration such as 10s or 2m", raw)
+	}
+
+	return timeout, nil
 }
 
 // ContextNames returns configured context names in stable sorted order.
@@ -244,8 +427,8 @@ func (s *Store) ContextNames() []string {
 
 // GetContext returns a named context if it exists.
 func (s *Store) GetContext(name string) (Context, bool) {
-	context, ok := s.doc.Contexts[name]
-	return context, ok
+	selected, ok := s.doc.Contexts[name]
+	return selected, ok
 }
 
 // CurrentContext returns the persisted current context, ignoring one-command overrides.
@@ -272,7 +455,7 @@ func (s *Store) User(name string) (User, bool) {
 func (s *Store) SetCluster(name, server string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return errors.New("cluster name is required")
+		return clierr.Usagef("cluster name is required")
 	}
 	if err := ValidateServer(server); err != nil {
 		return err
@@ -286,10 +469,10 @@ func (s *Store) SetUser(name, token string) error {
 	name = strings.TrimSpace(name)
 	token = strings.TrimSpace(token)
 	if name == "" || token == "" {
-		return errors.New("credential name and non-empty token are required")
+		return clierr.Usagef("credential name and non-empty token are required")
 	}
-	if len(token) > 64<<10 || strings.ContainsAny(token, " \t\r\n") {
-		return errors.New("API token is invalid; tokens must not contain whitespace or exceed 64 KiB")
+	if err := ValidateToken(token); err != nil {
+		return err
 	}
 	s.doc.Users[name] = User{Token: token}
 	return s.save()
@@ -302,13 +485,13 @@ func (s *Store) SetContext(name, cluster, user, environment string) error {
 	user = strings.TrimSpace(user)
 	environment = strings.TrimSpace(environment)
 	if name == "" || cluster == "" || user == "" {
-		return errors.New("context name, cluster, and user are required")
+		return clierr.Usagef("context name, cluster, and user are required")
 	}
 	if _, ok := s.doc.Clusters[cluster]; !ok {
-		return fmt.Errorf("cluster %q does not exist; create it with 'machinarchy config set-cluster'", cluster)
+		return clierr.Usagef("cluster %q does not exist; create it with 'machinarchy config set-cluster'", cluster)
 	}
 	if _, ok := s.doc.Users[user]; !ok {
-		return fmt.Errorf("user %q does not exist; create it with 'machinarchy config set-credentials'", user)
+		return clierr.Usagef("user %q does not exist; create it with 'machinarchy config set-credentials'", user)
 	}
 	s.doc.Contexts[name] = Context{Cluster: cluster, User: user, Environment: environment}
 	return s.save()
@@ -318,7 +501,7 @@ func (s *Store) SetContext(name, cluster, user, environment string) error {
 func (s *Store) UseContext(name string) error {
 	name = strings.TrimSpace(name)
 	if _, ok := s.doc.Contexts[name]; !ok {
-		return fmt.Errorf("context %q does not exist", name)
+		return clierr.Usagef("context %q does not exist", name)
 	}
 	s.doc.CurrentContext = name
 	return s.save()
@@ -330,7 +513,26 @@ func ValidateServer(server string) error {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("API server must be an absolute http:// or https:// URL without credentials, query, or fragment")
+		return clierr.Usagef("API server must be an absolute http:// or https:// URL without credentials, query, or fragment")
+	}
+	return nil
+}
+
+// ValidateToken rejects empty, oversized, or whitespace/control-character
+// tokens. A token that passes is safe to place in an Authorization header.
+func ValidateToken(token string) error {
+	if token == "" {
+		return clierr.Usagef("API token is required")
+	}
+	invalid := len(token) > MaxTokenBytes
+	for _, r := range token {
+		if r <= ' ' || r == 0x7f {
+			invalid = true
+			break
+		}
+	}
+	if invalid {
+		return clierr.Usagef("API token is invalid; tokens must not contain whitespace or exceed 64 KiB")
 	}
 	return nil
 }
@@ -338,6 +540,9 @@ func ValidateServer(server string) error {
 func (s *Store) save() error {
 	if s == nil {
 		return errors.New("CLI config is not loaded")
+	}
+	if s.path == "" {
+		return errors.New("CLI config file path is not set")
 	}
 	data, err := yaml.Marshal(s.doc)
 	if err != nil {

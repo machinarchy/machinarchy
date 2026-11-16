@@ -17,7 +17,7 @@ To use a separate file, pass the same `--config PATH` to each command or set `MA
 
 ## Unauthorized response
 
-An HTTP 401 usually means the token is missing, expired, or belongs to a different API deployment. Log in to the intended deployment, update the matching named credentials, and confirm that the context selects that user and cluster:
+An HTTP 401 (exit code 3) usually means the token is missing, expired, or belongs to a different API deployment. Session tokens expire; API tokens can be revoked. Log in to the intended deployment, update the matching named credentials, and confirm that the context selects that user and cluster:
 
 ```sh
 go run ./cmd/machinarchy config get-contexts
@@ -25,6 +25,8 @@ go run ./cmd/machinarchy --context local get hosts
 ```
 
 Do not paste tokens into issue reports or logs.
+
+An HTTP 403 (also exit code 3) means the credential is valid but not permitted. Commands that manage runtime configuration or secrets need a human owner session; API tokens (`mch_pat_...`) are refused for them.
 
 ## Connection errors
 
@@ -35,7 +37,9 @@ curl -i http://localhost:8080/healthz/ready
 go run ./cmd/machinarchy --verbose get hosts
 ```
 
-The CLI applies a 30-second HTTP timeout and honors cancellation from Ctrl-C / SIGTERM.
+Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_CLI_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
+
+If the error says the server did not return JSON, or reports a redirect, the configured URL probably points at a proxy, a login page, or an `http://` address that forwards to `https://`. The CLI does not follow redirects so that it never sends your token somewhere unexpected.
 
 ## Environment not found or ambiguous
 
@@ -55,4 +59,12 @@ go run ./cmd/machinarchy get hosts -o yaml
 
 ## Malformed or unreadable config
 
-Check that the selected YAML file is valid and readable. The default config lives in the platform user config directory under `machinarchy/config.yaml`. Set `MACHINARCHY_CONFIG` or pass `--config PATH` to inspect a different file.
+Check that the selected YAML file is valid and readable. The default config lives in the platform user config directory under `.machinarchy/config.yaml`. Set `MACHINARCHY_CONFIG` or pass `--config PATH` to inspect a different file. A damaged file fails with exit code 2; `help`, `completion`, `version`, and group help still work.
+
+## Config file permissions warning
+
+`Warning: CLI config ... is readable by other users` means the file that stores your tokens can be read by other accounts. Run the `chmod 600` command shown in the warning.
+
+## Confirmation required
+
+No current command asks for confirmation. When commands gain confirmation prompts they will never prompt without a terminal or with `--no-input`: they will fail with exit code 2 and tell you to re-run with `--yes`. `--yes` cannot be supplied through an environment variable.

@@ -1,4 +1,7 @@
-// Package api contains the small HTTP client surface used by CLI commands.
+// Package api contains the HTTP client used by CLI commands. It is the only
+// place in the CLI that speaks HTTP: it applies authentication, bounds every
+// request, closes every response body, and converts failures into classified
+// errors (see APIError and the clierr package).
 package api
 
 import (
@@ -9,16 +12,23 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
-	"path"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/buildinfo"
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
 )
 
-const maxResponseBytes = 16 << 20
+const (
+	maxResponseBytes int64 = 16 << 20
+
+	invalidResponseHint = "The server did not return the expected JSON. Check that the server URL points at the Machinarchy API and not at a proxy or web page."
+)
 
 // Host is the credential-free host representation returned by the API.
 type Host struct {
@@ -52,8 +62,8 @@ type Environment struct {
 }
 
 // Client is the narrow HTTP contract commands depend on, making command logic
-// testable with a fake that needs no live server.
-// Client is the read-only API surface used by current resource commands.
+// testable with a fake that needs no live server. It is the read-only API
+// surface used by current resource commands.
 type Client interface {
 	ListHosts(context.Context) ([]Host, error)
 	ListEnvironments(context.Context) ([]Environment, error)
@@ -77,27 +87,98 @@ type ManagementClient interface {
 }
 
 // HTTPClient is an immutable, concurrency-safe client for the Machinarchy API.
+// Create one with NewHTTPClient and share it for the lifetime of a command.
 type HTTPClient struct {
-	baseURL *url.URL
-	token   string
-	http    *http.Client
+	baseURL     *url.URL
+	token       string
+	http        *http.Client
+	userAgent   string
+	maxResponse int64
+}
+
+// Option customises an HTTPClient.
+type Option func(*HTTPClient)
+
+// WithHTTPClient supplies the underlying http.Client, for example to install
+// a custom Transport. The client is copied: its Timeout is kept when set
+// (otherwise the target's request timeout applies) and redirect following is
+// always disabled so the bearer token is never replayed to another location.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *HTTPClient) {
+		if client != nil {
+			c.http = client
+		}
+	}
+}
+
+// WithUserAgent overrides the User-Agent header.
+func WithUserAgent(userAgent string) Option {
+	return func(c *HTTPClient) {
+		if strings.TrimSpace(userAgent) != "" {
+			c.userAgent = userAgent
+		}
+	}
+}
+
+func withMaxResponseBytes(limit int64) Option {
+	return func(c *HTTPClient) {
+		c.maxResponse = limit
+	}
 }
 
 // NewHTTPClient creates a bounded-timeout HTTP client for the resolved target.
-func NewHTTPClient(target config.Target) (*HTTPClient, error) {
+// The target's RequestTimeout bounds each request; zero selects the default.
+func NewHTTPClient(target config.Target, opts ...Option) (*HTTPClient, error) {
 	if err := config.ValidateServer(target.Server); err != nil {
 		return nil, err
 	}
+	if err := config.ValidateToken(target.Token); err != nil {
+		return nil, err
+	}
+	timeout := target.RequestTimeout
+	if timeout < 0 {
+		return nil, clierr.Usagef("request timeout must be positive")
+	}
+	if timeout == 0 {
+		timeout = config.DefaultRequestTimeout
+	}
+
 	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(target.Server), "/"))
 	if err != nil {
-		return nil, fmt.Errorf("parse API server URL: %w", err)
+		return nil, clierr.Usage(fmt.Errorf("parse API server URL: %w", err))
 	}
-	return &HTTPClient{
-		baseURL: baseURL,
-		token:   target.Token,
-		http:    &http.Client{Timeout: 30 * time.Second},
-	}, nil
+
+	client := &HTTPClient{
+		baseURL:     baseURL,
+		token:       target.Token,
+		http:        &http.Client{},
+		userAgent:   defaultUserAgent(),
+		maxResponse: maxResponseBytes,
+	}
+	for _, opt := range opts {
+		opt(client)
+	}
+
+	configured := *client.http
+	if configured.Timeout == 0 {
+		configured.Timeout = timeout
+	}
+	configured.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	client.http = &configured
+
+	return client, nil
 }
+
+func defaultUserAgent() string {
+	return fmt.Sprintf("machinarchy-cli/%s (%s/%s)", buildinfo.Version, runtime.GOOS, runtime.GOARCH)
+}
+
+var (
+	_ Client           = (*HTTPClient)(nil)
+	_ ManagementClient = (*HTTPClient)(nil)
+)
 
 // ListHosts retrieves all hosts visible to the configured API token.
 func (c *HTTPClient) ListHosts(ctx context.Context) ([]Host, error) {
@@ -127,6 +208,9 @@ func (c *HTTPClient) get(ctx context.Context, endpoint string, destination any) 
 	return c.request(ctx, http.MethodGet, endpoint, nil, destination)
 }
 
+// request is the single code path for every API call. It applies
+// authentication, honours ctx cancellation and the request timeout, always
+// closes the response body, and returns classified errors.
 func (c *HTTPClient) request(ctx context.Context, method, endpoint string, payload, destination any) error {
 	if c == nil || c.baseURL == nil || c.http == nil {
 		return errors.New("API client is not initialized")
@@ -134,34 +218,35 @@ func (c *HTTPClient) request(ctx context.Context, method, endpoint string, paylo
 	if ctx == nil {
 		return errors.New("request context is required")
 	}
-	requestURL := *c.baseURL
-	endpointURL, err := url.Parse(endpoint)
-	if err != nil {
-		return fmt.Errorf("parse API endpoint: %w", err)
+
+	displayPath := endpointPath(endpoint)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s %s: %w", method, displayPath, err)
 	}
-	requestURL.Path = path.Join(requestURL.Path, endpointURL.Path)
-	requestURL.RawQuery = endpointURL.RawQuery
+
+	requestURL, err := c.resolve(endpoint)
+	if err != nil {
+		return clierr.Usage(err)
+	}
+
 	var requestBody io.Reader
 	if payload != nil {
-		encoded, e := json.Marshal(payload)
-		if e != nil {
-			return fmt.Errorf("encode API request: %w", e)
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode API request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
+
 	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), requestBody)
 	if err != nil {
 		return fmt.Errorf("create API request: %w", err)
 	}
-	request.Header.Set("Accept", "application/json")
-	if payload != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	c.decorate(request, payload != nil)
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("request %s: %w", endpoint, err)
+		return c.transportError(ctx, method, displayPath, err)
 	}
 	defer func() {
 		if err := response.Body.Close(); err != nil {
@@ -169,23 +254,141 @@ func (c *HTTPClient) request(ctx context.Context, method, endpoint string, paylo
 		}
 	}()
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	success := response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+	limit := c.maxResponse
+	if !success {
+		limit = maxErrorBodyBytes
+	}
+
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if !success {
+		if int64(len(body)) > limit {
+			body = body[:limit]
+		}
+
+		return newAPIError(response, method, displayPath, body)
+	}
+	if readErr != nil {
+		return c.transportError(ctx, method, displayPath, readErr)
+	}
+	if int64(len(body)) > limit {
+		return clierr.Wrap(clierr.ExitUnavailable,
+			fmt.Errorf("API response from %s exceeds %d bytes", displayPath, limit), "")
+	}
+
+	return decodeResponse(response.StatusCode, displayPath, body, destination)
+}
+
+// decorate applies the headers every request carries. It is the only place
+// the credential is attached.
+func (c *HTTPClient) decorate(request *http.Request, hasBody bool) {
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("User-Agent", c.userAgent)
+	if hasBody {
+		request.Header.Set("Content-Type", "application/json")
+	}
+}
+
+// resolve joins an endpoint (an absolute path, optionally with a query) onto
+// the base URL. Escaped path segments are preserved, so an identifier
+// containing "/" cannot change which route is addressed, and dot or empty
+// segments are rejected rather than normalised away.
+func (c *HTTPClient) resolve(endpoint string) (*url.URL, error) {
+	ref, err := url.Parse(endpoint)
 	if err != nil {
-		return fmt.Errorf("read API response: %w", err)
+		return nil, fmt.Errorf("parse API endpoint: %w", err)
 	}
-	if len(body) > maxResponseBytes {
-		return fmt.Errorf("API response exceeds %d bytes", maxResponseBytes)
+	if ref.Scheme != "" || ref.Host != "" || !strings.HasPrefix(ref.Path, "/") {
+		return nil, errors.New("API endpoint must be an absolute path")
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return apiResponseError(response.StatusCode, body)
+
+	escaped := ref.EscapedPath()
+	for index, segment := range strings.Split(escaped, "/") {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return nil, fmt.Errorf("invalid API path segment: %w", err)
+		}
+		if decoded == "." || decoded == ".." {
+			return nil, errors.New("API path must not contain dot segments")
+		}
+		if index > 0 && segment == "" {
+			return nil, errors.New("API path must not contain empty segments; is an identifier blank?")
+		}
 	}
+
+	joined := strings.TrimRight(c.baseURL.EscapedPath(), "/") + escaped
+	decodedPath, err := url.PathUnescape(joined)
+	if err != nil {
+		return nil, fmt.Errorf("invalid API path: %w", err)
+	}
+
+	resolved := *c.baseURL
+	resolved.Path = decodedPath
+	resolved.RawPath = joined
+	resolved.RawQuery = ref.RawQuery
+	resolved.Fragment = ""
+
+	return &resolved, nil
+}
+
+// transportError classifies a failure that produced no HTTP response.
+func (c *HTTPClient) transportError(ctx context.Context, method, endpoint string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return fmt.Errorf("%s %s: %w", method, endpoint, context.Canceled)
+	}
+
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return clierr.Wrap(clierr.ExitUnavailable,
+			fmt.Errorf("%s %s did not finish before the command deadline: %w", method, endpoint, context.DeadlineExceeded), "")
+	}
+
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return clierr.Wrap(clierr.ExitUnavailable,
+			fmt.Errorf("%s %s timed out after %s", method, endpoint, c.http.Timeout),
+			"The server did not respond in time. Increase --request-timeout (or MACHINARCHY_CLI_REQUEST_TIMEOUT), or check that the server is healthy.")
+	}
+
+	// The URL error repeats the full request URL; report only the cause.
+	cause := err
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		cause = urlErr.Err
+	}
+
+	return clierr.Wrap(clierr.ExitUnavailable,
+		fmt.Errorf("cannot reach the API server at %s: %w", c.baseURL.Scheme+"://"+c.baseURL.Host, cause),
+		"Check the server URL ('machinarchy config get-contexts' or --server) and that the API is running.")
+}
+
+func decodeResponse(status int, endpoint string, body []byte, destination any) error {
 	if destination == nil {
 		return nil
 	}
-	if err := json.Unmarshal(body, destination); err != nil {
-		return fmt.Errorf("decode API response from %s: %w", endpoint, err)
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		switch status {
+		case http.StatusAccepted, http.StatusNoContent, http.StatusResetContent:
+			return nil
+		default:
+			return clierr.Wrap(clierr.ExitUnavailable,
+				fmt.Errorf("API response from %s was empty", endpoint), invalidResponseHint)
+		}
 	}
+
+	if err := json.Unmarshal(body, destination); err != nil {
+		return clierr.Wrap(clierr.ExitUnavailable,
+			fmt.Errorf("decode API response from %s: %w", endpoint, err), invalidResponseHint)
+	}
+
 	return nil
+}
+
+func endpointPath(endpoint string) string {
+	path, _, _ := strings.Cut(endpoint, "?")
+
+	return path
 }
 
 func (c *HTTPClient) raw(ctx context.Context, method, path string, payload any) (json.RawMessage, error) {
@@ -232,15 +435,4 @@ func (c *HTTPClient) RewrapSecrets(ctx context.Context, oldKeyID string, batchSi
 }
 func (c *HTTPClient) DeleteSecret(ctx context.Context, id string) error {
 	return c.request(ctx, http.MethodDelete, "/api/v1/secrets/"+url.PathEscape(id), nil, nil)
-}
-
-func apiResponseError(status int, body []byte) error {
-	message := http.StatusText(status)
-	var payload struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Error) != "" {
-		message = strings.TrimSpace(payload.Error)
-	}
-	return fmt.Errorf("API returned HTTP %d: %s", status, message)
 }

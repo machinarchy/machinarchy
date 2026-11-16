@@ -6,7 +6,7 @@ The CLI reads a YAML file. Its path is selected in this order:
 
 1. `--config PATH`
 2. `MACHINARCHY_CONFIG`
-3. The operating system's user config directory, under `machinarchy/config.yaml`
+3. The operating system's user config directory, under `.machinarchy/config.yaml` (for example `~/.config/.machinarchy/config.yaml` on Linux)
 
 Use `--config` consistently when managing or using a non-default config file. For example:
 
@@ -65,7 +65,14 @@ Prefer the commands over editing the token field directly. The config file store
 
 ## Environment variables and precedence
 
-Viper reads these CLI overrides using the `MACHINARCHY_CLI_` prefix:
+Settings are resolved in this order, highest priority first:
+
+1. Command-line flags
+2. `MACHINARCHY_CLI_*` environment variables
+3. The selected context in the config file (server, token, default environment)
+4. Built-in defaults
+
+The config file is read as plain YAML, so context, cluster, and user names are preserved exactly as written (`Prod.EU` stays `Prod.EU`). Each environment variable is the upper-cased flag name with `-` replaced by `_`:
 
 | Variable | Purpose |
 | --- | --- |
@@ -75,8 +82,16 @@ Viper reads these CLI overrides using the `MACHINARCHY_CLI_` prefix:
 | `MACHINARCHY_CLI_VERBOSE` | Enable debug logging (`true` or `false`) |
 | `MACHINARCHY_CLI_SERVER` | Override the selected context's server for this process |
 | `MACHINARCHY_CLI_TOKEN` | Override the selected context's token for this process |
+| `MACHINARCHY_CLI_REQUEST_TIMEOUT` | Per-request HTTP timeout, for example `10s` or `2m` (default `30s`) |
+| `MACHINARCHY_CLI_QUIET` | Suppress status output (`true` or `false`) |
+| `MACHINARCHY_CLI_NO_HEADERS` | Omit table headers (`true` or `false`) |
+| `MACHINARCHY_CLI_NO_INPUT` | Never prompt (`true` or `false`) |
 
-The config path has its separate `MACHINARCHY_CONFIG` variable. Explicit flags override config values; environment variables override file values when the corresponding flag is not explicitly set. For API server and token, process environment overrides the current context's stored values.
+The config path has its separate `MACHINARCHY_CONFIG` variable. For API server and token, the process environment overrides the current context's stored values.
+
+`--yes` is deliberately **not** available as an environment variable or config setting. Skipping a confirmation must be an explicit choice on each command line.
+
+A value that cannot be used (for example `--output xml` or `--request-timeout banana`) fails immediately with exit code 2, before any command runs.
 
 Global flags:
 
@@ -85,8 +100,28 @@ Global flags:
 | `--config PATH` | Use a particular CLI config file |
 | `--context NAME` | Use a context for one invocation |
 | `--env NAME_OR_ID`, `-n` | Filter hosts by Machinarchy environment |
-| `--output FORMAT`, `-o FORMAT` | Select `table`, `json`, or `yaml` output |
+| `--output FORMAT`, `-o FORMAT` | Select `table`, `json`, or `yaml` output. Without it each command uses its own default (lists are tables; the existing `runtime-config` and `secret` commands print JSON). |
 | `--verbose`, `-v` | Emit debug-level structured logs to stderr |
+| `--server URL` | Use this API server instead of the context's server |
+| `--request-timeout DURATION` | Timeout for each API request (default `30s`) |
+| `--quiet`, `-q` | Suppress status output; print only identifiers where a command supports it |
+| `--no-headers` | Omit table headers |
+| `--no-input` | Never prompt; fail with exit code 2 if input or confirmation would be needed |
+| `--yes`, `-y` | Pre-confirm destructive or sensitive actions (flag only) |
+
+`--no-input` and `--yes` are part of the shared command foundation. No current command asks for confirmation, so they have no effect yet; they apply to commands as confirmation is added to them.
+
+`config set-cluster` has its own `--server` flag, and `config set-context` has its own `--env` flag; on those commands the flag sets the value being stored rather than overriding the active context.
+
+## Config file security
+
+The config file stores bearer tokens in plaintext. New files are created with mode `0600` in a `0700` directory. If an existing config file that contains tokens is readable by other users, the CLI prints a warning to stderr (it keeps working) and shows the command to fix it:
+
+```sh
+chmod 600 ~/.config/.machinarchy/config.yaml
+```
+
+The CLI never prints tokens in output, errors, warnings, or verbose logs, and never follows HTTP redirects, so a token is not replayed to another location.
 
 ## Managing multiple contexts
 

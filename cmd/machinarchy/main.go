@@ -3,8 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,27 +12,28 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\nRun 'machinarchy --help' to see available commands.\n", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run() error {
+// run executes the CLI and returns its exit code. Deferred cleanup runs
+// before main calls os.Exit.
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	command := cli.NewRootCommand(cli.Options{
+	// After the first interrupt, restore default signal handling so a second
+	// Ctrl-C terminates a command that is slow to unwind.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	return cli.Run(ctx, cli.Options{
 		Streams: cli.IOStreams{
 			In:     os.Stdin,
 			Out:    os.Stdout,
 			ErrOut: os.Stderr,
 		},
 		Groups: commands.DefaultGroups(),
-	})
-	err := command.ExecuteContext(ctx)
-	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
+	}, nil)
 }

@@ -1,3 +1,5 @@
+// Package commands implements the Machinarchy CLI commands and registers them
+// with the root command. Commands reach the API only through cli.Factory.
 package commands
 
 import "github.com/machinarchy/machinarchy/internal/cli"
@@ -20,6 +22,13 @@ func DefaultGroups() []cli.CommandGroup {
 				NewConfigCommand,
 				NewRuntimeConfigCommand,
 				NewSecretCommand,
+			},
+		},
+		{
+			ID:    "other",
+			Title: "Other Commands",
+			Commands: []cli.CommandBuilder{
+				NewVersionCommand,
 			},
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -90,7 +91,7 @@ func newConfigPublish(f *cli.Factory) *cobra.Command {
 	var expected uint64
 	c := &cobra.Command{Use: "publish", Short: "Publish a new immutable runtime configuration revision", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if expected == 0 {
-			return fmt.Errorf("--expected-revision is required")
+			return clierr.Usagef("--expected-revision is required")
 		}
 		doc, e := readManagementInput(cmd, file)
 		if e != nil {
@@ -116,7 +117,7 @@ func newConfigRollback(f *cli.Factory) *cobra.Command {
 	var note string
 	c := &cobra.Command{Use: "rollback", Short: "Create a new revision from an earlier configuration revision", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if expected == 0 || target == 0 {
-			return fmt.Errorf("--expected-revision and --target-revision are required")
+			return clierr.Usagef("--expected-revision and --target-revision are required")
 		}
 		client, e := f.NewManagementClient(cmd.Context())
 		if e != nil {
@@ -157,7 +158,7 @@ func newSecretCreate(f *cli.Factory) *cobra.Command {
 	var stdin bool
 	c := &cobra.Command{Use: "create NAME --value-stdin", Short: "Create an encrypted secret version from stdin", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !stdin {
-			return fmt.Errorf("--value-stdin is required; secret values are not accepted as flags")
+			return clierr.Usagef("--value-stdin is required; secret values are not accepted as flags")
 		}
 		value, e := readSecretInput(cmd)
 		if e != nil {
@@ -199,7 +200,7 @@ func newSecretRotate(f *cli.Factory) *cobra.Command {
 	var stdin bool
 	c := &cobra.Command{Use: "rotate ID --expected-version N --value-stdin", Short: "Add a new encrypted secret version from stdin", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if expected == 0 || !stdin {
-			return fmt.Errorf("--expected-version and --value-stdin are required")
+			return clierr.Usagef("--expected-version and --value-stdin are required")
 		}
 		value, e := readSecretInput(cmd)
 		if e != nil {
@@ -224,7 +225,7 @@ func newSecretRewrap(f *cli.Factory) *cobra.Command {
 	var batchSize int
 	c := &cobra.Command{Use: "rewrap --old-key-id ID", Short: "Rewrap stored DEKs under the active external key", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if strings.TrimSpace(oldKeyID) == "" {
-			return fmt.Errorf("--old-key-id is required")
+			return clierr.Usagef("--old-key-id is required")
 		}
 		client, err := f.NewManagementClient(cmd.Context())
 		if err != nil {
@@ -260,7 +261,7 @@ func readManagementInput(cmd *cobra.Command, file string) (json.RawMessage, erro
 		// #nosec G304 -- file is an operator-configured configuration file path.
 		f, e := os.Open(file)
 		if e != nil {
-			return nil, e
+			return nil, clierr.Usage(e)
 		}
 		defer utils.CloseWithLog(f, file)
 		r = f
@@ -270,10 +271,10 @@ func readManagementInput(cmd *cobra.Command, file string) (json.RawMessage, erro
 		return nil, e
 	}
 	if len(b) > maxManagementInput {
-		return nil, fmt.Errorf("input exceeds %d bytes", maxManagementInput)
+		return nil, clierr.Usagef("input exceeds %d bytes", maxManagementInput)
 	}
 	if !json.Valid(b) {
-		return nil, fmt.Errorf("input must be valid JSON")
+		return nil, clierr.Usagef("input must be valid JSON")
 	}
 	return json.RawMessage(b), nil
 }
@@ -283,15 +284,18 @@ func readSecretInput(cmd *cobra.Command) (string, error) {
 		return "", e
 	}
 	if len(b) > 1<<20 {
-		return "", fmt.Errorf("secret input exceeds 1 MiB")
+		return "", clierr.Usagef("secret input exceeds 1 MiB")
 	}
 	value := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
 	if value == "" {
-		return "", fmt.Errorf("secret value cannot be empty")
+		return "", clierr.Usagef("secret value cannot be empty")
 	}
 	return value, nil
 }
 func writeJSON(cmd *cobra.Command, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
 	var value any
 	if e := json.Unmarshal(raw, &value); e != nil {
 		return e

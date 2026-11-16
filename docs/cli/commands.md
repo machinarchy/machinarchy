@@ -50,6 +50,15 @@ go run ./cmd/machinarchy get hosts -o json | jq '.[].name'
 
 Errors and verbose structured logs go to stderr. Resource output goes to stdout, so it can be piped without log lines mixed into the data.
 
+## `version`
+
+```sh
+go run ./cmd/machinarchy version
+go run ./cmd/machinarchy version -o json
+```
+
+Prints the CLI version, commit, build time, Go version, and platform. It needs no config file or server, so it works on a fresh or damaged installation. The server's version is not available from the API.
+
 ## `config`
 
 ```sh
@@ -62,6 +71,30 @@ go run ./cmd/machinarchy config set-context local --cluster local --user local -
 ```
 
 `set-credentials` also accepts `--token TOKEN`, but this can place the token in shell history or process arguments; prefer `--token-stdin`.
+
+## Command groups
+
+`get`, `config`, `runtime-config`, and `secret` are command groups. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
+
+## Exit codes
+
+Every failure prints `Error: <what happened>` and, when there is advice, `Hint: <how to fix it>` to stderr. The process exit code identifies the kind of failure so scripts can react to it:
+
+| Code | Meaning |
+| ---: | --- |
+| 0 | Success |
+| 1 | Unexpected failure, or an operation that completed unsuccessfully |
+| 2 | Usage error: unknown command or flag, invalid argument, bad value, unusable config file, missing confirmation, or input the API rejected as invalid (HTTP 400, 422) |
+| 3 | Authentication or authorization failure (HTTP 401, 403) |
+| 4 | API server, network, or timeout failure (HTTP 5xx, 408, 429, connection refused, request timeout, response that is not Machinarchy API JSON) |
+| 5 | Reserved: a local wait deadline elapsed while work is still running |
+| 6 | Not found (HTTP 404, or a named host or environment that does not exist) |
+| 7 | Conflict or failed precondition (HTTP 409, 412), for example a stale `--expected-revision` |
+| 130 | Interrupted (Ctrl-C or SIGTERM) |
+
+Ctrl-C now exits 130; it previously exited 0. Interrupting a command stops only the local process: it does not cancel work already accepted by the server.
+
+HTTP redirects are not followed and are reported as exit 2 with the redirect target in the hint, which usually means the server URL should use `https://`.
 
 ## Context, config, and verbosity examples
 

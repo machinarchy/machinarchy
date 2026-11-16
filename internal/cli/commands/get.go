@@ -7,6 +7,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/spf13/cobra"
 )
@@ -30,11 +31,9 @@ func newGetHostsCommand(factory *cli.Factory) *cobra.Command {
 		Args:    cobra.MaximumNArgs(1),
 		Example: "  machinarchy get hosts\n  machinarchy get hosts web-01 -o yaml\n  machinarchy get hosts --env production",
 		RunE: func(command *cobra.Command, args []string) error {
-			format := factory.Config().OutputFormat()
-			switch format {
-			case "table", "json", "yaml", "yml":
-			default:
-				return fmt.Errorf("unsupported output format %q; choose table, json, or yaml", format)
+			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
+			if err != nil {
+				return err
 			}
 
 			client, err := factory.NewAPIClient(command.Context())
@@ -58,9 +57,9 @@ func newGetHostsCommand(factory *cli.Factory) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return output.PrintHost(command.OutOrStdout(), format, host)
+				return printer.Host(host)
 			}
-			return output.PrintHosts(command.OutOrStdout(), format, hosts)
+			return printer.Hosts(hosts)
 		},
 	}
 }
@@ -100,10 +99,10 @@ func filterEnvironment(
 		}
 	}
 	if matches == 0 {
-		return nil, fmt.Errorf("environment %q was not found", environmentName)
+		return nil, clierr.Newf(clierr.ExitNotFound, "", "environment %q was not found", environmentName)
 	}
 	if matches > 1 {
-		return nil, fmt.Errorf("environment %q is ambiguous; use its numeric ID with --env", environmentName)
+		return nil, clierr.Usagef("environment %q is ambiguous; use its numeric ID with --env", environmentName)
 	}
 
 	filtered := make([]api.Host, 0, len(hosts))
@@ -128,10 +127,10 @@ func findHost(hosts []api.Host, nameOrID string) (api.Host, error) {
 	}
 	switch count {
 	case 0:
-		return api.Host{}, fmt.Errorf("host %q was not found", nameOrID)
+		return api.Host{}, clierr.Newf(clierr.ExitNotFound, "", "host %q was not found", nameOrID)
 	case 1:
 		return match, nil
 	default:
-		return api.Host{}, fmt.Errorf("host name %q is ambiguous; use its ID or select an environment with --env", nameOrID)
+		return api.Host{}, clierr.Usagef("host name %q is ambiguous; use its ID or select an environment with --env", nameOrID)
 	}
 }
