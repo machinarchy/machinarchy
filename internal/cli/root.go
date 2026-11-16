@@ -169,15 +169,27 @@ func showHelp(command *cobra.Command, _ []string) error {
 // skipsConfig reports whether command (or an ancestor below the root) must run
 // without reading the config file.
 func skipsConfig(command *cobra.Command) bool {
-	for current := command; current != nil; current = current.Parent() {
-		if current.Annotations[AnnotationSkipConfig] == "true" {
-			return true
-		}
+	if command == nil {
+		return false
+	}
 
+	// Explicit exemptions apply only to the selected command.
+	if command.Annotations[AnnotationSkipConfig] == "true" {
+		return true
+	}
+
+	// Detect Cobra's built-in help and completion commands.
+	// These exemptions must also work when Cobra resolves a nested
+	// command belonging to one of its built-in commands.
+	for current := command; current != nil; current = current.Parent() {
 		parent := current.Parent()
+
 		if parent != nil && !parent.HasParent() {
 			switch current.Name() {
-			case "help", "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+			case "help",
+				"completion",
+				cobra.ShellCompRequestCmd,
+				cobra.ShellCompNoDescRequestCmd:
 				return true
 			}
 		}

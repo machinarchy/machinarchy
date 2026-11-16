@@ -819,4 +819,24 @@ func TestCommandGroupsAreStrictAndNeedNoConfig(t *testing.T) {
 			t.Errorf("a leaf command must still validate the config file: %+v", got)
 		}
 	})
+
+	t.Run("nested leaf commands validate config inherited from no group", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"group", "child"},
+			{"outer", "inner", "deep"},
+		} {
+			got := run(t, options, append(
+				[]string{"--config", broken},
+				args...,
+			)...)
+
+			if got.code != clierr.ExitUsage {
+				t.Errorf("%v: expected config validation error, got %+v", args, got)
+			}
+
+			if strings.Contains(got.stdout, "ran ") {
+				t.Errorf("%v: command executed despite invalid config: %q", args, got.stdout)
+			}
+		}
+	})
 }

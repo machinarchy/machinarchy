@@ -195,8 +195,11 @@ func TestRequestMethodsPathsAndBodies(t *testing.T) {
 		wantBody   map[string]any
 	}{
 		{
-			name:       "publish",
-			call:       func() error { _, err := client.PublishRuntimeConfig(ctx, 3, json.RawMessage(`{"a":1}`), "why"); return err },
+			name: "publish",
+			call: func() error {
+				_, err := client.PublishRuntimeConfig(ctx, 3, json.RawMessage(`{"a":1}`), "why")
+				return err
+			},
 			wantMethod: http.MethodPut,
 			wantURI:    "/api/v1/runtime-config",
 			wantBody:   map[string]any{"expectedRevision": float64(3), "config": map[string]any{"a": float64(1)}, "changeNote": "why"},
@@ -216,8 +219,11 @@ func TestRequestMethodsPathsAndBodies(t *testing.T) {
 			wantBody:   map[string]any{"expectedRevision": float64(5), "targetRevision": float64(2), "changeNote": "undo"},
 		},
 		{
-			name:       "create secret passes the document through",
-			call:       func() error { _, err := client.CreateSecret(ctx, json.RawMessage(`{"name":"n","value":"v"}`)); return err },
+			name: "create secret passes the document through",
+			call: func() error {
+				_, err := client.CreateSecret(ctx, json.RawMessage(`{"name":"n","value":"v"}`))
+				return err
+			},
 			wantMethod: http.MethodPost,
 			wantURI:    "/api/v1/secrets",
 			wantBody:   map[string]any{"name": "n", "value": "v"},
