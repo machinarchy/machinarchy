@@ -31,7 +31,7 @@ No process requires NATS. (`deployments/infra.docker-compose.yml` still starts N
 cp .env.example .env
 ```
 
-Set `MACHINARCHY_OPERATOR_TOKEN` to a random value of at least 32 characters. For production, also set a separate `MACHINARCHY_ENCRYPTION_SECRET` and `CORS_ALLOWED_ORIGINS`. The encryption secret must remain stable: stored SSH credentials cannot be decrypted after it changes. Self-registration is disabled by default in production; use `MACHINARCHY_SIGNUP_ENABLED=true` only when account registration is intentionally available.
+Set `MACHINARCHY_OPERATOR_TOKEN` to a random value of at least 32 characters. For production, also set a separate `MACHINARCHY_ENCRYPTION_SECRET` and `CORS_ALLOWED_ORIGINS`. The encryption secret must remain stable: stored SSH credentials cannot be decrypted after it changes. Self-registration is disabled by default in every environment; use `MACHINARCHY_SIGNUP_ENABLED=true` only when account registration is intentionally available (each new account can read the whole inventory). `MACHINARCHY_ENVIRONMENT` defaults to `production`; `.env.example` sets `development` for local work.
 
 Load the environment and start both application components together:
 
@@ -90,8 +90,8 @@ Bootstrap settings use environment variables, a selected JSON file (`--config FI
 | `MACHINARCHY_OPERATOR_TOKEN` | JWT signing secret; required, at least 32 characters, no whitespace. |
 | `MACHINARCHY_ENCRYPTION_SECRET` / `_FILE` | External root key source for database-backed Secret Store envelope encryption; independent of the JWT secret and required in every environment. File permissions must be `0600` or stricter. |
 | `MACHINARCHY_ENCRYPTION_KEY_ID` / `_KEYRING_FILE` | Current external KEK identifier and optional protected JSON map of previous KEKs for decrypting older versions. |
-| `MACHINARCHY_ENVIRONMENT` | `development` or `production`. |
-| `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `true` in development and `false` in production. |
+| `MACHINARCHY_ENVIRONMENT` | `development` or `production` (default). Production enforces secure cookies, explicit CORS origins and PostgreSQL `sslmode=verify-full`. |
+| `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `false`. |
 | `MACHINARCHY_LISTEN_ADDR` | HTTP bind address, default `:8080`. |
 | `MACHINARCHY_DATABASE_ENGINE` | `sqlite` (default) or `postgres`. |
 | `MACHINARCHY_DATABASE_PATH` | SQLite file path, default `./data/machinarchy.db`. |

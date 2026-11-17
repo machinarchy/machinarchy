@@ -74,14 +74,26 @@ func TestEncryptionKeyMustBeIndependentAndFileProtected(t *testing.T) {
 }
 
 func TestLoadSignupDefaults(t *testing.T) {
-	t.Run("enabled in development", func(t *testing.T) {
+	t.Run("disabled in development", func(t *testing.T) {
 		setCommonEnv(t)
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
-		if !cfg.SignupEnabled {
-			t.Fatal("signup should default to enabled in development")
+		if cfg.SignupEnabled {
+			t.Fatal("signup must be opt-in in every environment (AUDIT S-03)")
+		}
+	})
+
+	t.Run("environment defaults to production", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_ENVIRONMENT", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Environment != Production || cfg.SignupEnabled {
+			t.Fatalf("unset environment gave %q (signup=%v), want production with signup disabled", cfg.Environment, cfg.SignupEnabled)
 		}
 	})
 

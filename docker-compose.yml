@@ -10,6 +10,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
+      # Local stack only: plain HTTP and a non-TLS PostgreSQL connection.
+      MACHINARCHY_ENVIRONMENT: development
       MACHINARCHY_LISTEN_ADDR: ":8080"
       MACHINARCHY_DATABASE_ENGINE: postgres
       MACHINARCHY_DATABASE_URL: postgres://machinarchy:${POSTGRES_PASSWORD:-machinarchy_dev_only}@postgres:5432/machinarchy_dev?sslmode=disable

@@ -43,7 +43,8 @@ COPY --from=build --chown=65532:65532 /out/machinarchy /machinarchy
 COPY --from=build --chown=65532:65532 /out/data /data
 
 # System Invariant Execution Defaults
-ENV MACHINARCHY_LISTEN_ADDR=:8080 \
+ENV MACHINARCHY_ENVIRONMENT=production \
+    MACHINARCHY_LISTEN_ADDR=:8080 \
     MACHINARCHY_DATABASE_ENGINE=sqlite \
     MACHINARCHY_DATABASE_PATH=/data/machinarchy.db
 

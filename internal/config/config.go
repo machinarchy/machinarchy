@@ -224,7 +224,7 @@ func load() (Config, error) {
 func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	cfg := Config{
 		ListenAddr:    get("MACHINARCHY_LISTEN_ADDR", ":8080"),
-		Environment:   Environment(strings.ToLower(get("MACHINARCHY_ENVIRONMENT", string(Development)))),
+		Environment:   Environment(strings.ToLower(get("MACHINARCHY_ENVIRONMENT", string(Production)))),
 		OperatorToken: get("MACHINARCHY_OPERATOR_TOKEN"),
 		LogLevel:      strings.ToLower(get("MACHINARCHY_LOG_LEVEL", "info")),
 		Database: DatabaseConfig{
@@ -240,15 +240,12 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		return Config{}, err
 	}
 
-	// Public self-registration is useful for local development, but a new
-	// account currently has the same API access as every existing account.
-	// Require an explicit production opt-in until resource-level authorization
-	// is implemented.
-	signupDefault := "true"
-	if cfg.Environment == Production {
-		signupDefault = "false"
-	}
-	signupEnabled, err := strconv.ParseBool(get("MACHINARCHY_SIGNUP_ENABLED", signupDefault))
+	// Secure by default (AUDIT S-03): the environment defaults to production
+	// (secure cookies, mandatory CORS origins and database TLS) and public
+	// self-registration is off everywhere. Every new account joins the shared
+	// workspace as a reader, which exposes the whole inventory, so signup must
+	// be an explicit decision even in development.
+	signupEnabled, err := strconv.ParseBool(get("MACHINARCHY_SIGNUP_ENABLED", "false"))
 	if err != nil {
 		return Config{}, errors.New("MACHINARCHY_SIGNUP_ENABLED must be true or false")
 	}
