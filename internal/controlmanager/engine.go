@@ -18,9 +18,8 @@ import (
 )
 
 var (
-	ErrDuplicateController      = errors.New("a controller is already registered for this resource kind")
-	ErrNoControllers            = errors.New("at least one controller must be registered before startup")
-	ErrHostConnectorUnavailable = errors.New("no Host convergence adapter is configured")
+	ErrDuplicateController = errors.New("a controller is already registered for this resource kind")
+	ErrNoControllers       = errors.New("at least one controller must be registered before startup")
 )
 
 type ReconcileResult struct{ RequeueAfter time.Duration }

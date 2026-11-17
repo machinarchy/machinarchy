@@ -16,13 +16,12 @@ const (
 
 // Security Architecture Custom Domain Errors
 var (
-	ErrInvalidInput          = errors.New("host validation constraint failed")
-	ErrAuthenticationFailed  = errors.New("ssh authentication rejected: invalid credentials")
-	ErrConnectionTimeout     = errors.New("network timeout reached while dialing target server")
-	ErrConnectionRefused     = errors.New("target machine actively refused the network connection")
-	ErrSessionCreationFailed = errors.New("failed to initialize interactive payload session channel")
-	ErrServiceBusy           = errors.New("service is at capacity")
-	ErrTargetNotAllowed      = errors.New("target address is not permitted by the network policy")
+	ErrInvalidInput         = errors.New("host validation constraint failed")
+	ErrAuthenticationFailed = errors.New("ssh authentication rejected: invalid credentials")
+	ErrConnectionTimeout    = errors.New("network timeout reached while dialing target server")
+	ErrConnectionRefused    = errors.New("target machine actively refused the network connection")
+	ErrServiceBusy          = errors.New("service is at capacity")
+	ErrTargetNotAllowed     = errors.New("target address is not permitted by the network policy")
 
 	ErrHostNotFound       = errors.New("requested host resource could not be found")
 	ErrHostAlreadyExists  = errors.New("a host with the same name or address:port already exists")
@@ -47,7 +46,6 @@ type HostStatus string
 const (
 	HostStatusPending      HostStatus = "PENDING"
 	HostStatusActive       HostStatus = "ACTIVE"
-	HostStatusSubjugated   HostStatus = "SUBJUGATED"
 	HostStatusDisconnected HostStatus = "DISCONNECTED"
 )
 
@@ -56,9 +54,7 @@ type ConnectionMethod string
 
 // Const defines the supported connection methods for managed hosts.
 const (
-	MethodSSH       ConnectionMethod = "SSH"
-	MethodAgentPull ConnectionMethod = "AGENT_PULL"
-	MethodAgentPush ConnectionMethod = "AGENT_PUSH"
+	MethodSSH ConnectionMethod = "SSH"
 )
 
 // Host represents a managed target machine within a workspace and environment.

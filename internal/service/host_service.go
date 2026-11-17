@@ -42,11 +42,6 @@ func (defaultSSHConnectionTester) TestConnection(ctx context.Context, params ssh
 	return sshclient.TestConnection(ctx, params)
 }
 
-// NewHostService constructs a host service with default SSH connection testing and capacity.
-func NewHostService(r domain.HostStore) HostService {
-	return NewHostServiceWithTester(r, defaultSSHConnectionTester{})
-}
-
 // NewHostServiceWithTester constructs a host service with a custom SSH connection tester.
 func NewHostServiceWithTester(r domain.HostStore, tester SSHConnectionTester) HostService {
 	return &hostService{

@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 )
@@ -14,13 +13,4 @@ func CloseWithLog(closer io.Closer, resource string) {
 			"error", err,
 		)
 	}
-}
-
-// CloseWithError closes a resource and returns a wrapped error if closing fails.
-func CloseWithError(closer io.Closer, resource string) error {
-	if err := closer.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", resource, err)
-	}
-
-	return nil
 }

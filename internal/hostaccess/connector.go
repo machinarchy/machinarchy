@@ -102,7 +102,7 @@ func (c *SSHConnector) Execute(ctx context.Context, host *resource.Host, profile
 		return Result{}, err
 	}
 	defer c.release()
-	raw, runErr := sshclient.ExecuteRemoteCommandDetailed(callCtx, params, shellQuote(argv))
+	raw, runErr := sshclient.ExecuteRemoteCommandDetailed(callCtx, params, domain.QuoteArgv(argv))
 	result := Result{Stdout: raw.Stdout, Stderr: raw.Stderr, Truncated: raw.Truncated}
 	if runErr != nil {
 		if code, ok := sshclient.ExitStatus(runErr); ok {
@@ -188,13 +188,6 @@ func classify(err error) error {
 	return ErrConnection
 }
 
-func shellQuote(argv []string) string {
-	quoted := make([]string, len(argv))
-	for i, value := range argv {
-		quoted[i] = "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
-	}
-	return strings.Join(quoted, " ")
-}
 func wipe(value []byte) {
 	for i := range value {
 		value[i] = 0

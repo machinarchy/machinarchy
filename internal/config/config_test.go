@@ -25,9 +25,6 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                  "",
-		"MACHINARCHY_SSH_KNOWN_HOSTS":            "",
-		"MACHINARCHY_SSH_CONNECT_TIMEOUT":        "",
-		"MACHINARCHY_SSH_USE_AGENT":              "",
 	}
 
 	for key, value := range envs {

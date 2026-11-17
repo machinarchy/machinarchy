@@ -106,10 +106,6 @@ func (workers combinedWorkers) Start(ctx context.Context) error {
 
 type componentFactory func(*Runtime) (httpLifecycle, workerLifecycle, error)
 
-// func run(ctx context.Context, cfg config.Config, serviceName string, factory componentFactory) (retErr error) {
-// 	return runWithOpener(ctx, cfg, serviceName, Open, factory)
-// }
-
 type runtimeOpener func(context.Context, config.Config) (*Runtime, error)
 
 func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, openRuntime runtimeOpener, factory componentFactory) (retErr error) {

@@ -25,7 +25,6 @@ import (
 type fixture struct {
 	db   *sql.DB
 	repo *management.Store
-	path string
 }
 
 func openFixture(t *testing.T, path string) fixture {
@@ -47,7 +46,7 @@ func openFixture(t *testing.T, path string) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture{db: db, repo: repo, path: path}
+	return fixture{db: db, repo: repo}
 }
 
 func TestConfigurationRevisionsConflictValidationHistoryAndOutbox(t *testing.T) {

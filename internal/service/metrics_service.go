@@ -25,16 +25,6 @@ type metricsService struct {
 	policyProvider func() netpolicy.Policy
 }
 
-// NewMetricsService constructs a metrics service with default SSH connection testing and capacity.
-func NewMetricsService(ms domain.MetricsStore, hs domain.HostStore) domain.MetricsService {
-	return &metricsService{
-		metricStore: ms,
-		hostStore:   hs,
-		sshLimit:    newDefaultSSHCapacity(),
-		policy:      netpolicy.Default(),
-	}
-}
-
 // NewMetricsServiceWithCapacity constructs a metrics service sharing the process SSH bulkhead.
 func NewMetricsServiceWithCapacity(ms domain.MetricsStore, hs domain.HostStore, capacity *SSHCapacity, opts ...Option) (domain.MetricsService, error) {
 	if ms == nil || hs == nil || capacity == nil {

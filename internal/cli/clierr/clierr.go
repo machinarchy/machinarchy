@@ -23,8 +23,6 @@ const (
 	ExitAuth = 3
 	// ExitUnavailable reports an API server, network, or request-timeout failure.
 	ExitUnavailable = 4
-	// ExitWaitTimeout reports that a local wait deadline elapsed.
-	ExitWaitTimeout = 5
 	// ExitNotFound reports that a requested resource does not exist.
 	ExitNotFound = 6
 	// ExitConflict reports a conflict or failed precondition.

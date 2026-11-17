@@ -59,7 +59,6 @@ func (c readinessCheck) CheckReadiness(ctx context.Context) error {
 
 // Server owns the HTTP listener and its process-local middleware resources.
 type Server struct {
-	engine         *echo.Echo
 	httpServer     *http.Server
 	metricsHandler http.Handler
 	limiter        *custommw.RateLimiter
@@ -129,7 +128,6 @@ func NewServer(
 
 	metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	s := &Server{
-		engine:         e,
 		metricsHandler: metricsHandler,
 		limiter:        limiter,
 		readiness: append([]ReadinessChecker{
@@ -214,7 +212,6 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 	e.Use(custommw.Logging())
 
 	s := &Server{
-		engine:         e,
 		metricsHandler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 		readiness:      readiness,
 	}

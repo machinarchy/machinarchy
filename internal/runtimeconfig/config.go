@@ -31,9 +31,8 @@ var (
 type ApplyClass string
 
 const (
-	HotReloadable           ApplyClass = "hot-reloadable"
-	ReconciliationTriggered ApplyClass = "reconciliation-triggered"
-	RestartRequired         ApplyClass = "restart-required"
+	HotReloadable   ApplyClass = "hot-reloadable"
+	RestartRequired ApplyClass = "restart-required"
 )
 
 // Config contains only non-secret values and SecretRef-like identifiers.

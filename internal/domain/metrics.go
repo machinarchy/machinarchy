@@ -34,11 +34,6 @@ type HostRuntimeDiagnostics struct {
 	DiskUsagePct float64   `json:"diskUsagePct"`
 }
 
-// TelemetryReader defines the interface for reading system metrics from a host.
-type TelemetryReader interface {
-	ReadCurrentStats() SystemStats
-}
-
 // MetricsStore defines how your app queries and stores metrics in SQLite
 type MetricsStore interface {
 	SaveMetricPoint(ctx context.Context, workspaceID int, cpuPct, memPct float64) error

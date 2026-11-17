@@ -10,10 +10,7 @@ type JobStatus string
 
 // Const defines the possible statuses for a job.
 const (
-	JobStatusPending   JobStatus = "PENDING"
-	JobStatusRunning   JobStatus = "RUNNING"
-	JobStatusCompleted JobStatus = "COMPLETED"
-	JobStatusFailed    JobStatus = "FAILED"
+	JobStatusPending JobStatus = "PENDING"
 )
 
 // Job represents an asynchronous task executed on a managed host, including its metadata and execution results.
