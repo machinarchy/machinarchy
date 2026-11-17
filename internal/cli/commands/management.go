@@ -119,6 +119,9 @@ func newConfigRollback(f *cli.Factory) *cobra.Command {
 		if expected == 0 || target == 0 {
 			return clierr.Usagef("--expected-revision and --target-revision are required")
 		}
+		if e := f.RequireConfirmation(fmt.Sprintf("Replace the active runtime configuration with revision %d?", target)); e != nil {
+			return e
+		}
 		client, e := f.NewManagementClient(cmd.Context())
 		if e != nil {
 			return e
@@ -227,6 +230,9 @@ func newSecretRewrap(f *cli.Factory) *cobra.Command {
 		if strings.TrimSpace(oldKeyID) == "" {
 			return clierr.Usagef("--old-key-id is required")
 		}
+		if err := f.RequireConfirmation(fmt.Sprintf("Rewrap stored secret keys from %q to the active key?", oldKeyID)); err != nil {
+			return err
+		}
 		client, err := f.NewManagementClient(cmd.Context())
 		if err != nil {
 			return err
@@ -243,6 +249,9 @@ func newSecretRewrap(f *cli.Factory) *cobra.Command {
 }
 func newSecretDelete(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{Use: "delete ID", Short: "Retire a secret without immediately removing retained ciphertext", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if e := f.RequireConfirmation(fmt.Sprintf("Retire secret %q?", args[0])); e != nil {
+			return e
+		}
 		client, e := f.NewManagementClient(cmd.Context())
 		if e != nil {
 			return e

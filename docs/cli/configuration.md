@@ -109,7 +109,7 @@ Global flags:
 | `--no-input` | Never prompt; fail with exit code 2 if input or confirmation would be needed |
 | `--yes`, `-y` | Pre-confirm destructive or sensitive actions (flag only) |
 
-`--no-input` and `--yes` are part of the shared command foundation. No current command asks for confirmation, so they have no effect yet; they apply to commands as confirmation is added to them.
+`secret delete`, `secret rewrap` and `runtime-config rollback` ask for confirmation; `--yes` skips the prompt and `--no-input` makes them fail instead of prompting.
 
 `config set-cluster` has its own `--server` flag, and `config set-context` has its own `--env` flag; on those commands the flag sets the value being stored rather than overriding the active context.
 

@@ -67,4 +67,4 @@ Check that the selected YAML file is valid and readable. The default config live
 
 ## Confirmation required
 
-No current command asks for confirmation. When commands gain confirmation prompts they will never prompt without a terminal or with `--no-input`: they will fail with exit code 2 and tell you to re-run with `--yes`. `--yes` cannot be supplied through an environment variable.
+`secret delete`, `secret rewrap` and `runtime-config rollback` ask for confirmation. They never prompt without a terminal or with `--no-input`: they fail with exit code 2 and tell you to re-run with `--yes`. `--yes` cannot be supplied through an environment variable.

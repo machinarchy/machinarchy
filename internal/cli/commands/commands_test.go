@@ -689,6 +689,12 @@ func newAPIServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Requ
 	return server
 }
 
+func (s *apiServer) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.requests)
+}
+
 func (s *apiServer) last(t *testing.T) apiRequest {
 	t.Helper()
 
@@ -861,7 +867,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 	t.Run("secret delete handles 204 and 404", func(t *testing.T) {
 		ok := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
-		got := execute(t, nil, "", "--config", writeConfig(t, ok.URL, "tok"), "secret", "delete", "s1")
+		got := execute(t, nil, "", "--config", writeConfig(t, ok.URL, "tok"), "secret", "delete", "s1", "--yes")
 		if got.code != 0 || got.stdout != "Secret retired.\n" {
 			t.Fatalf("result = %+v", got)
 		}
@@ -870,9 +876,31 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		}
 
 		missing := newAPIServer(t, jsonReply(404, `{"error":"secret not found"}`))
-		got = execute(t, nil, "", "--config", writeConfig(t, missing.URL, "tok"), "secret", "delete", "nope")
+		got = execute(t, nil, "", "--config", writeConfig(t, missing.URL, "tok"), "secret", "delete", "nope", "--yes")
 		if got.code != clierr.ExitNotFound {
 			t.Fatalf("exit code = %d, stderr %q", got.code, got.stderr)
+		}
+	})
+
+	// AUDIT F-04: destructive commands ask first; without a terminal they
+	// refuse unless --yes is given, and nothing reaches the server.
+	t.Run("destructive commands require confirmation", func(t *testing.T) {
+		server := newAPIServer(t, jsonReply(200, `{}`))
+		path := writeConfig(t, server.URL, "tok")
+		for _, args := range [][]string{
+			{"secret", "delete", "s1"},
+			{"secret", "rewrap", "--old-key-id", "k0"},
+			{"runtime-config", "rollback", "--expected-revision", "3", "--target-revision", "1"},
+		} {
+			for _, extra := range [][]string{nil, {"--no-input"}} {
+				got := execute(t, nil, "", append(append([]string{"--config", path}, args...), extra...)...)
+				if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "--yes") {
+					t.Fatalf("%v %v: code=%d stderr=%q, want usage error naming --yes", args, extra, got.code, got.stderr)
+				}
+			}
+		}
+		if n := server.count(); n != 0 {
+			t.Fatalf("%d requests reached the server without confirmation", n)
 		}
 	})
 
