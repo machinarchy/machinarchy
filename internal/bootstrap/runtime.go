@@ -350,11 +350,6 @@ func (r *Runtime) NewAPIServer(
 	if err != nil {
 		return nil, fmt.Errorf("construct host service: %w", err)
 	}
-	metricsService, err := service.NewMetricsServiceWithCapacity(r.stores.Metrics, r.stores.Hosts, sshCapacity,
-		service.WithTargetPolicyProvider(r.targetPolicyProvider(cfg.SSHTargetPolicy)))
-	if err != nil {
-		return nil, fmt.Errorf("construct metrics service: %w", err)
-	}
 	runManager, err := service.NewRunService(r.stores.Runs, r.stores.Hosts, r.stores.Environments, sshCapacity,
 		cfg.Execution, service.WithTargetPolicyProvider(r.targetPolicyProvider(cfg.SSHTargetPolicy)), service.WithExecutionPolicyProvider(r.executionPolicyProvider(cfg.Execution)), service.WithMaxActiveRuns(runtimeRunWorkers(r.configuration)), service.WithDefaultRunTimeout(runtimeRunTimeout(r.configuration)))
 	if err != nil {
@@ -376,8 +371,8 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("construct managed resource application service: %w", err)
 	}
 	repositories := httpv1.Repositories{
-		Users: r.stores.Users, Metrics: r.stores.Metrics, Hosts: r.stores.Hosts,
-		Jobs: r.stores.Jobs, Environments: r.stores.Environments, Access: r.stores.Access,
+		Users: r.stores.Users, Hosts: r.stores.Hosts,
+		Environments: r.stores.Environments, Access: r.stores.Access,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
 		SignupEnabled: func() bool {
 			if snapshot, ok := r.configuration.Snapshot(); ok {
@@ -387,7 +382,7 @@ func (r *Runtime) NewAPIServer(
 		},
 	}
 
-	return httpserver.NewServer(cfg, authService, hostService, metricsService,
+	return httpserver.NewServer(cfg, authService, hostService,
 		sshCapacity, runManager, repositories, r.stores, additionalReadiness...)
 }
 

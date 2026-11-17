@@ -1,4 +1,4 @@
-// Package postgres implements the domain store interfaces for PostgreSQL, including user, host, job, environment, and metrics stores. It provides methods for creating, retrieving, updating, and deleting entities in a PostgreSQL database while handling encryption of sensitive data and audit logging.
+// Package postgres implements the domain store interfaces for PostgreSQL, including user, host, environment, and run stores. It provides methods for creating, retrieving, updating, and deleting entities in a PostgreSQL database while handling encryption of sensitive data and audit logging.
 package postgres
 
 import (
@@ -28,9 +28,7 @@ type Store struct {
 
 var (
 	_ domain.UserStore        = (*Store)(nil)
-	_ domain.MetricsStore     = (*Store)(nil)
 	_ domain.HostStore        = (*Store)(nil)
-	_ domain.JobStore         = (*Store)(nil)
 	_ domain.EnvironmentStore = (*Store)(nil)
 )
 

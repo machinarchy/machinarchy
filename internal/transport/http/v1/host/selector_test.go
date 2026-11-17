@@ -66,7 +66,7 @@ func call(_ *Handler, handler func(echo.Context) error, method, target, body str
 }
 
 func TestListFiltersWithASelector(t *testing.T) {
-	h := NewHandler(&listFakeHosts{hosts: listHosts()}, nil, listFakeEnvs{}, nil)
+	h := NewHandler(&listFakeHosts{hosts: listHosts()}, listFakeEnvs{}, nil)
 	names := func(rec *httptest.ResponseRecorder) string {
 		t.Helper()
 		var hosts []domain.Host
@@ -108,7 +108,7 @@ func TestListFiltersWithASelector(t *testing.T) {
 func TestPatchLabelsHandler(t *testing.T) {
 	t.Run("applies a patch in the caller's workspace", func(t *testing.T) {
 		store := &listFakeHosts{patchResult: map[string]string{"role": "api"}}
-		h := NewHandler(store, nil, listFakeEnvs{}, nil)
+		h := NewHandler(store, listFakeEnvs{}, nil)
 		rec := call(h, h.PatchLabels, http.MethodPatch, "/hosts/5/labels", `{"set":{"role":"api"},"remove":["old"]}`, map[string]string{"id": "5"})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
@@ -133,7 +133,7 @@ func TestPatchLabelsHandler(t *testing.T) {
 			"set and remove": {"5", `{"set":{"a":"b"},"remove":["a"]}`},
 		} {
 			store := &listFakeHosts{}
-			h := NewHandler(store, nil, listFakeEnvs{}, nil)
+			h := NewHandler(store, listFakeEnvs{}, nil)
 			rec := call(h, h.PatchLabels, http.MethodPatch, "/hosts/"+tc.id+"/labels", tc.body, map[string]string{"id": tc.id})
 			if rec.Code != http.StatusBadRequest {
 				t.Errorf("%s: status = %d, want 400", name, rec.Code)
@@ -154,7 +154,7 @@ func TestPatchLabelsHandler(t *testing.T) {
 			"unexpected": {errors.New("pq: connection refused"), http.StatusInternalServerError},
 		} {
 			store := &listFakeHosts{patchErr: tc.err}
-			h := NewHandler(store, nil, listFakeEnvs{}, nil)
+			h := NewHandler(store, listFakeEnvs{}, nil)
 			rec := call(h, h.PatchLabels, http.MethodPatch, "/hosts/5/labels", `{"set":{"a":"b"}}`, map[string]string{"id": "5"})
 			if rec.Code != tc.status {
 				t.Errorf("%s: status = %d, want %d", name, rec.Code, tc.status)

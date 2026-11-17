@@ -15,7 +15,7 @@ import (
 
 // @title           Machinarchy API
 // @version         1.0
-// @description     HTTP API for managing Machinarchy environments, SSH hosts, and job history.
+// @description     HTTP API for managing Machinarchy environments, SSH hosts, and operations.
 // @termsOfService  https://github.com/machinarchy/machinarchy
 // @BasePath        /
 // @securityDefinitions.apikey BearerAuth

@@ -16,9 +16,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/configuration"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/environments"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/fleet"
-	"github.com/machinarchy/machinarchy/internal/transport/http/v1/history"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
-	"github.com/machinarchy/machinarchy/internal/transport/http/v1/job"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/managedresource"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/runs"
@@ -30,9 +28,7 @@ import (
 // Concrete database adapters are assembled at the process composition root.
 type Repositories struct {
 	Users            domain.UserStore
-	Metrics          domain.MetricsStore
 	Hosts            domain.HostStore
-	Jobs             domain.JobStore
 	Environments     domain.EnvironmentStore
 	Access           domain.AccessStore
 	Audit            domain.AuditStore
@@ -47,7 +43,6 @@ func RegisterRoutes(
 	g *echo.Group,
 	repos Repositories,
 	authServ domain.AuthService,
-	metricsServ domain.MetricsService,
 	hostServ service.HostService,
 	jwtSecret []byte,
 	secureCookies bool,
@@ -64,9 +59,7 @@ func RegisterRoutes(
 		authHandler.SetSignupEnabledProvider(repos.SignupEnabled)
 	}
 	envHandler := environments.NewHandler(repos.Environments)
-	historyHandler := history.NewHandler(metricsServ, repos.Hosts)
-	hostHandler := host.NewHandler(repos.Hosts, repos.Jobs, repos.Environments, hostServ)
-	jobHandler := job.NewHandler(repos.Jobs)
+	hostHandler := host.NewHandler(repos.Hosts, repos.Environments, hostServ)
 	tokenHandler := tokens.NewHandler(tokenService)
 	memberHandler := members.NewHandler(memberService)
 	fleetHandler := fleet.NewHandler(targetService)
@@ -101,14 +94,6 @@ func RegisterRoutes(
 
 		// /api/v1/fleet (target previews; read-only, nothing is executed)
 		fleet.RegisterRoutes(readRoutes.Group("/fleet"), fleetHandler)
-
-		// /api/v1/jobs (workspace-scoped job logs and tracking)
-		jobGroup := apiv1.Group("/jobs", middleware.RequirePermission(domain.PermissionOperationsRead))
-		job.RegisterRoutes(jobGroup, jobHandler)
-
-		// History & Job Tracking Sub-domain Group
-		historyGroup := apiv1.Group("/history", middleware.RequirePermission(domain.PermissionOperationsRead))
-		history.RegisterRoutes(historyGroup, historyHandler)
 
 		tokenGroup := apiv1.Group("/tokens",
 			middleware.RequirePermission(domain.PermissionTokenManage), middleware.RequireHuman())

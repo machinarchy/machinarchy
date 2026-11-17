@@ -1,6 +1,6 @@
 # Machinarchy
 
-Machinarchy is a Go control-plane service for registering SSH-managed hosts, grouping them into environments, and querying host and job history. It exposes an Echo-based HTTP API, stores application data in SQLite or PostgreSQL, and delivers internal events through a transactional database outbox.
+Machinarchy is a Go control-plane service for registering SSH-managed hosts, grouping them into environments, and running operations on them. It exposes an Echo-based HTTP API, stores application data in SQLite or PostgreSQL, and delivers internal events through a transactional database outbox.
 
 > **Implementation status:** Host registration, authentication, environment management, history queries, health checks, and event plumbing are implemented. The agent runtime is currently a stub. Command execution over SSH is available through `POST /api/v1/runs` but disabled by default; the older job endpoints expose records already present in storage. See [architecture and current limitations](docs/architecture.md).
 
@@ -72,9 +72,7 @@ The interactive reference is rendered by Scalar. The generated API contract is a
 | Authentication | `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/logout` |
 | Current user | `GET /api/v1/me` |
 | Environments | `GET`, `POST /api/v1/environments`; `PUT`, `DELETE /api/v1/environments/{id}` |
-| Hosts | `GET`, `POST /api/v1/hosts`; `PUT`, `DELETE /api/v1/hosts/{id}`; `GET /api/v1/hosts/{id}/jobs` |
-| Jobs | `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}` |
-| Metrics history | `GET /api/v1/history?range=1h` |
+| Hosts | `GET`, `POST /api/v1/hosts`; `PUT`, `DELETE /api/v1/hosts/{id}` |
 | API tokens | `GET`, `POST /api/v1/tokens`; `DELETE /api/v1/tokens/{id}` |
 
 Each account receives its own workspace. Existing databases assign legacy rows to the earliest account and give later accounts empty workspaces; review [the migration guidance](docs/SECURITY.md#existing-database-migration) and take a backup before upgrading. Workspace owners can issue operator or reader API tokens. The plaintext is returned once; use an `Authorization: Bearer <token>` header and store it in a secret manager. Token details and examples are in the [security guide](docs/SECURITY.md#workspace-authorization-and-api-tokens).

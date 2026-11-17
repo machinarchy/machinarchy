@@ -10,5 +10,4 @@ func RegisterRoutes(read, write *echo.Group, h *Handler) {
 	write.PUT("/:id", h.Update)
 	write.PATCH("/:id/labels", h.PatchLabels)
 	write.DELETE("/:id", h.Delete)
-	read.GET("/:id/jobs", h.ListJobsForHost)
 }

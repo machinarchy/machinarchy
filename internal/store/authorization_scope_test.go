@@ -119,29 +119,6 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 		t.Fatalf("cross-workspace host delete error = %v, want not found", err)
 	}
 
-	job := &domain.Job{WorkspaceID: ownerA.WorkspaceID, HostID: hostID, Command: "internal", Status: domain.JobStatusPending}
-	if err := stores.Jobs.CreateJob(ctx, job); err != nil {
-		t.Fatalf("create workspace A job: %v", err)
-	}
-	if _, err := stores.Jobs.GetJobByID(ctx, workspaceB, job.ID); err == nil {
-		t.Fatalf("cross-workspace job lookup unexpectedly succeeded")
-	}
-	jobsB, totalB, err := stores.Jobs.ListJobs(ctx, domain.JobFilter{WorkspaceID: workspaceB, Limit: 10})
-	if err != nil || totalB != 0 || len(jobsB) != 0 {
-		t.Fatalf("workspace B jobs = %#v total=%d err=%v; want none", jobsB, totalB, err)
-	}
-
-	if err := stores.Metrics.SaveMetricPoint(ctx, ownerA.WorkspaceID, 10, 20); err != nil {
-		t.Fatalf("save workspace A metrics: %v", err)
-	}
-	if err := stores.Metrics.SaveMetricPoint(ctx, workspaceB, 80, 90); err != nil {
-		t.Fatalf("save workspace B metrics: %v", err)
-	}
-	metricsA, err := stores.Metrics.GetStoredHistory(ctx, ownerA.WorkspaceID, 10)
-	if err != nil || len(metricsA) != 1 || metricsA[0].CPUPercent != 10 {
-		t.Fatalf("workspace A metrics = %#v err=%v; want only A's point", metricsA, err)
-	}
-
 	tokenService, err := service.NewAPITokenService(stores.Access)
 	if err != nil {
 		t.Fatalf("create API token service: %v", err)
@@ -270,14 +247,6 @@ func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 		'deploy', '', '', '', 'SHA256:legacy', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatalf("seed legacy host: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO jobs(host_id, command, status, started_at)
-		VALUES (1, 'legacy', 'SUCCEEDED', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("seed legacy job: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO metrics_history(timestamp, cpu_percent, mem_percent)
-		VALUES ('2026-01-01T00:00:00Z', 25, 50)`); err != nil {
-		t.Fatalf("seed legacy metric: %v", err)
-	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close seeded legacy database: %v", err)
 	}
@@ -324,14 +293,6 @@ func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
 	}
 	if len(laterEnvironments) != 0 {
 		t.Fatalf("later user's environments = %#v; want empty workspace", laterEnvironments)
-	}
-	legacyJobs, total, err := stores.Jobs.ListJobs(ctx, domain.JobFilter{WorkspaceID: oldest.WorkspaceID, Limit: 10})
-	if err != nil || total != 1 || len(legacyJobs) != 1 {
-		t.Fatalf("legacy jobs = %#v total=%d err=%v", legacyJobs, total, err)
-	}
-	legacyMetrics, err := stores.Metrics.GetStoredHistory(ctx, oldest.WorkspaceID, 10)
-	if err != nil || len(legacyMetrics) != 1 || legacyMetrics[0].CPUPercent != 25 {
-		t.Fatalf("legacy metrics = %#v err=%v", legacyMetrics, err)
 	}
 }
 

@@ -17,14 +17,13 @@ import (
 // Handler handles HTTP requests for host management operations.
 type Handler struct {
 	hosts        domain.HostStore
-	jobs         domain.JobStore
 	environments domain.EnvironmentStore
 	service      service.HostService
 }
 
 // NewHandler creates a host HTTP handler using the provided stores and host service.
-func NewHandler(hosts domain.HostStore, jobs domain.JobStore, environments domain.EnvironmentStore, hostService service.HostService) *Handler {
-	return &Handler{hosts: hosts, jobs: jobs, environments: environments, service: hostService}
+func NewHandler(hosts domain.HostStore, environments domain.EnvironmentStore, hostService service.HostService) *Handler {
+	return &Handler{hosts: hosts, environments: environments, service: hostService}
 }
 
 // Payload represents the data accepted when creating or updating a host.
@@ -41,15 +40,6 @@ type Payload struct {
 	SecretData          string            `json:"secretData" binding:"required" example:"-----BEGIN OPENSSH PRIVATE KEY-----"`
 	Passphrase          string            `json:"passphrase,omitempty" example:"key-passphrase"`
 	ExpectedFingerprint string            `json:"expectedFingerprint" binding:"required" example:"SHA256:..."`
-}
-
-// JobsResponse represents the response containing a host and its associated jobs.
-type JobsResponse struct {
-	HostID int           `json:"hostId"`
-	Data   []*domain.Job `json:"data"`
-	Total  int           `json:"total"`
-	Limit  int           `json:"limit"`
-	Offset int           `json:"offset"`
 }
 
 // Create registers a host and verifies its pinned SSH host key.
@@ -276,50 +266,6 @@ func (h *Handler) Delete(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "host deleted"})
 }
 
-// ListJobsForHost returns paginated jobs for a host.
-// @Summary List jobs for a host
-// @Tags Hosts
-// @Produce json
-// @Security BearerAuth
-// @Param id path int true "Host ID"
-// @Param limit query int false "Page size (1-100)" default(10)
-// @Param offset query int false "Number of rows to skip" default(0)
-// @Success 200 {object} JobsResponse
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/v1/hosts/{id}/jobs [get]
-func (h *Handler) ListJobsForHost(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-	}
-	hostID, err := strconv.Atoi(c.Param("id"))
-	if err != nil || hostID < 1 {
-		return badRequest(c, "invalid host ID")
-	}
-	limit, err := queryInt(c, "limit", 10)
-	if err != nil || limit < 1 || limit > 100 {
-		return badRequest(c, "limit must be between 1 and 100")
-	}
-	offset, err := queryInt(c, "offset", 0)
-	if err != nil || offset < 0 {
-		return badRequest(c, "offset must be non-negative")
-	}
-	jobs, total, err := h.jobs.ListJobs(c.Request().Context(), domain.JobFilter{
-		WorkspaceID: principal.WorkspaceID,
-		HostID:      hostID,
-		Limit:       limit,
-		Offset:      offset,
-	})
-	if err != nil {
-		return internalError(c)
-	}
-	return c.JSON(http.StatusOK, JobsResponse{
-		HostID: hostID, Data: jobs, Total: total, Limit: limit, Offset: offset,
-	})
-}
-
 // BulkHostsRequest is the body of a bulk registration request.
 type BulkHostsRequest struct {
 	Hosts []Payload `json:"hosts"`
@@ -433,14 +379,6 @@ func (p Payload) host(id string) (*domain.Host, error) {
 			AuthType: auth,
 		},
 	}, nil
-}
-
-func queryInt(c echo.Context, name string, fallback int) (int, error) {
-	value := c.QueryParam(name)
-	if value == "" {
-		return fallback, nil
-	}
-	return strconv.Atoi(value)
 }
 
 func (h *Handler) validateEnvironment(c echo.Context, workspaceID, environmentID int) error {

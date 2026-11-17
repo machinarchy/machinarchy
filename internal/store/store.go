@@ -43,9 +43,7 @@ type Stores struct {
 	engine           string
 	Users            domain.UserStore
 	Access           domain.AccessStore
-	Metrics          domain.MetricsStore
 	Hosts            domain.HostStore
-	Jobs             domain.JobStore
 	Environments     domain.EnvironmentStore
 	Audit            domain.AuditStore
 	Runs             domain.RunStore
@@ -144,9 +142,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 
 		stores.Users = storeInstance
 		stores.Access = storeInstance
-		stores.Metrics = storeInstance
 		stores.Hosts = storeInstance
-		stores.Jobs = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
 		stores.Runs = storeInstance
@@ -162,9 +158,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		}
 		stores.Users = storeInstance
 		stores.Access = storeInstance
-		stores.Metrics = storeInstance
 		stores.Hosts = storeInstance
-		stores.Jobs = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
 		stores.Runs = storeInstance
