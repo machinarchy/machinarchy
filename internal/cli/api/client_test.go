@@ -118,7 +118,7 @@ func TestEveryRequestCarriesAuthenticationAndStandardHeaders(t *testing.T) {
 		switch {
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/v1/hosts" || r.URL.Path == "/api/v1/environments":
+		case r.URL.Path == "/api/v1/environments":
 			_, _ = w.Write([]byte("[]"))
 		default:
 			_, _ = w.Write([]byte("{}"))
@@ -129,7 +129,16 @@ func TestEveryRequestCarriesAuthenticationAndStandardHeaders(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{"ListHosts", func() error { _, err := client.ListHosts(ctx); return err }},
+		{"ListHosts", func() error { _, err := client.ListHosts(ctx, HostQuery{}); return err }},
+		{"GetHost", func() error { _, err := client.GetHost(ctx, "h1"); return err }},
+		{"DeleteHost", func() error { return client.DeleteHost(ctx, "h1", 2) }},
+		{"SetHostLabels", func() error { _, err := client.SetHostLabels(ctx, "h1", 2, nil); return err }},
+		{"ListAccessProfiles", func() error { _, err := client.ListAccessProfiles(ctx, ""); return err }},
+		{"PreviewTargets", func() error { _, err := client.PreviewTargets(ctx, TargetRule{All: true}); return err }},
+		{"SubmitOperation", func() error { _, err := client.SubmitOperation(ctx, OperationInput{}); return err }},
+		{"GetOperation", func() error { _, err := client.GetOperation(ctx, "o1"); return err }},
+		{"ListOperations", func() error { _, err := client.ListOperations(ctx, OperationQuery{}); return err }},
+		{"CancelOperation", func() error { _, err := client.CancelOperation(ctx, "o1"); return err }},
 		{"ListEnvironments", func() error { _, err := client.ListEnvironments(ctx); return err }},
 		{"RuntimeConfig", func() error { _, err := client.RuntimeConfig(ctx); return err }},
 		{"ConfigHistory", func() error { _, err := client.ConfigHistory(ctx, 0); return err }},
@@ -302,31 +311,26 @@ func TestConfigHistoryQuery(t *testing.T) {
 	}
 }
 
-func TestListHostsDecodesAndNeverReturnsNil(t *testing.T) {
-	body := `[{"id":"7","environmentId":2,"name":"web-01","hostname":"web-01.example","ip_address":"10.0.0.7","connection":"ssh","labels":{"role":"web"},"ssh":{"username":"deploy","port":22,"status":"reachable"},"created_at":"2026-01-02T03:04:05Z","updated_at":"2026-01-02T03:04:05Z"}]`
-	client := newClient(t, respond(&recorder{}, http.StatusOK, body, nil))
+func TestManagedHostsDecodeAndQuery(t *testing.T) {
+	body := `{"items":[{"metadata":{"id":"0f3c","name":"web-01","environmentId":2,"labels":{"role":"web"},"revision":3},` +
+		`"spec":{"accessProfileId":"p1","accessTarget":{"endpoint":"10.0.0.7:22"}},"status":{"phase":"Active"}}],"nextCursor":"0f3c"}`
+	rec := &recorder{}
+	client := newClient(t, respond(rec, http.StatusOK, body, nil))
 
-	hosts, err := client.ListHosts(context.Background())
+	page, err := client.ListHosts(context.Background(), HostQuery{Selector: "role=web", EnvironmentID: 2, Cursor: "a b"})
 	if err != nil {
 		t.Fatalf("ListHosts: %v", err)
 	}
-	if len(hosts) != 1 || hosts[0].Name != "web-01" || hosts[0].EnvironmentID != 2 || hosts[0].IPAddress != "10.0.0.7" {
-		t.Fatalf("hosts = %+v", hosts)
+	if len(page.Items) != 1 || page.NextCursor != "0f3c" {
+		t.Fatalf("page = %+v", page)
 	}
-	if hosts[0].SSH == nil || hosts[0].SSH.Username != "deploy" || hosts[0].SSH.Port != 22 {
-		t.Fatalf("ssh = %+v", hosts[0].SSH)
+	host := page.Items[0]
+	if host.Metadata.Name != "web-01" || host.Metadata.Revision != 3 || host.Spec.AccessTarget.Endpoint != "10.0.0.7:22" || host.Status.Phase != "Active" {
+		t.Fatalf("host = %+v", host)
 	}
-
-	for _, empty := range []string{`[]`, `null`} {
-		client := newClient(t, respond(&recorder{}, http.StatusOK, empty, nil))
-
-		hosts, err := client.ListHosts(context.Background())
-		if err != nil {
-			t.Fatalf("ListHosts(%s): %v", empty, err)
-		}
-		if hosts == nil || len(hosts) != 0 {
-			t.Fatalf("ListHosts(%s) = %#v, want a non-nil empty slice", empty, hosts)
-		}
+	got := rec.last(t)
+	if got.Path != "/api/v1/managed/hosts" || got.RawQuery != "cursor=a+b&environment=2&selector=role%3Dweb" {
+		t.Fatalf("request = %s?%s", got.Path, got.RawQuery)
 	}
 }
 
@@ -358,7 +362,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newClient(t, respond(&recorder{}, test.status, test.body, test.headers))
 
-			_, err := client.ListHosts(context.Background())
+			_, err := client.ListEnvironments(context.Background())
 			if err == nil {
 				t.Fatal("ListHosts succeeded for an error status")
 			}
@@ -376,7 +380,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 			if !strings.HasPrefix(err.Error(), "API returned HTTP ") {
 				t.Errorf("error text = %q", err.Error())
 			}
-			if apiErr.Method != http.MethodGet || apiErr.Path != "/api/v1/hosts" {
+			if apiErr.Method != http.MethodGet || apiErr.Path != "/api/v1/environments" {
 				t.Errorf("request = %s %s", apiErr.Method, apiErr.Path)
 			}
 			hint := clierr.Hint(err)
@@ -398,7 +402,7 @@ func TestAPIErrorCarriesRequestIDRetryAfterAndFields(t *testing.T) {
 		`{"error":"untrusted host key","fingerprint":"SHA256:abc","algorithm":"ssh-ed25519","count":3}`,
 		map[string]string{"X-Request-Id": "req-42", "Retry-After": "90000000"}))
 
-	_, err := client.ListHosts(context.Background())
+	_, err := client.ListEnvironments(context.Background())
 	apiErr := asAPIError(t, err)
 
 	if apiErr.RequestID != "req-42" || !strings.Contains(err.Error(), "(request ID req-42)") {
@@ -419,7 +423,7 @@ func TestServerMessagesAreSanitised(t *testing.T) {
 	body := `{"error":"first\u001b[31m red\nsecond\u0007"}`
 	client := newClient(t, respond(&recorder{}, http.StatusBadRequest, body, nil))
 
-	_, err := client.ListHosts(context.Background())
+	_, err := client.ListEnvironments(context.Background())
 	apiErr := asAPIError(t, err)
 
 	for _, r := range apiErr.Message {
@@ -431,7 +435,7 @@ func TestServerMessagesAreSanitised(t *testing.T) {
 	long := `{"error":"` + strings.Repeat("x", 5000) + `"}`
 	client = newClient(t, respond(&recorder{}, http.StatusBadRequest, long, nil))
 
-	_, err = client.ListHosts(context.Background())
+	_, err = client.ListEnvironments(context.Background())
 	if got := len([]rune(asAPIError(t, err).Message)); got > maxMessageRunes+3 {
 		t.Fatalf("message is %d runes, want at most %d", got, maxMessageRunes+3)
 	}
@@ -440,7 +444,7 @@ func TestServerMessagesAreSanitised(t *testing.T) {
 func TestRedirectsAreNotFollowed(t *testing.T) {
 	var followed atomic.Bool
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/hosts", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/environments", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/elsewhere", http.StatusFound)
 	})
 	mux.HandleFunc("/elsewhere", func(w http.ResponseWriter, _ *http.Request) {
@@ -448,7 +452,7 @@ func TestRedirectsAreNotFollowed(t *testing.T) {
 	})
 	client := newClient(t, mux)
 
-	_, err := client.ListHosts(context.Background())
+	_, err := client.ListEnvironments(context.Background())
 	apiErr := asAPIError(t, err)
 
 	if followed.Load() {
@@ -481,7 +485,7 @@ func TestContextCancellationPropagates(t *testing.T) {
 			cancel()
 		}()
 
-		_, err := client.ListHosts(ctx)
+		_, err := client.ListEnvironments(ctx)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}
@@ -497,7 +501,7 @@ func TestContextCancellationPropagates(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := client.ListHosts(ctx)
+		_, err := client.ListEnvironments(ctx)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}
@@ -524,7 +528,7 @@ func TestRequestTimeouts(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = client.ListHosts(context.Background())
+		_, err = client.ListEnvironments(context.Background())
 		if err == nil {
 			t.Fatal("ListHosts succeeded against a stalled server")
 		}
@@ -548,7 +552,7 @@ func TestRequestTimeouts(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		_, err := client.ListHosts(ctx)
+		_, err := client.ListEnvironments(ctx)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 		}
@@ -571,7 +575,7 @@ func TestUnreachableServerErrorsAreClearAndSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = client.ListHosts(context.Background())
+	_, err = client.ListEnvironments(context.Background())
 	if err == nil {
 		t.Fatal("ListHosts succeeded against a closed server")
 	}
@@ -581,7 +585,7 @@ func TestUnreachableServerErrorsAreClearAndSafe(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot reach the API server at "+address) {
 		t.Errorf("message = %q", err.Error())
 	}
-	if strings.Contains(err.Error(), testToken) || strings.Contains(err.Error(), "/api/v1/hosts") {
+	if strings.Contains(err.Error(), testToken) || strings.Contains(err.Error(), "/api/v1/environments") {
 		t.Errorf("message should neither leak the credential nor repeat the URL: %q", err.Error())
 	}
 	if clierr.Hint(err) == "" {
@@ -643,7 +647,7 @@ func TestResponseBodiesAreAlwaysClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err = client.ListHosts(context.Background())
+			_, err = client.ListEnvironments(context.Background())
 			if (err != nil) != test.wantErr {
 				t.Fatalf("error = %v, wantErr = %v", err, test.wantErr)
 			}
@@ -661,7 +665,7 @@ func TestOversizedResponses(t *testing.T) {
 	t.Run("successful response over the limit is rejected", func(t *testing.T) {
 		client := newClient(t, respond(&recorder{}, http.StatusOK, `[`+strings.Repeat(" ", 100)+`]`, nil), withMaxResponseBytes(50))
 
-		_, err := client.ListHosts(context.Background())
+		_, err := client.ListEnvironments(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "exceeds") {
 			t.Fatalf("error = %v, want a size error", err)
 		}
@@ -674,7 +678,7 @@ func TestOversizedResponses(t *testing.T) {
 		body := strings.Repeat("x", maxErrorBodyBytes*2)
 		client := newClient(t, respond(&recorder{}, http.StatusInternalServerError, body, nil))
 
-		_, err := client.ListHosts(context.Background())
+		_, err := client.ListEnvironments(context.Background())
 		if apiErr := asAPIError(t, err); apiErr.Status != http.StatusInternalServerError {
 			t.Fatalf("status = %d", apiErr.Status)
 		}
@@ -704,7 +708,7 @@ func TestEmptyAndInvalidSuccessBodies(t *testing.T) {
 	t.Run("ok with no body is an error", func(t *testing.T) {
 		client := newClient(t, respond(&recorder{}, http.StatusOK, ``, nil))
 
-		_, err := client.ListHosts(ctx)
+		_, err := client.ListEnvironments(ctx)
 		if err == nil || clierr.ExitCode(err) != clierr.ExitUnavailable {
 			t.Fatalf("error = %v (exit %d)", err, clierr.ExitCode(err))
 		}
@@ -713,7 +717,7 @@ func TestEmptyAndInvalidSuccessBodies(t *testing.T) {
 	t.Run("html where JSON is expected", func(t *testing.T) {
 		client := newClient(t, respond(&recorder{}, http.StatusOK, `<html>login</html>`, nil))
 
-		_, err := client.ListHosts(ctx)
+		_, err := client.ListEnvironments(ctx)
 		if err == nil || clierr.ExitCode(err) != clierr.ExitUnavailable {
 			t.Fatalf("error = %v (exit %d)", err, clierr.ExitCode(err))
 		}
@@ -849,7 +853,7 @@ func TestNewHTTPClientValidation(t *testing.T) {
 	t.Run("user agent can be overridden", func(t *testing.T) {
 		rec := &recorder{}
 		client := newClient(t, respond(rec, http.StatusOK, `[]`, nil), WithUserAgent("custom/1.0"))
-		if _, err := client.ListHosts(context.Background()); err != nil {
+		if _, err := client.ListEnvironments(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if got := rec.last(t).UserAgent; got != "custom/1.0" {
@@ -860,14 +864,14 @@ func TestNewHTTPClientValidation(t *testing.T) {
 
 func TestMisuseIsReportedNotPanicked(t *testing.T) {
 	var uninitialised *HTTPClient
-	if _, err := uninitialised.ListHosts(context.Background()); err == nil || !strings.Contains(err.Error(), "not initialized") {
+	if _, err := uninitialised.ListEnvironments(context.Background()); err == nil || !strings.Contains(err.Error(), "not initialized") {
 		t.Errorf("nil client error = %v", err)
 	}
 
 	client := newClient(t, respond(&recorder{}, http.StatusOK, `[]`, nil))
 
 	var noContext context.Context
-	if _, err := client.ListHosts(noContext); err == nil || !strings.Contains(err.Error(), "context is required") {
+	if _, err := client.ListEnvironments(noContext); err == nil || !strings.Contains(err.Error(), "context is required") {
 		t.Errorf("nil context error = %v", err)
 	}
 }

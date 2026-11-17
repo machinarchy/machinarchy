@@ -137,7 +137,7 @@ func (p *Printer) Hosts(hosts []api.Host) error {
 	if p.options.Quiet {
 		ids := make([]string, 0, len(hosts))
 		for _, host := range hosts {
-			ids = append(ids, host.ID)
+			ids = append(ids, host.Metadata.ID)
 		}
 
 		return p.IDs(ids)
@@ -152,71 +152,47 @@ func (p *Printer) Host(host api.Host) error {
 		return p.Document(host)
 	}
 	if p.options.Quiet {
-		return p.IDs([]string{host.ID})
+		return p.IDs([]string{host.Metadata.ID})
 	}
 
 	return p.hostTable([]api.Host{host})
 }
 
 func (p *Printer) hostTable(hosts []api.Host) error {
-	headers := []string{"NAME", "ID", "ENVIRONMENT", "ADDRESS", "STATUS"}
+	headers := []string{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY"}
 
 	if len(hosts) == 0 {
-		// Preserved from the original output so existing consumers see no
-		// change; discovery commands will move this message to stderr.
-		return p.Table(headers, [][]string{{"No resources found.", "", "", "", ""}})
+		return p.Table(headers, [][]string{{"No resources found.", "", "", "", "", ""}})
 	}
 
 	rows := make([][]string, 0, len(hosts))
 	for _, host := range hosts {
-		address := host.IPAddress
-		if address == "" {
-			address = host.Hostname
+		environment := "-"
+		if host.Metadata.EnvironmentID > 0 {
+			environment = fmt.Sprintf("%d", host.Metadata.EnvironmentID)
 		}
-		status := "-"
-		if host.SSH != nil && host.SSH.Status != "" {
-			status = host.SSH.Status
-		}
-		rows = append(rows, []string{host.Name, host.ID, fmt.Sprintf("%d", host.EnvironmentID), address, status})
+		rows = append(rows, []string{host.Metadata.Name, host.Metadata.ID, environment,
+			orDash(host.Spec.AccessTarget.Endpoint), orDash(host.Status.Phase), condition(host.Status.Conditions, "Ready")})
 	}
 
 	return p.Table(headers, rows)
 }
 
-// PrintHosts renders a host collection as table, JSON, or YAML.
-//
-// Deprecated: use a Printer. Kept so existing callers keep working.
-func PrintHosts(writer io.Writer, format string, hosts []api.Host) error {
-	printer, err := legacyPrinter(writer, format)
-	if err != nil {
-		return err
+// condition returns the status of the named condition, or "-".
+func condition(conditions []api.Condition, kind string) string {
+	for _, c := range conditions {
+		if c.Type == kind {
+			return c.Status
+		}
 	}
-
-	return printer.Hosts(hosts)
+	return "-"
 }
 
-// PrintHost renders one host as a row, JSON object, or YAML object.
-//
-// Deprecated: use a Printer. Kept so existing callers keep working.
-func PrintHost(writer io.Writer, format string, host api.Host) error {
-	printer, err := legacyPrinter(writer, format)
-	if err != nil {
-		return err
+func orDash(value string) string {
+	if value == "" {
+		return "-"
 	}
-
-	return printer.Host(host)
-}
-
-func legacyPrinter(writer io.Writer, format string) (*Printer, error) {
-	if writer == nil {
-		return nil, errors.New("output writer is required")
-	}
-	parsed, err := ParseFormat(format)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewPrinter(writer, parsed, Options{})
+	return value
 }
 
 func printJSON(writer io.Writer, value any) error {

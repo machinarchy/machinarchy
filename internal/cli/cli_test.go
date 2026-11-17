@@ -96,11 +96,8 @@ func command(name string, body func(*cobra.Command, *cli.Factory) error) cli.Com
 	}
 }
 
-type stubClient struct{}
-
-func (stubClient) ListHosts(context.Context) ([]api.Host, error) { return nil, nil }
-
-func (stubClient) ListEnvironments(context.Context) ([]api.Environment, error) { return nil, nil }
+// stubClient satisfies api.Client; tests that use it never call the API.
+type stubClient struct{ api.Client }
 
 func writeConfig(t *testing.T, server, token string) string {
 	t.Helper()
@@ -613,8 +610,8 @@ func TestDefaultClientAuthenticatesEveryRequest(t *testing.T) {
 		mu.Unlock()
 
 		switch r.URL.Path {
-		case "/api/v1/hosts":
-			_, _ = w.Write([]byte(`[{"id":"1","name":"a"},{"id":"2","name":"b"}]`))
+		case "/api/v1/managed/hosts":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"id":"1","name":"a"}},{"metadata":{"id":"2","name":"b"}}]}`))
 		case "/api/v1/environments":
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -630,14 +627,14 @@ func TestDefaultClientAuthenticatesEveryRequest(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			hosts, err := client.ListHosts(c.Context())
+			hosts, err := client.ListHosts(c.Context(), api.HostQuery{})
 			if err != nil {
 				return err
 			}
 			if _, err := client.ListEnvironments(c.Context()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(c.OutOrStdout(), strconv.Itoa(len(hosts)))
+			_, err = fmt.Fprintln(c.OutOrStdout(), strconv.Itoa(len(hosts.Items)))
 			return err
 		}),
 	)
@@ -677,7 +674,7 @@ func TestStalledServerHonoursTheRequestTimeout(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = client.ListHosts(c.Context())
+		_, err = client.ListHosts(c.Context(), api.HostQuery{})
 		return err
 	}))
 

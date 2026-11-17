@@ -4,7 +4,7 @@ Run `machinarchy --help` or `machinarchy COMMAND --help` for the built-in Cobra 
 
 ## `get hosts`
 
-List hosts visible to the configured API token:
+List the managed hosts visible to the configured API token (`GET /api/v1/managed/hosts`; the CLI follows every page):
 
 ```sh
 go run ./cmd/machinarchy get hosts
@@ -20,6 +20,8 @@ go run ./cmd/machinarchy get hosts 01JABCDEF123
 
 If host names are ambiguous, use the resource ID or filter to one environment.
 
+`-l` / `--selector` filters with the selector syntax, for example `-l tier=web`, `-l 'role in (web,db),!canary'` or `-l name=web-*`. Built-in fields are `id`, `name`, `environment`, `phase`, `presence` and `profile`; any other key is a label.
+
 ### Environment filter
 
 `--env` / `-n` accepts a case-insensitive environment name or its numeric ID. The active context may also define a default environment.
@@ -30,7 +32,7 @@ go run ./cmd/machinarchy get hosts -n 3
 go run ./cmd/machinarchy --context staging get hosts -n production
 ```
 
-The API currently returns host and environment lists without an environment filter parameter. The CLI resolves the environment and filters the hosts locally.
+The CLI resolves the environment name to its ID and the server filters the hosts.
 
 ### Output formats
 
@@ -45,8 +47,33 @@ go run ./cmd/machinarchy get hosts -o yaml
 For example, pipe JSON through `jq`:
 
 ```sh
-go run ./cmd/machinarchy get hosts -o json | jq '.[].name'
+go run ./cmd/machinarchy get hosts -o json | jq '.[].metadata.name'
 ```
+
+## Managing hosts
+
+```sh
+go run ./cmd/machinarchy get profiles
+go run ./cmd/machinarchy create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web --trust SHA256:...
+go run ./cmd/machinarchy label host web-01 canary=yes tier-
+go run ./cmd/machinarchy delete host web-01
+```
+
+Binding a host to an Access Profile, or changing its endpoint or trusted keys, needs the workspace owner. `delete host` asks for confirmation (`--yes` skips it) and is refused while an operation targets the host.
+
+## Running programs
+
+`run` executes one program, without a shell, on the selected hosts. It first previews the targets, asks for confirmation, and then submits the operation bound to that preview: if the selection changes in between, the server refuses it (exit code 7) and nothing runs.
+
+```sh
+go run ./cmd/machinarchy run -l tier=web -- uptime
+go run ./cmd/machinarchy run --host web-01 --host web-02 --exclude web-02 --wait -- systemctl is-active nginx
+go run ./cmd/machinarchy get operations
+go run ./cmd/machinarchy get operation 01JABCDEF123
+go run ./cmd/machinarchy cancel operation 01JABCDEF123
+```
+
+`--wait` polls until the operation finishes, prints each host's state, exit code and first output line, and exits non-zero unless every host succeeded. Readers can list operations but never see their arguments or output.
 
 Errors and verbose structured logs go to stderr. Resource output goes to stdout, so it can be piped without log lines mixed into the data.
 

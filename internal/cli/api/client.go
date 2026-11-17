@@ -17,7 +17,6 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/machinarchy/machinarchy/internal/buildinfo"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -30,30 +29,6 @@ const (
 	invalidResponseHint = "The server did not return the expected JSON. Check that the server URL points at the Machinarchy API and not at a proxy or web page."
 )
 
-// Host is the credential-free host representation returned by the API.
-type Host struct {
-	ID            string            `json:"id" yaml:"id"`
-	EnvironmentID int               `json:"environmentId" yaml:"environmentId"`
-	Name          string            `json:"name" yaml:"name"`
-	Hostname      string            `json:"hostname" yaml:"hostname"`
-	IPAddress     string            `json:"ip_address" yaml:"ip_address"`
-	Connection    string            `json:"connection" yaml:"connection"`
-	Labels        map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
-	SSH           *SSHState         `json:"ssh,omitempty" yaml:"ssh,omitempty"`
-	CreatedAt     time.Time         `json:"created_at" yaml:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at" yaml:"updated_at"`
-}
-
-// SSHState contains operational SSH state without authentication secrets.
-type SSHState struct {
-	Username         string     `json:"username" yaml:"username"`
-	Port             int        `json:"port" yaml:"port"`
-	Status           string     `json:"status" yaml:"status"`
-	LastCheckAt      *time.Time `json:"last_check_at,omitempty" yaml:"last_check_at,omitempty"`
-	LastCheckMS      *int64     `json:"last_check_duration_ms,omitempty" yaml:"last_check_duration_ms,omitempty"`
-	LastCheckMessage string     `json:"last_check_message,omitempty" yaml:"last_check_message,omitempty"`
-}
-
 // Environment is a named resource scope in Machinarchy.
 type Environment struct {
 	ID          int    `json:"id" yaml:"id"`
@@ -61,12 +36,22 @@ type Environment struct {
 	Description string `json:"description" yaml:"description"`
 }
 
-// Client is the narrow HTTP contract commands depend on, making command logic
-// testable with a fake that needs no live server. It is the read-only API
-// surface used by current resource commands.
+// Client is the narrow HTTP contract resource commands depend on, making
+// command logic testable with a fake that needs no live server. Hosts and
+// Operations come from the managed API (/api/v1/managed).
 type Client interface {
-	ListHosts(context.Context) ([]Host, error)
+	ListHosts(context.Context, HostQuery) (Page[Host], error)
+	GetHost(context.Context, string) (*Host, error)
+	CreateHost(context.Context, HostInput) (*Host, error)
+	DeleteHost(context.Context, string, uint64) error
+	SetHostLabels(context.Context, string, uint64, map[string]string) (*Host, error)
 	ListEnvironments(context.Context) ([]Environment, error)
+	ListAccessProfiles(context.Context, string) (Page[AccessProfile], error)
+	PreviewTargets(context.Context, TargetRule) (*TargetSet, error)
+	SubmitOperation(context.Context, OperationInput) (*Operation, error)
+	GetOperation(context.Context, string) (*Operation, error)
+	CancelOperation(context.Context, string) (*Operation, error)
+	ListOperations(context.Context, OperationQuery) (Page[OperationSummary], error)
 }
 
 // ManagementClient is the API-only surface for runtime configuration and
@@ -179,18 +164,6 @@ var (
 	_ Client           = (*HTTPClient)(nil)
 	_ ManagementClient = (*HTTPClient)(nil)
 )
-
-// ListHosts retrieves all hosts visible to the configured API token.
-func (c *HTTPClient) ListHosts(ctx context.Context) ([]Host, error) {
-	var hosts []Host
-	if err := c.get(ctx, "/api/v1/hosts", &hosts); err != nil {
-		return nil, err
-	}
-	if hosts == nil {
-		hosts = make([]Host, 0)
-	}
-	return hosts, nil
-}
 
 // ListEnvironments retrieves environments used to resolve the --env filter.
 func (c *HTTPClient) ListEnvironments(ctx context.Context) ([]Environment, error) {

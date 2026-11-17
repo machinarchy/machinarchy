@@ -12,8 +12,9 @@ import (
 
 func sampleHosts() []api.Host {
 	return []api.Host{
-		{ID: "7", Name: "web-01", EnvironmentID: 2, IPAddress: "10.0.0.7", Hostname: "web-01.example", SSH: &api.SSHState{Username: "deploy", Port: 22, Status: "reachable"}},
-		{ID: "12", Name: "db", Hostname: "db.example"},
+		{Metadata: api.HostMetadata{ID: "7", Name: "web-01", EnvironmentID: 2}, Spec: api.HostSpec{AccessTarget: api.HostAccessTarget{Endpoint: "10.0.0.7:22"}},
+			Status: api.HostStatus{Phase: "Active", Conditions: []api.Condition{{Type: "Ready", Status: "True"}}}},
+		{Metadata: api.HostMetadata{ID: "12", Name: "db"}, Status: api.HostStatus{Phase: "Pending"}},
 	}
 }
 
@@ -85,9 +86,9 @@ func TestHostTable(t *testing.T) {
 	}
 
 	want := [][]string{
-		{"NAME", "ID", "ENVIRONMENT", "ADDRESS", "STATUS"},
-		{"web-01", "7", "2", "10.0.0.7", "reachable"},
-		{"db", "12", "0", "db.example", "-"},
+		{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY"},
+		{"web-01", "7", "2", "10.0.0.7:22", "Active", "True"},
+		{"db", "12", "-", "-", "Pending", "-"},
 	}
 	for index, line := range lines {
 		got := strings.Fields(line)
@@ -102,23 +103,6 @@ func TestHostTable(t *testing.T) {
 		if len(line) <= offset || line[offset-2] != ' ' {
 			t.Errorf("row %q is not aligned with the header at offset %d", line, offset)
 		}
-	}
-}
-
-func TestHostTableMatchesLegacyBytes(t *testing.T) {
-	var legacy, modern bytes.Buffer
-	if err := PrintHosts(&legacy, "table", sampleHosts()); err != nil {
-		t.Fatal(err)
-	}
-	printer, err := NewPrinter(&modern, FormatTable, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := printer.Hosts(sampleHosts()); err != nil {
-		t.Fatal(err)
-	}
-	if legacy.String() != modern.String() {
-		t.Fatalf("legacy and Printer output differ:\n%q\n%q", legacy.String(), modern.String())
 	}
 }
 
@@ -172,7 +156,7 @@ func TestJSONOutput(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, output)
 	}
-	if len(decoded) != 2 || decoded[0]["name"] != "web-01" || decoded[0]["ip_address"] != "10.0.0.7" {
+	if len(decoded) != 2 || decoded[0]["metadata"].(map[string]any)["name"] != "web-01" {
 		t.Fatalf("decoded = %v", decoded)
 	}
 	if !strings.Contains(output, "\n  {") {
@@ -181,7 +165,7 @@ func TestJSONOutput(t *testing.T) {
 
 	single := render(t, FormatJSON, Options{}, func(p *Printer) error { return p.Host(sampleHosts()[0]) })
 	var object map[string]any
-	if err := json.Unmarshal([]byte(single), &object); err != nil || object["id"] != "7" {
+	if err := json.Unmarshal([]byte(single), &object); err != nil || object["metadata"].(map[string]any)["id"] != "7" {
 		t.Fatalf("single = %s, err = %v", single, err)
 	}
 }
@@ -189,7 +173,7 @@ func TestJSONOutput(t *testing.T) {
 func TestYAMLOutput(t *testing.T) {
 	output := render(t, FormatYAML, Options{}, func(p *Printer) error { return p.Hosts(sampleHosts()) })
 
-	for _, want := range []string{"name: web-01", "ip_address: 10.0.0.7", "environmentId: 2", "status: reachable"} {
+	for _, want := range []string{"name: web-01", "endpoint: 10.0.0.7:22", "environmentId: 2", "phase: Active"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("YAML output lacks %q:\n%s", want, output)
 		}
@@ -208,7 +192,7 @@ func TestOutputNeverContainsCredentialFields(t *testing.T) {
 }
 
 func TestTableCellsCannotBreakRows(t *testing.T) {
-	hosts := []api.Host{{ID: "1", Name: "evil\tname\nwith\rbreaks", Hostname: "h"}}
+	hosts := []api.Host{{Metadata: api.HostMetadata{ID: "1", Name: "evil\tname\nwith\rbreaks"}}}
 	output := render(t, FormatTable, Options{}, func(p *Printer) error { return p.Hosts(hosts) })
 
 	if lines := strings.Split(strings.TrimRight(output, "\n"), "\n"); len(lines) != 2 {
@@ -241,26 +225,5 @@ func TestGenericTable(t *testing.T) {
 	})
 	if strings.Contains(output, "A") || !strings.Contains(output, "1") {
 		t.Fatalf("output = %q", output)
-	}
-}
-
-func TestLegacyWrappers(t *testing.T) {
-	var buffer bytes.Buffer
-	if err := PrintHosts(&buffer, "yml", sampleHosts()); err != nil || !strings.Contains(buffer.String(), "name: web-01") {
-		t.Fatalf("PrintHosts(yml) = %v\n%s", err, buffer.String())
-	}
-
-	buffer.Reset()
-	if err := PrintHost(&buffer, "json", sampleHosts()[0]); err != nil || !strings.Contains(buffer.String(), `"id": "7"`) {
-		t.Fatalf("PrintHost(json) = %v\n%s", err, buffer.String())
-	}
-
-	err := PrintHosts(&buffer, "xml", nil)
-	if err == nil || err.Error() != `unsupported output format "xml"; choose table, json, or yaml` {
-		t.Fatalf("PrintHosts(xml) = %v", err)
-	}
-
-	if err := PrintHosts(nil, "table", nil); err == nil {
-		t.Fatal("PrintHosts accepted a nil writer")
 	}
 }

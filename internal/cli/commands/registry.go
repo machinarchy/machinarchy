@@ -13,6 +13,11 @@ func DefaultGroups() []cli.CommandGroup {
 			Title: "Core Commands",
 			Commands: []cli.CommandBuilder{
 				NewGetCommand,
+				NewCreateCommand,
+				NewDeleteCommand,
+				NewLabelCommand,
+				NewRunCommand,
+				NewCancelCommand,
 			},
 		},
 		{

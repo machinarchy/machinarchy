@@ -86,40 +86,179 @@ contexts:
 	return path
 }
 
+// fakeClient is an in-memory managed API. ListHosts filters by environment
+// and simple KEY=VALUE selectors server-side, like the real API, and pages
+// pageSize hosts at a time when pageSize is set.
 type fakeClient struct {
-	hosts []api.Host
-	envs  []api.Environment
-	err   error
+	hosts    []api.Host
+	envs     []api.Environment
+	profiles []api.AccessProfile
+	ops      map[string]*api.Operation
+	err      error
+	pageSize int
+
+	submitted []api.OperationInput
+	deleted   []string
+	calls     int
 }
 
-func (f fakeClient) ListHosts(context.Context) ([]api.Host, error) {
+var _ api.Client = (*fakeClient)(nil)
+
+func (f *fakeClient) ListHosts(_ context.Context, query api.HostQuery) (api.Page[api.Host], error) {
+	f.calls++
 	if f.err != nil {
-		return nil, f.err
+		return api.Page[api.Host]{}, f.err
 	}
-	return f.hosts, nil
+	var matched []api.Host
+	for _, host := range f.hosts {
+		if query.EnvironmentID > 0 && host.Metadata.EnvironmentID != query.EnvironmentID {
+			continue
+		}
+		if key, value, ok := strings.Cut(query.Selector, "="); ok && host.Metadata.Labels[key] != value {
+			continue
+		}
+		matched = append(matched, host)
+	}
+	start := 0
+	if query.Cursor != "" {
+		fmt.Sscan(query.Cursor, &start)
+	}
+	if f.pageSize == 0 || start+f.pageSize >= len(matched) {
+		return api.Page[api.Host]{Items: matched[start:]}, nil
+	}
+	return api.Page[api.Host]{Items: matched[start : start+f.pageSize], NextCursor: fmt.Sprint(start + f.pageSize)}, nil
 }
 
-func (f fakeClient) ListEnvironments(context.Context) ([]api.Environment, error) {
+func (f *fakeClient) GetHost(_ context.Context, id string) (*api.Host, error) {
+	for _, host := range f.hosts {
+		if host.Metadata.ID == id {
+			return &host, nil
+		}
+	}
+	return nil, &api.APIError{Status: 404, Message: "resource not found"}
+}
+
+func (f *fakeClient) CreateHost(_ context.Context, input api.HostInput) (*api.Host, error) {
+	host := api.Host{Metadata: api.HostMetadata{ID: fmt.Sprint(len(f.hosts) + 100), Name: input.Name, Labels: input.Labels, Revision: 1}, Spec: input.Spec}
+	f.hosts = append(f.hosts, host)
+	return &host, nil
+}
+
+func (f *fakeClient) DeleteHost(_ context.Context, id string, revision uint64) error {
+	f.deleted = append(f.deleted, fmt.Sprintf("%s@%d", id, revision))
+	return nil
+}
+
+func (f *fakeClient) SetHostLabels(_ context.Context, id string, revision uint64, labels map[string]string) (*api.Host, error) {
+	for i := range f.hosts {
+		if f.hosts[i].Metadata.ID == id {
+			if f.hosts[i].Metadata.Revision != revision {
+				return nil, &api.APIError{Status: 409, Message: "resource revision conflict"}
+			}
+			f.hosts[i].Metadata.Labels = labels
+			f.hosts[i].Metadata.Revision++
+			return &f.hosts[i], nil
+		}
+	}
+	return nil, &api.APIError{Status: 404, Message: "resource not found"}
+}
+
+func (f *fakeClient) ListEnvironments(context.Context) ([]api.Environment, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.envs, nil
 }
 
-func fake(client fakeClient) cli.APIClientBuilder {
+func (f *fakeClient) ListAccessProfiles(context.Context, string) (api.Page[api.AccessProfile], error) {
+	return api.Page[api.AccessProfile]{Items: f.profiles}, nil
+}
+
+func (f *fakeClient) PreviewTargets(ctx context.Context, rule api.TargetRule) (*api.TargetSet, error) {
+	page, err := f.ListHosts(ctx, api.HostQuery{Selector: rule.Selector})
+	if err != nil {
+		return nil, err
+	}
+	set := &api.TargetSet{TargetsHash: fmt.Sprintf("hash-%d", len(page.Items))}
+	if rule.Selector != "" || rule.All {
+		set.Hosts = page.Items
+	}
+	for _, name := range rule.Include {
+		if host, err := pickName(f.hosts, name); err == nil {
+			set.Hosts = append(set.Hosts, host)
+		} else {
+			set.UnknownIncludes = append(set.UnknownIncludes, name)
+		}
+	}
+	return set, nil
+}
+
+func pickName(hosts []api.Host, name string) (api.Host, error) {
+	for _, host := range hosts {
+		if host.Metadata.Name == name || host.Metadata.ID == name {
+			return host, nil
+		}
+	}
+	return api.Host{}, fmt.Errorf("no host %q", name)
+}
+
+func (f *fakeClient) SubmitOperation(_ context.Context, input api.OperationInput) (*api.Operation, error) {
+	f.submitted = append(f.submitted, input)
+	op := &api.Operation{ID: fmt.Sprintf("op-%d", len(f.submitted)), Status: api.OperationStatus{State: "Queued"}}
+	if f.ops == nil {
+		f.ops = map[string]*api.Operation{}
+	}
+	f.ops[op.ID] = op
+	return op, nil
+}
+
+func (f *fakeClient) GetOperation(_ context.Context, id string) (*api.Operation, error) {
+	op, ok := f.ops[id]
+	if !ok {
+		return nil, &api.APIError{Status: 404, Message: "resource not found"}
+	}
+	// Each poll moves the operation along: Queued -> Running -> Succeeded.
+	next := map[string]string{"Queued": "Running", "Running": "Succeeded"}
+	current := *op
+	if state, ok := next[op.Status.State]; ok {
+		op.Status.State = state
+		if state == "Succeeded" {
+			zero := 0
+			op.Status.Targets = []api.OperationTarget{{Spec: api.OperationTargetSpec{DisplayName: "web-01"}, State: "Succeeded",
+				Result: &api.TargetResult{ExitCode: &zero, Output: "up 3 days\n"}}}
+		}
+	}
+	return &current, nil
+}
+
+func (f *fakeClient) CancelOperation(_ context.Context, id string) (*api.Operation, error) {
+	return &api.Operation{ID: id, Status: api.OperationStatus{State: "CancelRequested"}}, nil
+}
+
+func (f *fakeClient) ListOperations(context.Context, api.OperationQuery) (api.Page[api.OperationSummary], error) {
+	return api.Page[api.OperationSummary]{Items: []api.OperationSummary{{ID: "op-9", State: "Succeeded", Targets: map[string]int{"Succeeded": 2}}}}, nil
+}
+
+func fake(client *fakeClient) cli.APIClientBuilder {
 	return func(config.Target) (api.Client, error) { return client, nil }
 }
 
-func fixtures() fakeClient {
-	return fakeClient{
+func managedHost(id, name string, environment int, endpoint string, labels map[string]string) api.Host {
+	return api.Host{Metadata: api.HostMetadata{ID: id, Name: name, EnvironmentID: environment, Labels: labels, Revision: 1},
+		Spec: api.HostSpec{AccessTarget: api.HostAccessTarget{Endpoint: endpoint}}, Status: api.HostStatus{Phase: "Active"}}
+}
+
+func fixtures() *fakeClient {
+	return &fakeClient{
 		hosts: []api.Host{
-			{ID: "1", Name: "web-01", EnvironmentID: 1, IPAddress: "10.0.0.1", SSH: &api.SSHState{Status: "reachable"}},
-			{ID: "2", Name: "web-02", EnvironmentID: 1, Hostname: "web-02.example"},
-			{ID: "3", Name: "db-01", EnvironmentID: 2, IPAddress: "10.0.0.3"},
-			{ID: "4", Name: "dup", EnvironmentID: 1, IPAddress: "10.0.0.4"},
-			{ID: "5", Name: "dup", EnvironmentID: 2, IPAddress: "10.0.0.5"},
+			managedHost("1", "web-01", 1, "10.0.0.1:22", map[string]string{"tier": "web"}),
+			managedHost("2", "web-02", 1, "10.0.0.2:22", map[string]string{"tier": "web"}),
+			managedHost("3", "db-01", 2, "10.0.0.3:22", map[string]string{"tier": "db"}),
+			managedHost("4", "dup", 1, "10.0.0.4:22", nil),
+			managedHost("5", "dup", 2, "10.0.0.5:22", nil),
 		},
-		envs: []api.Environment{{ID: 1, Name: "prod"}, {ID: 2, Name: "dev"}},
+		envs:     []api.Environment{{ID: 1, Name: "prod"}, {ID: 2, Name: "dev"}},
+		profiles: []api.AccessProfile{{ID: "p-1", Name: "deploy", CurrentRevision: 1}},
 	}
 }
 
@@ -150,7 +289,12 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 	root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
 
 	want := map[string][]string{
-		"get":            {"hosts"},
+		"get":            {"hosts", "operations", "profiles"},
+		"create":         {"host"},
+		"delete":         {"host"},
+		"label":          {"host"},
+		"run":            nil,
+		"cancel":         {"operation"},
 		"config":         {"current-context", "get-contexts", "set-cluster", "set-context", "set-credentials", "use-context"},
 		"runtime-config": {"get", "history", "publish", "rollback", "status", "validate"},
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
@@ -325,7 +469,7 @@ func TestVersion(t *testing.T) {
 
 func TestGetHosts(t *testing.T) {
 	cfg := writeConfig(t, "http://127.0.0.1:1", "tok")
-	run := func(t *testing.T, client fakeClient, args ...string) result {
+	run := func(t *testing.T, client *fakeClient, args ...string) result {
 		t.Helper()
 
 		return execute(t, fake(client), "", append([]string{"--config", cfg}, args...)...)
@@ -341,11 +485,8 @@ func TestGetHosts(t *testing.T) {
 		if len(lines) != 6 || !strings.HasPrefix(lines[0], "NAME") {
 			t.Fatalf("output:\n%s", got.stdout)
 		}
-		if first := strings.Fields(lines[1]); strings.Join(first, "|") != "web-01|1|1|10.0.0.1|reachable" {
+		if first := strings.Fields(lines[1]); strings.Join(first, "|") != "web-01|1|1|10.0.0.1:22|Active|-" {
 			t.Errorf("first row = %v", first)
-		}
-		if second := strings.Fields(lines[2]); strings.Join(second, "|") != "web-02|2|1|web-02.example|-" {
-			t.Errorf("second row = %v", second)
 		}
 	})
 
@@ -378,7 +519,7 @@ func TestGetHosts(t *testing.T) {
 
 		asJSON := run(t, fixtures(), "get", "hosts", "web-01", "-o", "json")
 		var object map[string]any
-		if err := json.Unmarshal([]byte(asJSON.stdout), &object); err != nil || object["id"] != "1" {
+		if err := json.Unmarshal([]byte(asJSON.stdout), &object); err != nil || object["metadata"].(map[string]any)["id"] != "1" {
 			t.Errorf("single JSON = %s (%v)", asJSON.stdout, err)
 		}
 	})
@@ -445,13 +586,13 @@ func TestGetHosts(t *testing.T) {
 	})
 
 	t.Run("an empty inventory keeps the original table message", func(t *testing.T) {
-		got := run(t, fakeClient{}, "get", "hosts")
+		got := run(t, &fakeClient{}, "get", "hosts")
 
 		if got.code != 0 || !strings.Contains(got.stdout, "No resources found.") {
 			t.Fatalf("result = %+v", got)
 		}
 
-		asJSON := run(t, fakeClient{}, "get", "hosts", "-o", "json")
+		asJSON := run(t, &fakeClient{}, "get", "hosts", "-o", "json")
 		if strings.TrimSpace(asJSON.stdout) != "null" && strings.TrimSpace(asJSON.stdout) != "[]" {
 			t.Errorf("empty JSON = %q", asJSON.stdout)
 		}
@@ -494,7 +635,7 @@ func TestGetHosts(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				got := run(t, fakeClient{err: test.err}, "get", "hosts")
+				got := run(t, &fakeClient{err: test.err}, "get", "hosts")
 
 				if got.code != test.wantCode {
 					t.Fatalf("exit code = %d, want %d (stderr %q)", got.code, test.wantCode, got.stderr)
@@ -601,7 +742,7 @@ func TestConfigCommandsEndToEnd(t *testing.T) {
 		var target config.Target
 		builder := func(resolved config.Target) (api.Client, error) {
 			target = resolved
-			return fakeClient{envs: []api.Environment{{ID: 1, Name: "Staging"}}}, nil
+			return &fakeClient{envs: []api.Environment{{ID: 1, Name: "Staging"}}}, nil
 		}
 
 		got := execute(t, builder, "", "--config", path, "get", "hosts", "--env", "")
@@ -946,4 +1087,115 @@ func TestNoCommandErrorLeaksTheToken(t *testing.T) {
 	if strings.Contains(got.stdout+got.stderr, token) {
 		t.Errorf("a network failure leaked the token:\n%s%s", got.stdout, got.stderr)
 	}
+}
+
+// ---- managed host and operation commands (B8b) -----------------------------
+
+func TestManagedCommands(t *testing.T) {
+	cfg := writeConfig(t, "http://127.0.0.1:1", "tok")
+	run := func(t *testing.T, client *fakeClient, args ...string) result {
+		t.Helper()
+		return execute(t, fake(client), "", append([]string{"--config", cfg}, args...)...)
+	}
+
+	t.Run("get hosts follows every page and passes the selector", func(t *testing.T) {
+		client := fixtures()
+		client.pageSize = 2
+		got := run(t, client, "get", "hosts", "-q")
+		if got.stdout != "1\n2\n3\n4\n5\n" || client.calls != 3 {
+			t.Fatalf("stdout = %q after %d calls", got.stdout, client.calls)
+		}
+		got = run(t, fixtures(), "get", "hosts", "-l", "tier=web", "-q")
+		if got.stdout != "1\n2\n" {
+			t.Fatalf("selector stdout = %q", got.stdout)
+		}
+	})
+
+	t.Run("create host resolves the profile by name", func(t *testing.T) {
+		client := fixtures()
+		got := run(t, client, "create", "host", "web-09", "--endpoint", "10.0.0.9:22", "--profile", "deploy", "--label", "tier=web", "-q")
+		if got.code != 0 || got.stdout != "105\n" {
+			t.Fatalf("result = %+v", got)
+		}
+		created := client.hosts[len(client.hosts)-1]
+		if created.Spec.AccessProfileID != "p-1" || created.Spec.AccessTarget.Endpoint != "10.0.0.9:22" || created.Metadata.Labels["tier"] != "web" {
+			t.Fatalf("created = %+v", created)
+		}
+		missing := run(t, fixtures(), "create", "host", "x", "--endpoint", "h:22", "--profile", "nope")
+		if missing.code != clierr.ExitNotFound {
+			t.Fatalf("unknown profile = %+v", missing)
+		}
+		usage := run(t, fixtures(), "create", "host", "x", "--profile", "deploy")
+		if usage.code != clierr.ExitUsage {
+			t.Fatalf("missing endpoint = %+v", usage)
+		}
+	})
+
+	t.Run("delete host confirms and sends the revision", func(t *testing.T) {
+		client := fixtures()
+		if got := run(t, client, "delete", "host", "web-01"); got.code != clierr.ExitUsage || len(client.deleted) != 0 {
+			t.Fatalf("unconfirmed delete = %+v, deleted %v", got, client.deleted)
+		}
+		if got := run(t, client, "delete", "host", "web-01", "--yes"); got.code != 0 || strings.Join(client.deleted, ",") != "1@1" {
+			t.Fatalf("delete = %+v, deleted %v", got, client.deleted)
+		}
+	})
+
+	t.Run("label host sets and removes labels", func(t *testing.T) {
+		client := fixtures()
+		got := run(t, client, "label", "host", "web-01", "canary=yes", "tier-", "-o", "json")
+		if got.code != 0 {
+			t.Fatalf("result = %+v", got)
+		}
+		labels := client.hosts[0].Metadata.Labels
+		if labels["canary"] != "yes" || labels["tier"] != "" || len(labels) != 1 {
+			t.Fatalf("labels = %v", labels)
+		}
+		if bad := run(t, fixtures(), "label", "host", "web-01", "oops"); bad.code != clierr.ExitUsage {
+			t.Fatalf("bad label = %+v", bad)
+		}
+	})
+
+	t.Run("run previews, confirms, and binds to the preview", func(t *testing.T) {
+		client := fixtures()
+		if got := run(t, client, "run", "-l", "tier=web", "--", "uptime"); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
+			t.Fatalf("unconfirmed run = %+v", got)
+		}
+		got := run(t, client, "run", "-l", "tier=web", "--yes", "--", "uptime", "-p")
+		if got.code != 0 || !strings.Contains(got.stdout, "op-1") {
+			t.Fatalf("run = %+v", got)
+		}
+		submitted := client.submitted[0]
+		if submitted.ExpectTargetsHash != "hash-2" || strings.Join(submitted.Run.Argv, " ") != "uptime -p" || submitted.Targets.Selector != "tier=web" {
+			t.Fatalf("submitted = %+v", submitted)
+		}
+		for _, args := range [][]string{
+			{"run", "--yes", "--", "uptime"},    // no selection
+			{"run", "-l", "tier=web", "uptime"}, // program not after --
+			{"run", "--host", "ghost", "--yes", "--", "uptime"},
+		} {
+			if got := run(t, fixtures(), args...); got.code == 0 {
+				t.Errorf("%v succeeded: %+v", args, got)
+			}
+		}
+	})
+
+	t.Run("run --wait prints per-host results", func(t *testing.T) {
+		got := run(t, fixtures(), "run", "--host", "web-01", "--yes", "--wait", "--", "uptime")
+		if got.code != 0 || !strings.Contains(got.stdout, "web-01") || !strings.Contains(got.stdout, "up 3 days") {
+			t.Fatalf("result = %+v", got)
+		}
+	})
+
+	t.Run("operations and profiles", func(t *testing.T) {
+		if got := run(t, fixtures(), "get", "operations"); !strings.Contains(got.stdout, "op-9") || !strings.Contains(got.stdout, "Succeeded=2") {
+			t.Fatalf("operations = %+v", got)
+		}
+		if got := run(t, fixtures(), "get", "profiles"); !strings.Contains(got.stdout, "deploy") {
+			t.Fatalf("profiles = %+v", got)
+		}
+		if got := run(t, fixtures(), "cancel", "operation", "op-3"); !strings.Contains(got.stdout, "op-3") {
+			t.Fatalf("cancel = %+v", got)
+		}
+	})
 }
