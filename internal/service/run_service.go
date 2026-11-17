@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -390,6 +391,18 @@ func persistContext(actor domain.AuditActor) (context.Context, context.CancelFun
 
 func (s *runService) execute(run *domain.Run, creator domain.AuditActor) {
 	defer s.end()
+	// A panic outside the per-host isolation below must fail this run, not the
+	// whole API process (AUDIT Q-04).
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("run executor panicked", "run", run.ID, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			pctx, cancel := persistContext(creator)
+			defer cancel()
+			if err := s.runs.FinishRun(pctx, run.ID, domain.RunFailed, time.Now().UTC()); err != nil {
+				slog.Error("cannot record the failed run after a panic", "run", run.ID, "error", err)
+			}
+		}
+	}()
 	runCtx, cancelRun := context.WithCancel(s.baseCtx)
 	defer cancelRun()
 
@@ -427,7 +440,7 @@ func (s *runService) execute(run *domain.Run, creator domain.AuditActor) {
 		go func() {
 			defer workerWG.Done()
 			for host := range jobs {
-				record(host.HostID, s.runHost(runCtx, run, host, command, timeout, creator))
+				record(host.HostID, s.safeRunHost(runCtx, run, host, command, timeout, creator))
 			}
 		}()
 	}
@@ -489,6 +502,12 @@ feed:
 
 func (s *runService) heartbeatLoop(ctx context.Context, cancelRun context.CancelFunc, id int64, userCancelled *atomic.Bool, done chan<- struct{}) {
 	defer close(done)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("run heartbeat panicked; stopping the run", "run", id, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			cancelRun()
+		}
+	}()
 	ticker := time.NewTicker(s.heartbeatInterval)
 	defer ticker.Stop()
 	for {
@@ -511,6 +530,29 @@ func (s *runService) heartbeatLoop(ctx context.Context, cancelRun context.Cancel
 		case <-ticker.C:
 		}
 	}
+}
+
+// safeRunHost runs one host and turns a panic into a recorded host failure,
+// so one faulty host cannot crash the API or abandon the rest of the run
+// (AUDIT Q-04).
+func (s *runService) safeRunHost(ctx context.Context, run *domain.Run, target domain.RunHost, command string,
+	timeout time.Duration, creator domain.AuditActor) (status domain.RunHostStatus) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		slog.Error("run host execution panicked", "run", run.ID, "host", target.HostID, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		finished := time.Now().UTC()
+		pctx, cancel := persistContext(creator)
+		defer cancel()
+		if err := s.runs.UpdateRunHost(pctx, run.ID, target.HostID, domain.RunHostUpdate{
+			Status: domain.RunHostFailed, Error: "internal error while running on this host", FinishedAt: &finished}); err != nil {
+			slog.Error("cannot record host failure after a panic", "run", run.ID, "host", target.HostID, "error", err)
+		}
+		status = domain.RunHostFailed
+	}()
+	return s.runHost(ctx, run, target, command, timeout, creator)
 }
 
 // runHost executes the command on one host and records the outcome.

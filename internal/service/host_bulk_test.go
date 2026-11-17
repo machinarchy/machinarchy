@@ -75,6 +75,8 @@ func (f *bulkFakeTester) TestConnection(ctx context.Context, params sshclient.Di
 		return domain.ErrAuthenticationFailed
 	case "unknown-key.example":
 		return &domain.ErrHostKeyUnknown{Host: params.IP, Algorithm: "ssh-ed25519", Fingerprint: "SHA256:test"}
+	case "panic.example":
+		panic("connection tester bug")
 	case "boom.example":
 		return errors.New("dial tcp 10.0.0.5:22: secret internal detail")
 	}
@@ -302,5 +304,26 @@ func TestBulkRegisterReportsInsertTimeDuplicateAsDuplicate(t *testing.T) {
 	}
 	if strings.Contains(res.Results[1].Error, "UNIQUE") {
 		t.Errorf("database error text must not reach clients: %q", res.Results[1].Error)
+	}
+}
+
+// TestBulkRegisterIsolatesPanics covers AUDIT Q-04: a panic while registering
+// one entry fails that entry only; the process and the rest of the batch survive.
+func TestBulkRegisterIsolatesPanics(t *testing.T) {
+	store := &bulkFakeStore{}
+	svc := newBulkService(t, store, &bulkFakeTester{}, 4)
+	response, err := svc.BulkRegisterHosts(context.Background(), 1, []domain.BulkHostEntry{
+		bulkHost("ok-1", "10.0.0.1"), bulkHost("crash", "panic.example"), bulkHost("ok-2", "10.0.0.2"),
+	}, BulkRegisterOptions{})
+	if err != nil {
+		t.Fatalf("BulkRegisterHosts() error = %v", err)
+	}
+	statuses := []string{}
+	for _, result := range response.Results {
+		statuses = append(statuses, string(result.Status))
+	}
+	if response.Results[0].Status != domain.StatusSuccess || response.Results[1].Status != domain.StatusFailed ||
+		response.Results[2].Status != domain.StatusSuccess {
+		t.Fatalf("statuses = %v, want success, failed, success", statuses)
 	}
 }

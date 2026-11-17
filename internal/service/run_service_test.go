@@ -607,3 +607,30 @@ func TestNewRunServiceValidatesItsInputs(t *testing.T) {
 		t.Error("zero active runs must be rejected")
 	}
 }
+
+// TestRunIsolatesPanicsPerHost covers AUDIT Q-04: a panic while running on one
+// host is recorded as that host's failure; the other hosts still run and the
+// run reaches a final status instead of crashing the API process.
+func TestRunIsolatesPanicsPerHost(t *testing.T) {
+	store, hosts := newMemRunStore(), standardHosts()
+	runner := &fakeRunner{behave: func(_ context.Context, call runnerCall) (string, error) {
+		if call.Address == "10.0.0.1" {
+			panic("runner bug")
+		}
+		return "ok", nil
+	}}
+	svc := newRunSvc(t, store, hosts, runner, allowAllPrograms(t))
+	run, err := svc.Submit(context.Background(), opsPrincipal, domain.RunRequest{Argv: []string{"uptime"}, Rule: domain.TargetRule{Selector: "role=web"}})
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	final := store.waitFinal(t, run.ID)
+	if final.Status != domain.RunPartiallySucceeded || final.Counts.Failed != 1 || final.Counts.Succeeded != 1 {
+		t.Fatalf("final run = %+v", final)
+	}
+	for _, host := range final.Hosts {
+		if host.Address == "10.0.0.1" && (host.Status != domain.RunHostFailed || host.FinishedAt == nil) {
+			t.Fatalf("panicking host = %+v, want failed with a finish time", host)
+		}
+	}
+}

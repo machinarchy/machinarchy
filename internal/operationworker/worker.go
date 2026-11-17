@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -220,7 +221,7 @@ func (w *Worker) runWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case key := <-w.queue:
-			w.execute(ctx, key)
+			w.safeExecute(ctx, key)
 			w.mu.Lock()
 			delete(w.pending, key)
 			w.mu.Unlock()
@@ -262,6 +263,33 @@ func (w *Worker) Cancel(ctx context.Context, workspace int, id resource.ID) (*re
 		cancel()
 	}
 	return op, nil
+}
+
+// safeExecute isolates a panic in one Operation (AUDIT Q-04): it is logged
+// with its stack, the Operation is finished as Interrupted with reason
+// worker_panic (like a crash during execution: a command may already have
+// run, so it is never retried), and the worker keeps serving other work.
+// Without this, one panic would terminate the whole process, including the
+// API in monolith mode.
+func (w *Worker) safeExecute(ctx context.Context, key resource.OperationKey) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		w.deps.Logger.Error("Operation execution panicked", "operation_id", key.ID, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		op, err := w.deps.Operations.GetOperation(persistCtx, key.WorkspaceID, key.ID)
+		if err != nil {
+			w.deps.Logger.Error("cannot load Operation after panic", "operation_id", key.ID, "error", err)
+			return
+		}
+		if err := w.finishWithoutExecution(persistCtx, op, resource.OperationInterrupted, "worker_panic"); err != nil {
+			w.deps.Logger.Error("cannot record Operation failure after panic", "operation_id", key.ID, "error", err)
+		}
+	}()
+	w.execute(ctx, key)
 }
 
 func (w *Worker) execute(parent context.Context, key resource.OperationKey) {

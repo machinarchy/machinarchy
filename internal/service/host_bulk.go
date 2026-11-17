@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -144,7 +145,7 @@ func (s *hostService) registerPending(ctx context.Context, entries []domain.Bulk
 			defer wg.Done()
 			for i := range jobs {
 				h := entries[i].Host
-				if err := s.RegisterHost(ctx, h); err != nil {
+				if err := s.registerIsolated(ctx, h); err != nil {
 					if errors.Is(err, domain.ErrHostAlreadyExists) {
 						// Lost a race with another registration; the database
 						// constraint is the authority on duplicates.
@@ -244,4 +245,17 @@ func sshFailureMessage(err error, fallback string) string {
 		slog.Error("SSH operation failed", "error", err)
 		return fallback
 	}
+}
+
+// registerIsolated registers one bulk entry and converts a panic into an
+// ordinary failure for that entry, so it cannot crash the API or lose the
+// rest of the batch (AUDIT Q-04).
+func (s *hostService) registerIsolated(ctx context.Context, host *domain.Host) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("bulk host registration panicked", "host", host.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			err = errors.New("internal error while registering host")
+		}
+	}()
+	return s.RegisterHost(ctx, host)
 }
