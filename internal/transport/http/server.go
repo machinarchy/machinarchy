@@ -70,16 +70,12 @@ type Server struct {
 func NewServer(
 	cfg config.Config,
 	authService domain.AuthService,
-	hostService service.HostService,
-	sshCapacity *service.SSHCapacity,
-	runService domain.RunService,
 	repositories v1.Repositories,
 	database DatabaseReadiness,
 	dependencies ...ReadinessChecker,
 ) (*Server, error) {
-	if database == nil || repositories.Users == nil || repositories.Hosts == nil ||
-		repositories.Environments == nil || repositories.Access == nil ||
-		authService == nil || hostService == nil || sshCapacity == nil || runService == nil {
+	if database == nil || repositories.Users == nil || repositories.Environments == nil || repositories.Access == nil ||
+		authService == nil {
 		return nil, errors.New("HTTP server dependencies are required")
 	}
 	tokenService, err := service.NewAPITokenService(repositories.Access)
@@ -89,10 +85,6 @@ func NewServer(
 	memberService, err := service.NewMemberService(repositories.Users)
 	if err != nil {
 		return nil, fmt.Errorf("configure member service: %w", err)
-	}
-	targetService, err := service.NewTargetService(repositories.Hosts, repositories.Environments)
-	if err != nil {
-		return nil, fmt.Errorf("configure target service: %w", err)
 	}
 	auditService, err := service.NewAuditService(repositories.Audit)
 	if err != nil {
@@ -123,7 +115,7 @@ func NewServer(
 
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	e.Use(registerHTTPMetrics(registry, database.DatabaseStats, sshCapacity))
+	e.Use(registerHTTPMetrics(registry, database.DatabaseStats))
 
 	metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	s := &Server{
@@ -143,8 +135,7 @@ func NewServer(
 
 	api := e.Group("/api", limiter.Middleware())
 	v1.RegisterRoutes(api, repositories, authService,
-		hostService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, targetService, auditService, runService)
+		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",
@@ -355,7 +346,7 @@ func validateReadinessCheckers(checks []ReadinessChecker) error {
 	return nil
 }
 
-func registerHTTPMetrics(registry *prometheus.Registry, databaseStats func() sql.DBStats, sshCapacity *service.SSHCapacity) echo.MiddlewareFunc {
+func registerHTTPMetrics(registry *prometheus.Registry, databaseStats func() sql.DBStats) echo.MiddlewareFunc {
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "machinarchy",
 		Name:      "http_requests_total",
@@ -374,9 +365,6 @@ func registerHTTPMetrics(registry *prometheus.Registry, databaseStats func() sql
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "machinarchy", Name: "db_connections_idle", Help: "Idle database connections."}, func() float64 { return float64(databaseStats().Idle) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "machinarchy", Name: "db_connections_max_open", Help: "Configured maximum open database connections."}, func() float64 { return float64(databaseStats().MaxOpenConnections) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "machinarchy", Name: "db_connection_waits_total", Help: "Cumulative waits for an available database connection."}, func() float64 { return float64(databaseStats().WaitCount) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "machinarchy", Name: "ssh_operations_in_flight", Help: "Current outbound SSH operations."}, func() float64 { return float64(sshCapacity.InUse()) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "machinarchy", Name: "ssh_operations_limit", Help: "Maximum concurrent outbound SSH operations."}, func() float64 { return float64(sshCapacity.Limit()) }),
-		prometheus.NewCounterFunc(prometheus.CounterOpts{Namespace: "machinarchy", Name: "ssh_capacity_rejections_total", Help: "SSH operations rejected because the process bulkhead was full."}, func() float64 { return float64(sshCapacity.Rejected()) }),
 	)
 
 	// One middleware instance shares bounded-cardinality instruments across requests.

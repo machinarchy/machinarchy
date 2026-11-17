@@ -26,12 +26,21 @@ const (
 	maxCommandOutputBytes   = 1 << 20
 )
 
+// AuthMethod selects how the client authenticates.
+type AuthMethod string
+
+// Supported authentication methods.
+const (
+	AuthPassword   AuthMethod = "PASSWORD"
+	AuthPrivateKey AuthMethod = "PRIVATE_KEY"
+)
+
 // DialParams contains the parameters required to establish an SSH connection.
 type DialParams struct {
 	IP                  string
 	Port                int
 	Username            string
-	AuthMethod          domain.SSHAuthMethod
+	AuthMethod          AuthMethod
 	SecretData          string
 	Passphrase          string
 	ExpectedFingerprint string
@@ -209,12 +218,12 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 
 func authMethods(params DialParams) ([]ssh.AuthMethod, error) {
 	switch params.AuthMethod {
-	case domain.AuthTypePassword:
+	case AuthPassword:
 		if params.SecretData == "" {
 			return nil, fmt.Errorf("%w: SSH password is required", domain.ErrInvalidInput)
 		}
 		return []ssh.AuthMethod{ssh.Password(params.SecretData)}, nil
-	case domain.AuthTypePrivateKey:
+	case AuthPrivateKey:
 		if params.SecretData == "" {
 			return nil, fmt.Errorf("%w: SSH private key is required", domain.ErrInvalidInput)
 		}

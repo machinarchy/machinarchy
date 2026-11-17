@@ -43,17 +43,14 @@ type Stores struct {
 	engine           string
 	Users            domain.UserStore
 	Access           domain.AccessStore
-	Hosts            domain.HostStore
 	Environments     domain.EnvironmentStore
 	Audit            domain.AuditStore
-	Runs             domain.RunStore
 	ResourceHosts    resource.HostRepository
 	ResourceProfiles resource.AccessProfileRepository
 	Operations       resource.OperationStore
 	Outbox           eventing.OutboxStore
 	ResourceLeases   resource.LeaseStore
 	Management       *management.Store
-	logger           *slog.Logger
 }
 
 // Open initializes the configured storage backends using the provided context
@@ -142,10 +139,8 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 
 		stores.Users = storeInstance
 		stores.Access = storeInstance
-		stores.Hosts = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
-		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
 		stores.ResourceProfiles = storeInstance.Resources
 		stores.Operations = storeInstance.Resources
@@ -158,10 +153,8 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		}
 		stores.Users = storeInstance
 		stores.Access = storeInstance
-		stores.Hosts = storeInstance
 		stores.Environments = storeInstance
 		stores.Audit = storeInstance
-		stores.Runs = storeInstance
 		stores.ResourceHosts = storeInstance.Resources
 		stores.ResourceProfiles = storeInstance.Resources
 		stores.Operations = storeInstance.Resources

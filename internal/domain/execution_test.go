@@ -77,40 +77,6 @@ func TestQuoteArgvNeutralizesShellSyntax(t *testing.T) {
 
 // unquote interprets a command line produced by QuoteArgv the way a POSIX shell
 // would, with no expansion of any kind, to prove every argument round-trips.
-func unquote(t *testing.T, line string) []string {
-	t.Helper()
-	var args []string
-	i := 0
-	for i < len(line) {
-		if line[i] == ' ' {
-			i++
-			continue
-		}
-		var current strings.Builder
-		for i < len(line) && line[i] != ' ' {
-			switch line[i] {
-			case '\'':
-				j := strings.IndexByte(line[i+1:], '\'')
-				if j < 0 {
-					t.Fatalf("unterminated quote in %s", line)
-				}
-				current.WriteString(line[i+1 : i+1+j])
-				i += j + 2
-			case '\\':
-				if i+1 >= len(line) {
-					t.Fatalf("dangling backslash in %s", line)
-				}
-				current.WriteByte(line[i+1])
-				i += 2
-			default:
-				t.Fatalf("unquoted character %q at %d of %s: the quoting leaked", line[i], i, line)
-			}
-		}
-		args = append(args, current.String())
-	}
-	return args
-}
-
 func TestQuoteArgvRoundTrips(t *testing.T) {
 	argv := []string{"/bin/echo", "", " ", "a b", "'", "''", "'a'", `\`, `\'`, "$(id)", "`id`", "${IFS}", "a;b", "a&&b", "*", "?", "~", "#", "!", "é", "x'y'z"}
 	got := unquote(t, QuoteArgv(argv))
@@ -171,47 +137,6 @@ func TestExecutionPolicy(t *testing.T) {
 	}
 }
 
-func TestTargetsHash(t *testing.T) {
-	a, b, c := &Host{ID: "1"}, &Host{ID: "2"}, &Host{ID: "3"}
-	if TargetsHash([]*Host{a, b}) != TargetsHash([]*Host{b, a}) {
-		t.Error("the hash must not depend on order")
-	}
-	if TargetsHash([]*Host{a, b}) == TargetsHash([]*Host{a, c}) || TargetsHash([]*Host{a}) == TargetsHash([]*Host{a, b}) {
-		t.Error("different host sets must hash differently")
-	}
-	if TargetsHash([]*Host{{ID: "12"}, {ID: "3"}}) == TargetsHash([]*Host{{ID: "1"}, {ID: "23"}}) {
-		t.Error("ID boundaries must be part of the hash")
-	}
-	if len(TargetsHash(nil)) != 64 {
-		t.Error("the hash of no hosts must still be a digest")
-	}
-}
-
-func TestAggregateRunStatus(t *testing.T) {
-	ok, bad, late := RunHostSucceeded, RunHostFailed, RunHostTimedOut
-	for _, tc := range []struct {
-		name        string
-		hosts       []RunHostStatus
-		cancelled   bool
-		interrupted bool
-		want        RunStatus
-	}{
-		{"all succeeded", []RunHostStatus{ok, ok}, false, false, RunSucceeded},
-		{"all failed", []RunHostStatus{bad, late}, false, false, RunFailed},
-		{"mixed", []RunHostStatus{ok, bad}, false, false, RunPartiallySucceeded},
-		{"mixed with timeout", []RunHostStatus{ok, late}, false, false, RunPartiallySucceeded},
-		{"user cancel wins", []RunHostStatus{ok, RunHostCancelled}, true, false, RunCancelled},
-		{"interruption wins over cancel", []RunHostStatus{ok, RunHostInterrupted}, true, true, RunInterrupted},
-		{"unfinished hosts keep it running", []RunHostStatus{ok, RunHostRunning}, false, false, RunRunning},
-		{"pending keeps it running", []RunHostStatus{RunHostPending}, false, false, RunRunning},
-		{"no hosts is a failure", nil, false, false, RunFailed},
-	} {
-		if got := AggregateRunStatus(tc.hosts, tc.cancelled, tc.interrupted); got != tc.want {
-			t.Errorf("%s: status = %s, want %s", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestSanitizeOutput(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
 		{"plain", "hello\nworld\t!", "hello\nworld\t!"},
@@ -242,52 +167,38 @@ func TestSanitizeOutput(t *testing.T) {
 	}
 }
 
-func TestNormalizeRunFilter(t *testing.T) {
-	got, err := NormalizeRunFilter(RunFilter{})
-	if err != nil || got.Limit != DefaultRunPageSize {
-		t.Fatalf("default filter = %+v, %v", got, err)
-	}
-	if got, _ := NormalizeRunFilter(RunFilter{Limit: 100000}); got.Limit != MaxRunPageSize {
-		t.Errorf("limit must be capped at %d, got %d", MaxRunPageSize, got.Limit)
-	}
-	if got, err := NormalizeRunFilter(RunFilter{Status: " failed "}); err != nil || got.Status != "failed" {
-		t.Errorf("a valid status must be accepted and trimmed: %+v, %v", got, err)
-	}
-	for name, filter := range map[string]RunFilter{
-		"negative limit":  {Limit: -1},
-		"negative cursor": {BeforeID: -1},
-		"unknown status":  {Status: "exploded"},
-		"planned status":  {Status: "planned"},
-	} {
-		if _, err := NormalizeRunFilter(filter); !errors.Is(err, ErrInvalidInput) {
-			t.Errorf("%s: error = %v, want ErrInvalidInput", name, err)
+// unquote interprets a command line produced by QuoteArgv the way a POSIX shell
+// would, with no expansion of any kind, to prove every argument round-trips.
+func unquote(t *testing.T, line string) []string {
+	t.Helper()
+	var args []string
+	i := 0
+	for i < len(line) {
+		if line[i] == ' ' {
+			i++
+			continue
 		}
-	}
-}
-
-func TestRunStatusFinality(t *testing.T) {
-	for _, s := range []RunStatus{RunSucceeded, RunPartiallySucceeded, RunFailed, RunCancelled, RunInterrupted} {
-		if !s.Final() {
-			t.Errorf("%s must be final", s)
+		var current strings.Builder
+		for i < len(line) && line[i] != ' ' {
+			switch line[i] {
+			case '\'':
+				j := strings.IndexByte(line[i+1:], '\'')
+				if j < 0 {
+					t.Fatalf("unterminated quote in %s", line)
+				}
+				current.WriteString(line[i+1 : i+1+j])
+				i += j + 2
+			case '\\':
+				if i+1 >= len(line) {
+					t.Fatalf("dangling backslash in %s", line)
+				}
+				current.WriteByte(line[i+1])
+				i += 2
+			default:
+				t.Fatalf("unquoted character %q at %d of %s: the quoting leaked", line[i], i, line)
+			}
 		}
+		args = append(args, current.String())
 	}
-	for _, s := range []RunStatus{RunQueued, RunRunning, RunPlanned} {
-		if s.Final() {
-			t.Errorf("%s must not be final", s)
-		}
-	}
-	if RunHostPending.Final() || RunHostRunning.Final() || !RunHostTimedOut.Final() {
-		t.Error("host status finality is wrong")
-	}
-}
-
-func TestTargetsChangedErrorMatchesTheSentinel(t *testing.T) {
-	var err error = &TargetsChangedError{TargetsHash: "abc", Total: 3}
-	if !errors.Is(err, ErrTargetsChanged) {
-		t.Error("errors.Is must match ErrTargetsChanged")
-	}
-	var typed *TargetsChangedError
-	if !errors.As(err, &typed) || typed.Total != 3 {
-		t.Error("errors.As must recover the current target set")
-	}
+	return args
 }

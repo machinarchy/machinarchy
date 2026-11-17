@@ -33,7 +33,6 @@ import (
 // Close it only after all servers and workers using it have stopped.
 type Runtime struct {
 	stores           *store.Stores
-	runManager       service.RunManager
 	shutdownTimeout  time.Duration
 	configuration    *runtimeconfig.Service
 	snapshots        *runtimeconfig.SnapshotManager
@@ -198,24 +197,10 @@ func (b runtimeProfileBindings) GetOperation(ctx context.Context, workspace int,
 
 // Close releases shared infrastructure. Stop servers and workers before calling it.
 func (r *Runtime) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
-	defer cancel()
-	return r.CloseContext(ctx)
-}
-
-// CloseContext is Close bounded by the process shutdown budget (AUDIT Q-01):
-// executing runs get until ctx's deadline to record their outcome.
-func (r *Runtime) CloseContext(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
 	var closeErrors []error
-	if r.runManager != nil {
-		// Let executing runs record their outcome before the database closes.
-		if err := r.runManager.Close(ctx); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close run executors: %w", err))
-		}
-	}
 	if r.configCancel != nil {
 		r.configCancel()
 		r.configWG.Wait()
@@ -260,7 +245,7 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if snap, ok := r.configuration.Snapshot(); ok {
 		hostResync = time.Duration(snap.Revision.Config.Reconciliation.ManagedHostResyncSeconds) * time.Second
 	}
-	sshLimit := service.DefaultSSHConcurrency
+	sshLimit := defaultSSHConcurrency
 	if snap, ok := r.configuration.Snapshot(); ok {
 		sshLimit = snap.Revision.Config.SSH.MaxConcurrent
 	}
@@ -289,7 +274,7 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 	if r == nil || r.stores == nil || r.stores.Operations == nil || r.stores.ResourceHosts == nil || r.stores.ResourceProfiles == nil || r.stores.Outbox == nil {
 		return nil, errors.New("runtime is not initialized for Operation execution")
 	}
-	concurrency := service.DefaultSSHConcurrency
+	concurrency := defaultSSHConcurrency
 	workers := 4
 	if snap, ok := r.configuration.Snapshot(); ok {
 		concurrency = snap.Revision.Config.SSH.MaxConcurrent
@@ -318,6 +303,10 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 		Recovery: recovery}, workers)
 }
 
+// defaultSSHConcurrency bounds concurrent SSH sessions per connector until a
+// runtime configuration snapshot provides SSH.MaxConcurrent.
+const defaultSSHConcurrency = 32
+
 // NewAPIServer constructs the API adapter. Additional readiness checks are
 // included when the API and a worker run together in one process.
 func (r *Runtime) NewAPIServer(
@@ -332,39 +321,11 @@ func (r *Runtime) NewAPIServer(
 		return nil, errors.New("runtime is not initialized")
 	}
 
-	sshConcurrency := service.DefaultSSHConcurrency
-	if snap, ok := r.configuration.Snapshot(); ok {
-		sshConcurrency = snap.Revision.Config.SSH.MaxConcurrent
-	}
-	sshCapacity, err := service.NewSSHCapacity(sshConcurrency)
-	if err != nil {
-		return nil, fmt.Errorf("configure SSH concurrency limit: %w", err)
-	}
 	authService := service.NewAuthService(r.stores.Users, cfg.OperatorToken, 24*time.Hour)
 	if err := r.ensureOwner(ctx, cfg); err != nil {
 		return nil, err
 	}
 
-	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, sshCapacity,
-		service.WithTargetPolicyProvider(r.targetPolicyProvider(cfg.SSHTargetPolicy)))
-	if err != nil {
-		return nil, fmt.Errorf("construct host service: %w", err)
-	}
-	runManager, err := service.NewRunService(r.stores.Runs, r.stores.Hosts, r.stores.Environments, sshCapacity,
-		cfg.Execution, service.WithTargetPolicyProvider(r.targetPolicyProvider(cfg.SSHTargetPolicy)), service.WithExecutionPolicyProvider(r.executionPolicyProvider(cfg.Execution)), service.WithMaxActiveRuns(runtimeRunWorkers(r.configuration)), service.WithDefaultRunTimeout(runtimeRunTimeout(r.configuration)))
-	if err != nil {
-		return nil, fmt.Errorf("construct run service: %w", err)
-	}
-	recoverCtx, cancelRecover := context.WithTimeout(ctx, 15*time.Second)
-	_, err = runManager.Recover(recoverCtx)
-	cancelRecover()
-	if err != nil {
-		closeCtx, cancelClose := context.WithTimeout(context.Background(), 10*time.Second)
-		closeErr := runManager.Close(closeCtx)
-		cancelClose()
-		return nil, errors.Join(err, wrapCloseError("close run manager after recovery failure", closeErr))
-	}
-	r.runManager = runManager
 	managedResources, err := service.NewManagedResourceService(r.stores.ResourceHosts, r.stores.ResourceProfiles, r.stores.Operations,
 		r.executionPolicyProvider(domain.ExecutionPolicy{}), r.secrets)
 	if err != nil {
@@ -372,8 +333,7 @@ func (r *Runtime) NewAPIServer(
 	}
 	managedResources.UseEnvironments(r.stores.Environments)
 	repositories := httpv1.Repositories{
-		Users: r.stores.Users, Hosts: r.stores.Hosts,
-		Environments: r.stores.Environments, Access: r.stores.Access,
+		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
 		SignupEnabled: func() bool {
 			if snapshot, ok := r.configuration.Snapshot(); ok {
@@ -383,8 +343,7 @@ func (r *Runtime) NewAPIServer(
 		},
 	}
 
-	return httpserver.NewServer(cfg, authService, hostService,
-		sshCapacity, runManager, repositories, r.stores, additionalReadiness...)
+	return httpserver.NewServer(cfg, authService, repositories, r.stores, additionalReadiness...)
 }
 
 // NewControlManagerOperationsServer creates the HTTP surface used for worker
@@ -472,23 +431,6 @@ func (r *Runtime) executionPolicyProvider(fallback domain.ExecutionPolicy) func(
 		}
 		return policy
 	}
-}
-
-func runtimeRunWorkers(service *runtimeconfig.Service) int {
-	if service != nil {
-		if snapshot, ok := service.Snapshot(); ok {
-			return snapshot.Revision.Config.Operations.Workers
-		}
-	}
-	return 2
-}
-func runtimeRunTimeout(service *runtimeconfig.Service) int {
-	if service != nil {
-		if snapshot, ok := service.Snapshot(); ok {
-			return snapshot.Revision.Config.Operations.TimeoutSeconds
-		}
-	}
-	return domain.DefaultRunTimeout
 }
 
 func wrapCloseError(operation string, err error) error {

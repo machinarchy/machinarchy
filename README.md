@@ -2,7 +2,7 @@
 
 Machinarchy is a Go control-plane service for registering SSH-managed hosts, grouping them into environments, and running operations on them. It exposes an Echo-based HTTP API, stores application data in SQLite or PostgreSQL, and delivers internal events through a transactional database outbox.
 
-> **Implementation status:** Host registration, authentication, environment management, history queries, health checks, and event plumbing are implemented. The agent runtime is currently a stub. Command execution over SSH is available through `POST /api/v1/runs` but disabled by default; the older job endpoints expose records already present in storage. See [architecture and current limitations](docs/architecture.md).
+> **Implementation status:** Managed hosts with Access Profiles, operations (shell-free command execution over SSH, disabled by default), authentication, environments, the audit trail, runtime configuration and the Secret Store are implemented. The host agent lives in a separate repository and is not integrated yet. See [architecture and current limitations](docs/architecture.md).
 
 ## Components
 
@@ -72,10 +72,12 @@ The interactive reference is rendered by Scalar. The generated API contract is a
 | Authentication | `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/logout` |
 | Current user | `GET /api/v1/me` |
 | Environments | `GET`, `POST /api/v1/environments`; `PUT`, `DELETE /api/v1/environments/{id}` |
-| Hosts | `GET`, `POST /api/v1/hosts`; `PUT`, `DELETE /api/v1/hosts/{id}` |
+| Managed hosts | `GET`, `POST /api/v1/managed/hosts`; `GET`, `PUT`, `DELETE /api/v1/managed/hosts/{id}`; `PATCH /api/v1/managed/hosts/{id}/labels` |
+| Access Profiles | `GET`, `POST /api/v1/managed/access-profiles`; `GET`, `PUT`, `DELETE /api/v1/managed/access-profiles/{id}` |
+| Operations | `GET`, `POST /api/v1/managed/operations`; `POST /api/v1/managed/operations/preview`; `GET /api/v1/managed/operations/{id}`; `POST /api/v1/managed/operations/{id}/cancel` |
 | API tokens | `GET`, `POST /api/v1/tokens`; `DELETE /api/v1/tokens/{id}` |
 
-Each account receives its own workspace. Existing databases assign legacy rows to the earliest account and give later accounts empty workspaces; review [the migration guidance](docs/SECURITY.md#existing-database-migration) and take a backup before upgrading. Workspace owners can issue operator or reader API tokens. The plaintext is returned once; use an `Authorization: Bearer <token>` header and store it in a secret manager. Token details and examples are in the [security guide](docs/SECURITY.md#workspace-authorization-and-api-tokens).
+All accounts share one workspace. Errors use one JSON shape, `{"error": "...", "code": "..."}`, and lists return `{"items": [...], "nextCursor": "..."}`. Workspace owners can issue operator or reader API tokens. The plaintext is returned once; use an `Authorization: Bearer <token>` header and store it in a secret manager. Token details and examples are in the [security guide](docs/SECURITY.md#workspace-authorization-and-api-tokens).
 
 Human protected routes accept an `Authorization: Bearer <JWT>` header or the `auth_token` cookie returned by signup/login. API tokens are bearer-only and are not accepted as cookies. In Scalar, enter `Bearer <credential>` in the Authorization field.
 

@@ -36,7 +36,7 @@ func loopbackDialer(ctx context.Context, network, address string) (net.Conn, err
 func passwordParams(s *sshtest.Server) DialParams {
 	return DialParams{
 		IP: s.Host, Port: s.Port, Username: "deploy",
-		AuthMethod: domain.AuthTypePassword, SecretData: serverPassword,
+		AuthMethod: AuthPassword, SecretData: serverPassword,
 		ExpectedFingerprint: s.Fingerprint, Dialer: loopbackDialer,
 	}
 }
@@ -128,7 +128,7 @@ func TestSSHPrivateKeyAuthentication(t *testing.T) {
 	keyParams := func(s *sshtest.Server, privatePEM, passphrase string) DialParams {
 		return DialParams{
 			IP: s.Host, Port: s.Port, Username: "deploy",
-			AuthMethod: domain.AuthTypePrivateKey, SecretData: privatePEM, Passphrase: passphrase,
+			AuthMethod: AuthPrivateKey, SecretData: privatePEM, Passphrase: passphrase,
 			ExpectedFingerprint: s.Fingerprint, Dialer: loopbackDialer,
 		}
 	}
@@ -178,7 +178,7 @@ func TestSSHUnreachableAndMisbehavingHosts(t *testing.T) {
 		_ = listener.Close() // nothing listens here any more
 
 		params := DialParams{
-			IP: "127.0.0.1", Port: port, Username: "deploy", AuthMethod: domain.AuthTypePassword,
+			IP: "127.0.0.1", Port: port, Username: "deploy", AuthMethod: AuthPassword,
 			SecretData: serverPassword, ExpectedFingerprint: "SHA256:x", Dialer: loopbackDialer,
 		}
 		if err := TestConnection(timeout(t, 5*time.Second), params); !errors.Is(err, domain.ErrConnectionRefused) {

@@ -1,34 +1,29 @@
-// Package postgres implements the domain store interfaces for PostgreSQL, including user, host, environment, and run stores. It provides methods for creating, retrieving, updating, and deleting entities in a PostgreSQL database while handling encryption of sensitive data and audit logging.
+// Package postgres implements the account, environment and audit stores for
+// PostgreSQL; managed resources live in store/resources.
 package postgres
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"time"
 
 	"github.com/lib/pq"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	resourceStore "github.com/machinarchy/machinarchy/internal/store/resources"
-	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
 // Store implements the domain store interfaces for PostgreSQL
 type Store struct {
-	db            *sql.DB
-	Resources     *resourceStore.Store
-	encryptionKey []byte
-	logger        *slog.Logger
+	db        *sql.DB
+	Resources *resourceStore.Store
+	logger    *slog.Logger
 }
 
 var (
 	_ domain.UserStore        = (*Store)(nil)
-	_ domain.HostStore        = (*Store)(nil)
 	_ domain.EnvironmentStore = (*Store)(nil)
 )
 
@@ -36,10 +31,6 @@ var (
 func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("PostgreSQL database handle is required")
-	}
-	key, err := crypto.DeriveKey(secret, "postgres-host-credentials")
-	if err != nil {
-		return nil, fmt.Errorf("derive PostgreSQL credential encryption key: %w", err)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -56,315 +47,10 @@ func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("initialize PostgreSQL managed resource repositories: %w", err)
 	}
 	return &Store{
-		db:            db,
-		encryptionKey: key,
-		logger:        logger,
-		Resources:     resources,
+		db:        db,
+		logger:    logger,
+		Resources: resources,
 	}, nil
-}
-
-// CreateHost creates a new host in the database, encrypting its SSH credentials and validating its environment. It returns an error if the host already exists or if any database operation fails.
-func (s *Store) CreateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil || host.WorkspaceID <= 0 {
-		return fmt.Errorf("%w: host, workspace, and SSH access settings are required", domain.ErrInvalidInput)
-	}
-	labels := host.Labels
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labelsJSON, err := json.Marshal(labels)
-	if err != nil {
-		return fmt.Errorf("marshal host labels: %w", err)
-	}
-	password, privateKey, passphrase, err := s.encryptCredentials(host.SSH.AuthType)
-	if err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin create host transaction: %w", err)
-	}
-	defer utils.RollbackTx(tx, s.logger, "create host")
-
-	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	err = tx.QueryRowContext(ctx, `INSERT INTO hosts (
-		id, workspace_id, environment_id, name, hostname, ip_address, connection, labels, port,
-		username, password, private_key, passphrase, expected_fingerprint,
-		status, created_at, updated_at
-	) VALUES (nextval('hosts_id_seq')::TEXT, $1, $2, $3, $4, $5, $6, $7, $8, $9,
-		$10, $11, $12, $13, $14, $15, $16) RETURNING id`,
-		host.WorkspaceID, host.EnvironmentID, host.Name, host.Hostname, host.IPAddress,
-		string(host.Connection), string(labelsJSON), host.SSH.Port, host.SSH.Username,
-		password, privateKey, passphrase, host.SSH.AuthType.ExpectedFingerprint,
-		string(host.SSH.Status), now, now,
-	).Scan(&host.ID)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
-		}
-		return fmt.Errorf("insert PostgreSQL host: %w", err)
-	}
-	if err := appendAudit(ctx, tx, domain.AuditEvent{
-		WorkspaceID: host.WorkspaceID, Action: domain.AuditHostCreated,
-		TargetType: domain.AuditTargetHost, TargetID: host.ID,
-		Details: map[string]string{"name": host.Name, "address": host.IPAddress, "port": strconv.Itoa(host.SSH.Port)},
-	}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit create host transaction: %w", err)
-	}
-	host.Labels = labels
-	host.CreatedAt, host.UpdatedAt = now, now
-	return nil
-}
-
-// GetHostByID retrieves a host by its ID, returning an error if the host does not exist or if any database operation fails.
-func (s *Store) GetHostByID(ctx context.Context, id int) (*domain.Host, error) {
-	return s.getHostByID(ctx, 0, id)
-}
-
-// GetHostByIDInWorkspace retrieves a host by its ID within a specific workspace, returning an error if the host does not exist or if any database operation fails.
-func (s *Store) GetHostByIDInWorkspace(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
-	if workspaceID <= 0 {
-		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
-	}
-	return s.getHostByID(ctx, workspaceID, id)
-}
-
-func (s *Store) getHostByID(ctx context.Context, workspaceID, id int) (*domain.Host, error) {
-	query := `SELECT id, workspace_id, environment_id, name, hostname, ip_address, connection,
-		labels, port, username, password, private_key, passphrase,
-		expected_fingerprint, status, created_at, updated_at
-		FROM hosts WHERE id = $1`
-	args := []any{strconv.Itoa(id)}
-	if workspaceID > 0 {
-		query += ` AND workspace_id = $2`
-		args = append(args, workspaceID)
-	}
-	var host domain.Host
-	host.SSH = &domain.SSHAccess{}
-	var connection, status string
-	var labelsJSON []byte
-	var password, privateKey, passphrase string
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&host.ID, &host.WorkspaceID, &host.EnvironmentID, &host.Name, &host.Hostname, &host.IPAddress,
-		&connection, &labelsJSON, &host.SSH.Port, &host.SSH.Username,
-		&password, &privateKey, &passphrase, &host.SSH.AuthType.ExpectedFingerprint,
-		&status, &host.CreatedAt, &host.UpdatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, domain.ErrHostNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query PostgreSQL host %d: %w", id, err)
-	}
-	if err := json.Unmarshal(labelsJSON, &host.Labels); err != nil {
-		return nil, fmt.Errorf("decode labels for host %s: %w", host.ID, err)
-	}
-	if host.SSH.AuthType.Password, err = crypto.Decrypt(password, s.encryptionKey); err != nil {
-		return nil, fmt.Errorf("decrypt password for host %s: %w", host.ID, err)
-	}
-	if host.SSH.AuthType.PrivateKey, err = crypto.Decrypt(privateKey, s.encryptionKey); err != nil {
-		return nil, fmt.Errorf("decrypt private key for host %s: %w", host.ID, err)
-	}
-	if host.SSH.AuthType.Passphrase, err = crypto.Decrypt(passphrase, s.encryptionKey); err != nil {
-		return nil, fmt.Errorf("decrypt passphrase for host %s: %w", host.ID, err)
-	}
-	if host.SSH.AuthType.PrivateKey != "" {
-		host.SSH.AuthType.Method = domain.AuthTypePrivateKey
-	} else if host.SSH.AuthType.Password != "" {
-		host.SSH.AuthType.Method = domain.AuthTypePassword
-	}
-	host.Connection, host.SSH.Status = domain.ConnectionMethod(connection), domain.HostStatus(status)
-	return &host, nil
-}
-
-// ListAllHosts lists all hosts in a workspace, returning an error if any database operation fails.
-func (s *Store) ListAllHosts(ctx context.Context, workspaceID int) ([]*domain.Host, error) {
-	if workspaceID <= 0 {
-		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, environment_id, name, hostname,
-		ip_address, connection, labels, port, username, status, created_at, updated_at
-		FROM hosts WHERE workspace_id = $1 ORDER BY id::BIGINT DESC`, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("list PostgreSQL hosts: %w", err)
-	}
-	defer utils.CloseRows(rows, s.logger, "query list hosts")
-
-	hosts := make([]*domain.Host, 0)
-	for rows.Next() {
-		host := &domain.Host{SSH: &domain.SSHAccess{}}
-		var connection, status string
-		var labelsJSON []byte
-		if err := rows.Scan(&host.ID, &host.EnvironmentID, &host.Name, &host.Hostname,
-			&host.IPAddress, &connection, &labelsJSON, &host.SSH.Port,
-			&host.SSH.Username, &status, &host.CreatedAt, &host.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan PostgreSQL host row: %w", err)
-		}
-		if err := json.Unmarshal(labelsJSON, &host.Labels); err != nil {
-			return nil, fmt.Errorf("decode labels for host %s: %w", host.ID, err)
-		}
-		host.Connection, host.SSH.Status = domain.ConnectionMethod(connection), domain.HostStatus(status)
-		hosts = append(hosts, host)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate PostgreSQL hosts: %w", err)
-	}
-	return hosts, nil
-}
-
-// UpdateHostStatus updates the status of a host, returning an error if the host does not exist or if any database operation fails.
-func (s *Store) UpdateHostStatus(ctx context.Context, id string, status domain.HostStatus) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE hosts SET status = $1, updated_at = $2 WHERE id = $3`,
-		string(status), time.Now().UTC(), id)
-	if err != nil {
-		return fmt.Errorf("update PostgreSQL host %s status: %w", id, err)
-	}
-	return affected(result, domain.ErrHostNotFound)
-}
-
-// UpdateHostStatusWithGuard updates the status of a host only if its current status matches the expected status, returning an error if the host does not exist, if the current status does not match, or if any database operation fails.
-func (s *Store) UpdateHostStatusWithGuard(ctx context.Context, id int, expected, next domain.HostStatus) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE hosts SET status = $1, updated_at = $2
-		WHERE id = $3 AND status = $4`, string(next), time.Now().UTC(), strconv.Itoa(id), string(expected))
-	if err != nil {
-		return fmt.Errorf("update PostgreSQL host %d status with guard: %w", id, err)
-	}
-	return affected(result, domain.ErrConcurrentConflict)
-}
-
-// DeleteHost deletes a host from the database, returning an error if the host does not exist or if any database operation fails.
-func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id string) error {
-	if workspaceID <= 0 {
-		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin delete host transaction: %w", err)
-	}
-	defer utils.RollbackTx(tx, s.logger, "delete host")
-
-	var name, address string
-	err = tx.QueryRowContext(ctx, `SELECT name, ip_address FROM hosts WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-		id, workspaceID).Scan(&name, &address)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.ErrHostNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("read PostgreSQL host %s before delete: %w", id, err)
-	}
-	result, err := tx.ExecContext(ctx, `DELETE FROM hosts WHERE id = $1 AND workspace_id = $2`, id, workspaceID)
-	if err != nil {
-		return fmt.Errorf("delete PostgreSQL host %s: %w", id, err)
-	}
-	if err := affected(result, domain.ErrHostNotFound); err != nil {
-		return err
-	}
-	if err := appendAudit(ctx, tx, domain.AuditEvent{
-		WorkspaceID: workspaceID, Action: domain.AuditHostDeleted,
-		TargetType: domain.AuditTargetHost, TargetID: id,
-		Details: map[string]string{"name": name, "address": address},
-	}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete host transaction: %w", err)
-	}
-	return nil
-}
-
-// UpdateHost updates a host in the database, returning an error if the host does not exist or if any database operation fails.
-func (s *Store) UpdateHost(ctx context.Context, host *domain.Host) error {
-	if host == nil || host.SSH == nil || host.ID == "" || host.WorkspaceID <= 0 {
-		return fmt.Errorf("%w: host ID, workspace, and SSH access settings are required", domain.ErrInvalidInput)
-	}
-	labels := host.Labels
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labelsJSON, err := json.Marshal(labels)
-	if err != nil {
-		return fmt.Errorf("marshal host labels: %w", err)
-	}
-	password, privateKey, passphrase, err := s.encryptCredentials(host.SSH.AuthType)
-	if err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin update host transaction: %w", err)
-	}
-	defer utils.RollbackTx(tx, s.logger, "update host")
-
-	if err := validateHostEnvironment(ctx, tx, host.WorkspaceID, host.EnvironmentID); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	result, err := tx.ExecContext(ctx, `UPDATE hosts SET environment_id = $1, name = $2,
-		hostname = $3, ip_address = $4, connection = $5, labels = $6, port = $7,
-		username = $8, password = $9, private_key = $10, passphrase = $11,
-		expected_fingerprint = $12, status = $13, updated_at = $14
-		WHERE id = $15 AND workspace_id = $16`,
-		host.EnvironmentID, host.Name, host.Hostname, host.IPAddress, string(host.Connection),
-		string(labelsJSON), host.SSH.Port, host.SSH.Username, password, privateKey, passphrase,
-		host.SSH.AuthType.ExpectedFingerprint, string(host.SSH.Status), now, host.ID, host.WorkspaceID)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
-		}
-		return fmt.Errorf("update PostgreSQL host %s: %w", host.ID, err)
-	}
-	if err := affected(result, domain.ErrHostNotFound); err != nil {
-		return err
-	}
-	if err := appendAudit(ctx, tx, domain.AuditEvent{
-		WorkspaceID: host.WorkspaceID, Action: domain.AuditHostUpdated,
-		TargetType: domain.AuditTargetHost, TargetID: host.ID,
-		Details: map[string]string{"name": host.Name, "address": host.IPAddress, "port": strconv.Itoa(host.SSH.Port)},
-	}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit update host transaction: %w", err)
-	}
-	host.Labels, host.UpdatedAt = labels, now
-	return nil
-}
-
-func validateHostEnvironment(ctx context.Context, tx *sql.Tx, workspaceID, environmentID int) error {
-	if environmentID < 0 {
-		return fmt.Errorf("%w: environment ID must be non-negative", domain.ErrInvalidInput)
-	}
-	if environmentID == 0 {
-		return nil
-	}
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM environments
-		WHERE id = $1 AND workspace_id = $2)`, environmentID, workspaceID).Scan(&exists); err != nil {
-		return fmt.Errorf("validate host environment scope: %w", err)
-	}
-	if !exists {
-		return domain.ErrEnvironmentNotFound
-	}
-	return nil
-}
-
-func (s *Store) encryptCredentials(auth domain.SSHAuthType) (password, privateKey, passphrase string, err error) {
-	if password, err = crypto.Encrypt(auth.Password, s.encryptionKey); err != nil {
-		return "", "", "", fmt.Errorf("encrypt host password: %w", err)
-	}
-	if privateKey, err = crypto.Encrypt(auth.PrivateKey, s.encryptionKey); err != nil {
-		return "", "", "", fmt.Errorf("encrypt host private key: %w", err)
-	}
-	if passphrase, err = crypto.Encrypt(auth.Passphrase, s.encryptionKey); err != nil {
-		return "", "", "", fmt.Errorf("encrypt host passphrase: %w", err)
-	}
-	return password, privateKey, passphrase, nil
 }
 
 func affected(result sql.Result, notFound error) error {
@@ -381,59 +67,4 @@ func affected(result sql.Result, notFound error) error {
 func isUniqueViolation(err error) bool {
 	var postgresErr *pq.Error
 	return errors.As(err, &postgresErr) && postgresErr.Code == "23505"
-}
-
-// PatchHostLabels updates the labels of a host by applying a set of new labels and removing specified labels. It ensures that the workspace and host IDs are valid, applies the label changes, and records an audit event. The function returns the updated labels or an error if any operation fails.
-func (s *Store) PatchHostLabels(ctx context.Context, workspaceID, id int, set map[string]string, remove []string) (map[string]string, error) {
-	if workspaceID <= 0 || id <= 0 {
-		return nil, fmt.Errorf("%w: workspace and host IDs must be positive", domain.ErrInvalidInput)
-	}
-	if err := domain.ValidateLabelPatch(set, remove); err != nil {
-		return nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin label patch transaction: %w", err)
-	}
-	defer utils.RollbackTx(tx, s.logger, "label patch")
-
-	// FOR UPDATE serializes concurrent patches of the same host.
-	var raw []byte
-	err = tx.QueryRowContext(ctx, `SELECT labels FROM hosts WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-		strconv.Itoa(id), workspaceID).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, domain.ErrHostNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read host labels: %w", err)
-	}
-	current := map[string]string{}
-	if len(raw) != 0 {
-		if err := json.Unmarshal(raw, &current); err != nil {
-			return nil, fmt.Errorf("decode labels for host %d: %w", id, err)
-		}
-	}
-	merged, err := domain.ApplyLabelPatch(current, set, remove)
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("marshal host labels: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE hosts SET labels = $1, updated_at = NOW() WHERE id = $2 AND workspace_id = $3`,
-		string(encoded), strconv.Itoa(id), workspaceID); err != nil {
-		return nil, fmt.Errorf("update host labels: %w", err)
-	}
-	if err := appendAudit(ctx, tx, domain.AuditEvent{
-		WorkspaceID: workspaceID, Action: domain.AuditHostLabelsPatched,
-		TargetType: domain.AuditTargetHost, TargetID: strconv.Itoa(id),
-		Details: map[string]string{"set_keys": keyList(set), "removed_keys": sortedList(remove)},
-	}); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit label patch: %w", err)
-	}
-	return merged, nil
 }

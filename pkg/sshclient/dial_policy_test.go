@@ -35,7 +35,7 @@ func loopbackListener(t *testing.T) (port int, accepted *atomic.Int32) {
 func testParams(port int) DialParams {
 	return DialParams{
 		IP: "127.0.0.1", Port: port, Username: "deploy",
-		AuthMethod: domain.AuthTypePassword, SecretData: "pw", ExpectedFingerprint: "SHA256:test",
+		AuthMethod: AuthPassword, SecretData: "pw", ExpectedFingerprint: "SHA256:test",
 	}
 }
 

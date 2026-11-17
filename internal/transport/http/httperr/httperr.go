@@ -67,6 +67,7 @@ var common = []Mapping{
 	{domain.ErrPermissionDenied, http.StatusForbidden, CodePermissionDenied, "permission denied"},
 	{resource.ErrTargetsChanged, http.StatusConflict, CodeTargetsChanged, resource.ErrTargetsChanged.Error()},
 	{resource.ErrConflict, http.StatusConflict, CodeConflict, "resource revision conflict"},
+	{resource.ErrAlreadyExists, http.StatusConflict, CodeConflict, resource.ErrAlreadyExists.Error()},
 	{resource.ErrHostNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrOperationNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrAccessProfileNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},

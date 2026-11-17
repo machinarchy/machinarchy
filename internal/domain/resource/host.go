@@ -90,6 +90,7 @@ var (
 	ErrHostNotFound      = errors.New("managed host not found")
 	ErrOperationNotFound = errors.New("operation not found")
 	ErrConflict          = errors.New("resource revision conflict")
+	ErrAlreadyExists     = errors.New("a resource with this name already exists")
 	ErrInvalidTransition = errors.New("invalid resource lifecycle transition")
 	ErrOperationFinished = errors.New("operation is already terminal")
 	ErrInvalidResource   = errors.New("invalid resource")

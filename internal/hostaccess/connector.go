@@ -140,9 +140,9 @@ func (c *SSHConnector) params(ctx context.Context, host *resource.Host, revision
 	if err != nil {
 		return sshclient.DialParams{}, func() {}, ErrUnavailable
 	}
-	method := domain.AuthTypePassword
+	method := sshclient.AuthPassword
 	if revision.Spec.Authentication == resource.AuthenticationPrivateKey {
-		method = domain.AuthTypePrivateKey
+		method = sshclient.AuthPrivateKey
 	} else if revision.Spec.Authentication != resource.AuthenticationPassword {
 		wipe(credential)
 		return sshclient.DialParams{}, func() {}, ErrUnavailable

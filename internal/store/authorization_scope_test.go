@@ -2,12 +2,9 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"testing"
 	"time"
 
@@ -90,35 +87,6 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 		t.Fatalf("cross-workspace environment lookup error = %v, want not found", err)
 	}
 
-	host := &domain.Host{
-		WorkspaceID:   ownerA.WorkspaceID,
-		EnvironmentID: envB.ID,
-		Name:          "cross-workspace-reference",
-		SSH:           &domain.SSHAccess{Username: "deploy"},
-	}
-	if err := stores.Hosts.CreateHost(ctx, host); !errors.Is(err, domain.ErrEnvironmentNotFound) {
-		t.Fatalf("create host with foreign environment error = %v, want not found", err)
-	}
-	host.EnvironmentID = envA.ID
-	host.Name = "workspace-a-host"
-	if err := stores.Hosts.CreateHost(ctx, host); err != nil {
-		t.Fatalf("create workspace A host: %v", err)
-	}
-	hostID, err := strconv.Atoi(host.ID)
-	if err != nil {
-		t.Fatalf("parse host ID: %v", err)
-	}
-	if _, err := stores.Hosts.GetHostByIDInWorkspace(ctx, workspaceB, hostID); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Fatalf("cross-workspace host lookup error = %v, want not found", err)
-	}
-	host.EnvironmentID = envB.ID
-	if err := stores.Hosts.UpdateHost(ctx, host); !errors.Is(err, domain.ErrEnvironmentNotFound) {
-		t.Fatalf("update host with foreign environment error = %v, want not found", err)
-	}
-	if err := stores.Hosts.DeleteHost(ctx, workspaceB, host.ID); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Fatalf("cross-workspace host delete error = %v, want not found", err)
-	}
-
 	tokenService, err := service.NewAPITokenService(stores.Access)
 	if err != nil {
 		t.Fatalf("create API token service: %v", err)
@@ -189,110 +157,6 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 	}
 	if time.Until(*issued.ExpiresAt) <= 0 {
 		t.Fatal("issued token should have a future expiry")
-	}
-}
-
-func TestSQLiteMigrationAssignsLegacyDataToEarliestUser(t *testing.T) {
-	ctx := context.Background()
-	databasePath := filepath.Join(t.TempDir(), "legacy.db")
-	// #nosec G302 -- Directories require execute permission for traversal.
-	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
-		t.Fatalf("restrict test database directory: %v", err)
-	}
-	db, err := sql.Open("sqlite", databasePath)
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		t.Fatalf("enable foreign keys: %v", err)
-	}
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate migration test source")
-	}
-	migrationDir := filepath.Join(filepath.Dir(sourceFile), "migrations", "sqlite")
-	for _, migration := range []string{"000001_init_hosts.up.sql", "000002_application_tables.up.sql"} {
-		// #nosec G304 -- migration filenames are hardcoded test fixtures.
-		content, err := os.ReadFile(filepath.Join(migrationDir, migration))
-		if err != nil {
-			t.Fatalf("read legacy migration %s: %v", migration, err)
-		}
-		if _, err := db.ExecContext(ctx, string(content)); err != nil {
-			t.Fatalf("apply legacy migration %s: %v", migration, err)
-		}
-	}
-	for _, version := range []int{1, 2} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (?)`, version); err != nil {
-			t.Fatalf("record legacy migration %d: %v", version, err)
-		}
-	}
-	for _, user := range []struct{ name, email string }{
-		{name: "oldest", email: "oldest@example.test"},
-		{name: "later", email: "later@example.test"},
-	} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO users(username, email, password_hash, created_at)
-			VALUES (?, ?, 'hash', '2026-01-01T00:00:00Z')`, user.name, user.email); err != nil {
-			t.Fatalf("seed legacy user %q: %v", user.name, err)
-		}
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO environments(name, description, created_at)
-		VALUES ('legacy-production', 'legacy', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("seed legacy environment: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO hosts
-		(id, environment_id, name, hostname, ip_address, connection, status, labels, port,
-		username, password, private_key, passphrase, expected_fingerprint, created_at, updated_at)
-		VALUES ('1', 1, 'legacy-host', 'legacy-host', '192.0.2.1', 'SSH', 'PENDING', '{}', 22,
-		'deploy', '', '', '', 'SHA256:legacy', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("seed legacy host: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close seeded legacy database: %v", err)
-	}
-
-	stores, err := store.Open(ctx, store.Config{
-		Engine:           store.EngineSQLite,
-		SQLitePath:       databasePath,
-		EncryptionSecret: "integration-test-secret-with-more-than-thirty-two-bytes",
-	})
-	if err != nil {
-		t.Fatalf("upgrade legacy database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := stores.Close(); err != nil {
-			t.Errorf("close upgraded stores: %v", err)
-		}
-	})
-	oldest, err := stores.Users.GetUserByUsername(ctx, "oldest")
-	if err != nil {
-		t.Fatalf("load earliest account: %v", err)
-	}
-	later, err := stores.Users.GetUserByUsername(ctx, "later")
-	if err != nil {
-		t.Fatalf("load later account: %v", err)
-	}
-	if oldest.WorkspaceID != 1 || oldest.Role != domain.RoleOwner || later.WorkspaceID == oldest.WorkspaceID {
-		t.Fatalf("legacy account workspaces: oldest=%+v later=%+v", oldest, later)
-	}
-	legacyHosts, err := stores.Hosts.ListAllHosts(ctx, oldest.WorkspaceID)
-	if err != nil || len(legacyHosts) != 1 || legacyHosts[0].ID != "1" {
-		t.Fatalf("legacy host inventory = %#v err=%v; want record assigned to earliest user", legacyHosts, err)
-	}
-	laterHosts, err := stores.Hosts.ListAllHosts(ctx, later.WorkspaceID)
-	if err != nil || len(laterHosts) != 0 {
-		t.Fatalf("later user's hosts = %#v err=%v; want empty workspace", laterHosts, err)
-	}
-	legacyEnvironments, err := stores.Environments.ListEnvironments(ctx, oldest.WorkspaceID)
-	if err != nil || len(legacyEnvironments) != 1 {
-		t.Fatalf("legacy environments = %#v err=%v", legacyEnvironments, err)
-	}
-	laterEnvironments, err := stores.Environments.ListEnvironments(ctx, later.WorkspaceID)
-	if err != nil {
-		t.Fatalf("list later user's environments: %v", err)
-	}
-	if len(laterEnvironments) != 0 {
-		t.Fatalf("later user's environments = %#v; want empty workspace", laterEnvironments)
 	}
 }
 

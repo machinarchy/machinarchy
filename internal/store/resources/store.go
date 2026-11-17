@@ -168,7 +168,7 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 		s.nowText(host.Metadata.CreatedAt), s.nowText(host.Metadata.UpdatedAt))
 	if err != nil {
 		if isUniqueError(err) {
-			return fmt.Errorf("%w: %w", domain.ErrHostAlreadyExists, err)
+			return fmt.Errorf("%w: %w", resource.ErrAlreadyExists, err)
 		}
 		return fmt.Errorf("insert managed Host: %w", err)
 	}

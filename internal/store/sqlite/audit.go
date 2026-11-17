@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -160,21 +158,4 @@ func (s *Store) VerifyAuditChain(ctx context.Context, workspaceID int) (*domain.
 			return &result, nil
 		}
 	}
-}
-
-// keyList renders map keys as a sorted, comma-separated list for audit details.
-func keyList(m map[string]string) string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ",")
-}
-
-// sortedList renders values as a sorted, comma-separated list for audit details.
-func sortedList(values []string) string {
-	sorted := append([]string(nil), values...)
-	sort.Strings(sorted)
-	return strings.Join(sorted, ",")
 }

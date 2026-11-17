@@ -143,9 +143,7 @@ func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, o
 			slog.Error("skipping runtime close because a background worker is still running")
 			return
 		}
-		closeCtx, cancel := budget.context()
-		defer cancel()
-		if err := runtime.CloseContext(closeCtx); err != nil {
+		if err := runtime.Close(); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("close runtime: %w", err))
 		}
 	}()

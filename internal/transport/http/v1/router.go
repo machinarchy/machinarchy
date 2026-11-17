@@ -15,11 +15,8 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/auth"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/configuration"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/environments"
-	"github.com/machinarchy/machinarchy/internal/transport/http/v1/fleet"
-	"github.com/machinarchy/machinarchy/internal/transport/http/v1/host"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/managedresource"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
-	"github.com/machinarchy/machinarchy/internal/transport/http/v1/runs"
 	secretapi "github.com/machinarchy/machinarchy/internal/transport/http/v1/secret"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/tokens"
 )
@@ -28,7 +25,6 @@ import (
 // Concrete database adapters are assembled at the process composition root.
 type Repositories struct {
 	Users            domain.UserStore
-	Hosts            domain.HostStore
 	Environments     domain.EnvironmentStore
 	Access           domain.AccessStore
 	Audit            domain.AuditStore
@@ -43,15 +39,12 @@ func RegisterRoutes(
 	g *echo.Group,
 	repos Repositories,
 	authServ domain.AuthService,
-	hostServ service.HostService,
 	jwtSecret []byte,
 	secureCookies bool,
 	signupEnabled bool,
 	tokenService domain.APITokenService,
 	memberService domain.MemberService,
-	targetService domain.TargetService,
 	auditService domain.AuditService,
-	runService domain.RunService,
 ) {
 	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
@@ -59,12 +52,9 @@ func RegisterRoutes(
 		authHandler.SetSignupEnabledProvider(repos.SignupEnabled)
 	}
 	envHandler := environments.NewHandler(repos.Environments)
-	hostHandler := host.NewHandler(repos.Hosts, repos.Environments, hostServ)
 	tokenHandler := tokens.NewHandler(tokenService)
 	memberHandler := members.NewHandler(memberService)
-	fleetHandler := fleet.NewHandler(targetService)
 	auditHandler := audit.NewHandler(auditService)
-	runHandler := runs.NewHandler(runService)
 
 	// ==========================================
 	// PUBLIC ROUTES (No Auth Middleware)
@@ -87,14 +77,6 @@ func RegisterRoutes(
 		envWriteGroup := writeRoutes.Group("/environments")
 		environments.RegisterRoutes(envReadGroup, envWriteGroup, envHandler)
 
-		// Host management routes.
-		hostReadGroup := readRoutes.Group("/hosts")
-		hostWriteGroup := writeRoutes.Group("/hosts")
-		host.RegisterRoutes(hostReadGroup, hostWriteGroup, hostHandler)
-
-		// /api/v1/fleet (target previews; read-only, nothing is executed)
-		fleet.RegisterRoutes(readRoutes.Group("/fleet"), fleetHandler)
-
 		tokenGroup := apiv1.Group("/tokens",
 			middleware.RequirePermission(domain.PermissionTokenManage), middleware.RequireHuman())
 		tokens.RegisterRoutes(tokenGroup, tokenHandler)
@@ -103,14 +85,6 @@ func RegisterRoutes(
 		memberGroup := apiv1.Group("/members",
 			middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
 		members.RegisterRoutes(memberGroup, memberHandler)
-
-		// Runs: anyone who can read operations may list and inspect them; starting
-		// and cancelling need the separate runs:execute permission.
-		runs.RegisterRoutes(
-			apiv1.Group("/runs", middleware.RequirePermission(domain.PermissionOperationsRead)),
-			apiv1.Group("/runs", middleware.RequirePermission(domain.PermissionRunsExecute)),
-			runHandler,
-		)
 
 		// Owner-only audit trail; API tokens are refused.
 		auditGroup := apiv1.Group("/audit",

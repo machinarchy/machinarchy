@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -179,40 +181,21 @@ func (f *fixture) roleOf(t *testing.T, username string) domain.Role {
 	return user.Role
 }
 
-func contractHost(workspaceID int, name, address string, port int) *domain.Host {
-	return &domain.Host{
-		WorkspaceID: workspaceID, Name: name, Hostname: name + ".example.test", IPAddress: address,
-		Connection: domain.MethodSSH, Labels: map[string]string{"env": "prod"},
-		SSH: &domain.SSHAccess{
-			Port: port, Username: "deploy", Status: domain.HostStatusPending,
-			AuthType: domain.SSHAuthType{Method: domain.AuthTypePassword, Password: "pw", ExpectedFingerprint: "SHA256:test"},
-		},
-	}
-}
-
 var contractTests = []struct {
 	name string
-	run  func(t *testing.T, f *fixture)
+	run  func(*testing.T, *fixture)
 }{
-	{"signup defaults and uniqueness", testSignup},
-	{"member roles and last owner", testMemberRoles},
-	{"concurrent owner demotion", testConcurrentDemotion},
-	{"host lifecycle and isolation", testHostLifecycle},
-	{"host uniqueness", testHostUniqueness},
-	{"host label patches", testHostLabelPatches},
-	{"concurrent label patches", testConcurrentLabelPatches},
+	{"signup", testSignup},
+	{"member roles", testMemberRoles},
+	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"audit trail", testAuditTrail},
 	{"audit events are append-only", testAuditAppendOnly},
 	{"audit detects a modified event", testAuditDetectsModification},
 	{"audit detects a removed event", testAuditDetectsRemoval},
 	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
-	{"run lifecycle", testRunLifecycle},
-	{"run listing", testRunListing},
-	{"run recovery", testRunRecovery},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
-	{"host uniqueness pre-flight", testHostUniquenessPreflight},
 }
 
 func TestStoreContract(t *testing.T) {
@@ -353,134 +336,6 @@ func testConcurrentDemotion(t *testing.T, f *fixture) {
 	}
 }
 
-func testHostLifecycle(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	other := f.newWorkspace(t, "other")
-
-	host := contractHost(1, "web-01", "10.0.0.1", 22)
-	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
-		t.Fatalf("CreateHost() error = %v", err)
-	}
-	id, err := strconv.Atoi(host.ID)
-	if err != nil || id <= 0 {
-		t.Fatalf("host ID %q must be a positive integer: %v", host.ID, err)
-	}
-
-	got, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil {
-		t.Fatalf("GetHostByIDInWorkspace() error = %v", err)
-	}
-	if got.Name != "web-01" || got.IPAddress != "10.0.0.1" || got.SSH.Port != 22 || got.SSH.Username != "deploy" ||
-		got.Labels["env"] != "prod" || got.SSH.AuthType.ExpectedFingerprint != "SHA256:test" ||
-		got.SSH.AuthType.Password != "pw" || got.SSH.Status != domain.HostStatusPending {
-		t.Fatalf("stored host does not round-trip, including decrypted credentials: %+v", got)
-	}
-	if byID, err := f.stores.Hosts.GetHostByID(ctx, id); err != nil || byID.ID != host.ID {
-		t.Errorf("GetHostByID() = %+v, %v", byID, err)
-	}
-
-	if hosts, err := f.stores.Hosts.ListAllHosts(ctx, 1); err != nil || len(hosts) != 1 {
-		t.Errorf("workspace 1 hosts = %d, %v; want 1", len(hosts), err)
-	}
-	if hosts, err := f.stores.Hosts.ListAllHosts(ctx, other); err != nil || len(hosts) != 0 {
-		t.Errorf("other workspace hosts = %d, %v; want 0", len(hosts), err)
-	}
-	if _, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, other, id); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("cross-workspace read error = %v, want ErrHostNotFound", err)
-	}
-	if err := f.stores.Hosts.DeleteHost(ctx, other, host.ID); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("cross-workspace delete error = %v, want ErrHostNotFound", err)
-	}
-
-	if err := f.stores.Hosts.UpdateHostStatus(ctx, host.ID, domain.HostStatusActive); err != nil {
-		t.Fatalf("UpdateHostStatus() error = %v", err)
-	}
-	if err := f.stores.Hosts.UpdateHostStatusWithGuard(ctx, id, domain.HostStatusPending, domain.HostStatusDisconnected); !errors.Is(err, domain.ErrConcurrentConflict) {
-		t.Errorf("stale guard error = %v, want ErrConcurrentConflict", err)
-	}
-	if err := f.stores.Hosts.UpdateHostStatusWithGuard(ctx, id, domain.HostStatusActive, domain.HostStatusDisconnected); err != nil {
-		t.Errorf("matching guard error = %v", err)
-	}
-	if err := f.stores.Hosts.UpdateHostStatus(ctx, "999999", domain.HostStatusActive); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("unknown host status update error = %v, want ErrHostNotFound", err)
-	}
-
-	got.Name, got.Labels = "web-01-renamed", map[string]string{"env": "staging", "tier": "web"}
-	if err := f.stores.Hosts.UpdateHost(ctx, got); err != nil {
-		t.Fatalf("UpdateHost() error = %v", err)
-	}
-	updated, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil || updated.Name != "web-01-renamed" || updated.Labels["tier"] != "web" || updated.SSH.AuthType.Password != "pw" {
-		t.Fatalf("updated host = %+v, %v", updated, err)
-	}
-
-	if err := f.stores.Hosts.DeleteHost(ctx, 1, host.ID); err != nil {
-		t.Fatalf("DeleteHost() error = %v", err)
-	}
-	if _, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("read after delete error = %v, want ErrHostNotFound", err)
-	}
-	if err := f.stores.Hosts.DeleteHost(ctx, 1, host.ID); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("second delete error = %v, want ErrHostNotFound", err)
-	}
-}
-
-func testHostUniqueness(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	for _, h := range []*domain.Host{
-		contractHost(1, "Web-01", "10.0.0.1", 22),
-		contractHost(1, "dns-1", "Db.Example.Test", 22),
-	} {
-		if err := f.stores.Hosts.CreateHost(ctx, h); err != nil {
-			t.Fatalf("create %s: %v", h.Name, err)
-		}
-	}
-	conflicts := map[string]*domain.Host{
-		"same name, different case":     contractHost(1, "WEB-01", "10.0.0.2", 22),
-		"same address and port":         contractHost(1, "other", "10.0.0.1", 22),
-		"same hostname, different case": contractHost(1, "dns-2", "db.example.test", 22),
-	}
-	for name, host := range conflicts {
-		if err := f.stores.Hosts.CreateHost(ctx, host); !errors.Is(err, domain.ErrHostAlreadyExists) {
-			t.Errorf("%s: error = %v, want ErrHostAlreadyExists", name, err)
-		}
-	}
-	if err := f.stores.Hosts.CreateHost(ctx, contractHost(1, "web-01-alt-port", "10.0.0.1", 2222)); err != nil {
-		t.Errorf("the same address on a different port is a different target: %v", err)
-	}
-	other := f.newWorkspace(t, "workspace-b")
-	if err := f.stores.Hosts.CreateHost(ctx, contractHost(other, "web-01", "10.0.0.1", 22)); err != nil {
-		t.Errorf("the same name and address in another workspace must be allowed: %v", err)
-	}
-	if hosts, err := f.stores.Hosts.ListAllHosts(ctx, 1); err != nil || len(hosts) != 3 {
-		t.Fatalf("workspace 1 hosts = %d, %v; rejected inserts must leave no rows", len(hosts), err)
-	}
-
-	// Updates cannot collide either, and a refused update changes nothing.
-	second := contractHost(1, "db-01", "10.0.0.9", 22)
-	if err := f.stores.Hosts.CreateHost(ctx, second); err != nil {
-		t.Fatal(err)
-	}
-	second.Name = "WEB-01"
-	if err := f.stores.Hosts.UpdateHost(ctx, second); !errors.Is(err, domain.ErrHostAlreadyExists) {
-		t.Fatalf("rename onto an existing name error = %v, want ErrHostAlreadyExists", err)
-	}
-	second.Name, second.IPAddress = "db-01", "10.0.0.1"
-	if err := f.stores.Hosts.UpdateHost(ctx, second); !errors.Is(err, domain.ErrHostAlreadyExists) {
-		t.Fatalf("move onto an existing address:port error = %v, want ErrHostAlreadyExists", err)
-	}
-	id, _ := strconv.Atoi(second.ID)
-	stored, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil || stored.Name != "db-01" || stored.IPAddress != "10.0.0.9" {
-		t.Fatalf("stored host = %+v, %v; a refused update must change nothing", stored, err)
-	}
-	second.IPAddress = "10.0.0.9"
-	second.SSH.Username = "ops"
-	if err := f.stores.Hosts.UpdateHost(ctx, second); err != nil {
-		t.Fatalf("saving a host without changing its identity must not conflict with itself: %v", err)
-	}
-}
-
 func testEnvironments(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	other := f.newWorkspace(t, "other")
@@ -507,15 +362,19 @@ func testEnvironments(t *testing.T, f *fixture) {
 		t.Errorf("cross-workspace delete error = %v, want ErrEnvironmentNotFound", err)
 	}
 
-	// Hosts may only reference environments of their own workspace.
-	crossHost := contractHost(1, "cross", "10.0.1.1", 22)
-	crossHost.EnvironmentID = foreign.ID
-	if err := f.stores.Hosts.CreateHost(ctx, crossHost); !errors.Is(err, domain.ErrEnvironmentNotFound) {
-		t.Errorf("host referencing another workspace's environment error = %v, want ErrEnvironmentNotFound", err)
+	// Managed hosts may only reference environments of their own workspace.
+	crossHost, err := resource.NewHost(1, foreign.ID, "cross", nil, resource.HostSpec{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	ownHost := contractHost(1, "own", "10.0.1.2", 22)
-	ownHost.EnvironmentID = production.ID
-	if err := f.stores.Hosts.CreateHost(ctx, ownHost); err != nil {
+	if err := f.stores.ResourceHosts.CreateHost(ctx, crossHost); err == nil {
+		t.Error("a host referencing another workspace's environment was stored")
+	}
+	ownHost, err := resource.NewHost(1, production.ID, "own", nil, resource.HostSpec{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceHosts.CreateHost(ctx, ownHost); err != nil {
 		t.Errorf("host referencing its own environment: %v", err)
 	}
 
@@ -633,195 +492,6 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	}
 }
 
-func testHostUniquenessPreflight(t *testing.T, f *fixture) {
-	ctx := context.Background()
-
-	// Make the database look like it was last migrated before version 4 and hold
-	// hosts that violate the new indexes.
-	for _, statement := range []string{
-		`DROP INDEX idx_hosts_workspace_name`,
-		`DROP INDEX idx_hosts_workspace_address`,
-		`DELETE FROM schema_migrations WHERE version = 4`,
-	} {
-		if _, err := f.stores.DB.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	insert := f.pick(
-		`INSERT INTO hosts (id, workspace_id, environment_id, name, hostname, ip_address,
-			connection, status, port, username, password, private_key, passphrase, expected_fingerprint,
-			created_at, updated_at) VALUES (?, 1, 0, ?, 'h', ?, 'SSH', 'PENDING', 22, 'u', '', '', '', 'fp', 'now', 'now')`,
-		`INSERT INTO hosts (id, workspace_id, environment_id, name, hostname, ip_address,
-			connection, status, port, username, password, private_key, passphrase, expected_fingerprint,
-			created_at, updated_at) VALUES ($1, 1, 0, $2, 'h', $3, 'SSH', 'PENDING', 22, 'u', '', '', '', 'fp', NOW(), NOW())`,
-	)
-	for _, row := range [][]any{
-		{"901", "web-01", "10.0.0.1"},
-		{"902", "WEB-01", "10.0.0.2"}, // name duplicate
-		{"903", "app-01", "10.0.0.5"},
-		{"904", "app-02", "10.0.0.5"}, // address:port duplicate
-	} {
-		if _, err := f.stores.DB.ExecContext(ctx, insert, row...); err != nil {
-			t.Fatalf("seed host %v: %v", row[0], err)
-		}
-	}
-	if err := f.stores.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := store.Open(ctx, f.cfg)
-	if err == nil {
-		t.Fatal("Open() succeeded although existing hosts violate the uniqueness constraints")
-	}
-	for _, want := range []string{"web-01", "workspace 1", "901", "902", "10.0.0.5:22", "903", "904", "Nothing has been changed"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error should mention %q:\n%v", want, err)
-		}
-	}
-
-	// Resolve the conflicts by hand, as the message instructs.
-	raw := f.raw(t)
-	if _, err := raw.ExecContext(ctx, `DELETE FROM hosts WHERE id IN ('902', '904')`); err != nil {
-		t.Fatal(err)
-	}
-	f.open(t)
-	var indexes int
-	countIndexes := f.pick(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('idx_hosts_workspace_name', 'idx_hosts_workspace_address')`,
-		`SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname IN ('idx_hosts_workspace_name', 'idx_hosts_workspace_address')`,
-	)
-	if err := f.stores.DB.QueryRowContext(ctx, countIndexes).Scan(&indexes); err != nil || indexes != 2 {
-		t.Fatalf("uniqueness indexes present = %d, %v; want 2", indexes, err)
-	}
-}
-
-func testHostLabelPatches(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	other := f.newWorkspace(t, "other")
-	host := contractHost(1, "web-01", "10.0.0.1", 22) // starts with env=prod
-	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
-		t.Fatal(err)
-	}
-	id, _ := strconv.Atoi(host.ID)
-
-	sameLabels := func(got, want map[string]string) bool {
-		if len(got) != len(want) {
-			return false
-		}
-		for k, v := range want {
-			if gv, ok := got[k]; !ok || gv != v {
-				return false
-			}
-		}
-		return true
-	}
-
-	merged, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"role": "web", "tier": "1"}, nil)
-	if err != nil || !sameLabels(merged, map[string]string{"env": "prod", "role": "web", "tier": "1"}) {
-		t.Fatalf("set = %v, %v; want existing labels kept and new ones added", merged, err)
-	}
-	merged, err = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"role": "api"}, []string{"tier", "absent"})
-	if err != nil || !sameLabels(merged, map[string]string{"env": "prod", "role": "api"}) {
-		t.Fatalf("set+remove = %v, %v; removing an absent label is not an error", merged, err)
-	}
-
-	stored, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil || !sameLabels(stored.Labels, merged) {
-		t.Fatalf("stored labels = %v, %v; want %v", stored.Labels, err, merged)
-	}
-	if stored.Name != "web-01" || stored.IPAddress != "10.0.0.1" || stored.SSH.Username != "deploy" ||
-		stored.SSH.AuthType.Password != "pw" || stored.SSH.AuthType.ExpectedFingerprint != "SHA256:test" {
-		t.Errorf("a label patch must not touch other host fields or credentials: %+v", stored)
-	}
-
-	// The patched labels are what selectors see.
-	hosts, err := f.stores.Hosts.ListAllHosts(ctx, 1)
-	if err != nil || len(hosts) != 1 {
-		t.Fatalf("ListAllHosts() = %d, %v", len(hosts), err)
-	}
-	selector, err := domain.ParseSelector("role=api,env=prod,!tier")
-	if err != nil || !selector.Matches(hosts[0], "") {
-		t.Errorf("selector did not match the patched host: %v", err)
-	}
-
-	for name, tc := range map[string]struct {
-		set    map[string]string
-		remove []string
-	}{
-		"empty patch":  {},
-		"reserved key": {set: map[string]string{"status": "x"}},
-		"bad value":    {set: map[string]string{"a": "has space"}},
-		"set+remove":   {set: map[string]string{"a": "b"}, remove: []string{"a"}},
-	} {
-		if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, tc.set, tc.remove); !errors.Is(err, domain.ErrInvalidInput) {
-			t.Errorf("%s: error = %v, want ErrInvalidInput", name, err)
-		}
-	}
-
-	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id+999, map[string]string{"a": "b"}, nil); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("unknown host error = %v, want ErrHostNotFound", err)
-	}
-	if _, err := f.stores.Hosts.PatchHostLabels(ctx, other, id, map[string]string{"leak": "x"}, nil); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Errorf("cross-workspace patch error = %v, want ErrHostNotFound", err)
-	}
-
-	// The label limit is enforced against the merged result, and a refused
-	// patch changes nothing.
-	fill := map[string]string{}
-	for i := 0; i < domain.MaxLabels-len(merged); i++ {
-		fill["fill"+strconv.Itoa(i)] = "v"
-	}
-	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, fill, nil); err != nil {
-		t.Fatalf("filling to the limit: %v", err)
-	}
-	if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"one-too-many": "v"}, nil); !errors.Is(err, domain.ErrInvalidInput) {
-		t.Errorf("exceeding the limit error = %v, want ErrInvalidInput", err)
-	}
-	after, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil || len(after.Labels) != domain.MaxLabels || after.Labels["leak"] != "" || after.Labels["one-too-many"] != "" {
-		t.Errorf("labels after refused patches = %d, %v", len(after.Labels), err)
-	}
-}
-
-func testConcurrentLabelPatches(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	host := contractHost(1, "web-01", "10.0.0.1", 22)
-	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
-		t.Fatal(err)
-	}
-	id, _ := strconv.Atoi(host.ID)
-
-	const patches = 20
-	var wg sync.WaitGroup
-	errs := make([]error, patches)
-	for i := 0; i < patches; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, errs[i] = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil)
-		}()
-	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("patch %d: %v", i, err)
-		}
-	}
-	stored, err := f.stores.Hosts.GetHostByIDInWorkspace(ctx, 1, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stored.Labels) != patches+1 { // the 20 patched labels plus the original env=prod
-		t.Fatalf("stored %d labels, want %d; concurrent patches must not overwrite each other: %v", len(stored.Labels), patches+1, stored.Labels)
-	}
-	for i := 0; i < patches; i++ {
-		if stored.Labels["k"+strconv.Itoa(i)] != "v" {
-			t.Errorf("label k%d was lost", i)
-		}
-	}
-}
-
-// auditEvents returns a workspace's events oldest first.
 func auditEvents(t *testing.T, f *fixture, workspaceID int) []domain.AuditEvent {
 	t.Helper()
 	newest, err := f.stores.Audit.ListAuditEvents(context.Background(), workspaceID, domain.AuditFilter{Limit: domain.MaxAuditPageSize})
@@ -861,24 +531,8 @@ func testAuditTrail(t *testing.T, f *fixture) {
 		t.Fatalf("demoting the last owner error = %v, want ErrLastOwner", err)
 	}
 
-	host := contractHost(1, "web-01", "10.0.0.1", 22)
-	host.SSH.AuthType.Password = "TOP-SECRET-PW"
-	if err := f.stores.Hosts.CreateHost(actx, host); err != nil {
-		t.Fatal(err)
-	}
-	hostID, _ := strconv.Atoi(host.ID)
-
 	// Operations that fail must leave no event behind.
 	before := len(auditEvents(t, f, 1))
-	if err := f.stores.Hosts.CreateHost(actx, contractHost(1, "dup", "10.0.0.1", 22)); !errors.Is(err, domain.ErrHostAlreadyExists) {
-		t.Fatalf("duplicate host error = %v", err)
-	}
-	if err := f.stores.Hosts.DeleteHost(actx, 1, "999999"); !errors.Is(err, domain.ErrHostNotFound) {
-		t.Fatalf("unknown host delete error = %v", err)
-	}
-	if _, err := f.stores.Hosts.PatchHostLabels(actx, 1, hostID, map[string]string{"name": "reserved"}, nil); !errors.Is(err, domain.ErrInvalidInput) {
-		t.Fatalf("invalid patch error = %v", err)
-	}
 	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, 9999, domain.RoleReader); !errors.Is(err, domain.ErrUserNotFound) {
 		t.Fatalf("unknown member error = %v", err)
 	}
@@ -890,17 +544,6 @@ func testAuditTrail(t *testing.T, f *fixture) {
 	}
 	if after := len(auditEvents(t, f, 1)); after != before {
 		t.Fatalf("failed operations wrote %d audit events, want 0", after-before)
-	}
-
-	host.Name = "web-01-renamed"
-	if err := f.stores.Hosts.UpdateHost(actx, host); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.stores.Hosts.PatchHostLabels(actx, 1, hostID, map[string]string{"role": "web"}, []string{"env"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Hosts.DeleteHost(actx, 1, host.ID); err != nil {
-		t.Fatal(err)
 	}
 
 	expires := time.Now().Add(time.Hour)
@@ -918,7 +561,6 @@ func testAuditTrail(t *testing.T, f *fixture) {
 	events := auditEvents(t, f, 1)
 	wantActions := []string{
 		domain.AuditUserCreated, domain.AuditUserCreated, domain.AuditMemberRoleChanged,
-		domain.AuditHostCreated, domain.AuditHostUpdated, domain.AuditHostLabelsPatched, domain.AuditHostDeleted,
 		domain.AuditAPITokenCreated, domain.AuditAPITokenRevoked,
 	}
 	if len(events) != len(wantActions) {
@@ -959,20 +601,11 @@ func testAuditTrail(t *testing.T, f *fixture) {
 	if events[2].TargetType != domain.AuditTargetUser || events[2].TargetID != strconv.Itoa(alice.ID) {
 		t.Errorf("role change target = %s/%s", events[2].TargetType, events[2].TargetID)
 	}
-	expectDetails(3, map[string]string{"name": "web-01", "address": "10.0.0.1", "port": "22"})
-	expectDetails(4, map[string]string{"name": "web-01-renamed", "address": "10.0.0.1", "port": "22"})
-	expectDetails(5, map[string]string{"set_keys": "role", "removed_keys": "env"})
-	expectDetails(6, map[string]string{"name": "web-01-renamed", "address": "10.0.0.1"})
-	for i := 3; i <= 6; i++ {
-		if events[i].TargetType != domain.AuditTargetHost || events[i].TargetID != host.ID {
-			t.Errorf("event[%d] target = %s/%s, want host %s", i, events[i].TargetType, events[i].TargetID, host.ID)
-		}
-	}
-	if e := events[7]; e.TargetType != domain.AuditTargetAPIToken || e.TargetID != strconv.Itoa(token.ID) || e.Details["name"] != "ci" ||
+	if e := events[3]; e.TargetType != domain.AuditTargetAPIToken || e.TargetID != strconv.Itoa(token.ID) || e.Details["name"] != "ci" ||
 		e.Details["role"] != "operator" || e.Details["expires_at"] == "" || len(e.Details) != 3 {
 		t.Errorf("token creation event = %+v", e)
 	}
-	expectDetails(8, map[string]string{"name": "ci"})
+	expectDetails(4, map[string]string{"name": "ci"})
 
 	// No credential ever reaches the trail.
 	encoded, err := json.Marshal(events)
@@ -1008,7 +641,7 @@ func testAuditTrail(t *testing.T, f *fixture) {
 	if err != nil || len(rest) != len(events)-2 || rest[0].ID >= page[1].ID {
 		t.Fatalf("second page = %d events, %v", len(rest), err)
 	}
-	created, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditHostCreated})
+	created, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditAPITokenCreated})
 	if err != nil || len(created) != 1 {
 		t.Fatalf("filtered events = %d, %v; want 1", len(created), err)
 	}
@@ -1022,21 +655,27 @@ func testAuditTrail(t *testing.T, f *fixture) {
 	}
 }
 
-// seedAuditEvents creates a host and n label patches, returning the events oldest first.
-func seedAuditEvents(t *testing.T, f *fixture, patches int) []domain.AuditEvent {
+// seedAuditEvents creates an account and n API tokens, returning the events
+// oldest first.
+func seedAuditEvents(t *testing.T, f *fixture, tokens int) []domain.AuditEvent {
 	t.Helper()
 	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
-	host := contractHost(1, "web-01", "10.0.0.1", 22)
-	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+	user, err := f.stores.Users.CreateUser(ctx, "seed", "seed@example.test", "hash")
+	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := strconv.Atoi(host.ID)
-	for i := 0; i < patches; i++ {
-		if _, err := f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil); err != nil {
+	for i := 0; i < tokens; i++ {
+		if err := f.stores.Access.CreateAPIToken(ctx, seedToken(user.ID, i)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return auditEvents(t, f, 1)
+}
+
+func seedToken(userID, i int) *domain.APIToken {
+	expires := time.Now().Add(time.Hour)
+	return &domain.APIToken{UserID: userID, WorkspaceID: 1, Name: "t" + strconv.Itoa(i), Role: domain.RoleReader,
+		TokenHash: fmt.Sprintf("%064x", i+1), CreatedAt: time.Now().UTC(), ExpiresAt: &expires}
 }
 
 func disableAuditTriggers(t *testing.T, f *fixture) {
@@ -1112,11 +751,10 @@ func testAuditDetectsRemoval(t *testing.T, f *fixture) {
 
 func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
-	host := contractHost(1, "web-01", "10.0.0.1", 22)
-	if err := f.stores.Hosts.CreateHost(ctx, host); err != nil {
+	user, err := f.stores.Users.CreateUser(ctx, "seed", "seed@example.test", "hash")
+	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := strconv.Atoi(host.ID)
 
 	const patches = 20
 	var wg sync.WaitGroup
@@ -1125,7 +763,7 @@ func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = f.stores.Hosts.PatchHostLabels(ctx, 1, id, map[string]string{"k" + strconv.Itoa(i): "v"}, nil)
+			errs[i] = f.stores.Access.CreateAPIToken(ctx, seedToken(user.ID, i))
 		}()
 	}
 	wg.Wait()
@@ -1142,321 +780,5 @@ func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 	result, err := f.stores.Audit.VerifyAuditChain(context.Background(), 1)
 	if err != nil || !result.Valid || result.Events != patches+1 {
 		t.Fatalf("the chain forked or broke under concurrency: %+v, %v", result, err)
-	}
-}
-
-func contractRun(workspaceID int, argv []string, hostIDs ...string) *domain.Run {
-	run := &domain.Run{
-		WorkspaceID: workspaceID, CreatedByUserID: 7, CreatedByUsername: "ops", CreatedByTokenID: 3,
-		Program: argv[0], ArgCount: len(argv) - 1, Argv: argv, ArgvSHA256: domain.ArgvDigest(argv),
-		TimeoutSeconds: 60, Concurrency: 5, TargetsHash: strings.Repeat("c", 64),
-		Rule: domain.TargetRule{Selector: "role=web"},
-	}
-	for i, id := range hostIDs {
-		run.Hosts = append(run.Hosts, domain.RunHost{
-			HostID: id, Name: "web-0" + strconv.Itoa(i+1), Address: "10.0.0." + strconv.Itoa(i+1), Port: 22,
-		})
-	}
-	return run
-}
-
-func runEvents(t *testing.T, f *fixture, action string) []domain.AuditEvent {
-	t.Helper()
-	events, err := f.stores.Audit.ListAuditEvents(context.Background(), 1, domain.AuditFilter{Action: action})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return events
-}
-
-func testRunLifecycle(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	actor := domain.AuditActor{UserID: 7, Username: "ops", APITokenID: 3, RequestID: "req-run", Source: "api"}
-	actx := domain.WithAuditActor(ctx, actor)
-	other := f.newWorkspace(t, "other")
-
-	argv := []string{"echo", "TOP-SECRET-ARG", "b"}
-	run := contractRun(1, argv, "101", "102")
-	if err := f.stores.Runs.CreateRun(actx, run); err != nil {
-		t.Fatalf("CreateRun() error = %v", err)
-	}
-	if run.ID <= 0 || run.Status != domain.RunQueued || run.CreatedAt.IsZero() {
-		t.Fatalf("created run = %+v", run)
-	}
-
-	got, err := f.stores.Runs.GetRun(ctx, 1, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != domain.RunQueued || got.Program != "echo" || got.ArgCount != 2 || len(got.Argv) != 3 || got.Argv[1] != "TOP-SECRET-ARG" ||
-		got.CreatedByUserID != 7 || got.CreatedByUsername != "ops" || got.CreatedByTokenID != 3 ||
-		got.TimeoutSeconds != 60 || got.Concurrency != 5 || got.Rule.Selector != "role=web" ||
-		got.TargetsHash != run.TargetsHash || got.CancelRequested || got.StartedAt != nil || got.FinishedAt != nil {
-		t.Fatalf("stored run = %+v", got)
-	}
-	if len(got.Hosts) != 2 || got.Hosts[0].Name != "web-01" || got.Hosts[0].Status != domain.RunHostPending ||
-		got.Hosts[1].HostID != "102" || got.Counts.Pending != 2 {
-		t.Fatalf("stored hosts = %+v counts %+v", got.Hosts, got.Counts)
-	}
-	// The arguments are encrypted at rest.
-	var stored string
-	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT argv_encrypted FROM runs WHERE id = ?`, `SELECT argv_encrypted FROM runs WHERE id = $1`), run.ID).Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if stored == "" || strings.Contains(stored, "TOP-SECRET-ARG") {
-		t.Errorf("argv_encrypted = %q; the arguments must not be stored in the clear", stored)
-	}
-	if _, err := f.stores.Runs.GetRun(ctx, other, run.ID); !errors.Is(err, domain.ErrRunNotFound) {
-		t.Errorf("another workspace's read error = %v, want ErrRunNotFound", err)
-	}
-	if _, err := f.stores.Runs.GetRun(ctx, 1, 999999); !errors.Is(err, domain.ErrRunNotFound) {
-		t.Errorf("unknown run error = %v, want ErrRunNotFound", err)
-	}
-
-	// Starting is claimed exactly once.
-	now := time.Now().UTC()
-	if err := f.stores.Runs.StartRun(ctx, run.ID, "executor-1", now); err != nil {
-		t.Fatalf("StartRun() error = %v", err)
-	}
-	if err := f.stores.Runs.StartRun(ctx, run.ID, "executor-2", now); !errors.Is(err, domain.ErrRunFinished) {
-		t.Errorf("second StartRun error = %v, want ErrRunFinished", err)
-	}
-	if running, _ := f.stores.Runs.GetRun(ctx, 1, run.ID); running.Status != domain.RunRunning || running.StartedAt == nil {
-		t.Errorf("after start: %+v", running)
-	}
-
-	// Cancellation: recorded once, visible through the heartbeat.
-	if cancel, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); err != nil || cancel {
-		t.Fatalf("Heartbeat() = %v, %v; want no cancellation yet", cancel, err)
-	}
-	if err := f.stores.Runs.RequestCancel(actx, other, run.ID); !errors.Is(err, domain.ErrRunNotFound) {
-		t.Errorf("another workspace's cancel error = %v, want ErrRunNotFound", err)
-	}
-	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); err != nil {
-		t.Errorf("a repeated cancel request must be harmless: %v", err)
-	}
-	if cancel, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); err != nil || !cancel {
-		t.Fatalf("Heartbeat() after cancel = %v, %v; want cancellation reported", cancel, err)
-	}
-
-	// Host results: progress, a final result, and a final result that cannot be overwritten.
-	started := time.Now().UTC()
-	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{Status: domain.RunHostRunning, StartedAt: &started}); err != nil {
-		t.Fatal(err)
-	}
-	zero, three := 0, 3
-	finished := time.Now().UTC()
-	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{
-		Status: domain.RunHostSucceeded, ExitCode: &zero, Output: "ok", FinishedAt: &finished}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "101", domain.RunHostUpdate{Status: domain.RunHostFailed, Output: "tampered"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.UpdateRunHost(ctx, run.ID, "102", domain.RunHostUpdate{
-		Status: domain.RunHostFailed, ExitCode: &three, Output: "boom", Error: "the command exited with status 3", FinishedAt: &finished}); err != nil {
-		t.Fatal(err)
-	}
-	mid, err := f.stores.Runs.GetRun(ctx, 1, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h1, h2 := mid.Hosts[0], mid.Hosts[1]
-	if h1.Status != domain.RunHostSucceeded || h1.Output != "ok" || h1.ExitCode == nil || *h1.ExitCode != 0 ||
-		h1.StartedAt == nil || h1.FinishedAt == nil {
-		t.Errorf("host 101 = %+v; a final result must not be overwritten and must keep its start time", h1)
-	}
-	if h2.Status != domain.RunHostFailed || h2.ExitCode == nil || *h2.ExitCode != 3 || h2.Output != "boom" || h2.Error == "" {
-		t.Errorf("host 102 = %+v", h2)
-	}
-	if mid.Counts.Succeeded != 1 || mid.Counts.Failed != 1 || mid.Counts.Pending != 0 || !mid.CancelRequested {
-		t.Errorf("counts = %+v cancelRequested=%v", mid.Counts, mid.CancelRequested)
-	}
-
-	// Finishing is idempotent and final.
-	if err := f.stores.Runs.FinishRun(ctx, run.ID, domain.RunRunning, time.Now().UTC()); !errors.Is(err, domain.ErrInvalidInput) {
-		t.Errorf("finishing with a non-final status error = %v, want ErrInvalidInput", err)
-	}
-	if err := f.stores.Runs.FinishRun(actx, run.ID, domain.RunCancelled, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.FinishRun(actx, run.ID, domain.RunSucceeded, time.Now().UTC()); err != nil {
-		t.Errorf("finishing twice must be a no-op: %v", err)
-	}
-	done, _ := f.stores.Runs.GetRun(ctx, 1, run.ID)
-	if done.Status != domain.RunCancelled || done.FinishedAt == nil {
-		t.Errorf("finished run = %+v; the first final status must stand", done)
-	}
-	if _, err := f.stores.Runs.Heartbeat(ctx, run.ID, time.Now().UTC()); !errors.Is(err, domain.ErrRunFinished) {
-		t.Errorf("Heartbeat on a finished run error = %v, want ErrRunFinished", err)
-	}
-	if err := f.stores.Runs.RequestCancel(actx, 1, run.ID); !errors.Is(err, domain.ErrRunFinished) {
-		t.Errorf("RequestCancel on a finished run error = %v, want ErrRunFinished", err)
-	}
-
-	// The audit trail: one event per change, attributed, never containing the arguments.
-	created := runEvents(t, f, domain.AuditRunCreated)
-	if len(created) != 1 {
-		t.Fatalf("run.created events = %d, want 1", len(created))
-	}
-	c := created[0]
-	if c.TargetType != domain.AuditTargetRun || c.TargetID != strconv.FormatInt(run.ID, 10) || c.ActorUserID != 7 ||
-		c.ActorTokenID != 3 || c.RequestID != "req-run" || c.Details["program"] != "echo" || c.Details["arg_count"] != "2" ||
-		c.Details["hosts"] != "2" || len(c.Details["argv_sha256"]) != 16 || len(c.Details["targets_hash"]) != 16 ||
-		c.Details["timeout_seconds"] != "60" || c.Details["concurrency"] != "5" {
-		t.Errorf("run.created = %+v", c)
-	}
-	if cancels := runEvents(t, f, domain.AuditRunCancelRequested); len(cancels) != 1 || cancels[0].ActorUserID != 7 {
-		t.Errorf("run.cancel_requested events = %+v, want exactly one", cancels)
-	}
-	finishedEvents := runEvents(t, f, domain.AuditRunFinished)
-	if len(finishedEvents) != 1 || finishedEvents[0].Details["status"] != "cancelled" ||
-		finishedEvents[0].Details["hosts_succeeded"] != "1" || finishedEvents[0].Details["hosts_failed"] != "1" {
-		t.Errorf("run.finished events = %+v", finishedEvents)
-	}
-	all := auditEvents(t, f, 1)
-	encoded, _ := json.Marshal(all)
-	for _, secret := range []string{"TOP-SECRET-ARG", run.ArgvSHA256} {
-		if strings.Contains(string(encoded), secret) {
-			t.Errorf("the audit trail contains %q", secret)
-		}
-	}
-	if result, err := f.stores.Audit.VerifyAuditChain(ctx, 1); err != nil || !result.Valid {
-		t.Errorf("audit chain = %+v, %v", result, err)
-	}
-}
-
-func testRunListing(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	other := f.newWorkspace(t, "other")
-
-	first := contractRun(1, []string{"uptime"}, "1", "2", "3")
-	second := contractRun(1, []string{"df", "-h"}, "4")
-	foreign := contractRun(other, []string{"uptime"}, "9")
-	for _, run := range []*domain.Run{first, second, foreign} {
-		if err := f.stores.Runs.CreateRun(ctx, run); err != nil {
-			t.Fatal(err)
-		}
-	}
-	zero := 0
-	for _, id := range []string{"1", "2"} {
-		if err := f.stores.Runs.UpdateRunHost(ctx, first.ID, id, domain.RunHostUpdate{Status: domain.RunHostSucceeded, ExitCode: &zero}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := f.stores.Runs.UpdateRunHost(ctx, first.ID, "3", domain.RunHostUpdate{Status: domain.RunHostTimedOut}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.StartRun(ctx, first.ID, "executor", time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.FinishRun(ctx, first.ID, domain.RunPartiallySucceeded, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-
-	runs, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{})
-	if err != nil || len(runs) != 2 {
-		t.Fatalf("ListRuns() = %d runs, %v; want 2 (the other workspace's run must not appear)", len(runs), err)
-	}
-	if runs[0].ID != second.ID || runs[1].ID != first.ID {
-		t.Errorf("order = %d, %d; want newest first", runs[0].ID, runs[1].ID)
-	}
-	if runs[1].Counts.Succeeded != 2 || runs[1].Counts.TimedOut != 1 || runs[1].Counts.Total() != 3 ||
-		runs[0].Counts.Pending != 1 || runs[1].Status != domain.RunPartiallySucceeded {
-		t.Errorf("listed counts: %+v / %+v", runs[1].Counts, runs[0].Counts)
-	}
-	for _, run := range runs {
-		if len(run.Argv) != 0 || len(run.Hosts) != 0 || run.Program == "" {
-			t.Errorf("a listing must not carry arguments or host results: %+v", run)
-		}
-	}
-	if only, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Status: string(domain.RunQueued)}); err != nil || len(only) != 1 || only[0].ID != second.ID {
-		t.Errorf("status filter = %+v, %v", only, err)
-	}
-	if page, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{BeforeID: second.ID, Limit: 10}); err != nil || len(page) != 1 || page[0].ID != first.ID {
-		t.Errorf("paging = %+v, %v", page, err)
-	}
-	if limited, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Limit: 1}); err != nil || len(limited) != 1 {
-		t.Errorf("limit = %d, %v", len(limited), err)
-	}
-	if empty, err := f.stores.Runs.ListRuns(ctx, 4242, domain.RunFilter{}); err != nil || len(empty) != 0 {
-		t.Errorf("an unknown workspace lists %d runs, %v", len(empty), err)
-	}
-	if _, err := f.stores.Runs.ListRuns(ctx, 1, domain.RunFilter{Status: "exploded"}); !errors.Is(err, domain.ErrInvalidInput) {
-		t.Errorf("an unknown status error = %v, want ErrInvalidInput", err)
-	}
-}
-
-func testRunRecovery(t *testing.T, f *fixture) {
-	ctx := context.Background()
-	running := contractRun(1, []string{"uptime"}, "1", "2")
-	queued := contractRun(1, []string{"uptime"}, "3")
-	finished := contractRun(1, []string{"uptime"}, "4")
-	for _, run := range []*domain.Run{running, queued, finished} {
-		if err := f.stores.Runs.CreateRun(ctx, run); err != nil {
-			t.Fatal(err)
-		}
-	}
-	now := time.Now().UTC()
-	zero := 0
-	if err := f.stores.Runs.StartRun(ctx, running.ID, "executor", now); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.UpdateRunHost(ctx, running.ID, "1", domain.RunHostUpdate{Status: domain.RunHostSucceeded, ExitCode: &zero, Output: "ok"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.UpdateRunHost(ctx, running.ID, "2", domain.RunHostUpdate{Status: domain.RunHostRunning}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.StartRun(ctx, finished.ID, "executor", now); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.stores.Runs.FinishRun(ctx, finished.ID, domain.RunFailed, now); err != nil {
-		t.Fatal(err)
-	}
-
-	// Nothing is stale yet.
-	if count, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(-time.Hour), now); err != nil || count != 0 {
-		t.Fatalf("InterruptStaleRuns(old cutoff) = %d, %v; want 0", count, err)
-	}
-	// Everything whose heartbeat is older than the cutoff and not final is interrupted.
-	count, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(time.Hour), now.Add(time.Minute))
-	if err != nil || count != 2 {
-		t.Fatalf("InterruptStaleRuns() = %d, %v; want 2 (the running and the queued run)", count, err)
-	}
-	got, _ := f.stores.Runs.GetRun(ctx, 1, running.ID)
-	if got.Status != domain.RunInterrupted || got.FinishedAt == nil {
-		t.Errorf("running run = %+v", got)
-	}
-	if got.Hosts[0].Status != domain.RunHostSucceeded || got.Hosts[0].Output != "ok" {
-		t.Errorf("a host that had finished must keep its result: %+v", got.Hosts[0])
-	}
-	if got.Hosts[1].Status != domain.RunHostInterrupted || !strings.Contains(got.Hosts[1].Error, "may or may not have run") {
-		t.Errorf("an unfinished host must be marked interrupted with the honest caveat: %+v", got.Hosts[1])
-	}
-	if q, _ := f.stores.Runs.GetRun(ctx, 1, queued.ID); q.Status != domain.RunInterrupted || q.Hosts[0].Status != domain.RunHostInterrupted {
-		t.Errorf("queued run = %+v", q)
-	}
-	if fin, _ := f.stores.Runs.GetRun(ctx, 1, finished.ID); fin.Status != domain.RunFailed {
-		t.Errorf("a finished run must be left alone: %+v", fin)
-	}
-	if again, err := f.stores.Runs.InterruptStaleRuns(ctx, now.Add(time.Hour), now.Add(2*time.Minute)); err != nil || again != 0 {
-		t.Errorf("a second sweep = %d, %v; want 0", again, err)
-	}
-
-	interrupted := runEvents(t, f, domain.AuditRunInterrupted)
-	if len(interrupted) != 2 {
-		t.Fatalf("run.interrupted events = %d, want 2", len(interrupted))
-	}
-	for _, e := range interrupted {
-		if e.Source != "recovery" || e.ActorUserID != 0 {
-			t.Errorf("recovery event = %+v; it must be attributed to the system", e)
-		}
-	}
-	if result, err := f.stores.Audit.VerifyAuditChain(ctx, 1); err != nil || !result.Valid {
-		t.Errorf("audit chain = %+v, %v", result, err)
 	}
 }

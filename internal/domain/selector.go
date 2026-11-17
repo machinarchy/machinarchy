@@ -1,10 +1,7 @@
 package domain
 
 import (
-	"context"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -50,9 +47,8 @@ type requirement struct {
 // Values may contain the wildcards * (any run of characters) and ? (one
 // character), for example name=web-* . There are no regular expressions.
 //
-// Built-in fields are name, hostname, address, status, connection, and
-// environment (the environment's name). They are compared case-insensitively;
-// label keys and values are case-sensitive. Any other key is a label.
+// Which fields exist, and which compare case-insensitively, is decided by the
+// subject (see MatchesFields); for managed hosts see resource.Host.SelectorField.
 //
 // An empty expression is a parse error, and a nil *Selector matches nothing, so
 // a rule can never select the whole fleet by accident.
@@ -94,15 +90,6 @@ func (s *Selector) String() string {
 		return ""
 	}
 	return s.expr
-}
-
-// Matches reports whether h satisfies every requirement. environmentName is the
-// name of the host's environment ("" when it has none).
-func (s *Selector) Matches(h *Host, environmentName string) bool {
-	if h == nil {
-		return false
-	}
-	return s.MatchesFields(func(key string) (string, bool, bool) { return hostField(h, environmentName, key) })
 }
 
 // SelectorField returns a field's value, whether it is present, and whether
@@ -269,32 +256,6 @@ func (r requirement) matchesValue(value string, present, fold bool) bool {
 	}
 }
 
-// hostField returns a built-in field or a label, whether it is present, and
-// whether comparisons on it ignore case.
-func hostField(h *Host, environmentName, key string) (value string, present, fold bool) {
-	switch key {
-	case "id":
-		return h.ID, h.ID != "", false
-	case "name":
-		return h.Name, h.Name != "", true
-	case "hostname":
-		return h.Hostname, h.Hostname != "", true
-	case "address":
-		return h.IPAddress, h.IPAddress != "", true
-	case "connection":
-		return string(h.Connection), h.Connection != "", true
-	case "environment":
-		return environmentName, environmentName != "", true
-	case "status":
-		if h.SSH == nil || h.SSH.Status == "" {
-			return "", false, true
-		}
-		return string(h.SSH.Status), true, true
-	}
-	value, present = h.Labels[key]
-	return value, present, false
-}
-
 func anyGlob(patterns []string, value string, fold bool) bool {
 	if fold {
 		value = strings.ToLower(value)
@@ -382,121 +343,4 @@ func (r TargetRule) parse() (*Selector, error) {
 		return nil, nil
 	}
 	return ParseSelector(r.Selector)
-}
-
-// TargetSet is the outcome of resolving a TargetRule against an inventory.
-type TargetSet struct {
-	// Matched are the targets, sorted by name.
-	Matched []*Host
-	// Excluded were selected but removed by the exclude list.
-	Excluded []*Host
-	// UnknownIncludes and UnknownExcludes list entries that named no host.
-	UnknownIncludes []string
-	UnknownExcludes []string
-}
-
-// ResolveTargets applies rule to hosts. environments maps environment IDs to
-// names for the "environment" selector field; it may be nil.
-func ResolveTargets(rule TargetRule, hosts []*Host, environments map[int]string) (*TargetSet, error) {
-	selector, err := rule.parse()
-	if err != nil {
-		return nil, err
-	}
-
-	byID := make(map[string]*Host, len(hosts))
-	byName := make(map[string]*Host, len(hosts))
-	for _, h := range hosts {
-		byID[h.ID] = h
-		byName[strings.ToLower(h.Name)] = h
-	}
-	lookup := func(entry string) *Host {
-		entry = strings.TrimSpace(entry)
-		if h, ok := byID[entry]; ok {
-			return h
-		}
-		return byName[strings.ToLower(entry)]
-	}
-
-	selected := make(map[*Host]struct{})
-	for _, h := range hosts {
-		if rule.All || selector.Matches(h, environments[h.EnvironmentID]) {
-			selected[h] = struct{}{}
-		}
-	}
-
-	set := &TargetSet{}
-	for _, entry := range rule.Include {
-		if h := lookup(entry); h != nil {
-			selected[h] = struct{}{}
-		} else {
-			set.UnknownIncludes = append(set.UnknownIncludes, strings.TrimSpace(entry))
-		}
-	}
-	excluded := make(map[*Host]struct{})
-	for _, entry := range rule.Exclude {
-		if h := lookup(entry); h != nil {
-			excluded[h] = struct{}{}
-		} else {
-			set.UnknownExcludes = append(set.UnknownExcludes, strings.TrimSpace(entry))
-		}
-	}
-
-	for h := range selected {
-		if _, drop := excluded[h]; drop {
-			set.Excluded = append(set.Excluded, h)
-		} else {
-			set.Matched = append(set.Matched, h)
-		}
-	}
-	sortHosts(set.Matched)
-	sortHosts(set.Excluded)
-	return set, nil
-}
-
-func sortHosts(hosts []*Host) {
-	sort.Slice(hosts, func(i, j int) bool {
-		a, b := strings.ToLower(hosts[i].Name), strings.ToLower(hosts[j].Name)
-		if a != b {
-			return a < b
-		}
-		ai, aerr := strconv.Atoi(hosts[i].ID)
-		bi, berr := strconv.Atoi(hosts[j].ID)
-		if aerr == nil && berr == nil {
-			return ai < bi
-		}
-		return hosts[i].ID < hosts[j].ID
-	})
-}
-
-// TargetHost is the credential-free view of a host returned by previews.
-type TargetHost struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Hostname    string            `json:"hostname"`
-	Address     string            `json:"address"`
-	Environment string            `json:"environment,omitempty"`
-	Status      HostStatus        `json:"status,omitempty"`
-	Labels      map[string]string `json:"labels"`
-}
-
-// TargetPreview shows what a rule would target without doing anything to the hosts.
-type TargetPreview struct {
-	// Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts of them.
-	Total     int          `json:"total"`
-	Hosts     []TargetHost `json:"hosts"`
-	Truncated bool         `json:"truncated"`
-	// Excluded lists hosts that were selected but removed by the exclude list.
-	Excluded        []TargetHost `json:"excluded"`
-	UnknownIncludes []string     `json:"unknownIncludes"`
-	UnknownExcludes []string     `json:"unknownExcludes"`
-	// TargetsHash identifies the exact targeted hosts (all of them, not only the
-	// listed ones). A run can require it so it runs on what was reviewed.
-	TargetsHash string `json:"targetsHash"`
-}
-
-// TargetService resolves target rules for the caller's workspace.
-type TargetService interface {
-	// Preview resolves rule without touching any host. Selector and rule errors
-	// wrap ErrInvalidInput; callers need inventory read permission.
-	Preview(ctx context.Context, principal Principal, rule TargetRule) (*TargetPreview, error)
 }
