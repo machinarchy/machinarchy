@@ -171,7 +171,37 @@ func (s *ManagedResourceService) GetOperation(ctx context.Context, principal dom
 	if principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionOperationsRead) {
 		return nil, domain.ErrPermissionDenied
 	}
-	return s.operations.GetOperation(ctx, principal.WorkspaceID, id)
+	op, err := s.operations.GetOperation(ctx, principal.WorkspaceID, id)
+	if err != nil {
+		return nil, err
+	}
+	if !principal.Role.Allows(domain.PermissionRunsExecute) {
+		return redactOperation(op), nil
+	}
+	return op, nil
+}
+
+// redactOperation removes command arguments and captured output, which can
+// carry secrets, for principals who may only read operations. This matches
+// the legacy runs API, which shows output only to callers allowed to execute
+// (AUDIT S-04). State, timing, exit codes and error classes stay visible.
+func redactOperation(op *resource.Operation) *resource.Operation {
+	redacted := *op
+	if op.Spec.Run != nil {
+		run := *op.Spec.Run
+		run.Argv = nil
+		redacted.Spec.Run = &run
+	}
+	redacted.Status.Targets = make([]resource.OperationTarget, len(op.Status.Targets))
+	for i, target := range op.Status.Targets {
+		if target.Result != nil {
+			result := *target.Result
+			result.Output, result.Stdout, result.Stderr = "", "", ""
+			target.Result = &result
+		}
+		redacted.Status.Targets[i] = target
+	}
+	return &redacted
 }
 
 func (s *ManagedResourceService) GetHost(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Host, error) {

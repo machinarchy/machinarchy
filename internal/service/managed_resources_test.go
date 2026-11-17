@@ -141,3 +141,45 @@ func TestOperatorCannotRedirectOwnerCredential(t *testing.T) {
 		t.Fatalf("stale revision: err = %v, want ErrConflict", err)
 	}
 }
+
+// TestReadersCannotSeeOperationArgvOrOutput covers AUDIT S-04: readers (the
+// role every self-signup receives) see operation state but not the command
+// line or captured output, which may contain secrets.
+func TestReadersCannotSeeOperationArgvOrOutput(t *testing.T) {
+	svc, _, operations := newManagedService(t)
+	id := mustID(t)
+	exit := 0
+	operations.operations[id] = &resource.Operation{
+		ID: id, WorkspaceID: 1, Kind: resource.OperationKindRun, Revision: 3,
+		Spec: resource.OperationSpec{Run: &resource.RunSpec{Argv: []string{"mysql", "-pS3cret"}, TimeoutSeconds: 30, Concurrency: 1}},
+		Status: resource.OperationStatus{State: resource.OperationSucceeded, Targets: []resource.OperationTarget{{
+			State:  resource.TargetSucceeded,
+			Result: &resource.TargetResult{ExitCode: &exit, Output: "token=abc", Stdout: "token=abc", Stderr: "warn", ErrorClass: ""},
+		}}},
+	}
+	ctx := context.Background()
+
+	got, err := svc.GetOperation(ctx, principal(domain.RoleReader), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := got.Status.Targets[0].Result
+	if len(got.Spec.Run.Argv) != 0 || result.Output != "" || result.Stdout != "" || result.Stderr != "" {
+		t.Fatalf("reader saw sensitive fields: argv=%v result=%+v", got.Spec.Run.Argv, result)
+	}
+	if got.Status.State != resource.OperationSucceeded || result.ExitCode == nil || *result.ExitCode != 0 || got.Spec.Run.TimeoutSeconds != 30 {
+		t.Fatalf("reader lost non-sensitive fields: %+v", got)
+	}
+	// The stored operation must not be modified by redaction.
+	if stored := operations.operations[id]; len(stored.Spec.Run.Argv) != 2 || stored.Status.Targets[0].Result.Output != "token=abc" {
+		t.Fatal("redaction mutated the stored operation")
+	}
+
+	full, err := svc.GetOperation(ctx, principal(domain.RoleOperator), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Spec.Run.Argv) != 2 || full.Status.Targets[0].Result.Stdout != "token=abc" {
+		t.Fatalf("operator should see argv and output: %+v", full)
+	}
+}
