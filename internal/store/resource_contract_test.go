@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ func TestManagedResourceContract(t *testing.T) {
 			t.Run("host revision and status", func(t *testing.T) { testResourceHost(t, newFixture(t, engine)) })
 			t.Run("Access Profile revision isolation and outbox", func(t *testing.T) { testAccessProfile(t, newFixture(t, engine)) })
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
+			t.Run("operation target writes", func(t *testing.T) { testOperationTargetWrites(t, newFixture(t, engine)) })
 			t.Run("transaction rollback", func(t *testing.T) { testResourceRollback(t, newFixture(t, engine)) })
 			t.Run("outbox atomicity", func(t *testing.T) { testOutboxAtomicity(t, newFixture(t, engine)) })
 			t.Run("outbox retry and crash recovery", func(t *testing.T) { testOutboxRecovery(t, newFixture(t, engine)) })
@@ -456,3 +458,135 @@ func installFailingAuditTrigger(t *testing.T, f *fixture) {
 }
 
 func intPtr(value int) *int { return &value }
+
+// testOperationTargetWrites covers AUDIT Q-02 and Q-03: target outcomes are
+// recorded per row without bumping the Operation revision, terminal targets
+// are final, and an Operation-level update holding an older view (such as a
+// cancellation racing a completion) can neither move a target backwards nor
+// overwrite a stored result.
+func testOperationTargetWrites(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	workspaceID := f.newWorkspace(t, "target-workspace")
+	now := time.Now().UTC()
+	profile, profileRevision, err := resource.NewAccessProfile(workspaceID, "target-profile", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Username: "deploy", Authentication: resource.AuthenticationPassword, Credential: resource.SecretReference{ID: "target-secret", Version: 1}, Enabled: true}, 7, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, profileRevision); err != nil {
+		t.Fatal(err)
+	}
+	var targets []resource.OperationTargetSpec
+	var hostIDs []resource.ID
+	for i := range 3 {
+		host, err := resource.NewHost(workspaceID, 0, fmt.Sprintf("target-host-%d", i), nil, resource.HostSpec{AccessProfileID: profile.ID}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+		hostIDs = append(hostIDs, host.Metadata.ID)
+		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation,
+			DisplayName: host.Metadata.Name, AccessProfileID: profile.ID, AccessProfileRevision: profileRevision.Revision})
+	}
+	op, err := resource.NewRunOperation(workspaceID, resource.ActorRef{UserID: 7}, resource.OperationSpec{
+		Targets: targets, Run: &resource.RunSpec{Argv: []string{"uptime"}, TimeoutSeconds: 30, Concurrency: 1}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.CreateOperation(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	// A target cannot be written before the Operation runs.
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[0], resource.TargetRunning, nil); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("target write on a queued Operation: %v, want ErrOperationFinished", err)
+	}
+	started, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = started.Start(now); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.UpdateOperation(ctx, started, 1); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := f.stores.Operations.GetOperationState(ctx, workspaceID, op.ID); err != nil || state != resource.OperationRunning {
+		t.Fatalf("GetOperationState = %q, %v", state, err)
+	}
+
+	// A cancellation request is computed from this (soon stale) view.
+	stale, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := stale.Revision
+
+	exit := 0
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[0], resource.TargetRunning, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[0], resource.TargetSucceeded,
+		&resource.TargetResult{ExitCode: &exit, Stdout: "up 3 days"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[1], resource.TargetFailed,
+		&resource.TargetResult{ErrorClass: "remote_execution_failed"}); err != nil {
+		t.Fatal(err)
+	}
+	// Terminal targets are final.
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[0], resource.TargetFailed, nil); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("overwrite of a terminal target: %v, want ErrOperationFinished", err)
+	}
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID+1000, op.ID, hostIDs[2], resource.TargetFailed, nil); !errors.Is(err, resource.ErrOperationNotFound) {
+		t.Fatalf("cross-workspace target write: %v, want ErrOperationNotFound", err)
+	}
+
+	loaded, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Revision != revision {
+		t.Fatalf("target writes bumped the Operation revision %d -> %d", revision, loaded.Revision)
+	}
+	if loaded.Status.Targets[0].State != resource.TargetSucceeded || loaded.Status.Targets[0].Result.Stdout != "up 3 days" ||
+		loaded.Status.Targets[1].State != resource.TargetFailed || loaded.Status.Targets[2].State != resource.TargetPending {
+		t.Fatalf("targets after per-target writes: %+v", loaded.Status.Targets)
+	}
+
+	// The stale view still has targets 0 and 1 as Pending. Writing it back
+	// (as a racing cancellation would) must not resurrect them.
+	if err = stale.RequestCancel(now); err != nil {
+		t.Fatal(err)
+	}
+	if err = stale.SetTargetState(hostIDs[0], resource.TargetCancelled, &resource.TargetResult{ErrorClass: "cancelled"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.UpdateOperation(ctx, stale, revision); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("stale update over a completed target: %v, want ErrConflict", err)
+	}
+	// A fresh cancellation that leaves targets untouched succeeds and writes no target rows.
+	fresh, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fresh.RequestCancel(now); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.Operations.UpdateOperation(ctx, fresh, revision); err != nil {
+		t.Fatalf("fresh cancellation: %v", err)
+	}
+	final, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status.State != resource.OperationCancelRequested || final.Status.Targets[0].Result.Stdout != "up 3 days" {
+		t.Fatalf("after cancellation: state=%s targets=%+v", final.Status.State, final.Status.Targets)
+	}
+	// Targets can still be completed while cancellation is pending.
+	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[2], resource.TargetCancelled,
+		&resource.TargetResult{ErrorClass: "cancelled"}); err != nil {
+		t.Fatalf("completing a target during cancellation: %v", err)
+	}
+}

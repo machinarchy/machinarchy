@@ -51,7 +51,7 @@ type Stores struct {
 	Runs             domain.RunStore
 	ResourceHosts    resource.HostRepository
 	ResourceProfiles resource.AccessProfileRepository
-	Operations       resource.OperationRepository
+	Operations       resource.OperationStore
 	Outbox           eventing.OutboxStore
 	ResourceLeases   resource.LeaseStore
 	Management       *management.Store

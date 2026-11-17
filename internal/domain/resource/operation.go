@@ -248,17 +248,7 @@ func (o *Operation) SetTargetState(hostID ID, state TargetState, result *TargetR
 			return ErrOperationFinished
 		}
 		if result != nil {
-			copyResult := *result
-			copyResult.Output = sanitizeMessage(copyResult.Output, MaxTargetOutputBytes)
-			remaining := MaxTargetOutputBytes - len(copyResult.Output)
-			copyResult.Stdout = sanitizeMessage(copyResult.Stdout, remaining)
-			remaining -= len(copyResult.Stdout)
-			if remaining < 0 {
-				remaining = 0
-			}
-			copyResult.Stderr = sanitizeMessage(copyResult.Stderr, remaining)
-			copyResult.ErrorClass = sanitizeMessage(copyResult.ErrorClass, 128)
-			target.Result = &copyResult
+			target.Result = NormalizeTargetResult(result)
 		}
 		target.State = state
 		o.Revision++
@@ -335,3 +325,40 @@ func validTargetState(state TargetState) bool {
 func isFinalTargetState(state TargetState) bool {
 	return state != TargetPending && state != TargetRunning
 }
+
+// NormalizeTargetResult returns a sanitized copy of result bounded to
+// MaxTargetOutputBytes, exactly as SetTargetState stores it. Repositories that
+// write a single target use it so per-target writes keep the same invariants.
+func NormalizeTargetResult(result *TargetResult) *TargetResult {
+	if result == nil {
+		return nil
+	}
+	copyResult := *result
+	copyResult.Output = sanitizeMessage(copyResult.Output, MaxTargetOutputBytes)
+	remaining := MaxTargetOutputBytes - len(copyResult.Output)
+	copyResult.Stdout = sanitizeMessage(copyResult.Stdout, remaining)
+	remaining -= len(copyResult.Stdout)
+	if remaining < 0 {
+		remaining = 0
+	}
+	copyResult.Stderr = sanitizeMessage(copyResult.Stderr, remaining)
+	copyResult.ErrorClass = sanitizeMessage(copyResult.ErrorClass, 128)
+	return &copyResult
+}
+
+// TargetProgress orders target states: pending < running < terminal. Target
+// state only ever moves forward, which lets repositories reject writes based
+// on a stale view instead of silently moving a target backwards.
+func TargetProgress(state TargetState) int {
+	switch state {
+	case TargetPending:
+		return 0
+	case TargetRunning:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// ValidTargetState reports whether state is a known target state.
+func ValidTargetState(state TargetState) bool { return validTargetState(state) }

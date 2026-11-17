@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"time"
 
@@ -856,14 +857,29 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 	if err := s.rowsAffected(result, resource.ErrConflict); err != nil {
 		return err
 	}
+	stored := make(map[resource.ID]resource.OperationTarget, len(current.Status.Targets))
+	for _, target := range current.Status.Targets {
+		stored[target.Spec.HostID] = target
+	}
 	for _, target := range operation.Status.Targets {
+		before := stored[target.Spec.HostID]
+		if before.State == target.State && reflect.DeepEqual(before.Result, target.Result) {
+			continue // unchanged: no write, no re-encryption (AUDIT Q-03)
+		}
+		// Targets only move forward. A caller holding an older view (for example
+		// a cancellation racing a target completion recorded through
+		// UpdateOperationTarget) must not move a target back or overwrite a
+		// terminal result (AUDIT Q-02); it gets a conflict and reloads.
+		if resource.TargetProgress(target.State) <= resource.TargetProgress(before.State) {
+			return resource.ErrConflict
+		}
 		output, err := s.encryptTargetOutput(target.Result)
 		if err != nil {
 			return fmt.Errorf("encrypt Operation target output: %w", err)
 		}
 		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?
-			WHERE operation_id = ? AND host_id = ?`), string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
-			output, targetErrorClass(target.Result), string(operation.ID), string(target.Spec.HostID))
+			WHERE operation_id = ? AND host_id = ? AND state = ?`), string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
+			output, targetErrorClass(target.Result), string(operation.ID), string(target.Spec.HostID), string(before.State))
 		if err != nil {
 			return fmt.Errorf("update Operation target: %w", err)
 		}
