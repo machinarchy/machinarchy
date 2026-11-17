@@ -1,28 +1,12 @@
 # ============================================================================
-# HELP
+# `make help`: lists every target with a `## description`, grouped by the
+# preceding `##@ Section` line. Included last so it sees all makefiles.
 # ============================================================================
 
 .PHONY: help
 
-help: ## Show available developer commands
-	@awk 'BEGIN { \
-		FS = ":.*##"; \
-		printf "\nMachinarchy - Developer Commands\n"; \
-		printf "================================\n"; \
-		category = "General"; \
-	} \
-	/^##@/ { \
-		category = substr($$0, 5); \
-		printf "\n%s\n", category; \
-		for (i = 0; i < length(category); i++) printf "-"; \
-		printf "\n"; \
-		next; \
-	} \
-	/^[a-zA-Z0-9_.-]+:.*##/ { \
-		description = $$2; \
-		sub(/^[[:space:]]+/, "", description); \
-		printf "  %-24s %s\n", $$1, description; \
-	} \
-	END { \
-		printf "\nRun make <command> to execute a command.\n\n"; \
-	}' $(MAKEFILE_LIST)
+help: ## Show this help
+	@awk 'BEGIN { FS = ":.*##"; printf "\nMachinarchy developer commands\n\nUsage: make <target> [VAR=value ...]\n" } \
+	/^##@/ { printf "\n%s\n", substr($$0, 5); next } \
+	/^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-22s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@printf '\nCommon variables: ENV_FILE=%s BIN_DIR=%s ARGS="..." VERSION=%s\n\n' "$(ENV_FILE)" "$(BIN_DIR)" "$(VERSION)"

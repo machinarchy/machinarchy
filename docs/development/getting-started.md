@@ -109,7 +109,7 @@ Then, in a separate terminal, run the component you are working on. For example:
 make run-api
 ```
 
-Other available local run targets are `make run-controlmanager`, `make run-monolit`, `make run-cli`, and `make run-agent`. These targets load `.env` and execute the corresponding Go package. They do not start PostgreSQL or NATS automatically.
+Other available local run targets are `make run-controlmanager`, `make run-monolit` and `make run-cli`. These targets load `.env` (override with `ENV_FILE=...`) and execute the corresponding Go package; pass extra arguments with `ARGS`, for example `make run-cli ARGS="get hosts"`. They do not start PostgreSQL or NATS automatically.
 
 To run a local component against PostgreSQL or another dependency, make sure the corresponding service is running and the values in `.env` match that service's connection settings.
 
@@ -151,9 +151,8 @@ Binaries are written to `bin/`:
 - `bin/machinarchy-controlmanager`
 - `bin/machinarchy-monolit`
 - `bin/machinarchy`
-- `bin/machinarchy-agent`
 
-Build an individual component with `make build-api`, `make build-controlmanager`, `make build-monolit`, `make build-cli`, or `make build-agent`.
+Build an individual component with `make build-api`, `make build-controlmanager`, `make build-monolit`, or `make build-cli`. The agent is built from the separate `machinarchy-agent` repository.
 
 ## 8. Stop local services and clean generated artifacts
 

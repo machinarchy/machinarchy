@@ -1,5 +1,29 @@
 # ChangeLogAI
 
+## 2026-11-17 — Makefile refactor
+
+### Changes in this update
+
+- Restructured the developer Makefile into five topic files: `mk/config.mk`, `mk/build.mk`, `mk/checks.mk`, `mk/containers.mk` and `mk/help.mk`. These replace `go.mk`, `quality.mk`, `test.mk`, `security.mk`, `compose.mk` and `ssh.mk`. Removed the stale `mk/README.md`.
+- **Fixed `make build` and `build-release`.** They no longer build the deleted `cmd/agent`. Removed `build-agent` and `run-agent`.
+- Version metadata (`VERSION`, `COMMIT`, `BUILD_TIME`) is computed once per invocation and can be overridden.
+- Go linker flags moved to `GO_LDFLAGS`, so an exported C `LDFLAGS` can no longer leak into Go builds.
+- `build-release` uses target-specific variables instead of a recursive `make`.
+- Shared helpers (`go_build`, `run_with_env`, `require_tool`) replace repeated recipes.
+- **`run-*` targets take extra arguments through `ARGS="..."`.** The previous trick that turned extra command-line words into no-op targets is gone: it could silently trigger real targets such as `build`. The env file is now sourced by absolute path.
+- Added `tidy-check` (`go mod verify` + `go mod tidy -diff`) and included it in `verify` and `verify-full`.
+- `lint` no longer re-runs `fmt-check`; golangci-lint already enforces gofmt.
+- `verify-full` uses `test-race` instead of running the suite twice.
+- `help` now shows usage and common variables.
+- Updated `docs/development/getting-started.md`.
+
+### Verification
+
+- All 57 targets shared with the previous Makefile were dry-run (`make -n`) and diffed against it. 34 are identical. The differences in the rest are the intended ones listed above.
+- Ran successfully: `make -j4 build`; `make build-release VERSION=1.0.0` (binary reports 1.0.0 and was built with `-trimpath`); `make build-cli VERSION=9.9.9-test`; `make run-cli ARGS=version`; `make vet tidy-check`; `make test` (29 packages ok); `make clean`.
+- `make verify`, `make shellcheck` and `make vuln` run correctly but exit non-zero on findings that predate this change: 4 golangci-lint issues, shellcheck errors in `scripts/dev/setup-local.sh` and `scripts/usecases/run.sh`, and the Echo advisories GO-2026-6875/6872. These are tracked in `AUDIT/00` and `AUDIT/02`.
+- Tested with GNU Make 3.81, the macOS default.
+
 ## 2026-11-14 — CLI foundation and API client (Phase 2)
 
 ### Changes in this update
