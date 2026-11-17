@@ -43,6 +43,13 @@ func (s *ManagedResourceService) CreateHost(ctx context.Context, principal domai
 	if err := authorizeManagedHost(principal); err != nil {
 		return nil, err
 	}
+	// Binding a host to an Access Profile decides where an owner-provisioned
+	// credential is sent, so it needs the same authority as the profile itself.
+	if spec.AccessProfileID != "" {
+		if err := authorizeProfileOwner(principal); err != nil {
+			return nil, err
+		}
+	}
 	host, err := resource.NewHost(principal.WorkspaceID, 0, name, labels, spec, time.Now().UTC())
 	if err != nil {
 		return nil, err
@@ -57,7 +64,39 @@ func (s *ManagedResourceService) UpdateHost(ctx context.Context, principal domai
 	if err := authorizeManagedHost(principal); err != nil {
 		return err
 	}
+	if spec.AccessProfileID != "" {
+		current, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)
+		if err != nil {
+			return err
+		}
+		if current.Metadata.Revision != revision {
+			return resource.ErrConflict // the store would reject it too; never authorize against a stale spec
+		}
+		if credentialBindingChanged(current.Spec, spec) {
+			if err := authorizeProfileOwner(principal); err != nil {
+				return err
+			}
+		}
+	}
 	return s.hosts.UpdateHostSpec(ctx, principal.WorkspaceID, id, revision, generation, spec, time.Now().UTC())
+}
+
+// credentialBindingChanged reports whether next changes where the bound
+// profile's credential would be presented: the profile or its pinned
+// revision, the endpoint, or the trusted host keys. An operator who could
+// change these could point an owner's SSH credential at a server they control
+// and capture it (AUDIT S-02).
+func credentialBindingChanged(current, next resource.HostSpec) bool {
+	if current.AccessProfileID != next.AccessProfileID || current.ProfileRevision != next.ProfileRevision ||
+		current.AccessTarget.Endpoint != next.AccessTarget.Endpoint || len(current.AccessTarget.Trust) != len(next.AccessTarget.Trust) {
+		return true
+	}
+	for i := range current.AccessTarget.Trust {
+		if current.AccessTarget.Trust[i] != next.AccessTarget.Trust[i] {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ManagedResourceService) CreateAccessProfile(ctx context.Context, principal domain.Principal, name, description string, spec resource.AccessProfileSpec) (*resource.AccessProfile, error) {
