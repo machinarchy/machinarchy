@@ -99,11 +99,25 @@ func (s *Selector) String() string {
 // Matches reports whether h satisfies every requirement. environmentName is the
 // name of the host's environment ("" when it has none).
 func (s *Selector) Matches(h *Host, environmentName string) bool {
-	if s == nil || h == nil || len(s.reqs) == 0 {
+	if h == nil {
+		return false
+	}
+	return s.MatchesFields(func(key string) (string, bool, bool) { return hostField(h, environmentName, key) })
+}
+
+// SelectorField returns a field's value, whether it is present, and whether
+// comparisons on it ignore case.
+type SelectorField func(key string) (value string, present, fold bool)
+
+// MatchesFields reports whether the subject described by field satisfies every
+// requirement. It lets any resource type be selected with the same syntax.
+func (s *Selector) MatchesFields(field SelectorField) bool {
+	if s == nil || field == nil || len(s.reqs) == 0 {
 		return false
 	}
 	for _, req := range s.reqs {
-		if !req.matches(h, environmentName) {
+		value, present, fold := field(req.key)
+		if !req.matchesValue(value, present, fold) {
 			return false
 		}
 	}
@@ -242,8 +256,7 @@ func validateSelectorValue(value string) error {
 	return nil
 }
 
-func (r requirement) matches(h *Host, environmentName string) bool {
-	value, present, fold := hostField(h, environmentName, r.key)
+func (r requirement) matchesValue(value string, present, fold bool) bool {
 	switch r.op {
 	case opExists:
 		return present
@@ -340,6 +353,12 @@ type TargetRule struct {
 func (r TargetRule) Validate() error {
 	_, err := r.parse()
 	return err
+}
+
+// ParsedSelector validates the rule and returns its selector, which is nil
+// when the rule has none (it then relies on All or Include).
+func (r TargetRule) ParsedSelector() (*Selector, error) {
+	return r.parse()
 }
 
 func (r TargetRule) parse() (*Selector, error) {

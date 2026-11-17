@@ -11,7 +11,8 @@ import (
 type HostRepository interface {
 	CreateHost(context.Context, *Host) error
 	GetHost(context.Context, int, ID) (*Host, error)
-	ListHosts(context.Context, int, int) ([]Host, error)
+	// ListHosts returns one page of Hosts ordered by ID (see HostListFilter).
+	ListHosts(context.Context, HostListFilter) ([]Host, error)
 	ListHostKeys(context.Context, HostKeyCursor) ([]HostKey, error)
 	UpdateHostSpec(context.Context, int, ID, uint64, uint64, HostSpec, time.Time) error
 	UpdateHostMetadata(context.Context, int, ID, uint64, string, int, map[string]string, time.Time) error
@@ -25,6 +26,8 @@ type HostRepository interface {
 type OperationRepository interface {
 	CreateOperation(context.Context, *Operation) error
 	GetOperation(context.Context, int, ID) (*Operation, error)
+	// ListOperations returns one page of summaries, newest first.
+	ListOperations(context.Context, OperationListFilter) ([]OperationSummary, error)
 	UpdateOperation(context.Context, *Operation, uint64) error
 }
 
@@ -71,6 +74,9 @@ type OperationRecoveryRepository interface {
 type AccessProfileRepository interface {
 	CreateAccessProfile(context.Context, *AccessProfile, AccessProfileRevision) error
 	GetAccessProfile(context.Context, int, ID) (*AccessProfile, error)
+	// ListAccessProfiles returns live (not deleted) profiles ordered by ID,
+	// starting after the given ID.
+	ListAccessProfiles(ctx context.Context, workspaceID int, after ID, limit int) ([]AccessProfile, error)
 	GetAccessProfileRevision(context.Context, int, ID, uint64) (*AccessProfileRevision, error)
 	UpdateAccessProfile(context.Context, int, ID, uint64, AccessProfileSpec, int, time.Time) (*AccessProfileRevision, error)
 	ListHostsByAccessProfile(context.Context, int, ID) ([]HostKey, error)

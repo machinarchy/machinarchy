@@ -13,6 +13,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 func (s *Store) CreateAccessProfile(ctx context.Context, profile *resource.AccessProfile, revision resource.AccessProfileRevision) error {
@@ -42,17 +43,49 @@ func (s *Store) CreateAccessProfile(ctx context.Context, profile *resource.Acces
 	return tx.Commit()
 }
 
+const accessProfileColumns = `id,workspace_id,name,description,current_revision,created_at,updated_at,created_by,deleted_at`
+
 func (s *Store) GetAccessProfile(ctx context.Context, workspaceID int, id resource.ID) (*resource.AccessProfile, error) {
 	if workspaceID <= 0 || id.Validate() != nil {
 		return nil, resource.ErrAccessProfileNotFound
 	}
-	var p resource.AccessProfile
-	var created, updated string
-	var deleted sql.NullString
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id,workspace_id,name,description,current_revision,created_at,updated_at,created_by,deleted_at FROM access_profiles WHERE workspace_id=? AND id=?`), workspaceID, string(id)).Scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.CurrentRevision, &created, &updated, &p.CreatedBy, &deleted)
+	p, err := scanAccessProfile(s.db.QueryRowContext(ctx, s.bind(`SELECT `+accessProfileColumns+` FROM access_profiles WHERE workspace_id=? AND id=?`), workspaceID, string(id)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, resource.ErrAccessProfileNotFound
 	}
+	return p, err
+}
+
+// ListAccessProfiles returns live profiles ordered by ID, after the given ID.
+func (s *Store) ListAccessProfiles(ctx context.Context, workspaceID int, after resource.ID, limit int) ([]resource.AccessProfile, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", resource.ErrInvalidResource)
+	}
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+accessProfileColumns+` FROM access_profiles
+		WHERE workspace_id=? AND deleted_at IS NULL AND id > ? ORDER BY id LIMIT ?`), workspaceID, string(after), resource.PageLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list Access Profiles: %w", err)
+	}
+	defer utils.CloseRows(rows, s.logger, "query list access profiles")
+	profiles := make([]resource.AccessProfile, 0)
+	for rows.Next() {
+		p, err := scanAccessProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Access Profiles: %w", err)
+	}
+	return profiles, nil
+}
+
+func scanAccessProfile(row rowScanner) (*resource.AccessProfile, error) {
+	var p resource.AccessProfile
+	var created, updated string
+	var deleted sql.NullString
+	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.CurrentRevision, &created, &updated, &p.CreatedBy, &deleted)
 	if err != nil {
 		return nil, err
 	}

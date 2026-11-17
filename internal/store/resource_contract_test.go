@@ -20,6 +20,7 @@ func TestManagedResourceContract(t *testing.T) {
 			t.Run("Access Profile revision isolation and outbox", func(t *testing.T) { testAccessProfile(t, newFixture(t, engine)) })
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
 			t.Run("operation target writes", func(t *testing.T) { testOperationTargetWrites(t, newFixture(t, engine)) })
+			t.Run("listing and keyset pagination", func(t *testing.T) { testResourceListing(t, newFixture(t, engine)) })
 			t.Run("transaction rollback", func(t *testing.T) { testResourceRollback(t, newFixture(t, engine)) })
 			t.Run("outbox atomicity", func(t *testing.T) { testOutboxAtomicity(t, newFixture(t, engine)) })
 			t.Run("outbox retry and crash recovery", func(t *testing.T) { testOutboxRecovery(t, newFixture(t, engine)) })
@@ -143,7 +144,7 @@ func testResourceHost(t *testing.T, f *fixture) {
 	if err := f.stores.ResourceHosts.UpdateHostMetadata(ctx, host.Metadata.WorkspaceID, host.Metadata.ID, 3, "stale", 0, nil, time.Now()); !errors.Is(err, resource.ErrConflict) {
 		t.Fatalf("stale update error = %v", err)
 	}
-	listed, err := f.stores.ResourceHosts.ListHosts(ctx, host.Metadata.WorkspaceID, 10)
+	listed, err := f.stores.ResourceHosts.ListHosts(ctx, resource.HostListFilter{WorkspaceID: host.Metadata.WorkspaceID, Limit: 10})
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("ListHosts = %d, %v", len(listed), err)
 	}
@@ -588,5 +589,108 @@ func testOperationTargetWrites(t *testing.T, f *fixture) {
 	if err = f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, hostIDs[2], resource.TargetCancelled,
 		&resource.TargetResult{ErrorClass: "cancelled"}); err != nil {
 		t.Fatalf("completing a target during cancellation: %v", err)
+	}
+}
+
+// testResourceListing covers the B8a list queries: keyset pages, filters and
+// target counts, on both dialects.
+func testResourceListing(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	workspaceID := f.newWorkspace(t, "listing")
+	other := f.newWorkspace(t, "listing-other")
+	now := time.Now().UTC()
+	profile, revision, err := resource.NewAccessProfile(workspaceID, "list-profile", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Username: "deploy", Authentication: resource.AuthenticationPassword, Credential: resource.SecretReference{ID: "list-secret", Version: 1}, Enabled: true}, 7, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, revision); err != nil {
+		t.Fatal(err)
+	}
+	var hosts []*resource.Host
+	for i := range 5 {
+		host, err := resource.NewHost(workspaceID, 0, fmt.Sprintf("list-host-%d", i), map[string]string{"tier": "web"}, resource.HostSpec{AccessProfileID: profile.ID}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, host)
+	}
+	foreign, err := resource.NewHost(other, 0, "foreign", nil, resource.HostSpec{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceHosts.CreateHost(ctx, foreign); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hosts: two-item keyset pages cover all five exactly once, in ID order.
+	seen := map[resource.ID]bool{}
+	var after resource.ID
+	for page := 0; ; page++ {
+		got, err := f.stores.ResourceHosts.ListHosts(ctx, resource.HostListFilter{WorkspaceID: workspaceID, After: after, Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, host := range got {
+			if seen[host.Metadata.ID] || host.Metadata.WorkspaceID != workspaceID || (i > 0 && got[i-1].Metadata.ID >= host.Metadata.ID) {
+				t.Fatalf("page %d returned %s out of order, twice, or from another workspace", page, host.Metadata.ID)
+			}
+			seen[host.Metadata.ID] = true
+		}
+		if len(got) < 2 {
+			break
+		}
+		after = got[len(got)-1].Metadata.ID
+	}
+	if len(seen) != 5 {
+		t.Fatalf("paged through %d hosts, want 5", len(seen))
+	}
+	if got, err := f.stores.ResourceHosts.ListHosts(ctx, resource.HostListFilter{WorkspaceID: workspaceID, Phase: resource.HostDeleting}); err != nil || len(got) != 0 {
+		t.Fatalf("phase filter = %d hosts, %v", len(got), err)
+	}
+
+	// Access Profiles: deleted ones are hidden.
+	if got, err := f.stores.ResourceProfiles.ListAccessProfiles(ctx, workspaceID, "", 10); err != nil || len(got) != 1 || got[0].ID != profile.ID {
+		t.Fatalf("ListAccessProfiles = %+v, %v", got, err)
+	}
+
+	// Operations: newest first, cursor pages, host filter and target counts.
+	var ops []*resource.Operation
+	for i := range 3 {
+		op, err := resource.NewRunOperation(workspaceID, resource.ActorRef{UserID: 7}, resource.OperationSpec{
+			Targets: []resource.OperationTargetSpec{{HostID: hosts[i].Metadata.ID, HostGeneration: hosts[i].Metadata.Generation,
+				DisplayName: hosts[i].Metadata.Name, AccessProfileID: profile.ID, AccessProfileRevision: revision.Revision}},
+			Run: &resource.RunSpec{Argv: []string{"uptime"}, TimeoutSeconds: 30, Concurrency: 1}}, now.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = f.stores.Operations.CreateOperation(ctx, op); err != nil {
+			t.Fatal(err)
+		}
+		ops = append(ops, op)
+	}
+	first, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: workspaceID, Limit: 2})
+	if err != nil || len(first) != 2 || first[0].ID != ops[2].ID || first[1].ID != ops[1].ID {
+		t.Fatalf("first Operation page = %+v, %v", first, err)
+	}
+	if first[0].Targets[resource.TargetPending] != 1 || first[0].State != resource.OperationQueued {
+		t.Fatalf("summary = %+v, want one pending target", first[0])
+	}
+	rest, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: workspaceID, After: first[1].Cursor, Limit: 2})
+	if err != nil || len(rest) != 1 || rest[0].ID != ops[0].ID {
+		t.Fatalf("second Operation page = %+v, %v", rest, err)
+	}
+	byHost, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: workspaceID, HostID: hosts[1].Metadata.ID})
+	if err != nil || len(byHost) != 1 || byHost[0].ID != ops[1].ID {
+		t.Fatalf("host filter = %+v, %v", byHost, err)
+	}
+	if got, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: other}); err != nil || len(got) != 0 {
+		t.Fatalf("other workspace sees %d Operations, %v", len(got), err)
+	}
+	if _, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: workspaceID, After: "!!"}); !errors.Is(err, resource.ErrInvalidResource) {
+		t.Fatalf("bad cursor error = %v", err)
 	}
 }

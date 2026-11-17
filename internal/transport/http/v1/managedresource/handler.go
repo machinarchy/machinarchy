@@ -1,13 +1,19 @@
+// Package managedresource serves /api/v1/managed: managed Hosts, Access
+// Profiles and Operations. Authorization is enforced by the application
+// service; every error uses the httperr format.
 package managedresource
 
 import (
-	"errors"
+	"context"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
@@ -24,179 +30,260 @@ type hostRequest struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	Spec   resource.HostSpec `json:"spec"`
 }
+type hostUpdateRequest struct {
+	Revision   uint64            `json:"revision"`
+	Generation uint64            `json:"generation"`
+	Spec       resource.HostSpec `json:"spec"`
+}
+type labelsRequest struct {
+	Revision uint64            `json:"revision"`
+	Labels   map[string]string `json:"labels"`
+}
 type profileRequest struct {
 	Name        string                     `json:"name"`
 	Description string                     `json:"description,omitempty"`
 	Spec        resource.AccessProfileSpec `json:"spec"`
 }
+type profileUpdateRequest struct {
+	ExpectedRevision uint64                     `json:"expectedRevision"`
+	Spec             resource.AccessProfileSpec `json:"spec"`
+}
+
+// operationRequest targets explicit hostIds, or a rule (selector, include,
+// exclude, all) resolved at submission. expectTargetsHash, from a preview,
+// makes the submission fail with 409 targets_changed if the set differs.
 type operationRequest struct {
-	HostIDs []resource.ID    `json:"hostIds"`
-	Run     resource.RunSpec `json:"run"`
+	HostIDs           []resource.ID      `json:"hostIds,omitempty"`
+	Targets           *domain.TargetRule `json:"targets,omitempty"`
+	ExpectTargetsHash string             `json:"expectTargetsHash,omitempty"`
+	Run               resource.RunSpec   `json:"run"`
+}
+type previewRequest struct {
+	Targets domain.TargetRule `json:"targets"`
 }
 
 func RegisterRoutes(group *echo.Group, handler *Handler) {
+	group.GET("/hosts", handler.listHosts)
 	group.POST("/hosts", handler.createHost)
 	group.GET("/hosts/:id", handler.getHost)
 	group.PUT("/hosts/:id", handler.updateHost)
+	group.DELETE("/hosts/:id", handler.deleteHost)
+	group.PATCH("/hosts/:id/labels", handler.setHostLabels)
+	group.GET("/access-profiles", handler.listProfiles)
 	group.POST("/access-profiles", handler.createProfile)
+	group.GET("/access-profiles/:id", handler.getProfile)
 	group.PUT("/access-profiles/:id", handler.updateProfile)
+	group.DELETE("/access-profiles/:id", handler.deleteProfile)
+	group.GET("/operations", handler.listOperations)
 	group.POST("/operations", handler.submitOperation)
+	group.POST("/operations/preview", handler.previewOperation)
 	group.GET("/operations/:id", handler.getOperation)
 	group.POST("/operations/:id/cancel", handler.cancelOperation)
 }
 
-func (h *Handler) createHost(c echo.Context) error {
+// call runs one use case: it resolves the principal, lets parse read the
+// request, and writes either the result with status or a mapped error.
+func call[T any](c echo.Context, status int, parse func() error, run func(context.Context, domain.Principal) (T, error)) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return unauthorized(c)
+		return httperr.Unauthorized(c)
 	}
-	var request hostRequest
-	if err := c.Bind(&request); err != nil {
-		return badRequest(c)
+	if parse != nil {
+		if err := parse(); err != nil {
+			return httperr.BadRequest(c, "")
+		}
 	}
-	host, err := h.service.CreateHost(c.Request().Context(), principal, request.Name, request.Labels, request.Spec)
+	result, err := run(c.Request().Context(), principal)
 	if err != nil {
-		return applicationError(c, err)
+		return httperr.FromError(c, err, httperr.Mapping{Target: service.ErrAccessProfileOwnerRequired,
+			Status: http.StatusForbidden, Code: httperr.CodePermissionDenied, Message: "workspace owner permission is required"})
 	}
-	return c.JSON(http.StatusCreated, host)
-}
-func (h *Handler) getHost(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
+	if status == http.StatusNoContent {
+		return c.NoContent(status)
 	}
-	id, err := resource.ParseResourceID(c.Param("id"))
-	if err != nil {
-		return badRequest(c)
-	}
-	host, err := h.service.GetHost(c.Request().Context(), principal, id)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusOK, host)
-}
-func (h *Handler) updateHost(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	id, err := resource.ParseResourceID(c.Param("id"))
-	if err != nil {
-		return badRequest(c)
-	}
-	var request struct {
-		Revision   uint64            `json:"revision"`
-		Generation uint64            `json:"generation"`
-		Spec       resource.HostSpec `json:"spec"`
-	}
-	if err = c.Bind(&request); err != nil {
-		return badRequest(c)
-	}
-	if err = h.service.UpdateHost(c.Request().Context(), principal, id, request.Revision, request.Generation, request.Spec); err != nil {
-		return applicationError(c, err)
-	}
-	return c.NoContent(http.StatusNoContent)
-}
-func (h *Handler) createProfile(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	var request profileRequest
-	if err := c.Bind(&request); err != nil {
-		return badRequest(c)
-	}
-	profile, err := h.service.CreateAccessProfile(c.Request().Context(), principal, request.Name, request.Description, request.Spec)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusCreated, profile)
-}
-func (h *Handler) updateProfile(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	id, err := resource.ParseResourceID(c.Param("id"))
-	if err != nil {
-		return badRequest(c)
-	}
-	var request struct {
-		ExpectedRevision uint64                     `json:"expectedRevision"`
-		Spec             resource.AccessProfileSpec `json:"spec"`
-	}
-	if err = c.Bind(&request); err != nil {
-		return badRequest(c)
-	}
-	revision, err := h.service.UpdateAccessProfile(c.Request().Context(), principal, id, request.ExpectedRevision, request.Spec)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusCreated, revision)
-}
-func (h *Handler) submitOperation(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	var request operationRequest
-	if err := c.Bind(&request); err != nil {
-		return badRequest(c)
-	}
-	op, err := h.service.SubmitOperation(c.Request().Context(), principal, request.HostIDs, request.Run)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusAccepted, op)
-}
-func (h *Handler) getOperation(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	id, err := resource.ParseResourceID(c.Param("id"))
-	if err != nil {
-		return badRequest(c)
-	}
-	op, err := h.service.GetOperation(c.Request().Context(), principal, id)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusOK, op)
-}
-func (h *Handler) cancelOperation(c echo.Context) error {
-	principal, ok := middleware.Principal(c)
-	if !ok {
-		return unauthorized(c)
-	}
-	id, err := resource.ParseResourceID(c.Param("id"))
-	if err != nil {
-		return badRequest(c)
-	}
-	op, err := h.service.CancelOperation(c.Request().Context(), principal, id)
-	if err != nil {
-		return applicationError(c, err)
-	}
-	return c.JSON(http.StatusAccepted, op)
+	return c.JSON(status, result)
 }
 
-func unauthorized(c echo.Context) error {
-	return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-}
-func badRequest(c echo.Context) error {
-	return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request"})
-}
-func applicationError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, domain.ErrPermissionDenied), errors.Is(err, service.ErrAccessProfileOwnerRequired):
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "permission denied"})
-	case errors.Is(err, resource.ErrConflict):
-		return c.JSON(http.StatusConflict, map[string]string{"error": "resource revision conflict"})
-	case errors.Is(err, resource.ErrHostNotFound), errors.Is(err, resource.ErrOperationNotFound), errors.Is(err, resource.ErrAccessProfileNotFound):
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "resource not found"})
-	case errors.Is(err, resource.ErrInvalidResource), errors.Is(err, domain.ErrInvalidInput):
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid resource request"})
-	default:
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "managed resource request failed"})
+func bind(c echo.Context, target any) func() error { return func() error { return c.Bind(target) } }
+
+func pathID(c echo.Context, id *resource.ID) func() error {
+	return func() (err error) {
+		*id, err = resource.ParseResourceID(c.Param("id"))
+		return err
 	}
 }
+
+func all(steps ...func() error) func() error {
+	return func() error {
+		for _, step := range steps {
+			if err := step(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func queryInt(c echo.Context, name string, target *int) func() error {
+	return func() error {
+		raw := c.QueryParam(name)
+		if raw == "" {
+			return nil
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return strconv.ErrSyntax
+		}
+		*target = value
+		return nil
+	}
+}
+
+func queryTime(c echo.Context, name string, target *time.Time) func() error {
+	return func() (err error) {
+		if raw := c.QueryParam(name); raw != "" {
+			*target, err = time.Parse(time.RFC3339, raw)
+		}
+		return err
+	}
+}
+
+func (h *Handler) listHosts(c echo.Context) error {
+	query := service.HostQuery{Selector: c.QueryParam("selector"), Phase: resource.HostPhase(c.QueryParam("phase")),
+		After: resource.ID(c.QueryParam("cursor"))}
+	return call(c, http.StatusOK, all(queryInt(c, "environment", &query.EnvironmentID), queryInt(c, "limit", &query.Limit)),
+		func(ctx context.Context, p domain.Principal) (*resource.Page[resource.Host], error) {
+			return h.service.ListHosts(ctx, p, query)
+		})
+}
+
+func (h *Handler) createHost(c echo.Context) error {
+	var request hostRequest
+	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
+		return h.service.CreateHost(ctx, p, request.Name, request.Labels, request.Spec)
+	})
+}
+
+func (h *Handler) getHost(c echo.Context) error {
+	var id resource.ID
+	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
+		return h.service.GetHost(ctx, p, id)
+	})
+}
+
+func (h *Handler) updateHost(c echo.Context) error {
+	var id resource.ID
+	var request hostUpdateRequest
+	return call(c, http.StatusNoContent, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (any, error) {
+		return nil, h.service.UpdateHost(ctx, p, id, request.Revision, request.Generation, request.Spec)
+	})
+}
+
+func (h *Handler) deleteHost(c echo.Context) error {
+	var id resource.ID
+	var revision int
+	return call(c, http.StatusNoContent, all(pathID(c, &id), queryInt(c, "revision", &revision)), func(ctx context.Context, p domain.Principal) (any, error) {
+		if revision <= 0 {
+			return nil, domain.ErrInvalidInput
+		}
+		return nil, h.service.DeleteHost(ctx, p, id, uint64(revision))
+	})
+}
+
+func (h *Handler) setHostLabels(c echo.Context) error {
+	var id resource.ID
+	var request labelsRequest
+	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
+		return h.service.SetHostLabels(ctx, p, id, request.Revision, request.Labels)
+	})
+}
+
+func (h *Handler) listProfiles(c echo.Context) error {
+	var limit int
+	return call(c, http.StatusOK, queryInt(c, "limit", &limit), func(ctx context.Context, p domain.Principal) (*resource.Page[resource.AccessProfile], error) {
+		return h.service.ListAccessProfiles(ctx, p, resource.ID(c.QueryParam("cursor")), limit)
+	})
+}
+
+func (h *Handler) createProfile(c echo.Context) error {
+	var request profileRequest
+	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.AccessProfile, error) {
+		return h.service.CreateAccessProfile(ctx, p, request.Name, request.Description, request.Spec)
+	})
+}
+
+func (h *Handler) getProfile(c echo.Context) error {
+	var id resource.ID
+	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*service.AccessProfileView, error) {
+		return h.service.GetAccessProfile(ctx, p, id)
+	})
+}
+
+func (h *Handler) updateProfile(c echo.Context) error {
+	var id resource.ID
+	var request profileUpdateRequest
+	return call(c, http.StatusCreated, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.AccessProfileRevision, error) {
+		return h.service.UpdateAccessProfile(ctx, p, id, request.ExpectedRevision, request.Spec)
+	})
+}
+
+func (h *Handler) deleteProfile(c echo.Context) error {
+	var id resource.ID
+	return call(c, http.StatusNoContent, pathID(c, &id), func(ctx context.Context, p domain.Principal) (any, error) {
+		return nil, h.service.DeleteAccessProfile(ctx, p, id)
+	})
+}
+
+func (h *Handler) listOperations(c echo.Context) error {
+	filter := resource.OperationListFilter{State: resource.OperationState(c.QueryParam("state")),
+		HostID: resource.ID(c.QueryParam("host")), After: c.QueryParam("cursor")}
+	parse := all(queryInt(c, "limit", &filter.Limit), queryTime(c, "createdAfter", &filter.CreatedAfter),
+		queryTime(c, "createdBefore", &filter.CreatedBefore))
+	return call(c, http.StatusOK, parse, func(ctx context.Context, p domain.Principal) (*resource.Page[resource.OperationSummary], error) {
+		return h.service.ListOperations(ctx, p, filter)
+	})
+}
+
+func (h *Handler) submitOperation(c echo.Context) error {
+	var request operationRequest
+	return call(c, http.StatusAccepted, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
+		switch {
+		case request.Targets != nil && len(request.HostIDs) > 0:
+			return nil, domainInput("give either hostIds or targets, not both")
+		case request.Targets != nil:
+			return h.service.SubmitOperationForRule(ctx, p, *request.Targets, request.ExpectTargetsHash, request.Run)
+		case request.ExpectTargetsHash != "":
+			return nil, domainInput("expectTargetsHash requires targets")
+		default:
+			return h.service.SubmitOperation(ctx, p, request.HostIDs, request.Run)
+		}
+	})
+}
+
+func (h *Handler) previewOperation(c echo.Context) error {
+	var request previewRequest
+	return call(c, http.StatusOK, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.HostTargetSet, error) {
+		return h.service.PreviewTargets(ctx, p, request.Targets)
+	})
+}
+
+func (h *Handler) getOperation(c echo.Context) error {
+	var id resource.ID
+	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
+		return h.service.GetOperation(ctx, p, id)
+	})
+}
+
+func (h *Handler) cancelOperation(c echo.Context) error {
+	var id resource.ID
+	return call(c, http.StatusAccepted, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
+		return h.service.CancelOperation(ctx, p, id)
+	})
+}
+
+type inputError string
+
+func (e inputError) Error() string        { return string(e) }
+func (e inputError) Is(target error) bool { return target == domain.ErrInvalidInput }
+
+func domainInput(message string) error { return inputError(message) }

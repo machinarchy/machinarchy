@@ -370,6 +370,7 @@ func (r *Runtime) NewAPIServer(
 	if err != nil {
 		return nil, fmt.Errorf("construct managed resource application service: %w", err)
 	}
+	managedResources.UseEnvironments(r.stores.Environments)
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Hosts: r.stores.Hosts,
 		Environments: r.stores.Environments, Access: r.stores.Access,

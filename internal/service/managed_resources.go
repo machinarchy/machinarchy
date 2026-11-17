@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -20,6 +21,7 @@ type ManagedResourceService struct {
 	operations   resource.OperationRepository
 	policy       func() domain.ExecutionPolicy
 	secretReader SecretReferenceReader
+	environments EnvironmentNames
 }
 
 type SecretReferenceReader interface {
@@ -167,9 +169,35 @@ func (s *ManagedResourceService) SubmitOperation(ctx context.Context, principal 
 	return operation, nil
 }
 
-func (s *ManagedResourceService) GetOperation(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Operation, error) {
-	if principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionOperationsRead) {
+// SubmitOperationForRule resolves rule (selector, include/exclude lists or
+// all) to managed Hosts and submits the Operation on them. When
+// expectTargetsHash is set it must equal the hash of the resolved set, so the
+// Operation runs exactly on the Hosts the caller previewed.
+func (s *ManagedResourceService) SubmitOperationForRule(ctx context.Context, principal domain.Principal, rule domain.TargetRule,
+	expectTargetsHash string, run resource.RunSpec) (*resource.Operation, error) {
+	if principal.UserID <= 0 || principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionRunsExecute) {
 		return nil, domain.ErrPermissionDenied
+	}
+	set, err := s.resolveTargets(ctx, principal.WorkspaceID, rule)
+	if err != nil {
+		return nil, err
+	}
+	if expectTargetsHash != "" && expectTargetsHash != set.TargetsHash {
+		return nil, resource.ErrTargetsChanged
+	}
+	if len(set.Matched) == 0 {
+		return nil, fmt.Errorf("%w: the target rule matches no hosts", domain.ErrInvalidInput)
+	}
+	ids := make([]resource.ID, len(set.Matched))
+	for i, host := range set.Matched {
+		ids[i] = host.Metadata.ID
+	}
+	return s.SubmitOperation(ctx, principal, ids, run)
+}
+
+func (s *ManagedResourceService) GetOperation(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Operation, error) {
+	if err := authorizeRead(principal, domain.PermissionOperationsRead); err != nil {
+		return nil, err
 	}
 	op, err := s.operations.GetOperation(ctx, principal.WorkspaceID, id)
 	if err != nil {
@@ -205,8 +233,8 @@ func redactOperation(op *resource.Operation) *resource.Operation {
 }
 
 func (s *ManagedResourceService) GetHost(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Host, error) {
-	if principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionInventoryRead) {
-		return nil, domain.ErrPermissionDenied
+	if err := authorizeRead(principal, domain.PermissionInventoryRead); err != nil {
+		return nil, err
 	}
 	return s.hosts.GetHost(ctx, principal.WorkspaceID, id)
 }

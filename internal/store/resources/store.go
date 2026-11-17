@@ -196,23 +196,33 @@ type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ID) (*resource.Host, error) {
-	const query = `SELECT id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
+const hostColumns = `id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
 		access_profile_revision, generation, revision, observed_generation, phase, conditions,
-		last_observed_at, deletion_timestamp, created_at, updated_at
-		FROM managed_hosts WHERE workspace_id = ? AND id = ?`
+		last_observed_at, deletion_timestamp, created_at, updated_at`
+
+func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ID) (*resource.Host, error) {
+	host, err := scanHost(q.QueryRowContext(ctx, s.bind(`SELECT `+hostColumns+` FROM managed_hosts WHERE workspace_id = ? AND id = ?`), workspaceID, string(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, resource.ErrHostNotFound
+	}
+	return host, err
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanHost(row rowScanner) (*resource.Host, error) {
 	var host resource.Host
 	var labelsText, conditionsText, presence, profileID, accessTarget, phase string
 	var environmentID sql.NullInt64
 	var lastObserved, deletion sql.NullString
 	var created, updated string
-	err := q.QueryRowContext(ctx, s.bind(query), workspaceID, string(id)).Scan(
+	err := row.Scan(
 		&host.Metadata.ID, &host.Metadata.WorkspaceID, &environmentID, &host.Metadata.Name,
 		&labelsText, &presence, &profileID, &accessTarget, &host.Spec.ProfileRevision, &host.Metadata.Generation,
 		&host.Metadata.Revision, &host.Status.ObservedGeneration, &phase, &conditionsText,
 		&lastObserved, &deletion, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, resource.ErrHostNotFound
+		return nil, err
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read managed Host: %w", err)
@@ -250,36 +260,42 @@ func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id r
 	return &host, nil
 }
 
-func (s *Store) ListHosts(ctx context.Context, workspaceID int, limit int) ([]resource.Host, error) {
-	if workspaceID <= 0 {
+// ListHosts returns one keyset page of Hosts ordered by ID, in a single query.
+func (s *Store) ListHosts(ctx context.Context, filter resource.HostListFilter) ([]resource.Host, error) {
+	if filter.WorkspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", resource.ErrInvalidResource)
 	}
-	if limit <= 0 || limit > 500 {
-		limit = 100
+	query := `SELECT ` + hostColumns + ` FROM managed_hosts WHERE workspace_id = ?`
+	args := []any{filter.WorkspaceID}
+	if filter.EnvironmentID > 0 {
+		query += ` AND environment_id = ?`
+		args = append(args, filter.EnvironmentID)
 	}
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT id FROM managed_hosts WHERE workspace_id = ? ORDER BY updated_at DESC, id LIMIT ?`), workspaceID, limit)
+	if filter.Phase != "" {
+		query += ` AND phase = ?`
+		args = append(args, string(filter.Phase))
+	}
+	if filter.After != "" {
+		query += ` AND id > ?`
+		args = append(args, string(filter.After))
+	}
+	query += ` ORDER BY id LIMIT ?`
+	args = append(args, resource.PageLimit(filter.Limit))
+	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list managed Hosts: %w", err)
 	}
 	defer utils.CloseRows(rows, s.logger, "query list hosts")
-	ids := make([]resource.ID, 0)
+	hosts := make([]resource.Host, 0)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, resource.ID(id))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate managed Hosts: %w", err)
-	}
-	hosts := make([]resource.Host, 0, len(ids))
-	for _, id := range ids {
-		host, err := s.GetHost(ctx, workspaceID, id)
+		host, err := scanHost(rows)
 		if err != nil {
 			return nil, err
 		}
 		hosts = append(hosts, *host)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed Hosts: %w", err)
 	}
 	return hosts, nil
 }
