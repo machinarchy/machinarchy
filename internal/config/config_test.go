@@ -41,7 +41,7 @@ func TestBootstrapSourcesPrecedenceAndSecretRejection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MACHINARCHY_LISTEN_ADDR", ":7000")
-	cfg, err := LoadCommandLine([]string{"--config", path, "--listen-addr", ":6000"}, false)
+	cfg, err := LoadCommandLine([]string{"--config", path, "--listen-addr", ":6000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,30 +160,21 @@ func TestLoadPostgresRequirements(t *testing.T) {
 	})
 }
 
-func TestLoadEventBrokerURLValidation(t *testing.T) {
-	t.Run("rejects malformed endpoint with actionable setting name", func(t *testing.T) {
-		setCommonEnv(t)
-		t.Setenv("MACHINARCHY_BROKER_URL", "not-a-nats-url")
-		_, err := Load()
-		if err == nil || !strings.Contains(err.Error(), "MACHINARCHY_BROKER_URL") {
-			t.Fatalf("Load() error = %v, want a useful broker URL validation error", err)
-		}
-	})
-
-	t.Run("accepts a comma-separated NATS endpoint list", func(t *testing.T) {
-		setCommonEnv(t)
-		t.Setenv("MACHINARCHY_BROKER_URL", "nats://nats-a:4222,tls://nats-b:4222")
-		if _, err := Load(); err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-	})
-	t.Run("Control Manager does not require a broker URL", func(t *testing.T) {
-		setCommonEnv(t)
-		t.Setenv("MACHINARCHY_BROKER_URL", "not-a-nats-url")
-		if _, err := LoadControlManager(); err != nil {
-			t.Fatalf("LoadControlManager() should ignore legacy broker settings: %v", err)
-		}
-	})
+// TestLoadIgnoresLegacyBrokerSettings proves no process requires NATS any
+// more (AUDIT A-04/R-05): a leftover or malformed MACHINARCHY_BROKER_URL must
+// not block startup, and the removed --broker-url flag is rejected.
+func TestLoadIgnoresLegacyBrokerSettings(t *testing.T) {
+	setCommonEnv(t)
+	t.Setenv("MACHINARCHY_BROKER_URL", "not-a-nats-url")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v; the API must not depend on NATS", err)
+	}
+	if _, err := LoadControlManager(); err != nil {
+		t.Fatalf("LoadControlManager() error = %v", err)
+	}
+	if _, err := LoadCommandLine([]string{"--broker-url", "nats://x:4222"}); err == nil {
+		t.Fatal("removed --broker-url flag was accepted")
+	}
 }
 
 func TestLoadOperatorTokenValidation(t *testing.T) {

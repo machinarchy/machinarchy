@@ -31,7 +31,7 @@ func TestRegisterHostHonorsConfiguredPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strict, err := NewHostServiceWithTesterAndCapacity(&bulkFakeStore{}, nil, &bulkFakeTester{}, capacity,
+	strict, err := NewHostServiceWithTesterAndCapacity(&bulkFakeStore{}, &bulkFakeTester{}, capacity,
 		WithTargetPolicy(netpolicy.Policy{})) // private networks disabled
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestRegisterHostHonorsConfiguredPolicy(t *testing.T) {
 	}
 
 	store := &bulkFakeStore{}
-	open, err := NewHostServiceWithTesterAndCapacity(store, nil, &bulkFakeTester{}, capacity,
+	open, err := NewHostServiceWithTesterAndCapacity(store, &bulkFakeTester{}, capacity,
 		WithTargetPolicy(netpolicy.Policy{AllowLoopback: true}))
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestBulkRegisterReportsPolicyDenialsPerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewHostServiceWithTesterAndCapacity(store, nil, tester, capacity,
+	svc, err := NewHostServiceWithTesterAndCapacity(store, tester, capacity,
 		WithTargetPolicy(netpolicy.Policy{AllowPrivate: true}))
 	if err != nil {
 		t.Fatal(err)

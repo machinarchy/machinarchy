@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -27,16 +25,10 @@ type HostService interface {
 
 type hostService struct {
 	repo           domain.HostStore
-	publisher      EventPublisher
 	sshTester      SSHConnectionTester
 	sshLimit       *SSHCapacity
 	policy         netpolicy.Policy
 	policyProvider func() netpolicy.Policy
-}
-
-// EventPublisher defines the interface for publishing events to an external system.
-type EventPublisher interface {
-	Publish(ctx context.Context, subject string, payload interface{}) error
 }
 
 // SSHConnectionTester defines the interface for testing SSH connections.
@@ -51,30 +43,30 @@ func (defaultSSHConnectionTester) TestConnection(ctx context.Context, params ssh
 }
 
 // NewHostService constructs a host service with default SSH connection testing and capacity.
-func NewHostService(r domain.HostStore, publisher EventPublisher) HostService {
-	return NewHostServiceWithTester(r, publisher, defaultSSHConnectionTester{})
+func NewHostService(r domain.HostStore) HostService {
+	return NewHostServiceWithTester(r, defaultSSHConnectionTester{})
 }
 
 // NewHostServiceWithTester constructs a host service with a custom SSH connection tester.
-func NewHostServiceWithTester(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester) HostService {
+func NewHostServiceWithTester(r domain.HostStore, tester SSHConnectionTester) HostService {
 	return &hostService{
-		repo: r, publisher: publisher, sshTester: tester,
+		repo: r, sshTester: tester,
 		sshLimit: newDefaultSSHCapacity(), policy: netpolicy.Default(),
 	}
 }
 
 // NewHostServiceWithCapacity constructs a host service using a shared SSH bulkhead.
-func NewHostServiceWithCapacity(r domain.HostStore, publisher EventPublisher, capacity *SSHCapacity, opts ...Option) (HostService, error) {
-	return NewHostServiceWithTesterAndCapacity(r, publisher, defaultSSHConnectionTester{}, capacity, opts...)
+func NewHostServiceWithCapacity(r domain.HostStore, capacity *SSHCapacity, opts ...Option) (HostService, error) {
+	return NewHostServiceWithTesterAndCapacity(r, defaultSSHConnectionTester{}, capacity, opts...)
 }
 
 // NewHostServiceWithTesterAndCapacity injects SSH verification and capacity ports.
-func NewHostServiceWithTesterAndCapacity(r domain.HostStore, publisher EventPublisher, tester SSHConnectionTester, capacity *SSHCapacity, opts ...Option) (HostService, error) {
+func NewHostServiceWithTesterAndCapacity(r domain.HostStore, tester SSHConnectionTester, capacity *SSHCapacity, opts ...Option) (HostService, error) {
 	if r == nil || tester == nil || capacity == nil {
 		return nil, errors.New("host service dependencies and SSH capacity are required")
 	}
 	options := applyOptions(opts)
-	return &hostService{repo: r, publisher: publisher, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy, policyProvider: options.targetPolicyProvider}, nil
+	return &hostService{repo: r, sshTester: tester, sshLimit: capacity, policy: options.targetPolicy, policyProvider: options.targetPolicyProvider}, nil
 }
 
 func (s *hostService) targetPolicy() netpolicy.Policy {
@@ -161,21 +153,5 @@ func (s *hostService) RegisterHost(ctx context.Context, h *domain.Host) (retErr 
 		return fmt.Errorf("persist host: %w", err)
 	}
 	span.SetAttributes(attribute.String("host.id", h.ID))
-	if s.publisher != nil {
-		hostID, parseErr := strconv.Atoi(h.ID)
-		if parseErr != nil {
-			slog.Error("created host ID is not numeric; skipped host-created event", "host_id", h.ID, "error", parseErr)
-			return nil
-		}
-		event := domain.HostCreatedEvent{
-			HostID: hostID, Hostname: h.Hostname, EnvironmentID: h.EnvironmentID,
-			Timestamp: h.CreatedAt,
-		}
-		if err := s.publisher.Publish(ctx, "machinarchy.host.created", event); err != nil {
-			// The database write already committed. Report the event delivery failure
-			// operationally without making the client retry an already-created host.
-			slog.Error("failed to publish host-created event", "host_id", h.ID, "error", err)
-		}
-	}
 	return nil
 }

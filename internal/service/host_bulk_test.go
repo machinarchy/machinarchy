@@ -87,7 +87,7 @@ func newBulkService(t *testing.T, store *bulkFakeStore, tester *bulkFakeTester, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewHostServiceWithTesterAndCapacity(store, nil, tester, limit, WithTargetPolicy(netpolicy.Policy{AllowPrivate: true}))
+	svc, err := NewHostServiceWithTesterAndCapacity(store, tester, limit, WithTargetPolicy(netpolicy.Policy{AllowPrivate: true}))
 	if err != nil {
 		t.Fatal(err)
 	}

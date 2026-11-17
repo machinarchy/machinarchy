@@ -23,7 +23,7 @@ func realSSHService(t *testing.T, store *bulkFakeStore, policy netpolicy.Policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewHostServiceWithCapacity(store, nil, capacity, WithTargetPolicy(policy))
+	svc, err := NewHostServiceWithCapacity(store, capacity, WithTargetPolicy(policy))
 	if err != nil {
 		t.Fatal(err)
 	}

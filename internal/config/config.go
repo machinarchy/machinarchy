@@ -78,7 +78,6 @@ type Config struct {
 	EncryptionPreviousKeys map[string]string
 	LogLevel               string
 	Database               DatabaseConfig
-	EventBroker            EventBrokerConfig
 	BootstrapAdmin         BootstrapAdminConfig
 	SSHTargetPolicy        netpolicy.Policy
 	Execution              domain.ExecutionPolicy
@@ -93,23 +92,17 @@ type BootstrapAdminConfig struct {
 	Password string
 }
 
-// EventBrokerConfig holds the configuration for the event broker connection.
-type EventBrokerConfig struct {
-	URL string
-}
-
 // Load reads the configuration from environment variables, applies defaults, and validates the configuration values. It returns a Config struct or an error if validation fails.
 func Load() (Config, error) {
-	return load(true)
+	return load()
 }
 
 // LoadWithOptions loads immutable bootstrap settings with precedence flags,
 // environment, file, then defaults. Secret values are never accepted from
 // flags or the configuration file.
 type LoadOptions struct {
-	FilePath            string
-	Flags               map[string]string
-	RequireLegacyBroker bool
+	FilePath string
+	Flags    map[string]string
 }
 
 func LoadWithOptions(options LoadOptions) (Config, error) {
@@ -147,11 +140,11 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		}
 		return ""
 	}
-	return loadWithGetter(options.RequireLegacyBroker, get)
+	return loadWithGetter(get)
 }
 
 // LoadCommandLine supports non-secret startup flags and a JSON bootstrap file.
-func LoadCommandLine(args []string, requireLegacyBroker bool) (Config, error) {
+func LoadCommandLine(args []string) (Config, error) {
 	flags := map[string]string{}
 	file := ""
 	allowed := map[string]string{
@@ -159,8 +152,6 @@ func LoadCommandLine(args []string, requireLegacyBroker bool) (Config, error) {
 		"--environment":    "MACHINARCHY_ENVIRONMENT",
 		"--log-level":      "MACHINARCHY_LOG_LEVEL",
 		"--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED",
-
-		"--broker-url": "MACHINARCHY_BROKER_URL",
 
 		"--database-engine":            "MACHINARCHY_DATABASE_ENGINE",
 		"--database-path":              "MACHINARCHY_DATABASE_PATH",
@@ -217,20 +208,20 @@ func LoadCommandLine(args []string, requireLegacyBroker bool) (Config, error) {
 
 		flags[envKey] = value
 	}
-	return LoadWithOptions(LoadOptions{FilePath: file, Flags: flags, RequireLegacyBroker: requireLegacyBroker})
+	return LoadWithOptions(LoadOptions{FilePath: file, Flags: flags})
 }
 
-// LoadControlManager loads only settings required by the SQL-backed control
-// loop. The standalone manager does not connect to the legacy NATS adapter.
+// LoadControlManager loads the control manager configuration. Since the
+// legacy NATS adapter was removed it is identical to Load.
 func LoadControlManager() (Config, error) {
-	return load(false)
+	return load()
 }
 
-func load(requireLegacyBroker bool) (Config, error) {
-	return loadWithGetter(requireLegacyBroker, GetEnv)
+func load() (Config, error) {
+	return loadWithGetter(GetEnv)
 }
 
-func loadWithGetter(requireLegacyBroker bool, get func(string, ...string) string) (Config, error) {
+func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	cfg := Config{
 		ListenAddr:    get("MACHINARCHY_LISTEN_ADDR", ":8080"),
 		Environment:   Environment(strings.ToLower(get("MACHINARCHY_ENVIRONMENT", string(Development)))),
@@ -241,9 +232,6 @@ func loadWithGetter(requireLegacyBroker bool, get func(string, ...string) string
 			Path:           get("MACHINARCHY_DATABASE_PATH", "./data/machinarchy.db"),
 			URL:            get("MACHINARCHY_DATABASE_URL", ""),
 			ConnectTimeout: 5 * time.Second,
-		},
-		EventBroker: EventBrokerConfig{
-			URL: get("MACHINARCHY_BROKER_URL", "nats://localhost:4222"),
 		},
 	}
 
@@ -375,26 +363,7 @@ func loadWithGetter(requireLegacyBroker bool, get func(string, ...string) string
 	if err := cfg.validateDatabase(); err != nil {
 		return Config{}, err
 	}
-	if requireLegacyBroker {
-		if err := validateEventBrokerURL(cfg.EventBroker.URL); err != nil {
-			return Config{}, err
-		}
-	}
-
 	return cfg, nil
-}
-
-func validateEventBrokerURL(raw string) error {
-	if strings.TrimSpace(raw) == "" {
-		return errors.New("MACHINARCHY_BROKER_URL is required")
-	}
-	for _, endpoint := range strings.Split(raw, ",") {
-		parsed, err := url.Parse(strings.TrimSpace(endpoint))
-		if err != nil || (parsed.Scheme != "nats" && parsed.Scheme != "tls") || parsed.Hostname() == "" {
-			return errors.New("MACHINARCHY_BROKER_URL must contain NATS endpoints using nats:// or tls:// with a host")
-		}
-	}
-	return nil
 }
 
 // loadSSHTargetPolicy reads the destination policy applied to every SSH dial.

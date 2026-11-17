@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/machinarchy/machinarchy/internal/broker"
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/controlmanager"
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -30,11 +29,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Runtime owns the process-local database and event broker connections.
+// Runtime owns the process-local database connections.
 // Close it only after all servers and workers using it have stopped.
 type Runtime struct {
 	stores           *store.Stores
-	eventBroker      *broker.EventBroker
 	runManager       service.RunManager
 	configuration    *runtimeconfig.Service
 	snapshots        *runtimeconfig.SnapshotManager
@@ -44,18 +42,20 @@ type Runtime struct {
 	configWG         sync.WaitGroup
 }
 
-// Open initializes the shared persistence and event infrastructure.
+// Open initializes the shared persistence infrastructure for the API and the
+// monolith. No process connects to NATS: the controller's internal events use
+// the database outbox (AUDIT A-04).
 func Open(ctx context.Context, cfg config.Config) (*Runtime, error) {
-	return open(ctx, cfg, true, "application")
+	return open(ctx, cfg, "application")
 }
 
-// OpenControlManager initializes only database-backed control-loop
-// infrastructure. It does not require or connect to NATS.
+// OpenControlManager initializes the database-backed control-loop
+// infrastructure.
 func OpenControlManager(ctx context.Context, cfg config.Config) (*Runtime, error) {
-	return open(ctx, cfg, false, "control-manager")
+	return open(ctx, cfg, "control-manager")
 }
 
-func open(ctx context.Context, cfg config.Config, connectLegacyBroker bool, role string) (*Runtime, error) {
+func open(ctx context.Context, cfg config.Config, role string) (*Runtime, error) {
 	if ctx == nil {
 		return nil, errors.New("runtime context is required")
 	}
@@ -80,31 +80,10 @@ func open(ctx context.Context, cfg config.Config, connectLegacyBroker bool, role
 			wrapCloseError("close datastore after canceled startup", stores.Close()))
 	}
 
-	var eventBroker *broker.EventBroker
-	if connectLegacyBroker {
-		eventBroker, err = broker.NewEventBroker(cfg.EventBroker.URL)
-		if err != nil {
-			closeErr := stores.Close()
-			return nil, errors.Join(
-				fmt.Errorf("connect legacy API event broker: %w", err),
-				wrapCloseError("close datastore after broker startup failure", closeErr),
-			)
-		}
-		if err := ctx.Err(); err != nil {
-			eventBroker.Close()
-			return nil, errors.Join(fmt.Errorf("runtime startup canceled: %w", err),
-				wrapCloseError("close datastore after canceled startup", stores.Close()))
-		}
-	}
-
 	runtime, err := newConfigurationRuntime(ctx, stores, cfg, role)
 	if err != nil {
-		if eventBroker != nil {
-			eventBroker.Close()
-		}
 		return nil, errors.Join(err, wrapCloseError("close datastore after configuration startup failure", stores.Close()))
 	}
-	runtime.eventBroker = eventBroker
 	return runtime, nil
 }
 
@@ -234,9 +213,6 @@ func (r *Runtime) Close() error {
 		r.configCancel()
 		r.configWG.Wait()
 	}
-	if r.eventBroker != nil {
-		r.eventBroker.Close()
-	}
 	if r.stores != nil {
 		if err := r.stores.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close datastore: %w", err))
@@ -344,7 +320,7 @@ func (r *Runtime) NewAPIServer(
 	if ctx == nil {
 		return nil, errors.New("API startup context is required")
 	}
-	if r == nil || r.stores == nil || r.eventBroker == nil {
+	if r == nil || r.stores == nil {
 		return nil, errors.New("runtime is not initialized")
 	}
 
@@ -361,7 +337,7 @@ func (r *Runtime) NewAPIServer(
 		return nil, err
 	}
 
-	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, r.eventBroker, sshCapacity,
+	hostService, err := service.NewHostServiceWithCapacity(r.stores.Hosts, sshCapacity,
 		service.WithTargetPolicyProvider(r.targetPolicyProvider(cfg.SSHTargetPolicy)))
 	if err != nil {
 		return nil, fmt.Errorf("construct host service: %w", err)
@@ -403,11 +379,8 @@ func (r *Runtime) NewAPIServer(
 		},
 	}
 
-	readiness := make([]httpserver.ReadinessChecker, 0, 1+len(additionalReadiness))
-	readiness = append(readiness, r.eventBroker)
-	readiness = append(readiness, additionalReadiness...)
 	return httpserver.NewServer(cfg, authService, hostService, metricsService,
-		sshCapacity, runManager, repositories, r.stores, readiness...)
+		sshCapacity, runManager, repositories, r.stores, additionalReadiness...)
 }
 
 // NewControlManagerOperationsServer creates the HTTP surface used for worker
