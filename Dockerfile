@@ -24,11 +24,10 @@ ARG BUILD_TIME="unknown"
 # Parameterized Runtime Entry Targets Configuration
 ARG MACHINARCHY_COMMAND=monolit
 
-# Senior Fix: Added 'agent' context alignment support inside validation statements 
-# and mapped out your production-grade ldflags variables natively.
-RUN case "$MACHINARCHY_COMMAND" in api|controlmanager|monolit|machinarchy|agent) ;; *) echo "::error::Unsupported system compilation target: $MACHINARCHY_COMMAND" >&2; exit 1 ;; esac \
+# Version information is injected into internal/buildinfo.
+RUN case "$MACHINARCHY_COMMAND" in api|controlmanager|monolit|machinarchy) ;; *) echo "::error::Unsupported system compilation target: $MACHINARCHY_COMMAND" >&2; exit 1 ;; esac \
     && CGO_ENABLED=0 go build -trimpath \
-       -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" \
+       -ldflags="-s -w -X github.com/machinarchy/machinarchy/internal/buildinfo.Version=${VERSION} -X github.com/machinarchy/machinarchy/internal/buildinfo.Commit=${COMMIT} -X github.com/machinarchy/machinarchy/internal/buildinfo.BuildTime=${BUILD_TIME}" \
        -o /out/machinarchy ./cmd/"$MACHINARCHY_COMMAND"
 
 # =========================================================================

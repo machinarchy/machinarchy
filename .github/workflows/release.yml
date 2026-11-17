@@ -104,7 +104,7 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Build CLI and agent binaries
+      - name: Build CLI binaries
         env:
           RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
           RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
@@ -113,7 +113,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist-binaries
           BUILD_TIME="$(git show -s --format=%cI "$RELEASE_SHA")"
-          LDFLAGS="-s -w -X main.Version=${RELEASE_TAG} -X main.Commit=${RELEASE_SHA} -X main.BuildTime=${BUILD_TIME}"
+          BUILDINFO=github.com/machinarchy/machinarchy/internal/buildinfo
+          LDFLAGS="-s -w -X ${BUILDINFO}.Version=${RELEASE_TAG} -X ${BUILDINFO}.Commit=${RELEASE_SHA} -X ${BUILDINFO}.BuildTime=${BUILD_TIME}"
 
           build_binary() {
             local goos="$1" goarch="$2" package="$3" output="$4"
@@ -128,10 +129,6 @@ jobs:
           build_binary linux  arm64 ./cmd/machinarchy machinarchy-linux-arm64
           build_binary darwin amd64 ./cmd/machinarchy machinarchy-darwin-amd64
           build_binary darwin arm64 ./cmd/machinarchy machinarchy-darwin-arm64
-
-          # Agent binaries (Linux targets).
-          build_binary linux amd64 ./cmd/agent machinarchy-agent-linux-amd64
-          build_binary linux arm64 ./cmd/agent machinarchy-agent-linux-arm64
 
       - name: Generate SHA-256 checksums
         shell: bash
@@ -162,13 +159,6 @@ jobs:
           | Linux | ARM64 | machinarchy-linux-arm64 |
           | macOS | Intel | machinarchy-darwin-amd64 |
           | macOS | Apple Silicon | machinarchy-darwin-arm64 |
-
-          ## Agent
-
-          | Platform | Architecture | Asset |
-          |---|---|---|
-          | Linux | AMD64 | machinarchy-agent-linux-amd64 |
-          | Linux | ARM64 | machinarchy-agent-linux-arm64 |
 
           ## Install
 
@@ -220,8 +210,6 @@ jobs:
               machinarchy-linux-arm64 \
               machinarchy-darwin-amd64 \
               machinarchy-darwin-arm64 \
-              machinarchy-agent-linux-amd64 \
-              machinarchy-agent-linux-arm64 \
               checksums.txt; do
               printf -- '- [%s](https://github.com/%s/releases/download/%s/%s)\n' \
                 "$asset" "$REPOSITORY" "$RELEASE_TAG" "$asset"

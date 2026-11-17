@@ -10,7 +10,7 @@ Machinarchy is a Go control-plane service for registering SSH-managed hosts, gro
 - `cmd/controlmanager`: control-manager worker (outbox consumer and reconcilers) with health and metrics endpoints.
 - `cmd/monolit`: single-process mode that runs the API and control-manager worker together.
 - `cmd/machinarchy`: Cobra-based CLI for API resources and named contexts.
-- `cmd/agent`: reserved entry point; the agent runtime is not implemented yet.
+- The host agent lives in the separate `machinarchy-agent` repository; the controller does not talk to it yet.
 - `internal/bootstrap`: shared composition for database, API, and worker dependencies.
 - `internal/domain`: application entities and storage/service ports.
 - `internal/service`: use cases, including host registration and SSH capacity limiting.
@@ -59,7 +59,7 @@ go run ./cmd/machinarchy config use-context local
 go run ./cmd/machinarchy get hosts
 ```
 
-The CLI stores its context file under the user config directory by default. Use `--context` to select a context for one command, `--env` (or `-n`) to filter hosts by Machinarchy environment, and `-o json` or `-o yaml` for structured output. See the [CLI guide](docs/cli/README.md), [CLI command examples](example-cli.md), and [SSH host use case](example-usecases.md) for setup and usage.
+The CLI stores its context file under the user config directory by default. Use `--context` to select a context for one command, `--env` (or `-n`) to filter hosts by Machinarchy environment, and `-o json` or `-o yaml` for structured output. See the [CLI guide](docs/cli/README.md), [CLI command examples](docs/cli/example-cli.md), and [SSH host use case](docs/examples/example-usecases.md) for setup and usage.
 
 Build the default API container with `docker build -t machinarchy-api .`. Select another process with `docker build --build-arg MACHINARCHY_COMMAND=controlmanager -t machinarchy-controlmanager .`, `docker build --build-arg MACHINARCHY_COMMAND=monolit -t machinarchy-monolit .`, or `docker build --build-arg MACHINARCHY_COMMAND=machinarchy -t machinarchy-cli .`. Run server containers with the values from `.env` and mount a named volume at `/data` for SQLite persistence. The image runs as an unprivileged user.
 
