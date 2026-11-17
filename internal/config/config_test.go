@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setCommonEnv provisions the baseline test environment variables cleanly using a loop.
@@ -365,4 +366,27 @@ func TestLoadExecutionPolicy(t *testing.T) {
 			t.Fatalf("Load() = %+v, %v", cfg.Execution, err)
 		}
 	})
+}
+
+// TestLoadShutdownTimeout covers AUDIT Q-01: one shutdown budget, defaulting
+// below Kubernetes' 30 s grace period and bounded to sane values.
+func TestLoadShutdownTimeout(t *testing.T) {
+	setCommonEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ShutdownTimeout != 25*time.Second {
+		t.Fatalf("default ShutdownTimeout = %s, want 25s", cfg.ShutdownTimeout)
+	}
+	t.Setenv("MACHINARCHY_SHUTDOWN_TIMEOUT", "40s")
+	if cfg, err = Load(); err != nil || cfg.ShutdownTimeout != 40*time.Second {
+		t.Fatalf("Load() = %s, %v; want 40s", cfg.ShutdownTimeout, err)
+	}
+	for _, bad := range []string{"1s", "0s", "-5s", "11m", "soon"} {
+		t.Setenv("MACHINARCHY_SHUTDOWN_TIMEOUT", bad)
+		if _, err := Load(); err == nil {
+			t.Fatalf("MACHINARCHY_SHUTDOWN_TIMEOUT=%q accepted", bad)
+		}
+	}
 }

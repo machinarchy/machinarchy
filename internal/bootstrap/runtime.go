@@ -34,6 +34,7 @@ import (
 type Runtime struct {
 	stores           *store.Stores
 	runManager       service.RunManager
+	shutdownTimeout  time.Duration
 	configuration    *runtimeconfig.Service
 	snapshots        *runtimeconfig.SnapshotManager
 	secrets          *secrets.Service
@@ -165,7 +166,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	runtime := &Runtime{stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
-		operationSecrets: operationSecretService, configCancel: cancel}
+		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout}
 	runtime.configWG.Add(1)
 	go func() {
 		defer runtime.configWG.Done()
@@ -197,17 +198,23 @@ func (b runtimeProfileBindings) GetOperation(ctx context.Context, workspace int,
 
 // Close releases shared infrastructure. Stop servers and workers before calling it.
 func (r *Runtime) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	defer cancel()
+	return r.CloseContext(ctx)
+}
+
+// CloseContext is Close bounded by the process shutdown budget (AUDIT Q-01):
+// executing runs get until ctx's deadline to record their outcome.
+func (r *Runtime) CloseContext(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
 	var closeErrors []error
 	if r.runManager != nil {
 		// Let executing runs record their outcome before the database closes.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := r.runManager.Close(ctx); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close run executors: %w", err))
 		}
-		cancel()
 	}
 	if r.configCancel != nil {
 		r.configCancel()
@@ -232,6 +239,7 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 		leases = nil
 	}
 	engineConfig := controlmanager.DefaultConfig()
+	engineConfig.ShutdownTimeout = engineDrainTimeout(r.shutdownTimeout)
 	if snap, ok := r.configuration.Snapshot(); ok {
 		c := snap.Revision.Config
 		engineConfig.Workers = c.ControlManager.Workers

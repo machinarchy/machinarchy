@@ -16,6 +16,9 @@ services:
       MACHINARCHY_DATABASE_ENGINE: postgres
       MACHINARCHY_DATABASE_URL: postgres://machinarchy:${POSTGRES_PASSWORD:-machinarchy_dev_only}@postgres:5432/machinarchy_dev?sslmode=disable
     restart: unless-stopped
+    # Must exceed MACHINARCHY_SHUTDOWN_TIMEOUT (default 25s); Docker's 10s
+    # default would SIGKILL the process mid-drain.
+    stop_grace_period: 30s
     networks:
       - machinarchy-network
 

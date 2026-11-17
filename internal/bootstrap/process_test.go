@@ -36,7 +36,9 @@ func TestRunComponentsGracefulShutdown(t *testing.T) {
 			}
 
 			done := make(chan error, 1)
-			go func() { done <- runComponents(ctx, "127.0.0.1:0", server, workerLifecycle) }()
+			go func() {
+				done <- runComponents(ctx, "127.0.0.1:0", server, workerLifecycle, newShutdownBudget(5*time.Second))
+			}()
 
 			select {
 			case <-server.ready:
@@ -108,7 +110,7 @@ func TestRunComponentsReportsUnexpectedWorkerStopAndShutsDownServer(t *testing.T
 	worker := &fakeWorker{started: make(chan struct{}), stopped: make(chan struct{}), result: wantErr}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := runComponents(ctx, "127.0.0.1:0", server, worker)
+	err := runComponents(ctx, "127.0.0.1:0", server, worker, newShutdownBudget(5*time.Second))
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("runComponents() error = %v, want worker startup failure", err)
 	}
@@ -122,7 +124,7 @@ func TestRunComponentsDoesNotStartWorkerAfterStartupCancellation(t *testing.T) {
 	cancel()
 	server := newFakeHTTP()
 	worker := &fakeWorker{started: make(chan struct{}), stopped: make(chan struct{})}
-	err := runComponents(ctx, "127.0.0.1:0", server, worker)
+	err := runComponents(ctx, "127.0.0.1:0", server, worker, newShutdownBudget(5*time.Second))
 	if err != nil {
 		t.Fatalf("runComponents() error = %v", err)
 	}
@@ -141,7 +143,7 @@ func TestRunComponentsReportsListenerStartupFailure(t *testing.T) {
 	server := &fakeHTTP{startErr: wantErr, ready: make(chan struct{}), stopped: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := runComponents(ctx, "127.0.0.1:0", server, nil)
+	err := runComponents(ctx, "127.0.0.1:0", server, nil, newShutdownBudget(5*time.Second))
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("runComponents() error = %v, want listener startup error", err)
 	}
@@ -151,13 +153,13 @@ func TestRunComponentsReportsListenerStartupFailure(t *testing.T) {
 }
 
 func TestRunComponentsRejectsMissingStartupDependencies(t *testing.T) {
-	if err := runComponents(context.Background(), "127.0.0.1:0", nil, nil); err == nil {
+	if err := runComponents(context.Background(), "127.0.0.1:0", nil, nil, newShutdownBudget(5*time.Second)); err == nil {
 		t.Fatal("runComponents accepted a nil HTTP server")
 	}
-	if err := runComponents(context.Background(), " ", newFakeHTTP(), nil); err == nil {
+	if err := runComponents(context.Background(), " ", newFakeHTTP(), nil, newShutdownBudget(5*time.Second)); err == nil {
 		t.Fatal("runComponents accepted an empty listen address")
 	}
-	if err := runComponents(context.TODO(), "127.0.0.1:0", newFakeHTTP(), nil); err == nil {
+	if err := runComponents(context.TODO(), "127.0.0.1:0", newFakeHTTP(), nil, newShutdownBudget(5*time.Second)); err == nil {
 		t.Fatal("runComponents accepted a context.TODO()")
 	}
 }
@@ -217,4 +219,72 @@ func (w *fakeWorker) Start(ctx context.Context) error {
 	<-ctx.Done()
 	close(w.stopped)
 	return nil
+}
+
+// slowWorker takes drain to stop after cancellation; with a zero drain it
+// ignores cancellation until release is closed.
+type slowWorker struct {
+	started chan struct{}
+	release chan struct{}
+	drain   time.Duration
+	stopped atomic.Bool
+}
+
+func (w *slowWorker) Start(ctx context.Context) error {
+	close(w.started)
+	<-ctx.Done()
+	if w.drain == 0 {
+		<-w.release
+	}
+	time.Sleep(w.drain)
+	w.stopped.Store(true)
+	return nil
+}
+
+// TestRunComponentsWaitsForWorkerWithinBudget covers AUDIT Q-01: runComponents
+// returns only after the worker has drained, so the runtime (and its database)
+// is never closed under a live worker; a worker that outlives the budget is
+// reported with errComponentsStillRunning so the caller skips closing.
+func TestRunComponentsWaitsForWorkerWithinBudget(t *testing.T) {
+	run := func(worker *slowWorker, budget time.Duration) (time.Duration, error) {
+		ctx, cancel := context.WithCancel(context.Background())
+		server := newFakeHTTP()
+		done := make(chan error, 1)
+		go func() { done <- runComponents(ctx, "127.0.0.1:0", server, worker, newShutdownBudget(budget)) }()
+		<-server.ready
+		<-worker.started
+		cancel()
+		start := time.Now()
+		select {
+		case err := <-done:
+			return time.Since(start), err
+		case <-time.After(5 * time.Second):
+			t.Fatal("runComponents did not respect the shutdown budget")
+			return 0, nil
+		}
+	}
+
+	draining := &slowWorker{started: make(chan struct{}), drain: 300 * time.Millisecond}
+	if _, err := run(draining, 2*time.Second); err != nil {
+		t.Fatalf("draining worker: runComponents() error = %v", err)
+	}
+	if !draining.stopped.Load() {
+		t.Fatal("runComponents returned before the worker finished draining")
+	}
+
+	stuck := &slowWorker{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(stuck.release)
+	took, err := run(stuck, 300*time.Millisecond)
+	if !errors.Is(err, errComponentsStillRunning) {
+		t.Fatalf("stuck worker: runComponents() error = %v, want errComponentsStillRunning", err)
+	}
+	if took > 2*time.Second {
+		t.Fatalf("stuck worker held shutdown for %s, budget was 300ms", took)
+	}
+}
+
+func TestEngineDrainFitsInsideShutdownBudget(t *testing.T) {
+	if got := engineDrainTimeout(25 * time.Second); got >= 25*time.Second-2*time.Second {
+		t.Fatalf("engine drain %s leaves no room for post-cancel grace and runtime close", got)
+	}
 }

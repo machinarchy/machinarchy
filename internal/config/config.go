@@ -77,6 +77,7 @@ type Config struct {
 	EncryptionKeyID        string
 	EncryptionPreviousKeys map[string]string
 	LogLevel               string
+	ShutdownTimeout        time.Duration
 	Database               DatabaseConfig
 	BootstrapAdmin         BootstrapAdminConfig
 	SSHTargetPolicy        netpolicy.Policy
@@ -239,6 +240,18 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	if err := cfg.Environment.Validate(); err != nil {
 		return Config{}, err
 	}
+
+	// One budget for stopping every component (AUDIT Q-01). Keep it below the
+	// orchestrator's grace period (Docker stop_grace_period, Kubernetes
+	// terminationGracePeriodSeconds) so SIGKILL never lands mid-write.
+	shutdownTimeout, err := parseDurationBounds(get("MACHINARCHY_SHUTDOWN_TIMEOUT", "25s"), "MACHINARCHY_SHUTDOWN_TIMEOUT", false)
+	if err != nil {
+		return Config{}, err
+	}
+	if shutdownTimeout < 5*time.Second || shutdownTimeout > 10*time.Minute {
+		return Config{}, errors.New("MACHINARCHY_SHUTDOWN_TIMEOUT must be between 5s and 10m")
+	}
+	cfg.ShutdownTimeout = shutdownTimeout
 
 	// Secure by default (AUDIT S-03): the environment defaults to production
 	// (secure cookies, mandatory CORS origins and database TLS) and public

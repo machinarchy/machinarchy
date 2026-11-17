@@ -92,6 +92,7 @@ Bootstrap settings use environment variables, a selected JSON file (`--config FI
 | `MACHINARCHY_ENCRYPTION_KEY_ID` / `_KEYRING_FILE` | Current external KEK identifier and optional protected JSON map of previous KEKs for decrypting older versions. |
 | `MACHINARCHY_ENVIRONMENT` | `development` or `production` (default). Production enforces secure cookies, explicit CORS origins and PostgreSQL `sslmode=verify-full`. |
 | `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `false`. |
+| `MACHINARCHY_SHUTDOWN_TIMEOUT` | Total time to stop the HTTP server, background workers and the database after SIGTERM (5s–10m, default `25s`). Keep it below the orchestrator's grace period: Docker `stop_grace_period` (compose sets `30s`) or Kubernetes `terminationGracePeriodSeconds` (default 30s). |
 | `MACHINARCHY_LISTEN_ADDR` | HTTP bind address, default `:8080`. |
 | `MACHINARCHY_DATABASE_ENGINE` | `sqlite` (default) or `postgres`. |
 | `MACHINARCHY_DATABASE_PATH` | SQLite file path, default `./data/machinarchy.db`. |

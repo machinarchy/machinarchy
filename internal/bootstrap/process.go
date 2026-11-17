@@ -14,7 +14,9 @@ import (
 )
 
 const (
-	componentShutdownTimeout  = 10 * time.Second
+	// defaultShutdownTimeout matches config's MACHINARCHY_SHUTDOWN_TIMEOUT
+	// default and stays below Kubernetes' 30 s termination grace period.
+	defaultShutdownTimeout    = 25 * time.Second
 	apiServiceName            = "machinarchy-api"
 	controlManagerServiceName = "machinarchy-controlmanager"
 	monolithServiceName       = "machinarchy-monolit"
@@ -121,12 +123,13 @@ func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, o
 		return errors.New("process listen address is required")
 	}
 
+	budget := newShutdownBudget(cfg.ShutdownTimeout)
 	shutdownTelemetry, err := initializeProcess(ctx, cfg, serviceName)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), componentShutdownTimeout)
+		shutdownCtx, cancel := budget.context()
 		defer cancel()
 		if err := shutdownTelemetry(shutdownCtx); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("shutdown telemetry: %w", err))
@@ -138,7 +141,15 @@ func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, o
 		return err
 	}
 	defer func() {
-		if err := runtime.Close(); err != nil {
+		if errors.Is(retErr, errComponentsStillRunning) {
+			// Closing the datastore now would fail the worker's in-flight
+			// writes; leave it to process exit.
+			slog.Error("skipping runtime close because a background worker is still running")
+			return
+		}
+		closeCtx, cancel := budget.context()
+		defer cancel()
+		if err := runtime.CloseContext(closeCtx); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("close runtime: %w", err))
 		}
 	}()
@@ -149,7 +160,7 @@ func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, o
 	}
 	slog.Info("process components constructed", "service", serviceName,
 		"listen_addr", cfg.ListenAddr, "database_engine", cfg.Database.Engine)
-	return runComponents(ctx, cfg.ListenAddr, server, worker)
+	return runComponents(ctx, cfg.ListenAddr, server, worker, budget)
 }
 
 func initializeProcess(ctx context.Context, cfg config.Config, serviceName string) (func(context.Context) error, error) {
@@ -167,7 +178,7 @@ func initializeProcess(ctx context.Context, cfg config.Config, serviceName strin
 	return shutdown, nil
 }
 
-func runComponents(ctx context.Context, address string, server httpLifecycle, worker workerLifecycle) error {
+func runComponents(ctx context.Context, address string, server httpLifecycle, worker workerLifecycle, budget *shutdownBudget) error {
 	if ctx == nil {
 		return errors.New("process context is required")
 	}
@@ -181,6 +192,9 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 	}
 	if server == nil {
 		return errors.New("process HTTP server is required")
+	}
+	if budget == nil {
+		return errors.New("process shutdown budget is required")
 	}
 
 	processCtx, cancelProcess := context.WithCancel(ctx)
@@ -196,7 +210,7 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 	case <-serverReady:
 	case err := <-serverErrors:
 		if ctx.Err() == nil {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), componentShutdownTimeout)
+			shutdownCtx, cancel := budget.context()
 			defer cancel()
 			return errors.Join(unexpectedComponentStop("HTTP server", err), server.Shutdown(shutdownCtx))
 		}
@@ -204,7 +218,7 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 	case <-ctx.Done():
 		// StartWithReady owns listener creation. Wait for it to either bind or
 		// fail before shutdown so a late listener cannot escape cleanup.
-		startupCtx, cancelStartup := context.WithTimeout(context.Background(), componentShutdownTimeout)
+		startupCtx, cancelStartup := budget.context()
 		defer cancelStartup()
 		select {
 		case <-serverReady:
@@ -237,7 +251,7 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 		}
 	}
 
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), componentShutdownTimeout)
+	shutdownCtx, cancelShutdown := budget.context()
 	defer cancelShutdown()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		componentErr = errors.Join(componentErr, fmt.Errorf("shutdown HTTP server: %w", err))
@@ -250,6 +264,8 @@ func runComponents(ctx context.Context, address string, server httpLifecycle, wo
 
 	cancelProcess()
 	if workerErrors != nil && !workerFinished {
+		// Wait inside the same budget; the runtime is closed only after this
+		// returns, so a worker that is still running is reported distinctly.
 		if err := waitForWorker(shutdownCtx, workerErrors); err != nil {
 			componentErr = errors.Join(componentErr, err)
 		}
@@ -287,6 +303,6 @@ func waitForWorker(ctx context.Context, errorsCh <-chan error) error {
 		}
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("wait for background worker shutdown: %w", ctx.Err())
+		return fmt.Errorf("%w: %w", errComponentsStillRunning, ctx.Err())
 	}
 }
