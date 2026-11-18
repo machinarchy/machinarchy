@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "HTTP API for managing Machinarchy environments, SSH hosts, and job history.",
+        "description": "HTTP API for managing Machinarchy environments, SSH hosts, and operations.",
         "title": "Machinarchy API",
         "termsOfService": "https://github.com/machinarchy/machinarchy",
         "contact": {},
@@ -43,19 +43,19 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -114,25 +114,25 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -186,37 +186,25 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -247,28 +235,19 @@
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -301,19 +280,13 @@
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -355,37 +328,25 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -436,46 +397,31 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -515,238 +461,76 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/fleet/targets/preview": {
-            "post": {
+        "/api/v1/managed/access-profiles": {
+            "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Resolves a selector with explicit include and exclude lists against the workspace inventory and lists the matching hosts (at most 500; total is always exact), the hosts removed by the exclude list, and include/exclude entries that matched no host. Nothing is contacted or changed, and no credentials are returned.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Returns SecretRefs only, never secret values.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Fleet"
+                    "Managed"
                 ],
-                "summary": "Preview fleet targets",
+                "summary": "List Access Profiles",
                 "parameters": [
                     {
-                        "description": "Target rule",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/fleet.PreviewRequest"
-                        }
+                        "type": "string",
+                        "description": "nextCursor of the previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, at most 500",
+                        "name": "limit",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/domain.TargetPreview"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/resource.Page-resource_AccessProfile"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/history": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Metrics"
-                ],
-                "summary": "Get historical metrics",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "default": "1h",
-                        "description": "Supported time ranges: 1h, 5h, or 24h",
-                        "name": "range",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/domain.DataPoint"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/hosts": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Optionally filters with a label selector such as `environment=production,role in (web,db),!canary`. Built-in fields are name, hostname, address, status, connection, and environment; any other key is a label. Values may use the wildcards * and ?. An empty or invalid selector is rejected rather than treated as \"all\".",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Hosts"
-                ],
-                "summary": "List hosts",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Label selector",
-                        "name": "selector",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/domain.Host"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -757,7 +541,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Registers a host after validating SSH connectivity and the expected host-key fingerprint. SecretData contains the SSH password or private key and is never returned.",
+                "description": "Workspace owner only.",
                 "consumes": [
                     "application/json"
                 ],
@@ -765,17 +549,17 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "Register a host",
+                "summary": "Create an Access Profile",
                 "parameters": [
                     {
-                        "description": "Host connection details; provide either ip or hostname. SecretData is the SSH password or private key and is never returned.",
+                        "description": "Request",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/host.Payload"
+                            "$ref": "#/definitions/managedresource.profileRequest"
                         }
                     }
                 ],
@@ -783,131 +567,99 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/domain.Host"
+                            "$ref": "#/definitions/resource.AccessProfile"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "412": {
-                        "description": "Precondition Failed",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/hosts/bulk": {
-            "post": {
+        "/api/v1/managed/access-profiles/{id}": {
+            "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Registers many hosts in one request with partial-success semantics: each record is validated, checked for duplicates (name or address:port, against the inventory and earlier records), SSH-verified against its pinned fingerprint, and stored independently. The response is 200 whenever the request itself is valid; inspect each result's status. Set validate_only to check records without contacting hosts or storing anything. SecretData is never returned. No commands are executed.",
-                "consumes": [
-                    "application/json"
-                ],
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "Bulk register hosts",
+                "summary": "Get an Access Profile with its current spec",
                 "parameters": [
                     {
-                        "description": "Up to 100 host records",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/host.BulkHostsRequest"
-                        }
+                        "type": "string",
+                        "description": "Access Profile ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/domain.BulkImportResponse"
+                            "$ref": "#/definitions/service.AccessProfileView"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/hosts/{id}": {
+            },
             "put": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Updates host metadata and credentials. SecretData contains the SSH password or private key and is never returned.",
+                "description": "Workspace owner only.",
                 "consumes": [
                     "application/json"
                 ],
@@ -915,68 +667,62 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "Update a host",
+                "summary": "Create a new Access Profile revision",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Host ID",
+                        "type": "string",
+                        "description": "Access Profile ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Updated host details",
+                        "description": "Request",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/host.Payload"
+                            "$ref": "#/definitions/managedresource.profileUpdateRequest"
                         }
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/domain.Host"
+                            "$ref": "#/definitions/resource.AccessProfileRevision"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -987,105 +733,104 @@
                         "BearerAuth": []
                     }
                 ],
+                "description": "Owner only; refused with 409 while a host is bound to it.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "Delete a host",
+                "summary": "Delete an Access Profile",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Host ID",
+                        "type": "string",
+                        "description": "Access Profile ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
+                    "204": {
+                        "description": "No Content"
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/hosts/{id}/jobs": {
+        "/api/v1/managed/hosts": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
+                "description": "Keyset-paginated; filter by selector, environment ID and phase.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "List jobs for a host",
+                "summary": "List managed hosts",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Host ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Page size (1-100)",
-                        "name": "limit",
+                        "type": "string",
+                        "description": "Selector, for example tier=web",
+                        "name": "selector",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "default": 0,
-                        "description": "Number of rows to skip",
-                        "name": "offset",
+                        "description": "Environment ID",
+                        "name": "environment",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Pending, Active or Deleting",
+                        "name": "phase",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "nextCursor of the previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, at most 500",
+                        "name": "limit",
                         "in": "query"
                     }
                 ],
@@ -1093,47 +838,36 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/host.JobsResponse"
+                            "$ref": "#/definitions/resource.Page-resource_Host"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/hosts/{id}/labels": {
-            "patch": {
+            },
+            "post": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Applies the changes atomically on top of the host's current labels, so unrelated labels and all connection settings are untouched and concurrent patches do not overwrite each other. Keys are 1-63 characters of letters, digits, '.', '_', '-', or '/'; values may be empty or up to 63 characters; a host may have at most 50 labels; the built-in selector field names (id, name, hostname, address, status, environment, connection) are reserved.",
+                "description": "Binding an Access Profile needs the workspace owner.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1141,112 +875,373 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Hosts"
+                    "Managed"
                 ],
-                "summary": "Set or remove host labels",
+                "summary": "Create a managed host",
                 "parameters": [
                     {
-                        "type": "integer",
+                        "description": "Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.hostRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Host"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/managed/hosts/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Get a managed host",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Host"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Changing the profile, endpoint or trust of a bound host needs the owner.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Replace a managed host spec",
+                "parameters": [
+                    {
+                        "type": "string",
                         "description": "Host ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Labels to set and remove",
+                        "description": "Request",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/host.LabelPatchRequest"
+                            "$ref": "#/definitions/managedresource.hostUpdateRequest"
                         }
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "object",
-                                "additionalProperties": {
-                                    "type": "string"
-                                }
-                            }
-                        }
+                    "204": {
+                        "description": "No Content"
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Refused with 409 while an operation targets the host.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Delete a managed host",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Current revision",
+                        "name": "revision",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/jobs": {
+        "/api/v1/managed/hosts/{id}/labels": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Replace a host's labels",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.labelsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Host"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/managed/operations": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
+                "description": "Newest first; summaries never contain argv or output.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Jobs"
+                    "Managed"
                 ],
-                "summary": "List jobs",
+                "summary": "List operations",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Filter by host ID",
-                        "name": "hostId",
+                        "type": "string",
+                        "description": "Operation state",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "host",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 time",
+                        "name": "createdAfter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 time",
+                        "name": "createdBefore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "nextCursor of the previous page",
+                        "name": "cursor",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "default": 10,
-                        "description": "Page size (1-100)",
+                        "description": "Page size, at most 500",
                         "name": "limit",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "default": 0,
-                        "description": "Number of rows to skip",
-                        "name": "offset",
                         "in": "query"
                     }
                 ],
@@ -1254,57 +1249,172 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/job.ListResponse"
+                            "$ref": "#/definitions/resource.Page-resource_OperationSummary"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Submit an operation",
+                "parameters": [
+                    {
+                        "description": "Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.operationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Operation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/jobs/{id}": {
+        "/api/v1/managed/operations/preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Preview the hosts a target rule selects",
+                "parameters": [
+                    {
+                        "description": "Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.previewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/resource.HostTargetSet"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/managed/operations/{id}": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
+                "description": "Readers see no argv or output.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Jobs"
+                    "Managed"
                 ],
-                "summary": "Get a job",
+                "summary": "Get an operation",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Job ID",
+                        "type": "string",
+                        "description": "Operation ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -1314,43 +1424,94 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/domain.Job"
+                            "$ref": "#/definitions/resource.Operation"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/managed/operations/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Request cancellation of an operation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Operation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Operation"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1380,13 +1541,13 @@
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/auth.ErrorResponse"
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1420,19 +1581,13 @@
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1484,82 +1639,164 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/runs": {
+        "/api/v1/runtime-config": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Newest first, without arguments or per-host results. Requires operations read permission.",
+                "description": "Workspace owner, human session only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Runs"
+                    "Runtime configuration"
                 ],
-                "summary": "List runs",
+                "summary": "Get the active runtime configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "Publish a new configuration revision",
                 "parameters": [
                     {
-                        "type": "string",
-                        "description": "Only runs with this status",
-                        "name": "status",
+                        "description": "{\\",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runtime-config/revisions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "List configuration revisions",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Return revisions older than this",
+                        "name": "before",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Only runs with a smaller id (paging cursor)",
-                        "name": "before_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Page size (default 50, maximum 200)",
+                        "description": "Page size",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1568,37 +1805,289 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/domain.Run"
-                            }
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runtime-config/revisions/{revision}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "Get one configuration revision",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Revision",
+                        "name": "revision",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runtime-config/rollback": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "Copy an earlier revision into a new one",
+                "parameters": [
+                    {
+                        "description": "{\\",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runtime-config/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "Show applied revisions per process",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/runtime-config/validate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Runtime configuration"
+                ],
+                "summary": "Validate a configuration document",
+                "parameters": [
+                    {
+                        "description": "{\\",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/secrets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Secrets"
+                ],
+                "summary": "List secret metadata (never values)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1609,106 +2098,140 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Disabled unless the server enables execution and lists the allowed programs. Requires the runs:execute permission (owners and operators). The command is an argument list with no shell, the targets are resolved and pinned when the run is accepted, and the run executes in the background: poll GET /api/v1/runs/{id}. Output is combined stdout and stderr. Commands are never retried; a timeout or cancellation does not prove the command did not run. The 202 response carries the run; with dryRun the plan is returned with 200 and nothing is stored or contacted.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Workspace owner, human session only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Runs"
+                    "Secrets"
                 ],
-                "summary": "Run a command on hosts",
+                "summary": "Create a secret from a write-only value",
                 "parameters": [
                     {
-                        "description": "Command and target rule",
+                        "description": "{\\",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/runs.SubmitRequest"
+                            "type": "object"
                         }
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "Dry run plan",
-                        "schema": {
-                            "$ref": "#/definitions/domain.Run"
-                        }
-                    },
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "$ref": "#/definitions/domain.Run"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "409": {
-                        "description": "The targeted hosts changed since the preview",
+                    "201": {
+                        "description": "Created",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
                         }
                     },
-                    "503": {
-                        "description": "Service Unavailable",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
             }
         },
-        "/api/v1/runs/{id}": {
+        "/api/v1/secrets/rewrap": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Secrets"
+                ],
+                "summary": "Rewrap stored keys under the active KEK",
+                "parameters": [
+                    {
+                        "description": "{\\",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/secrets/{id}": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Callers with the runs:execute permission also see the arguments and each host's output; others see only status, exit codes, and errors.",
+                "description": "Workspace owner, human session only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Runs"
+                    "Secrets"
                 ],
-                "summary": "Get a run",
+                "summary": "Get secret metadata",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Run ID",
+                        "type": "string",
+                        "description": "Secret ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -1718,122 +2241,200 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/domain.Run"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/runs/{id}/cancel": {
-            "post": {
+            },
+            "delete": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Stops new hosts from starting and closes running SSH sessions. A command that was already sent may still have run, or keep running, on its host; cancelled hosts are reported as such. Requires the runs:execute permission.",
+                "description": "Workspace owner, human session only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Runs"
+                    "Secrets"
                 ],
-                "summary": "Cancel a run",
+                "summary": "Retire a secret",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "Run ID",
+                        "type": "string",
+                        "description": "Secret ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     }
                 ],
                 "responses": {
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "$ref": "#/definitions/domain.Run"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
+                    "204": {
+                        "description": "No Content"
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/secrets/{id}/rotate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Secrets"
+                ],
+                "summary": "Add a new secret version",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Secret ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "{\\",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/secrets/{id}/versions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner, human session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Secrets"
+                ],
+                "summary": "List secret version metadata",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Secret ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1867,19 +2468,13 @@
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1922,37 +2517,25 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -1995,37 +2578,25 @@
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -2141,14 +2712,6 @@
         }
     },
     "definitions": {
-        "auth.ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string"
-                }
-            }
-        },
         "auth.LoginRequest": {
             "type": "object",
             "required": [
@@ -2303,65 +2866,6 @@
                 }
             }
         },
-        "domain.BulkImportResponse": {
-            "type": "object",
-            "properties": {
-                "duplicate_count": {
-                    "type": "integer"
-                },
-                "failure_count": {
-                    "type": "integer"
-                },
-                "results": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.HostOperationResult"
-                    }
-                },
-                "success_count": {
-                    "type": "integer"
-                },
-                "total_processed": {
-                    "type": "integer"
-                },
-                "valid_count": {
-                    "type": "integer"
-                },
-                "validate_only": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "domain.ConnectionMethod": {
-            "type": "string",
-            "enum": [
-                "SSH",
-                "AGENT_PULL",
-                "AGENT_PUSH"
-            ],
-            "x-enum-varnames": [
-                "MethodSSH",
-                "MethodAgentPull",
-                "MethodAgentPush"
-            ]
-        },
-        "domain.DataPoint": {
-            "type": "object",
-            "properties": {
-                "cpuPercent": {
-                    "type": "number"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "memPercent": {
-                    "type": "number"
-                },
-                "timestamp": {
-                    "type": "string"
-                }
-            }
-        },
         "domain.Environment": {
             "type": "object",
             "properties": {
@@ -2378,100 +2882,6 @@
                     "type": "string"
                 }
             }
-        },
-        "domain.Host": {
-            "type": "object",
-            "properties": {
-                "connection": {
-                    "$ref": "#/definitions/domain.ConnectionMethod"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "environmentId": {
-                    "type": "integer"
-                },
-                "hostname": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "ip_address": {
-                    "type": "string"
-                },
-                "labels": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "name": {
-                    "type": "string"
-                },
-                "ssh": {
-                    "$ref": "#/definitions/domain.SSHAccess"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "domain.HostOperationResult": {
-            "type": "object",
-            "properties": {
-                "address": {
-                    "type": "string"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "hostname": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "index": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.HostResultStatus"
-                }
-            }
-        },
-        "domain.HostResultStatus": {
-            "type": "string",
-            "enum": [
-                "success",
-                "valid",
-                "failed",
-                "duplicate"
-            ],
-            "x-enum-varnames": [
-                "StatusSuccess",
-                "StatusValid",
-                "StatusFailed",
-                "StatusDuplicate"
-            ]
-        },
-        "domain.HostStatus": {
-            "type": "string",
-            "enum": [
-                "PENDING",
-                "ACTIVE",
-                "SUBJUGATED",
-                "DISCONNECTED"
-            ],
-            "x-enum-varnames": [
-                "HostStatusPending",
-                "HostStatusActive",
-                "HostStatusSubjugated",
-                "HostStatusDisconnected"
-            ]
         },
         "domain.IssuedAPIToken": {
             "type": "object",
@@ -2499,50 +2909,6 @@
                 }
             }
         },
-        "domain.Job": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string"
-                },
-                "finishedAt": {
-                    "type": "string"
-                },
-                "hostId": {
-                    "type": "integer"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "resultLog": {
-                    "type": "string"
-                },
-                "startedAt": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.JobStatus"
-                },
-                "triggeredBy": {
-                    "type": "string"
-                }
-            }
-        },
-        "domain.JobStatus": {
-            "type": "string",
-            "enum": [
-                "PENDING",
-                "RUNNING",
-                "COMPLETED",
-                "FAILED"
-            ],
-            "x-enum-varnames": [
-                "JobStatusPending",
-                "JobStatusRunning",
-                "JobStatusCompleted",
-                "JobStatusFailed"
-            ]
-        },
         "domain.Role": {
             "type": "string",
             "enum": [
@@ -2555,272 +2921,6 @@
                 "RoleOperator",
                 "RoleReader"
             ]
-        },
-        "domain.Run": {
-            "type": "object",
-            "properties": {
-                "argCount": {
-                    "type": "integer"
-                },
-                "argv": {
-                    "description": "Argv is only returned to callers allowed to execute; it may contain\nsensitive values and is stored encrypted.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "cancelRequested": {
-                    "description": "CancelRequested is set when cancellation was asked for.",
-                    "type": "boolean"
-                },
-                "concurrency": {
-                    "type": "integer"
-                },
-                "counts": {
-                    "$ref": "#/definitions/domain.RunCounts"
-                },
-                "createdAt": {
-                    "type": "string"
-                },
-                "createdByTokenId": {
-                    "type": "integer"
-                },
-                "createdByUserId": {
-                    "type": "integer"
-                },
-                "createdByUsername": {
-                    "type": "string"
-                },
-                "finishedAt": {
-                    "type": "string"
-                },
-                "hosts": {
-                    "description": "Hosts is omitted from listings. Output is only included for callers\nallowed to execute.",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.RunHost"
-                    }
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "program": {
-                    "type": "string"
-                },
-                "rule": {
-                    "$ref": "#/definitions/domain.TargetRule"
-                },
-                "startedAt": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.RunStatus"
-                },
-                "targetsHash": {
-                    "type": "string"
-                },
-                "timeoutSeconds": {
-                    "type": "integer"
-                }
-            }
-        },
-        "domain.RunCounts": {
-            "type": "object",
-            "properties": {
-                "cancelled": {
-                    "type": "integer"
-                },
-                "failed": {
-                    "type": "integer"
-                },
-                "interrupted": {
-                    "type": "integer"
-                },
-                "pending": {
-                    "type": "integer"
-                },
-                "running": {
-                    "type": "integer"
-                },
-                "succeeded": {
-                    "type": "integer"
-                },
-                "timedOut": {
-                    "type": "integer"
-                }
-            }
-        },
-        "domain.RunHost": {
-            "type": "object",
-            "properties": {
-                "address": {
-                    "type": "string"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "exitCode": {
-                    "type": "integer"
-                },
-                "finishedAt": {
-                    "type": "string"
-                },
-                "hostId": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "output": {
-                    "type": "string"
-                },
-                "port": {
-                    "type": "integer"
-                },
-                "startedAt": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.RunHostStatus"
-                }
-            }
-        },
-        "domain.RunHostStatus": {
-            "type": "string",
-            "enum": [
-                "pending",
-                "running",
-                "succeeded",
-                "failed",
-                "timed_out",
-                "cancelled",
-                "interrupted"
-            ],
-            "x-enum-varnames": [
-                "RunHostPending",
-                "RunHostRunning",
-                "RunHostSucceeded",
-                "RunHostFailed",
-                "RunHostTimedOut",
-                "RunHostCancelled",
-                "RunHostInterrupted"
-            ]
-        },
-        "domain.RunStatus": {
-            "type": "string",
-            "enum": [
-                "queued",
-                "running",
-                "succeeded",
-                "partially_succeeded",
-                "failed",
-                "cancelled",
-                "interrupted",
-                "planned"
-            ],
-            "x-enum-varnames": [
-                "RunQueued",
-                "RunRunning",
-                "RunSucceeded",
-                "RunPartiallySucceeded",
-                "RunFailed",
-                "RunCancelled",
-                "RunInterrupted",
-                "RunPlanned"
-            ]
-        },
-        "domain.SSHAccess": {
-            "type": "object",
-            "properties": {
-                "last_check_at": {
-                    "type": "string"
-                },
-                "last_check_duration_ms": {
-                    "type": "integer"
-                },
-                "last_check_message": {
-                    "type": "string"
-                },
-                "port": {
-                    "type": "integer"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.HostStatus"
-                },
-                "username": {
-                    "type": "string"
-                }
-            }
-        },
-        "domain.TargetHost": {
-            "type": "object",
-            "properties": {
-                "address": {
-                    "type": "string"
-                },
-                "environment": {
-                    "type": "string"
-                },
-                "hostname": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "labels": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "name": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.HostStatus"
-                }
-            }
-        },
-        "domain.TargetPreview": {
-            "type": "object",
-            "properties": {
-                "excluded": {
-                    "description": "Excluded lists hosts that were selected but removed by the exclude list.",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.TargetHost"
-                    }
-                },
-                "hosts": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.TargetHost"
-                    }
-                },
-                "targetsHash": {
-                    "description": "TargetsHash identifies the exact targeted hosts (all of them, not only the\nlisted ones). A run can require it so it runs on what was reviewed.",
-                    "type": "string"
-                },
-                "total": {
-                    "description": "Total is the number of targeted hosts; Hosts lists at most MaxPreviewHosts of them.",
-                    "type": "integer"
-                },
-                "truncated": {
-                    "type": "boolean"
-                },
-                "unknownExcludes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "unknownIncludes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
         },
         "domain.TargetRule": {
             "type": "object",
@@ -2904,127 +3004,20 @@
                 }
             }
         },
-        "fleet.PreviewRequest": {
+        "httperr.Body": {
             "type": "object",
             "properties": {
-                "all": {
-                    "description": "All explicitly targets every host; it cannot be combined with selector or include.",
-                    "type": "boolean"
+                "code": {
+                    "type": "string"
                 },
-                "exclude": {
-                    "description": "Exclude removes hosts by ID or name, always winning over selector and include.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "include": {
-                    "description": "Include adds hosts by ID or name regardless of the selector.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "selector": {
-                    "description": "Selector is a label selector, for example environment=production,role in (web,db),!canary.",
-                    "type": "string",
-                    "example": "environment=production,role=web"
+                "error": {
+                    "type": "string"
                 }
             }
         },
-        "host.BulkHostsRequest": {
+        "managedresource.hostRequest": {
             "type": "object",
             "properties": {
-                "hosts": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/host.Payload"
-                    }
-                },
-                "validate_only": {
-                    "description": "ValidateOnly checks records and duplicates without contacting hosts or\nstoring anything.",
-                    "type": "boolean"
-                }
-            }
-        },
-        "host.JobsResponse": {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Job"
-                    }
-                },
-                "hostId": {
-                    "type": "integer"
-                },
-                "limit": {
-                    "type": "integer"
-                },
-                "offset": {
-                    "type": "integer"
-                },
-                "total": {
-                    "type": "integer"
-                }
-            }
-        },
-        "host.LabelPatchRequest": {
-            "type": "object",
-            "properties": {
-                "remove": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "set": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
-        "host.Payload": {
-            "type": "object",
-            "required": [
-                "authMethod",
-                "expectedFingerprint",
-                "name",
-                "secretData",
-                "username"
-            ],
-            "properties": {
-                "authMethod": {
-                    "type": "string",
-                    "enum": [
-                        "PASSWORD",
-                        "PRIVATE_KEY"
-                    ],
-                    "example": "PRIVATE_KEY"
-                },
-                "connection": {
-                    "type": "string",
-                    "example": "SSH"
-                },
-                "environmentId": {
-                    "type": "integer",
-                    "example": 1
-                },
-                "expectedFingerprint": {
-                    "type": "string",
-                    "example": "SHA256:..."
-                },
-                "hostname": {
-                    "type": "string",
-                    "example": "web-01.example.com"
-                },
-                "ip": {
-                    "type": "string",
-                    "example": "192.0.2.10"
-                },
                 "labels": {
                     "type": "object",
                     "additionalProperties": {
@@ -3032,44 +3025,91 @@
                     }
                 },
                 "name": {
-                    "type": "string",
-                    "example": "web-01"
+                    "type": "string"
                 },
-                "passphrase": {
-                    "type": "string",
-                    "example": "key-passphrase"
-                },
-                "port": {
-                    "type": "integer",
-                    "example": 22
-                },
-                "secretData": {
-                    "type": "string",
-                    "example": "-----BEGIN OPENSSH PRIVATE KEY-----"
-                },
-                "username": {
-                    "type": "string",
-                    "example": "deploy"
+                "spec": {
+                    "$ref": "#/definitions/resource.HostSpec"
                 }
             }
         },
-        "job.ListResponse": {
+        "managedresource.hostUpdateRequest": {
             "type": "object",
             "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Job"
+                "generation": {
+                    "type": "integer"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.HostSpec"
+                }
+            }
+        },
+        "managedresource.labelsRequest": {
+            "type": "object",
+            "properties": {
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
                     }
                 },
-                "limit": {
+                "revision": {
+                    "type": "integer"
+                }
+            }
+        },
+        "managedresource.operationRequest": {
+            "type": "object",
+            "properties": {
+                "expectTargetsHash": {
+                    "type": "string"
+                },
+                "hostIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "run": {
+                    "$ref": "#/definitions/resource.RunSpec"
+                },
+                "targets": {
+                    "$ref": "#/definitions/domain.TargetRule"
+                }
+            }
+        },
+        "managedresource.previewRequest": {
+            "type": "object",
+            "properties": {
+                "targets": {
+                    "$ref": "#/definitions/domain.TargetRule"
+                }
+            }
+        },
+        "managedresource.profileRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.AccessProfileSpec"
+                }
+            }
+        },
+        "managedresource.profileUpdateRequest": {
+            "type": "object",
+            "properties": {
+                "expectedRevision": {
                     "type": "integer"
                 },
-                "offset": {
-                    "type": "integer"
-                },
-                "total": {
-                    "type": "integer"
+                "spec": {
+                    "$ref": "#/definitions/resource.AccessProfileSpec"
                 }
             }
         },
@@ -3087,50 +3127,636 @@
                 }
             }
         },
-        "runs.SubmitRequest": {
+        "resource.AccessProfile": {
             "type": "object",
             "properties": {
-                "all": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "integer"
+                },
+                "currentRevision": {
+                    "type": "integer"
+                },
+                "deletedAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "workspaceId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.AccessProfileRevision": {
+            "type": "object",
+            "properties": {
+                "checksum": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "integer"
+                },
+                "profileId": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.AccessProfileSpec"
+                },
+                "workspaceId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.AccessProfileSpec": {
+            "type": "object",
+            "properties": {
+                "authenticationMethod": {
+                    "$ref": "#/definitions/resource.AuthenticationMethod"
+                },
+                "connectorKind": {
+                    "$ref": "#/definitions/resource.ConnectorKind"
+                },
+                "credential": {
+                    "$ref": "#/definitions/resource.SecretReference"
+                },
+                "enabled": {
                     "type": "boolean"
                 },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.ActorRef": {
+            "type": "object",
+            "properties": {
+                "apiTokenId": {
+                    "type": "integer"
+                },
+                "userId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.AuthenticationMethod": {
+            "type": "string",
+            "enum": [
+                "password",
+                "private-key"
+            ],
+            "x-enum-varnames": [
+                "AuthenticationPassword",
+                "AuthenticationPrivateKey"
+            ]
+        },
+        "resource.Condition": {
+            "type": "object",
+            "properties": {
+                "lastTransitionTime": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "observedGeneration": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/resource.ConditionStatus"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.ConditionStatus": {
+            "type": "string",
+            "enum": [
+                "True",
+                "False",
+                "Unknown"
+            ],
+            "x-enum-varnames": [
+                "ConditionTrue",
+                "ConditionFalse",
+                "ConditionUnknown"
+            ]
+        },
+        "resource.ConnectorKind": {
+            "type": "string",
+            "enum": [
+                "ssh"
+            ],
+            "x-enum-varnames": [
+                "ConnectorSSH"
+            ]
+        },
+        "resource.DesiredPresence": {
+            "type": "string",
+            "enum": [
+                "Managed",
+                "Absent"
+            ],
+            "x-enum-varnames": [
+                "PresenceManaged",
+                "PresenceAbsent"
+            ]
+        },
+        "resource.Host": {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "$ref": "#/definitions/resource.HostMetadata"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.HostSpec"
+                },
+                "status": {
+                    "$ref": "#/definitions/resource.HostStatus"
+                }
+            }
+        },
+        "resource.HostAccessTarget": {
+            "type": "object",
+            "properties": {
+                "endpoint": {
+                    "type": "string"
+                },
+                "trust": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "resource.HostMetadata": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "deletionTimestamp": {
+                    "type": "string"
+                },
+                "environmentId": {
+                    "type": "integer"
+                },
+                "generation": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "workspaceId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.HostPhase": {
+            "type": "string",
+            "enum": [
+                "Pending",
+                "Active",
+                "Deleting"
+            ],
+            "x-enum-varnames": [
+                "HostPending",
+                "HostActive",
+                "HostDeleting"
+            ]
+        },
+        "resource.HostSpec": {
+            "type": "object",
+            "properties": {
+                "accessProfileId": {
+                    "type": "string"
+                },
+                "accessTarget": {
+                    "description": "AccessTarget is host-owned connector-neutral location and trust material.\nIts interpretation is restricted to the selected connector adapter.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.HostAccessTarget"
+                        }
+                    ]
+                },
+                "presence": {
+                    "$ref": "#/definitions/resource.DesiredPresence"
+                },
+                "profileRevision": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.HostStatus": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.Condition"
+                    }
+                },
+                "lastObservedAt": {
+                    "type": "string"
+                },
+                "observedGeneration": {
+                    "type": "integer"
+                },
+                "phase": {
+                    "$ref": "#/definitions/resource.HostPhase"
+                }
+            }
+        },
+        "resource.HostTargetSet": {
+            "type": "object",
+            "properties": {
+                "excluded": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.Host"
+                    }
+                },
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.Host"
+                    }
+                },
+                "targetsHash": {
+                    "description": "TargetsHash identifies the exact Host IDs and generations matched, so a\nsubmission can require that it runs on what was reviewed.",
+                    "type": "string"
+                },
+                "unknownExcludes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "unknownIncludes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "resource.Operation": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "$ref": "#/definitions/resource.ActorRef"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/resource.OperationKind"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.OperationSpec"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/resource.OperationStatus"
+                },
+                "workspaceId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.OperationKind": {
+            "type": "string",
+            "enum": [
+                "Run"
+            ],
+            "x-enum-varnames": [
+                "OperationKindRun"
+            ]
+        },
+        "resource.OperationSpec": {
+            "type": "object",
+            "properties": {
+                "deadline": {
+                    "type": "string"
+                },
+                "run": {
+                    "$ref": "#/definitions/resource.RunSpec"
+                },
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.OperationTargetSpec"
+                    }
+                }
+            }
+        },
+        "resource.OperationState": {
+            "type": "string",
+            "enum": [
+                "Queued",
+                "Running",
+                "CancelRequested",
+                "Succeeded",
+                "PartiallySucceeded",
+                "Failed",
+                "Cancelled",
+                "TimedOut",
+                "Interrupted"
+            ],
+            "x-enum-varnames": [
+                "OperationQueued",
+                "OperationRunning",
+                "OperationCancelRequested",
+                "OperationSucceeded",
+                "OperationPartiallySucceeded",
+                "OperationFailed",
+                "OperationCancelled",
+                "OperationTimedOut",
+                "OperationInterrupted"
+            ]
+        },
+        "resource.OperationStatus": {
+            "type": "object",
+            "properties": {
+                "cancelAsked": {
+                    "type": "boolean"
+                },
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.Condition"
+                    }
+                },
+                "state": {
+                    "$ref": "#/definitions/resource.OperationState"
+                },
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.OperationTarget"
+                    }
+                }
+            }
+        },
+        "resource.OperationSummary": {
+            "type": "object",
+            "properties": {
+                "cancelRequested": {
+                    "type": "boolean"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "$ref": "#/definitions/resource.ActorRef"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/resource.OperationKind"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/resource.OperationState"
+                },
+                "targets": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "resource.OperationTarget": {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "$ref": "#/definitions/resource.TargetResult"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.OperationTargetSpec"
+                },
+                "state": {
+                    "$ref": "#/definitions/resource.TargetState"
+                }
+            }
+        },
+        "resource.OperationTargetSpec": {
+            "type": "object",
+            "properties": {
+                "accessProfileId": {
+                    "type": "string"
+                },
+                "accessProfileRevision": {
+                    "type": "integer"
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "hostGeneration": {
+                    "type": "integer"
+                },
+                "hostId": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.Page-resource_AccessProfile": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.AccessProfile"
+                    }
+                },
+                "nextCursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.Page-resource_Host": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.Host"
+                    }
+                },
+                "nextCursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.Page-resource_OperationSummary": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.OperationSummary"
+                    }
+                },
+                "nextCursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.RunSpec": {
+            "type": "object",
+            "properties": {
                 "argv": {
-                    "description": "Argv is the program followed by its arguments. There is no shell: each\nelement reaches the program as exactly one argument.",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
                 "concurrency": {
-                    "description": "Concurrency bounds hosts processed at once (default 5, maximum 20).",
                     "type": "integer"
                 },
-                "dryRun": {
-                    "description": "DryRun validates and plans without storing a run or contacting any host.",
-                    "type": "boolean"
-                },
-                "exclude": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "expectTargetsHash": {
-                    "description": "ExpectTargetsHash, copied from a preview, makes the request fail with 409\nunless it would run on exactly the previewed hosts.",
+                "timeoutSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.SecretReference": {
+            "type": "object",
+            "properties": {
+                "id": {
                     "type": "string"
                 },
-                "include": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.TargetResult": {
+            "type": "object",
+            "properties": {
+                "errorClass": {
+                    "type": "string"
                 },
-                "selector": {
-                    "description": "Selector, Include, Exclude, and All form the target rule exactly as in the\ntarget preview. At least one of selector, include, or all is required.",
-                    "type": "string",
-                    "example": "environment=production,role=web"
+                "exitCode": {
+                    "type": "integer"
                 },
-                "timeoutSeconds": {
-                    "description": "TimeoutSeconds bounds the command on each host (default 60, maximum 900).",
+                "output": {
+                    "type": "string"
+                },
+                "stderr": {
+                    "type": "string"
+                },
+                "stdout": {
+                    "type": "string"
+                }
+            }
+        },
+        "resource.TargetState": {
+            "type": "string",
+            "enum": [
+                "Pending",
+                "Running",
+                "Succeeded",
+                "Failed",
+                "TimedOut",
+                "Cancelled",
+                "Interrupted"
+            ],
+            "x-enum-varnames": [
+                "TargetPending",
+                "TargetRunning",
+                "TargetSucceeded",
+                "TargetFailed",
+                "TargetTimedOut",
+                "TargetCancelled",
+                "TargetInterrupted"
+            ]
+        },
+        "service.AccessProfileView": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "integer"
+                },
+                "currentRevision": {
+                    "type": "integer"
+                },
+                "deletedAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "spec": {
+                    "$ref": "#/definitions/resource.AccessProfileSpec"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "workspaceId": {
                     "type": "integer"
                 }
             }

@@ -3,7 +3,7 @@
 # ============================================================================
 
 .PHONY: fmt fmt-check tidy-check vet lint shellcheck
-.PHONY: test test-short test-race test-postgres coverage coverage-html bench
+.PHONY: test test-short test-race test-postgres coverage coverage-html bench smoke
 .PHONY: gosec vuln security
 .PHONY: verify verify-full ci
 
@@ -51,6 +51,9 @@ coverage: ## Run tests and write COVERAGE_FILE (coverage.out)
 coverage-html: coverage ## Render the coverage profile as COVERAGE_HTML (coverage.html)
 	$(GO) tool cover -html="$(COVERAGE_FILE)" -o "$(COVERAGE_HTML)"
 	@echo "Coverage report: $(COVERAGE_HTML)"
+
+smoke: build ## Run the CLI end to end against a fresh monolith (scripts/smoke.sh)
+	./scripts/smoke.sh
 
 bench: ## Run Go benchmarks
 	$(GO) test -run '^$$' -bench . -benchmem ./...

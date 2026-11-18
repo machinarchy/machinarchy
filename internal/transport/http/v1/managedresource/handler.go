@@ -148,6 +148,21 @@ func queryTime(c echo.Context, name string, target *time.Time) func() error {
 	}
 }
 
+// @Summary List managed hosts
+// @Description Keyset-paginated; filter by selector, environment ID and phase.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param selector query string false "Selector, for example tier=web"
+// @Param environment query int false "Environment ID"
+// @Param phase query string false "Pending, Active or Deleting"
+// @Param cursor query string false "nextCursor of the previous page"
+// @Param limit query int false "Page size, at most 500"
+// @Success 200 {object} resource.Page[resource.Host]
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/managed/hosts [get]
 func (h *Handler) listHosts(c echo.Context) error {
 	query := service.HostQuery{Selector: c.QueryParam("selector"), Phase: resource.HostPhase(c.QueryParam("phase")),
 		After: resource.ID(c.QueryParam("cursor"))}
@@ -157,6 +172,19 @@ func (h *Handler) listHosts(c echo.Context) error {
 		})
 }
 
+// @Summary Create a managed host
+// @Description Binding an Access Profile needs the workspace owner.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param request body hostRequest true "Request"
+// @Success 201 {object} resource.Host
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/hosts [post]
 func (h *Handler) createHost(c echo.Context) error {
 	var request hostRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
@@ -164,6 +192,17 @@ func (h *Handler) createHost(c echo.Context) error {
 	})
 }
 
+// @Summary Get a managed host
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Host ID"
+// @Success 200 {object} resource.Host
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/managed/hosts/{id} [get]
 func (h *Handler) getHost(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
@@ -171,6 +210,21 @@ func (h *Handler) getHost(c echo.Context) error {
 	})
 }
 
+// @Summary Replace a managed host spec
+// @Description Changing the profile, endpoint or trust of a bound host needs the owner.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param id path string true "Host ID"
+// @Param request body hostUpdateRequest true "Request"
+// @Success 204
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/hosts/{id} [put]
 func (h *Handler) updateHost(c echo.Context) error {
 	var id resource.ID
 	var request hostUpdateRequest
@@ -179,6 +233,20 @@ func (h *Handler) updateHost(c echo.Context) error {
 	})
 }
 
+// @Summary Delete a managed host
+// @Description Refused with 409 while an operation targets the host.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Host ID"
+// @Param revision query int true "Current revision"
+// @Success 204
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/hosts/{id} [delete]
 func (h *Handler) deleteHost(c echo.Context) error {
 	var id resource.ID
 	var revision int
@@ -190,6 +258,20 @@ func (h *Handler) deleteHost(c echo.Context) error {
 	})
 }
 
+// @Summary Replace a host's labels
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param id path string true "Host ID"
+// @Param request body labelsRequest true "Request"
+// @Success 200 {object} resource.Host
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/hosts/{id}/labels [patch]
 func (h *Handler) setHostLabels(c echo.Context) error {
 	var id resource.ID
 	var request labelsRequest
@@ -198,6 +280,17 @@ func (h *Handler) setHostLabels(c echo.Context) error {
 	})
 }
 
+// @Summary List Access Profiles
+// @Description Returns SecretRefs only, never secret values.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param cursor query string false "nextCursor of the previous page"
+// @Param limit query int false "Page size, at most 500"
+// @Success 200 {object} resource.Page[resource.AccessProfile]
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/managed/access-profiles [get]
 func (h *Handler) listProfiles(c echo.Context) error {
 	var limit int
 	return call(c, http.StatusOK, queryInt(c, "limit", &limit), func(ctx context.Context, p domain.Principal) (*resource.Page[resource.AccessProfile], error) {
@@ -205,6 +298,19 @@ func (h *Handler) listProfiles(c echo.Context) error {
 	})
 }
 
+// @Summary Create an Access Profile
+// @Description Workspace owner only.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param request body profileRequest true "Request"
+// @Success 201 {object} resource.AccessProfile
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/access-profiles [post]
 func (h *Handler) createProfile(c echo.Context) error {
 	var request profileRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.AccessProfile, error) {
@@ -212,6 +318,17 @@ func (h *Handler) createProfile(c echo.Context) error {
 	})
 }
 
+// @Summary Get an Access Profile with its current spec
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Access Profile ID"
+// @Success 200 {object} service.AccessProfileView
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/managed/access-profiles/{id} [get]
 func (h *Handler) getProfile(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*service.AccessProfileView, error) {
@@ -219,6 +336,21 @@ func (h *Handler) getProfile(c echo.Context) error {
 	})
 }
 
+// @Summary Create a new Access Profile revision
+// @Description Workspace owner only.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param id path string true "Access Profile ID"
+// @Param request body profileUpdateRequest true "Request"
+// @Success 201 {object} resource.AccessProfileRevision
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/access-profiles/{id} [put]
 func (h *Handler) updateProfile(c echo.Context) error {
 	var id resource.ID
 	var request profileUpdateRequest
@@ -227,6 +359,19 @@ func (h *Handler) updateProfile(c echo.Context) error {
 	})
 }
 
+// @Summary Delete an Access Profile
+// @Description Owner only; refused with 409 while a host is bound to it.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Access Profile ID"
+// @Success 204
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/access-profiles/{id} [delete]
 func (h *Handler) deleteProfile(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusNoContent, pathID(c, &id), func(ctx context.Context, p domain.Principal) (any, error) {
@@ -234,6 +379,22 @@ func (h *Handler) deleteProfile(c echo.Context) error {
 	})
 }
 
+// @Summary List operations
+// @Description Newest first; summaries never contain argv or output.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param state query string false "Operation state"
+// @Param host query string false "Host ID"
+// @Param createdAfter query string false "RFC 3339 time"
+// @Param createdBefore query string false "RFC 3339 time"
+// @Param cursor query string false "nextCursor of the previous page"
+// @Param limit query int false "Page size, at most 500"
+// @Success 200 {object} resource.Page[resource.OperationSummary]
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/managed/operations [get]
 func (h *Handler) listOperations(c echo.Context) error {
 	filter := resource.OperationListFilter{State: resource.OperationState(c.QueryParam("state")),
 		HostID: resource.ID(c.QueryParam("host")), After: c.QueryParam("cursor")}
@@ -244,6 +405,20 @@ func (h *Handler) listOperations(c echo.Context) error {
 	})
 }
 
+// @Summary Submit an operation
+// @Description Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param request body operationRequest true "Request"
+// @Success 202 {object} resource.Operation
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/operations [post]
 func (h *Handler) submitOperation(c echo.Context) error {
 	var request operationRequest
 	return call(c, http.StatusAccepted, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
@@ -260,6 +435,17 @@ func (h *Handler) submitOperation(c echo.Context) error {
 	})
 }
 
+// @Summary Preview the hosts a target rule selects
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param request body previewRequest true "Request"
+// @Success 200 {object} resource.HostTargetSet
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/managed/operations/preview [post]
 func (h *Handler) previewOperation(c echo.Context) error {
 	var request previewRequest
 	return call(c, http.StatusOK, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.HostTargetSet, error) {
@@ -267,6 +453,18 @@ func (h *Handler) previewOperation(c echo.Context) error {
 	})
 }
 
+// @Summary Get an operation
+// @Description Readers see no argv or output.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Operation ID"
+// @Success 200 {object} resource.Operation
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/managed/operations/{id} [get]
 func (h *Handler) getOperation(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
@@ -274,6 +472,18 @@ func (h *Handler) getOperation(c echo.Context) error {
 	})
 }
 
+// @Summary Request cancellation of an operation
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Operation ID"
+// @Success 202 {object} resource.Operation
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/operations/{id}/cancel [post]
 func (h *Handler) cancelOperation(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusAccepted, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {

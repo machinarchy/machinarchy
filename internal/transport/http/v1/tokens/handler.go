@@ -41,10 +41,10 @@ func NewHandler(service domain.APITokenService) *Handler {
 // @Security BearerAuth
 // @Param request body CreateRequest true "Token name, role, and lifetime"
 // @Success 201 {object} domain.IssuedAPIToken
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 409 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
 // @Router /api/v1/tokens [post]
 func (h *Handler) Create(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -70,8 +70,8 @@ func (h *Handler) Create(c echo.Context) error {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {array} domain.APIToken
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
 // @Router /api/v1/tokens [get]
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -93,10 +93,10 @@ func (h *Handler) List(c echo.Context) error {
 // @Security BearerAuth
 // @Param id path int true "API token ID"
 // @Success 200 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
 // @Router /api/v1/tokens/{id} [delete]
 func (h *Handler) Revoke(c echo.Context) error {
 	principal, ok := middleware.Principal(c)

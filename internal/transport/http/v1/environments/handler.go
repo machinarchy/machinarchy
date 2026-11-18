@@ -38,10 +38,10 @@ type EnvSavePayload struct {
 // @Security BearerAuth
 // @Param request body EnvSavePayload true "Environment details"
 // @Success 201 {object} domain.Environment
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 409 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/environments [post]
 func (h *Handler) Create(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -69,8 +69,8 @@ func (h *Handler) Create(c echo.Context) error {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {array} domain.Environment
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 401 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/environments [get]
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -93,11 +93,11 @@ func (h *Handler) List(c echo.Context) error {
 // @Param id path int true "Environment ID"
 // @Param request body EnvSavePayload true "Updated environment details"
 // @Success 200 {object} domain.Environment
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 409 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/environments/{id} [put]
 func (h *Handler) Update(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -134,10 +134,10 @@ func (h *Handler) Update(c echo.Context) error {
 // @Security BearerAuth
 // @Param id path int true "Environment ID"
 // @Success 200 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/environments/{id} [delete]
 func (h *Handler) Delete(c echo.Context) error {
 	principal, ok := middleware.Principal(c)

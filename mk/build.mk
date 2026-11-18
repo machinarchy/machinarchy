@@ -65,7 +65,7 @@ run-cli: ## Run the CLI, e.g. make run-cli ARGS="get hosts"
 ##@ API documentation
 api-docs: ## Regenerate docs/swagger.{json,yaml} with swag
 	$(call require_tool,$(SWAG),See docs/development/prerequisites.md.)
-	$(SWAG) init -g main.go -d cmd/api,internal/transport/http,internal/domain --parseInternal -o docs --outputTypes json,yaml
+	$(SWAG) init -g main.go -d cmd/api,internal/transport/http,internal/domain,internal/service --parseInternal -o docs --outputTypes json,yaml
 
 ##@ Cleanup
 clean: ## Remove build and coverage artifacts

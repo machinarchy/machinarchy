@@ -18,6 +18,16 @@ import (
 type Handler struct{ service *runtimeconfig.Service }
 
 func NewHandler(s *runtimeconfig.Service) *Handler { return &Handler{service: s} }
+
+// @Summary Get the active runtime configuration
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/runtime-config [get]
 func (h *Handler) Current(c echo.Context) error {
 	r, err := h.service.Current(c.Request().Context())
 	if err != nil {
@@ -25,6 +35,19 @@ func (h *Handler) Current(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]any{"revision": r, "classifications": runtimeconfig.Classifications()})
 }
+
+// @Summary List configuration revisions
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Param before query int false "Return revisions older than this"
+// @Param limit query int false "Page size"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/runtime-config/revisions [get]
 func (h *Handler) List(c echo.Context) error {
 	limit := 100
 	if raw := c.QueryParam("limit"); raw != "" {
@@ -48,6 +71,19 @@ func (h *Handler) List(c echo.Context) error {
 	}
 	return c.JSON(200, rows)
 }
+
+// @Summary Get one configuration revision
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Param revision path int true "Revision"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/runtime-config/revisions/{revision} [get]
 func (h *Handler) Get(c echo.Context) error {
 	v, err := strconv.ParseUint(c.Param("revision"), 10, 64)
 	if err != nil {
@@ -66,6 +102,18 @@ type publishRequest struct {
 	ChangeNote       string               `json:"changeNote,omitempty"`
 }
 
+// @Summary Validate a configuration document
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Param request body object true "{\"config\": {...}}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 422 {object} httperr.Body
+// @Router /api/v1/runtime-config/validate [post]
 func (h *Handler) Validate(c echo.Context) error {
 	var body struct {
 		Config runtimeconfig.Config `json:"config"`
@@ -78,6 +126,20 @@ func (h *Handler) Validate(c echo.Context) error {
 	}
 	return c.JSON(200, map[string]any{"valid": true, "classifications": runtimeconfig.Classifications()})
 }
+
+// @Summary Publish a new configuration revision
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Param request body object true "{\"expectedRevision\", \"config\", \"changeNote\"}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 422 {object} httperr.Body
+// @Router /api/v1/runtime-config [put]
 func (h *Handler) Publish(c echo.Context) error {
 	var req publishRequest
 	if err := decode(c, &req); err != nil {
@@ -96,6 +158,20 @@ func (h *Handler) Publish(c echo.Context) error {
 	}
 	return c.JSON(http.StatusCreated, r)
 }
+
+// @Summary Copy an earlier revision into a new one
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Param request body object true "{\"expectedRevision\", \"targetRevision\", \"changeNote\"}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/runtime-config/rollback [post]
 func (h *Handler) Rollback(c echo.Context) error {
 	var req struct {
 		ExpectedRevision uint64 `json:"expectedRevision"`
@@ -118,6 +194,16 @@ func (h *Handler) Rollback(c echo.Context) error {
 	}
 	return c.JSON(http.StatusCreated, r)
 }
+
+// @Summary Show applied revisions per process
+// @Description Workspace owner, human session only.
+// @Tags Runtime configuration
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/runtime-config/status [get]
 func (h *Handler) Status(c echo.Context) error {
 	rows, err := h.service.Status(c.Request().Context())
 	if err != nil {

@@ -33,10 +33,10 @@ func NewHandler(service domain.AuditService) *Handler {
 // @Param before_id query int false "Only events with a smaller id (paging cursor)"
 // @Param limit query int false "Page size (default 100, maximum 500)"
 // @Success 200 {array} domain.AuditEvent
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/audit/events [get]
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
@@ -72,9 +72,9 @@ func (h *Handler) List(c echo.Context) error {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} domain.AuditVerification
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/audit/verify [get]
 func (h *Handler) Verify(c echo.Context) error {
 	principal, ok := middleware.Principal(c)

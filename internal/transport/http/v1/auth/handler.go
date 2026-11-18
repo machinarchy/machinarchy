@@ -93,10 +93,10 @@ func clearAuthCookie(c echo.Context, secure bool) {
 // @Produce json
 // @Param request body SignUpRequest true "Account details"
 // @Success 201 {object} domain.AuthTokenResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 409 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/auth/signup [post]
 func (h *Handler) SignUp(c echo.Context) error {
 	enabled := h.signupEnabled.Load()
@@ -148,9 +148,9 @@ func (h *Handler) SignUp(c echo.Context) error {
 // @Produce json
 // @Param request body LoginRequest true "Credentials"
 // @Success 200 {object} domain.AuthTokenResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 401 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/auth/login [post]
 func (h *Handler) Login(c echo.Context) error {
 	var req LoginRequest
@@ -185,8 +185,8 @@ func (h *Handler) Login(c echo.Context) error {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} domain.UserResponse
-// @Failure 401 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
+// @Failure 401 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
 // @Router /api/v1/me [get]
 func (h *Handler) GetMe(c echo.Context) error {
 	username, ok := c.Get("username").(string)
