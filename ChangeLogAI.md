@@ -1,5 +1,21 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: managed-resource use cases end to end (branch audit/tests-2)
+
+- `internal/service/managed_flow_test.go` (new): the managed-resource service on real SQLite stores and a real Secret Store, with owner, operator and reader members. It covers:
+  - Access Profiles: owner-only create, update and delete; a profile pointing at a missing secret is refused; readers see only the secret reference;
+  - Hosts: create needs `inventory:write`; selector listing and an invalid selector; labels need the right revision and `inventory:write`;
+  - Operations:
+    - preview, then submit refused while execution is disabled, for readers, for a stale reviewed-target hash, for a rule matching nothing, for a rule that includes an unbound host, and for a program outside the allowlist;
+    - a successful submit;
+    - listing;
+    - cancel (readers refused, a repeat cancel is idempotent);
+  - deletion: revision checks; deleting a profile still used by a host gives `ErrConflict`, and it works once unused.
+
+### Verification
+
+- `go test -race -cover ./internal/service/`: **81.2%** (28.9% at the start of the phase). golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: runtime configuration tests (branch audit/tests-2)
 
 - `internal/runtimeconfig/service_test.go` (new, on a real SQLite repository):
