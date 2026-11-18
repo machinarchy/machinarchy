@@ -67,6 +67,12 @@ type Server struct {
 	limiter        *custommw.RateLimiter
 	readiness      []ReadinessChecker
 	alive          atomic.Bool
+
+	// metricsServer serves /metrics on its own listener when configured
+	// (AUDIT S-17); /metrics is then absent from the API listener.
+	metricsServer *http.Server
+	metricsAddr   string
+	metricsBound  string // actual address once bound, for logs and tests
 }
 
 // NewServer builds the HTTP adapter from domain ports and operational health checks.
@@ -132,13 +138,10 @@ func NewServer(
 		}, dependencies...),
 	}
 	s.alive.Store(true)
-	e.GET("/healthz", s.liveHandler)
-	e.GET("/healthz/live", s.liveHandler)
-	e.GET("/healthz/ready", s.readyHandler)
-	e.GET("/metrics", s.metricsEndpoint)
-	e.GET("/openapi.json", echo.WrapHandler(docs.SpecHandler()))
-	e.GET("/scalar", s.scalarReferenceHandler)
-	e.GET("/scalar/init.js", s.scalarInitHandler)
+	s.registerOperationalRoutes(e, cfg.APIDocsEnabled, cfg.MetricsListenAddr == "")
+	if cfg.MetricsListenAddr != "" {
+		s.useMetricsListener(cfg.MetricsListenAddr)
+	}
 
 	api := e.Group("/api", limiter.Middleware(), requestDeadline(RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
@@ -159,6 +162,44 @@ func NewServer(
 		return nil, err
 	}
 	return s, nil
+}
+
+// registerOperationalRoutes adds the unauthenticated routes of the API
+// listener: health always, metrics unless they have their own listener, and
+// the OpenAPI spec and reference only when API docs are enabled (AUDIT S-17).
+func (s *Server) registerOperationalRoutes(e *echo.Echo, apiDocs, metrics bool) {
+	e.GET("/healthz", s.liveHandler)
+	e.GET("/healthz/live", s.liveHandler)
+	e.GET("/healthz/ready", s.readyHandler)
+	if metrics {
+		e.GET("/metrics", s.metricsEndpoint)
+	}
+	if apiDocs {
+		e.GET("/openapi.json", echo.WrapHandler(docs.SpecHandler()))
+		e.GET("/scalar", s.scalarReferenceHandler)
+		e.GET("/scalar/init.js", s.scalarInitHandler)
+	}
+}
+
+// useMetricsListener serves /metrics, and nothing else, on address. It is
+// bound and drained together with the API listener.
+func (s *Server) useMetricsListener(address string) {
+	s.metricsAddr = address
+	s.metricsServer = &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/metrics" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+				http.NotFound(w, r)
+				return
+			}
+			s.metricsHandler.ServeHTTP(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+	}
 }
 
 // NewOperationsServer creates health and metrics endpoints for a background
@@ -321,6 +362,20 @@ func (s *Server) StartWithReady(address string, ready func()) error {
 		return fmt.Errorf("listen on %q: %w", address, err)
 	}
 	s.httpServer.Addr = address
+	if s.metricsServer != nil {
+		metricsListener, err := net.Listen("tcp", s.metricsAddr)
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("listen for metrics on %q: %w", s.metricsAddr, err)
+		}
+		s.metricsBound = metricsListener.Addr().String()
+		slog.Info("metrics listening", "address", s.metricsBound)
+		go func() {
+			if err := s.metricsServer.Serve(metricsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("metrics listener stopped", "error", err)
+			}
+		}()
+	}
 	if ready != nil {
 		ready()
 	}
@@ -343,11 +398,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer == nil {
 		return nil
 	}
+	var metricsErr error
+	if s.metricsServer != nil {
+		if err := s.metricsServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			metricsErr = errors.Join(fmt.Errorf("shutdown metrics listener: %w", err), s.metricsServer.Close())
+		}
+	}
 	if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		closeErr := s.httpServer.Close()
-		return errors.Join(fmt.Errorf("shutdown HTTP server: %w", err), closeErr)
+		return errors.Join(fmt.Errorf("shutdown HTTP server: %w", err), closeErr, metricsErr)
 	}
-	return nil
+	return metricsErr
 }
 
 func validateReadinessCheckers(checks []ReadinessChecker) error {

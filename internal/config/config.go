@@ -70,6 +70,8 @@ type DatabaseConfig struct {
 // Config holds the overall application configuration, including server settings, database configuration, and other operational parameters.
 type Config struct {
 	ListenAddr             string
+	MetricsListenAddr      string // when set, /metrics is served only here, not on ListenAddr
+	APIDocsEnabled         bool   // serve /openapi.json and /scalar
 	Environment            Environment
 	SignupEnabled          bool
 	OperatorToken          string
@@ -171,6 +173,9 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--environment":    "MACHINARCHY_ENVIRONMENT",
 		"--log-level":      "MACHINARCHY_LOG_LEVEL",
 		"--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED",
+
+		"--metrics-listen-addr": "MACHINARCHY_METRICS_LISTEN_ADDR",
+		"--api-docs-enabled":    "MACHINARCHY_API_DOCS_ENABLED",
 
 		"--database-engine":            "MACHINARCHY_DATABASE_ENGINE",
 		"--database-path":              "MACHINARCHY_DATABASE_PATH",
@@ -282,6 +287,26 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 
 	if err := validateListenAddr(cfg.ListenAddr); err != nil {
 		return Config{}, err
+	}
+
+	// Operational endpoints on the public listener (AUDIT S-17). The API
+	// reference loads a third-party script and the spec maps every route, so
+	// both are off in production unless enabled. Metrics can move to their own
+	// listener so the API port exposes nothing unauthenticated but health.
+	apiDocsDefault := "false"
+	if cfg.Environment == Development {
+		apiDocsDefault = "true"
+	}
+	apiDocsEnabled, err := strconv.ParseBool(get("MACHINARCHY_API_DOCS_ENABLED", apiDocsDefault))
+	if err != nil {
+		return Config{}, errors.New("MACHINARCHY_API_DOCS_ENABLED must be true or false")
+	}
+	cfg.APIDocsEnabled = apiDocsEnabled
+	cfg.MetricsListenAddr = get("MACHINARCHY_METRICS_LISTEN_ADDR", "")
+	if cfg.MetricsListenAddr != "" {
+		if err := validateMetricsListenAddr(cfg.MetricsListenAddr, cfg.ListenAddr); err != nil {
+			return Config{}, err
+		}
 	}
 
 	// Configuration loading returns errors to the caller; it must never exit the
@@ -543,6 +568,19 @@ func validateListenAddr(address string) error {
 	port, err := strconv.Atoi(rawPort)
 	if err != nil || port < 1 || port > 65535 {
 		return errors.New("MACHINARCHY_LISTEN_ADDR port configuration out of structural boundaries [1-65535]")
+	}
+	return nil
+}
+
+func validateMetricsListenAddr(address, apiAddress string) error {
+	_, rawPort, err := net.SplitHostPort(address)
+	port, convErr := strconv.Atoi(rawPort)
+	if err != nil || convErr != nil || port < 1 || port > 65535 {
+		return errors.New("MACHINARCHY_METRICS_LISTEN_ADDR must be host:port with a port in 1-65535 (e.g. :9090)")
+	}
+	// apiAddress was validated before this is called.
+	if _, apiPort, err := net.SplitHostPort(apiAddress); err == nil && rawPort == apiPort {
+		return errors.New("MACHINARCHY_METRICS_LISTEN_ADDR must use a different port from MACHINARCHY_LISTEN_ADDR")
 	}
 	return nil
 }

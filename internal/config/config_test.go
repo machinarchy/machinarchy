@@ -16,6 +16,8 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_LISTEN_ADDR":                "",
 		"MACHINARCHY_ENVIRONMENT":                "development",
 		"MACHINARCHY_SIGNUP_ENABLED":             "",
+		"MACHINARCHY_API_DOCS_ENABLED":           "",
+		"MACHINARCHY_METRICS_LISTEN_ADDR":        "",
 		"MACHINARCHY_DATABASE_ENGINE":            "sqlite",
 		"MACHINARCHY_DATABASE_PATH":              "",
 		"MACHINARCHY_DATABASE_URL":               "",
@@ -460,4 +462,43 @@ func TestLoadAgentGateway(t *testing.T) {
 			t.Fatalf("tls:// in production: %v", err)
 		}
 	})
+}
+
+func TestLoadOperationalEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		env         map[string]string
+		wantDocs    bool
+		wantMetrics string
+		wantErr     string
+	}{
+		{name: "development serves docs", env: map[string]string{}, wantDocs: true},
+		{name: "production hides docs", env: map[string]string{"MACHINARCHY_ENVIRONMENT": "production"}},
+		{name: "production opt-in", env: map[string]string{"MACHINARCHY_ENVIRONMENT": "production", "MACHINARCHY_API_DOCS_ENABLED": "true"}, wantDocs: true},
+		{name: "development opt-out", env: map[string]string{"MACHINARCHY_API_DOCS_ENABLED": "false"}},
+		{name: "bad docs flag", env: map[string]string{"MACHINARCHY_API_DOCS_ENABLED": "maybe"}, wantErr: "MACHINARCHY_API_DOCS_ENABLED"},
+		{name: "separate metrics listener", env: map[string]string{"MACHINARCHY_METRICS_LISTEN_ADDR": "127.0.0.1:9090"}, wantDocs: true, wantMetrics: "127.0.0.1:9090"},
+		{name: "metrics on the API port", env: map[string]string{"MACHINARCHY_METRICS_LISTEN_ADDR": ":8080"}, wantErr: "different port"},
+		{name: "metrics address without port", env: map[string]string{"MACHINARCHY_METRICS_LISTEN_ADDR": "localhost"}, wantErr: "MACHINARCHY_METRICS_LISTEN_ADDR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setCommonEnv(t)
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.APIDocsEnabled != tc.wantDocs || cfg.MetricsListenAddr != tc.wantMetrics {
+				t.Fatalf("docs=%v metrics=%q, want %v %q", cfg.APIDocsEnabled, cfg.MetricsListenAddr, tc.wantDocs, tc.wantMetrics)
+			}
+		})
+	}
 }

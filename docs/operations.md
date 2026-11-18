@@ -32,6 +32,8 @@ keyring file, and the agent gateway key and enrollment token.
 | Setting | Notes |
 |---|---|
 | `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
+| `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |
+| `MACHINARCHY_API_DOCS_ENABLED` | Serve `/openapi.json` and the `/scalar` reference. Default `true` in development, `false` in production. |
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | One budget (default 25s) for HTTP drain, worker drain and closing the database. Keep it below the orchestrator grace period. |
 | `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set; the program list is re-checked when each Operation runs. |
 | `MACHINARCHY_SSH_*` | Egress policy: private ranges, loopback and all ports are denied unless allowed. |
@@ -108,7 +110,9 @@ host is contacted.
 
 ## Metrics
 
-Every process serves `/metrics`:
+Every process serves `/metrics`: on the API port by default, or only on
+`MACHINARCHY_METRICS_LISTEN_ADDR` when that is set (API and monolith). The
+Control Manager's operations listener is never public.
 
 | Metric | Meaning |
 |---|---|

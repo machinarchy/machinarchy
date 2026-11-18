@@ -1,5 +1,23 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 11: API docs and metrics off the public listener (branch audit/http-hardening)
+
+**Behaviour change:** in production, `/openapi.json`, `/scalar` and `/scalar/init.js` are no longer served unless `MACHINARCHY_API_DOCS_ENABLED=true`.
+
+- `internal/config/config.go`: new `MACHINARCHY_API_DOCS_ENABLED` (`--api-docs-enabled`; default `true` in development, `false` in production) and `MACHINARCHY_METRICS_LISTEN_ADDR` (`--metrics-listen-addr`; must be host:port on a different port from the API).
+- `internal/transport/http/server.go`: `registerOperationalRoutes` serves health always, `/metrics` only when there is no separate metrics listener, and the docs only when enabled. `useMetricsListener` binds a second listener that serves `/metrics` and nothing else. It is bound before readiness is signalled and shut down within the same budget as the API listener (AUDIT S-17).
+- `docs/operations.md`, `README.md`, `.env.example`: the two settings.
+
+### Verification
+
+- `go test -race ./internal/transport/http/ ./internal/config/`: pass. New tests: `TestOperationalRoutesFollowConfiguration` (4 combinations), `TestMetricsListenerServesOnlyMetrics` (serves metrics, 404 for anything else, closed after shutdown) and `TestLoadOperationalEndpoints` (8 cases).
+- golangci-lint on the changed packages: 0 issues. The first commit attempt had 2 (an unclosed response body in a test, and an unchecked `SplitHostPort`); both were fixed before amending.
+- Manual: a production monolith on SQLite with `MACHINARCHY_METRICS_LISTEN_ADDR=127.0.0.1:19090`:
+  - the API port answered `/healthz/ready` 200, and `/metrics`, `/openapi.json` and `/scalar` 404;
+  - `/api/v1/me` returned 401 with HSTS, `no-store` and the deny-all CSP;
+  - the metrics port served `/metrics` 200 and `/healthz/live` 404;
+  - SIGTERM: exit 0, and both ports closed.
+
 ## 2026-11-18 — Audit Phase 11: security headers and API reference policy (branch audit/http-hardening)
 
 - `internal/transport/http/middleware/headers.go` (new): `SecurityHeaders` sets `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, same-origin COOP and CORP, and a deny-all CSP on every response. HSTS is added in production only. `/api` responses add `Cache-Control: no-store`. It is used by the API server and by the operations server (AUDIT S-16).

@@ -121,6 +121,8 @@ startup. Secrets are accepted only from the environment or `0600` files.
 | `MACHINARCHY_ENVIRONMENT` | `production` (default: secure cookies, explicit CORS, verified DB TLS, TLS to NATS) or `development`. |
 | `MACHINARCHY_DATABASE_ENGINE`, `_PATH`, `_URL` | `sqlite` (default, `./data/machinarchy.db`) or `postgres`. |
 | `MACHINARCHY_LISTEN_ADDR` | Default `:8080`. |
+| `MACHINARCHY_METRICS_LISTEN_ADDR` | Optional separate listener for `/metrics` (recommended in production). |
+| `MACHINARCHY_API_DOCS_ENABLED` | `/openapi.json` and `/scalar`; on in development, off in production by default. |
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | Total graceful-shutdown budget, default 25s. |
 | `MACHINARCHY_EXECUTION_ENABLED`, `_ALLOWED_PROGRAMS` | Command execution is off by default. |
 | `MACHINARCHY_SSH_*` | SSH egress policy (deny by default). |
@@ -150,7 +152,8 @@ the [runbook](docs/runbook.md) for failure modes, and [security](docs/SECURITY.m
 ## API
 
 The OpenAPI document is generated from handler annotations (`make api-docs`)
-and served at `/openapi.json`; a test fails when a route is missing from it.
+and served at `/openapi.json` (with a reference at `/scalar`) when
+`MACHINARCHY_API_DOCS_ENABLED` is on; a test fails when a route is missing from it.
 Errors are `{"error": "...", "code": "..."}`, lists are
 `{"items": [...], "nextCursor": "..."}`.
 
