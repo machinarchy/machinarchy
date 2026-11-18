@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 11: security headers and API reference policy (branch audit/http-hardening)
+
+- `internal/transport/http/middleware/headers.go` (new): `SecurityHeaders` sets `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, same-origin COOP and CORP, and a deny-all CSP on every response. HSTS is added in production only. `/api` responses add `Cache-Control: no-store`. It is used by the API server and by the operations server (AUDIT S-16).
+- `internal/transport/http/scalar.go`: the reference page has its own CSP (scripts only from this origin and the pinned `@scalar/api-reference@1.75.0` file, no inline scripts). The init code moved to `/scalar/init.js`, and Scalar's telemetry and web fonts (`fonts.scalar.com`) are off (AUDIT S-11). SRI is not added: computing the hash needs the file, and fetching it was out of scope.
+- `docs/operations.md`: new "Security headers" section.
+
+### Verification
+
+- `go test ./internal/transport/http/ ./internal/transport/http/middleware/`: pass (new `TestSecurityHeaders`, `TestSecurityHeadersCanBeOverriddenByHandler`, `TestScalarReferencePolicy`).
+- golangci-lint on `internal/transport/http/...`: 0 issues.
+- Manual: a development monolith served `/scalar` in the browser pane. The reference rendered the spec, and the console showed no CSP violations once the web fonts were disabled. Before that, only the 14 font loads from `fonts.scalar.com` were blocked.
+
 ## 2026-11-18 — Audit follow-up: e2e requires exit 78 from a revoked agent (branch audit/followup)
 
 - `test/e2e/agent_test.go`: after revocation the test now waits for the agent to exit by itself and requires exit status 78 (machinarchy-agent `5ec5beb`, AUDIT/09 F9-02). Before, it accepted any exit, and usually stopped the agent with SIGTERM before it noticed. **CI's `MACHINARCHY_AGENT_REF` must point at an agent revision that includes `5ec5beb`.**

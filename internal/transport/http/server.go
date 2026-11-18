@@ -115,6 +115,7 @@ func NewServer(
 	e.Use(echomw.Recover())
 	e.Use(echomw.RequestID())
 	e.Use(custommw.Logging())
+	e.Use(custommw.SecurityHeaders(cfg.Environment == config.Production))
 	e.Use(custommw.CORS(origins))
 
 	registry := prometheus.NewRegistry()
@@ -137,6 +138,7 @@ func NewServer(
 	e.GET("/metrics", s.metricsEndpoint)
 	e.GET("/openapi.json", echo.WrapHandler(docs.SpecHandler()))
 	e.GET("/scalar", s.scalarReferenceHandler)
+	e.GET("/scalar/init.js", s.scalarInitHandler)
 
 	api := e.Group("/api", limiter.Middleware(), requestDeadline(RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
@@ -206,6 +208,7 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 	e.Use(echomw.Recover())
 	e.Use(echomw.RequestID())
 	e.Use(custommw.Logging())
+	e.Use(custommw.SecurityHeaders(false))
 
 	s := &Server{
 		registry:       registry,

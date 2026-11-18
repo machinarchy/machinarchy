@@ -91,6 +91,21 @@ database and, where they run, the Control Manager's startup recovery and the
 agent gateway's NATS connection: an outage makes the pod unready without
 restarting it.
 
+## Security headers
+
+Every response carries `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, same-origin
+`Cross-Origin-Opener-Policy` and `-Resource-Policy`, and a deny-all
+`Content-Security-Policy`. In production, responses also carry
+`Strict-Transport-Security` (one year, subdomains): terminate TLS in front of
+machinarchy and do not serve it on plain HTTP. Responses under `/api` add
+`Cache-Control: no-store`.
+
+The API reference page (`/scalar`) has its own policy. It allows only scripts
+from this origin and the version-pinned Scalar file on cdn.jsdelivr.net, and
+no inline scripts. Scalar's web fonts are turned off, so no other third-party
+host is contacted.
+
 ## Metrics
 
 Every process serves `/metrics`:
