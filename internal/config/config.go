@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,7 +82,25 @@ type Config struct {
 	BootstrapAdmin         BootstrapAdminConfig
 	SSHTargetPolicy        netpolicy.Policy
 	Execution              domain.ExecutionPolicy
+	AgentGateway           AgentGatewayConfig
 }
+
+// AgentGatewayConfig enables the controller side of the agent protocol. The
+// gateway is off unless NATSURL is set.
+type AgentGatewayConfig struct {
+	NATSURL             string
+	SigningKeySeed      []byte // 32-byte Ed25519 seed
+	EnrollmentToken     string
+	NATSCredentialsFile string
+	NATSCAFile          string
+	NATSCertFile        string
+	NATSKeyFile         string
+	LeaseTTL            time.Duration
+	Heartbeat           time.Duration
+}
+
+// Enabled reports whether the gateway is configured.
+func (c AgentGatewayConfig) Enabled() bool { return c.NATSURL != "" }
 
 // BootstrapAdminConfig describes the optional first owner account. The account is
 // only created when the default workspace has no owner, so leaving the password
@@ -342,6 +361,10 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	}
 	cfg.Execution = execution
 
+	if cfg.AgentGateway, err = loadAgentGateway(get, cfg.Environment); err != nil {
+		return Config{}, err
+	}
+
 	// Log System Levels Check
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -537,4 +560,63 @@ func readSecretFile(path, setting string) ([]byte, error) {
 		return nil, fmt.Errorf("unable to read the file named by %s", setting)
 	}
 	return data, nil
+}
+
+// loadAgentGateway reads MACHINARCHY_AGENT_GATEWAY_*. All key material comes
+// from 0600 files. Production requires TLS to NATS (a tls:// URL or a CA file).
+func loadAgentGateway(get func(string, ...string) string, environment Environment) (AgentGatewayConfig, error) {
+	cfg := AgentGatewayConfig{NATSURL: strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_URL"))}
+	if cfg.NATSURL == "" {
+		return cfg, nil
+	}
+	parsed, err := url.Parse(cfg.NATSURL)
+	if err != nil || (parsed.Scheme != "nats" && parsed.Scheme != "tls") || parsed.Host == "" {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_URL must be a nats:// or tls:// URL")
+	}
+	if parsed.User != nil {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_URL must not embed credentials; use MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE")
+	}
+	cfg.NATSCredentialsFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE"))
+	cfg.NATSCAFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_CA_FILE"))
+	cfg.NATSCertFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_CERT_FILE"))
+	cfg.NATSKeyFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_KEY_FILE"))
+	if (cfg.NATSCertFile == "") != (cfg.NATSKeyFile == "") {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_CERT_FILE and _KEY_FILE must be set together")
+	}
+	if environment == Production && parsed.Scheme != "tls" && cfg.NATSCAFile == "" {
+		return cfg, errors.New("production requires TLS to NATS: use a tls:// URL or set MACHINARCHY_AGENT_GATEWAY_NATS_CA_FILE")
+	}
+	keyFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE"))
+	if keyFile == "" {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE is required when the agent gateway is enabled")
+	}
+	raw, err := readSecretFile(keyFile, "MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE")
+	if err != nil {
+		return cfg, err
+	}
+	if cfg.SigningKeySeed, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err != nil || len(cfg.SigningKeySeed) != 32 {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE must hold a base64-encoded 32-byte Ed25519 seed (openssl rand -base64 32)")
+	}
+	tokenFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE"))
+	if tokenFile == "" {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE is required when the agent gateway is enabled")
+	}
+	token, err := readSecretFile(tokenFile, "MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE")
+	if err != nil {
+		return cfg, err
+	}
+	cfg.EnrollmentToken = strings.TrimSpace(string(token))
+	if len(cfg.EnrollmentToken) < 32 || len(cfg.EnrollmentToken) > 256 || strings.ContainsAny(cfg.EnrollmentToken, " \t\r\n") {
+		return cfg, errors.New("the agent enrollment token must be 32 to 256 characters without whitespace")
+	}
+	if cfg.LeaseTTL, err = parseDurationBounds(get("MACHINARCHY_AGENT_GATEWAY_LEASE_TTL", "60s"), "MACHINARCHY_AGENT_GATEWAY_LEASE_TTL", false); err != nil {
+		return cfg, err
+	}
+	if cfg.Heartbeat, err = parseDurationBounds(get("MACHINARCHY_AGENT_GATEWAY_HEARTBEAT", "15s"), "MACHINARCHY_AGENT_GATEWAY_HEARTBEAT", false); err != nil {
+		return cfg, err
+	}
+	if cfg.Heartbeat < 5*time.Second || cfg.Heartbeat*2 > cfg.LeaseTTL {
+		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_HEARTBEAT must be at least 5s and at most half the lease TTL")
+	}
+	return cfg, nil
 }

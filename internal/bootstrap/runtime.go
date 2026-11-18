@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/agentgateway"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/controlmanager"
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -40,6 +43,11 @@ type Runtime struct {
 	operationSecrets *secrets.Service
 	configCancel     context.CancelFunc
 	configWG         sync.WaitGroup
+	// metrics collects component metrics (agent gateway, workers) that every
+	// server of this process also serves on /metrics.
+	metrics        *prometheus.Registry
+	agentGateway   *agentgateway.Gateway
+	agentPublicKey string
 }
 
 // Open initializes the shared persistence infrastructure for the API and the
@@ -163,9 +171,15 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	if err != nil {
 		return nil, err
 	}
+	metrics := prometheus.NewRegistry()
+	gateway, publicKey, err := newAgentGateway(cfg.AgentGateway, stores, metrics)
+	if err != nil {
+		return nil, errors.Join(err, wrapCloseError("close datastore after agent gateway failure", stores.Close()))
+	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	runtime := &Runtime{stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
-		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout}
+		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout,
+		metrics: metrics, agentGateway: gateway, agentPublicKey: publicKey}
 	runtime.configWG.Add(1)
 	go func() {
 		defer runtime.configWG.Done()
@@ -335,6 +349,8 @@ func (r *Runtime) NewAPIServer(
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
+		Agents:         r.stores.Agents,
+		AgentPublicKey: r.agentPublicKey,
 		SignupEnabled: func() bool {
 			if snapshot, ok := r.configuration.Snapshot(); ok {
 				return snapshot.Revision.Config.Features.SignupEnabled
@@ -343,7 +359,15 @@ func (r *Runtime) NewAPIServer(
 		},
 	}
 
-	return httpserver.NewServer(cfg, authService, repositories, r.stores, additionalReadiness...)
+	if r.agentGateway != nil {
+		repositories.AgentGateway = r.agentGateway // only when present: a nil pointer in the interface is not nil
+	}
+	server, err := httpserver.NewServer(cfg, authService, repositories, r.stores, additionalReadiness...)
+	if err != nil {
+		return nil, err
+	}
+	server.AddMetrics(r.metrics)
+	return server, nil
 }
 
 // NewControlManagerOperationsServer creates the HTTP surface used for worker
@@ -354,7 +378,16 @@ func (r *Runtime) NewControlManagerOperationsServer(
 	if r == nil || r.stores == nil {
 		return nil, errors.New("runtime is not initialized")
 	}
-	return httpserver.NewOperationsServer(r.stores, engine)
+	readiness := []httpserver.ReadinessChecker{engine}
+	if r.agentGateway != nil {
+		readiness = append(readiness, r.agentGateway)
+	}
+	server, err := httpserver.NewOperationsServer(r.stores, readiness...)
+	if err != nil {
+		return nil, err
+	}
+	server.AddMetrics(r.metrics)
+	return server, nil
 }
 
 // ConfigureLogging installs the common structured JSON logger.
@@ -470,3 +503,9 @@ func (r *Runtime) ensureOwner(parent context.Context, cfg config.Config) error {
 	}
 	return nil
 }
+
+// AgentGateway returns the configured gateway, or nil.
+func (r *Runtime) AgentGateway() *agentgateway.Gateway { return r.agentGateway }
+
+// Metrics returns the registry for component metrics of this process.
+func (r *Runtime) Metrics() *prometheus.Registry { return r.metrics }

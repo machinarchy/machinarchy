@@ -326,3 +326,22 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER access_profile_delete_reference_guard
 BEFORE UPDATE OF deleted_at ON access_profiles
 FOR EACH ROW EXECUTE FUNCTION machinarchy_guard_access_profile_delete();
+
+-- Host agents enrolled through the agent gateway (protocol/agentv1).
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    workspace_id BIGINT NOT NULL REFERENCES workspaces(id),
+    request_id TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL UNIQUE,
+    hostname TEXT NOT NULL,
+    agent_version TEXT NOT NULL,
+    os TEXT NOT NULL,
+    architecture TEXT NOT NULL,
+    capabilities TEXT NOT NULL DEFAULT '[]',
+    lease_id TEXT NOT NULL,
+    lease_expires_at TEXT NOT NULL,
+    registered_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX idx_agents_workspace ON agents(workspace_id, id);

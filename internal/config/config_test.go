@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -383,4 +384,80 @@ func TestLoadShutdownTimeout(t *testing.T) {
 			t.Fatalf("MACHINARCHY_SHUTDOWN_TIMEOUT=%q accepted", bad)
 		}
 	}
+}
+
+// TestLoadAgentGateway covers the agent gateway settings: off by default,
+// key material only from 0600 files, TLS required in production.
+func TestLoadAgentGateway(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string, mode os.FileMode) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	seed := write("seed", base64.StdEncoding.EncodeToString(make([]byte, 32)), 0o600)
+	token := write("token", strings.Repeat("t", 40), 0o600)
+	open := write("open-seed", base64.StdEncoding.EncodeToString(make([]byte, 32)), 0o644)
+	short := write("short-token", "short", 0o600)
+
+	setCommonEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.AgentGateway.Enabled() {
+		t.Fatalf("default = %+v, %v; want disabled", cfg.AgentGateway, err)
+	}
+
+	valid := map[string]string{
+		"MACHINARCHY_AGENT_GATEWAY_NATS_URL":              "nats://127.0.0.1:4222",
+		"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE":      seed,
+		"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": token,
+	}
+	for name, tc := range map[string]struct {
+		override map[string]string
+		ok       bool
+	}{
+		"valid":              {nil, true},
+		"bad scheme":         {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_URL": "http://x:4222"}, false},
+		"credentials in url": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_URL": "nats://u:p@x:4222"}, false},
+		"no key":             {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": ""}, false},
+		"world-readable key": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": open}, false},
+		"short token":        {map[string]string{"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": short}, false},
+		"heartbeat too long": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_HEARTBEAT": "40s"}, false},
+		"cert without key":   {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_CERT_FILE": "/c"}, false},
+		"custom lease":       {map[string]string{"MACHINARCHY_AGENT_GATEWAY_LEASE_TTL": "2m", "MACHINARCHY_AGENT_GATEWAY_HEARTBEAT": "30s"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setCommonEnv(t)
+			for k, v := range valid {
+				t.Setenv(k, v)
+			}
+			for k, v := range tc.override {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load()
+			if (err == nil) != tc.ok {
+				t.Fatalf("Load() error = %v, want ok=%v", err, tc.ok)
+			}
+			if tc.ok && (!cfg.AgentGateway.Enabled() || len(cfg.AgentGateway.SigningKeySeed) != 32) {
+				t.Fatalf("gateway config = %+v", cfg.AgentGateway)
+			}
+		})
+	}
+
+	t.Run("production requires TLS", func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_ENVIRONMENT", "production")
+		t.Setenv("MACHINARCHY_ENCRYPTION_SECRET", "abcdef0123456789abcdef0123456789")
+		for k, v := range valid {
+			t.Setenv(k, v)
+		}
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TLS") {
+			t.Fatalf("plain NATS in production: %v", err)
+		}
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_URL", "tls://nats.example:4222")
+		if _, err := Load(); err != nil && strings.Contains(err.Error(), "AGENT_GATEWAY") {
+			t.Fatalf("tls:// in production: %v", err)
+		}
+	})
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
 	"github.com/machinarchy/machinarchy/internal/store/accounts"
+	"github.com/machinarchy/machinarchy/internal/store/agents"
 	"github.com/machinarchy/machinarchy/internal/store/management"
 	"github.com/machinarchy/machinarchy/internal/store/postgres"
 	"github.com/machinarchy/machinarchy/internal/store/resources"
@@ -57,6 +58,7 @@ type Stores struct {
 	Outbox           eventing.OutboxStore
 	ResourceLeases   resource.LeaseStore
 	Management       *management.Store
+	Agents           *agents.Store
 }
 
 // Open initializes the configured storage backends using the provided context
@@ -152,6 +154,9 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 	stores.Users, stores.Access, stores.Environments, stores.Audit = accountStore, accountStore, accountStore, accountStore
 	stores.ResourceHosts, stores.ResourceProfiles, stores.Operations = resourceStore, resourceStore, resourceStore
 	stores.Outbox, stores.ResourceLeases = resourceStore, resourceStore
+	if stores.Agents, err = agents.New(db, dialect, accountStore.AppendAudit, slog.Default()); err != nil {
+		return fail(err)
+	}
 	managementStore, err := management.New(db, dialect, slog.Default())
 	if err != nil {
 		return fail(fmt.Errorf("initialize configuration and Secret Store repositories: %w", err))

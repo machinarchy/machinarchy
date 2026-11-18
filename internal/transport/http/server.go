@@ -61,6 +61,7 @@ func (c readinessCheck) CheckReadiness(ctx context.Context) error {
 
 // Server owns the HTTP listener and its process-local middleware resources.
 type Server struct {
+	registry       *prometheus.Registry
 	httpServer     *http.Server
 	metricsHandler http.Handler
 	limiter        *custommw.RateLimiter
@@ -122,6 +123,7 @@ func NewServer(
 
 	metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	s := &Server{
+		registry:       registry,
 		metricsHandler: metricsHandler,
 		limiter:        limiter,
 		readiness: append([]ReadinessChecker{
@@ -206,6 +208,7 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 	e.Use(custommw.Logging())
 
 	s := &Server{
+		registry:       registry,
 		metricsHandler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 		readiness:      readiness,
 	}
@@ -274,6 +277,15 @@ func (s *Server) readyHandler(c echo.Context) error {
 		state = "not_ready"
 	}
 	return c.JSON(status, echo.Map{"status": state, "checks": statuses})
+}
+
+// AddMetrics also serves the collectors of component (background worker,
+// agent gateway, Control Manager) on /metrics. Call it before serving.
+func (s *Server) AddMetrics(component prometheus.Gatherer) {
+	if s == nil || component == nil {
+		return
+	}
+	s.metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{s.registry, component}, promhttp.HandlerOpts{})
 }
 
 // metricsEndpoint serves Prometheus metrics.

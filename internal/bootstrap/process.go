@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	httpserver "github.com/machinarchy/machinarchy/internal/transport/http"
+
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/telemetry"
 )
@@ -55,7 +57,7 @@ func RunControlManager(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
 		}
-		return server, combinedWorkers{engine, operations}, nil
+		return server, runtime.backgroundWorkers(engine, operations), nil
 	})
 }
 
@@ -67,7 +69,11 @@ func RunMonolith(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct control manager: %w", err)
 		}
-		server, err := runtime.NewAPIServer(ctx, cfg, engine)
+		readiness := []httpserver.ReadinessChecker{engine}
+		if gateway := runtime.AgentGateway(); gateway != nil {
+			readiness = append(readiness, gateway)
+		}
+		server, err := runtime.NewAPIServer(ctx, cfg, readiness...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct API server: %w", err)
 		}
@@ -75,11 +81,20 @@ func RunMonolith(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
 		}
-		return server, combinedWorkers{engine, operations}, nil
+		return server, runtime.backgroundWorkers(engine, operations), nil
 	})
 }
 
 type combinedWorkers []workerLifecycle
+
+// backgroundWorkers is the Control Manager role's worker set: the engine, the
+// Operation worker and, when configured, the agent gateway.
+func (r *Runtime) backgroundWorkers(workers ...workerLifecycle) combinedWorkers {
+	if r.agentGateway != nil {
+		workers = append(workers, r.agentGateway)
+	}
+	return combinedWorkers(workers)
+}
 
 func (workers combinedWorkers) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)

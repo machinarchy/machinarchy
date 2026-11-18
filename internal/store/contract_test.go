@@ -1,7 +1,9 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -16,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/machinarchy/machinarchy/internal/agentgateway"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -185,6 +189,7 @@ var contractTests = []struct {
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
+	{"agents", testAgents},
 }
 
 func TestStoreContract(t *testing.T) {
@@ -769,5 +774,54 @@ func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 	result, err := f.stores.Audit.VerifyAuditChain(context.Background(), 1)
 	if err != nil || !result.Valid || result.Events != patches+1 {
 		t.Fatalf("the chain forked or broke under concurrency: %+v, %v", result, err)
+	}
+}
+
+// testAgents covers the agent gateway store: idempotent registration, lease
+// renewal, revocation and the audit trail, on both dialects.
+func testAgents(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)).Public().(ed25519.PublicKey)
+	agent := agentgateway.Agent{ID: "agent-1", Hostname: "web-01", AgentVersion: "1.0.0", OS: "linux", Architecture: "amd64",
+		Capabilities: []string{"runtime.info"}, PublicKey: key, LeaseID: "lease-1", LeaseExpiresAt: now.Add(time.Minute),
+		RegisteredAt: now, LastSeenAt: now}
+	first, err := f.stores.Agents.RegisterAgent(ctx, agent, "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := agent
+	retry.ID = "agent-2"
+	again, err := f.stores.Agents.RegisterAgent(ctx, retry, "req-1")
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("retried registration = %+v, %v; want the first agent", again, err)
+	}
+	got, err := f.stores.Agents.GetAgent(ctx, "agent-1")
+	if err != nil || !got.PublicKey.Equal(key) || got.Capabilities[0] != "runtime.info" || !got.Connected(now) {
+		t.Fatalf("GetAgent = %+v, %v", got, err)
+	}
+	later := now.Add(30 * time.Second)
+	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-2", later.Add(time.Minute), later); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RenewAgentLease(ctx, "ghost", "lease-x", later, later); !errors.Is(err, agentgateway.ErrAgentNotFound) {
+		t.Fatalf("renew unknown agent = %v", err)
+	}
+	if err := f.stores.Agents.RevokeAgent(ctx, "agent-1", later); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-3", later, later); !errors.Is(err, agentgateway.ErrAgentRevoked) {
+		t.Fatalf("renew revoked agent = %v", err)
+	}
+	list, err := f.stores.Agents.ListAgents(ctx)
+	if err != nil || len(list) != 1 || list[0].RevokedAt == nil || list[0].Connected(later) {
+		t.Fatalf("ListAgents = %+v, %v", list, err)
+	}
+	actions := map[string]bool{}
+	for _, event := range auditEvents(t, f, 1) {
+		actions[event.Action] = true
+	}
+	if !actions[domain.AuditAgentRegistered] || !actions[domain.AuditAgentRevoked] {
+		t.Fatalf("audit actions = %v", actions)
 	}
 }

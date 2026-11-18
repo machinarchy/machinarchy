@@ -26,6 +26,8 @@ const (
 	AuditResourceHostDeleted = "resource_host.deleted"
 	AuditAPITokenCreated     = "api_token.created"
 	AuditAPITokenRevoked     = "api_token.revoked"
+	AuditAgentRegistered     = "agent.registered"
+	AuditAgentRevoked        = "agent.revoked"
 
 	AuditRunCreated         = "run.created"
 	AuditRunCancelRequested = "run.cancel_requested"
@@ -40,6 +42,7 @@ const (
 	AuditTargetAPIToken     = "api_token"
 	AuditTargetRun          = "run"
 	AuditTargetOperation    = "operation"
+	AuditTargetAgent        = "agent"
 
 	AuditOutcomeSuccess = "success"
 

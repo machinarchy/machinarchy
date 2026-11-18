@@ -11,6 +11,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	// Sub-domain packages
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/agents"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/audit"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/auth"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/configuration"
@@ -31,7 +32,12 @@ type Repositories struct {
 	Configuration    *runtimeconfig.Service
 	Secrets          *secrets.Service
 	ManagedResources *service.ManagedResourceService
-	SignupEnabled    func() bool
+	// Agents lists enrolled agents; AgentGateway is nil where the gateway
+	// does not run; AgentPublicKey is "" when it is not configured.
+	Agents         agents.Lister
+	AgentGateway   agents.Gateway
+	AgentPublicKey string
+	SignupEnabled  func() bool
 }
 
 // RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
@@ -97,6 +103,13 @@ func RegisterRoutes(
 		}
 		if repos.Secrets != nil {
 			secretapi.RegisterRoutes(apiv1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman()), secretapi.NewHandler(repos.Secrets))
+		}
+		if repos.Agents != nil {
+			agents.RegisterRoutes(
+				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionInventoryRead)),
+				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionRunsExecute)),
+				apiv1.Group("/agents", middleware.RequireOwner(), middleware.RequireHuman()),
+				agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentPublicKey))
 		}
 		if repos.ManagedResources != nil {
 			managedresource.RegisterRoutes(apiv1.Group("/managed"), managedresource.NewHandler(repos.ManagedResources))
