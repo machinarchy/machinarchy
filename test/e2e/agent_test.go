@@ -343,6 +343,17 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		map[string]any{"capability": "runtime.info"}, &bad); status != http.StatusServiceUnavailable {
 		t.Fatalf("invoke on a revoked agent status = %d %v", status, bad)
 	}
+	// The agent learns of the revocation at its next renewal (heartbeat 5s)
+	// and exits 78 by itself, which tells supervisors not to restart it.
+	select {
+	case <-agent.exited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("revoked agent kept running")
+	}
+	var exit *exec.ExitError
+	if !errors.As(agent.err, &exit) || exit.ExitCode() != 78 {
+		t.Fatalf("revoked agent exited with %v, want exit status 78", agent.err)
+	}
 
 	// 5. /metrics serves HTTP, control-loop, worker and gateway metrics.
 	response, err := http.Get(client.base + "/metrics")
@@ -359,14 +370,7 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		}
 	}
 
-	// 6. Both processes stop cleanly on SIGTERM.
-	if err := agent.stop(t); err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			t.Fatalf("agent stop: %v", err)
-		}
-		// A revoked agent may exit non-zero by design; it must still exit.
-	}
+	// 6. machinarchy stops cleanly on SIGTERM (the agent already exited).
 	if err := server.stop(t); err != nil {
 		t.Fatalf("machinarchy did not stop cleanly: %v", err)
 	}

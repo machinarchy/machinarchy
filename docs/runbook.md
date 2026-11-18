@@ -82,7 +82,7 @@ or a broken credential).
 | Agent not listed after start | Agent log `enrollment rejected`; gateway metric `registrations_total{outcome="rejected"}`. | Enrollment tokens differ: use the same token on both sides. |
 | `registrations_total{outcome="invalid"}` rising | Messages failed signature or schema checks. | A misconfigured or hostile client. Check NATS ACLs. |
 | Agent listed but `connected: false` | Lease expired: no renewals arrive. | Agent down or partitioned; on the agent host `machinarchy-agent --healthcheck` exits 1 with the expiry time. |
-| Agent stops after a renewal; on restart it is refused (`enrollment_rejected`), gateway metric `registrations_total{outcome="revoked"}` | An owner revoked it; revoked keys are never re-admitted. | Intended. To re-admit the host, delete its state file (a new key is generated) and let it enrol again. |
+| Agent stops after a renewal with exit code 78; if restarted it is refused (`enrollment_rejected`), gateway metric `registrations_total{outcome="revoked"}` | An owner revoked it; revoked keys are never re-admitted. | Intended. The systemd unit does not restart on 78; under compose, stop the service. To re-admit the host, delete its state file (a new key is generated) and let it enrol again. |
 | Invoke returns 503 | This process does not run the gateway, or the agent has no live lease. | Call a monolith/Control Manager; check `connected`. |
 | Invoke returns 504 | The agent did not answer within the timeout. | Check the agent log for the operation ID; results that arrive later are ignored. |
 | Result `rejected` / `capability_unavailable` | The agent does not offer that capability. | Only `runtime.info`, `system.facts` and opt-in `service.*` exist. |

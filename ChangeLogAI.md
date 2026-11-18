@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit follow-up: e2e requires exit 78 from a revoked agent (branch audit/followup)
+
+- `test/e2e/agent_test.go`: after revocation the test now waits for the agent to exit by itself and requires exit status 78 (machinarchy-agent `5ec5beb`, AUDIT/09 F9-02). Before, it accepted any exit, and usually stopped the agent with SIGTERM before it noticed. **CI's `MACHINARCHY_AGENT_REF` must point at an agent revision that includes `5ec5beb`.**
+- `docs/runbook.md`: the revoked-agent row mentions exit 78 and the restart policy.
+
+Verification: `MACHINARCHY_E2E_REQUIRED=1 go test -race -count=2 ./test/e2e/` passes with the current agent; against agent `a7aa03c` it fails with "revoked agent exited with exit status 1, want exit status 78".
+
 ## 2026-11-18 — Audit follow-up: govulncheck gate with reviewed allowlist (branch audit/followup)
 
 - `scripts/security/govulncheck.sh` (new): runs `govulncheck -format json` and fails (exit 3) on any vulnerability the code calls, unless `scripts/security/govulncheck-allowlist.txt` has an unexpired entry for it and no fixed version exists. It notes allowlist entries that no longer match.
