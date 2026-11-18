@@ -253,11 +253,23 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 				AgentVersion: request.AgentVersion, OS: request.OS, Architecture: request.Architecture,
 				Capabilities: request.Capabilities, PublicKey: ed25519.PublicKey(request.AgentPublicKey),
 				LeaseID: lease.LeaseID, LeaseExpiresAt: lease.ExpiresAt, RegisteredAt: now, LastSeenAt: now}, request.RequestID)
+			if err == nil && agent.ID != id {
+				// A known key re-enrolled: record the lease it is about to get.
+				err = g.store.RenewAgentLease(context.Background(), agent.ID, lease.LeaseID, lease.ExpiresAt, now)
+			}
 			if err == nil {
 				err = g.provision(agent.ID)
 				response.AgentID, response.HostID = agent.ID, agent.ID
 			}
 		}
+	}
+	if errors.Is(err, ErrAgentRevoked) {
+		g.metrics.registrations.WithLabelValues("revoked").Inc()
+		g.logger.Warn("revoked agent tried to enrol again", "hostname", request.Hostname)
+		response.AgentID, response.HostID = "", ""
+		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
+		g.reply(msg, agentv1.KindRegisterResponse, response)
+		return
 	}
 	if err != nil {
 		g.metrics.registrations.WithLabelValues("error").Inc()

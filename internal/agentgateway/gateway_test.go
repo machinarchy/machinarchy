@@ -34,6 +34,14 @@ func (s *memStore) RegisterAgent(_ context.Context, agent Agent, requestID strin
 	if id, ok := s.requests[requestID]; ok {
 		return *s.agents[id], nil
 	}
+	for _, existing := range s.agents {
+		if existing.PublicKey.Equal(agent.PublicKey) {
+			if existing.RevokedAt != nil {
+				return Agent{}, ErrAgentRevoked
+			}
+			return *existing, nil
+		}
+	}
 	s.requests[requestID] = agent.ID
 	copied := agent
 	s.agents[agent.ID] = &copied
@@ -203,6 +211,11 @@ func TestEnrollmentAndLeases(t *testing.T) {
 	}
 	if revoked := f.renew(agent, first.AgentID); revoked == nil || revoked.Error == nil || revoked.Error.Code != agentv1.ErrorLeaseRevoked {
 		t.Fatalf("renewal after revocation = %+v, want lease_revoked", revoked)
+	}
+	// A revoked agent that clears its identity and enrols again with the
+	// shared token is rejected, not given a fresh identity.
+	if again := f.register(agent, enrollmentToken, "req-after-revoke"); again.Error == nil || again.Error.Code != agentv1.ErrorEnrollmentRejected || again.AgentID != "" {
+		t.Fatalf("re-enrolment of a revoked key = %+v, want enrollment_rejected", again)
 	}
 }
 

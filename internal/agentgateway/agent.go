@@ -40,8 +40,9 @@ var (
 	ErrAgentRevoked  = errors.New("agent has been revoked")
 )
 
-// Store persists agents. RegisterAgent is idempotent on requestID: a retried
-// registration returns the agent created by the first one.
+// Store persists agents. RegisterAgent is idempotent on requestID and on the
+// agent's public key: a retry, or a known key enrolling again, returns the
+// existing agent; a revoked key gets ErrAgentRevoked.
 type Store interface {
 	RegisterAgent(ctx context.Context, agent Agent, requestID string) (Agent, error)
 	GetAgent(ctx context.Context, id string) (*Agent, error)

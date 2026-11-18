@@ -83,8 +83,14 @@ func (s *Store) RegisterAgent(ctx context.Context, agent agentgateway.Agent, req
 		return agentgateway.Agent{}, fmt.Errorf("begin agent registration: %w", err)
 	}
 	defer sqlx.Rollback(tx, s.logger, "agent registration")
-	existing, err := scanAgent(tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT `+agentColumns+` FROM agents WHERE request_id = ?`), requestID))
+	existing, err := scanAgent(tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT `+agentColumns+` FROM agents WHERE request_id = ? OR public_key = ?`),
+		requestID, base64.StdEncoding.EncodeToString(agent.PublicKey)))
 	if err == nil {
+		// A retried request, or a known key enrolling again (an agent that lost
+		// its identity). A revoked key is never re-admitted.
+		if existing.RevokedAt != nil {
+			return agentgateway.Agent{}, agentgateway.ErrAgentRevoked
+		}
 		return *existing, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {

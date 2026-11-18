@@ -813,6 +813,11 @@ func testAgents(t *testing.T, f *fixture) {
 	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-3", later, later); !errors.Is(err, agentgateway.ErrAgentRevoked) {
 		t.Fatalf("renew revoked agent = %v", err)
 	}
+	reenrol := agent
+	reenrol.ID = "agent-3"
+	if _, err := f.stores.Agents.RegisterAgent(ctx, reenrol, "req-2"); !errors.Is(err, agentgateway.ErrAgentRevoked) {
+		t.Fatalf("re-registering a revoked key = %v, want ErrAgentRevoked", err)
+	}
 	list, err := f.stores.Agents.ListAgents(ctx)
 	if err != nil || len(list) != 1 || list[0].RevokedAt == nil || list[0].Connected(later) {
 		t.Fatalf("ListAgents = %+v, %v", list, err)
