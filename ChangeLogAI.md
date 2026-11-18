@@ -1,5 +1,21 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: runtime configuration tests (branch audit/tests-2)
+
+- `internal/runtimeconfig/service_test.go` (new, on a real SQLite repository):
+  - publish and rollback by an owner, applied to the live snapshot;
+  - refused for operators, readers and owner API tokens, and for stale revisions, restart-only changes and invalid configurations;
+  - get, list, status and checksum;
+  - **apply is all-or-nothing on prepare**: a participant that refuses leaves the snapshot unchanged, rolls back the others, and records `apply_failed`; the revision applies once every participant accepts it;
+  - snapshots are copies;
+  - the watcher applies a revision published by another process and stops cleanly on cancellation.
+- `internal/transport/http/v1/configuration/handler_test.go` (new): every endpoint and status code against the real service, including strict decoding (unknown fields and trailing JSON are refused).
+- Not covered on purpose: a commit failure rolls back every participant, including ones never committed (AUDIT/03 Q-16). That is a known bug scheduled for Phase 19, so no test locks it in.
+
+### Verification
+
+- `go test -race -cover`: `runtimeconfig` 13.3% → **78.2%**; `v1/configuration` 0% → **91.6%**. golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: API token, secret and environment tests (branch audit/tests-2)
 
 - `internal/service/api_token_service_test.go` (new):
