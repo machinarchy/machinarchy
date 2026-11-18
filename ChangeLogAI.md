@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 12: protocol contract test (branch audit/agent-authz)
+
+- `internal/agentgateway/contract_test.go` (new): `TestProtocolGoldenFixtures` finds the protocol module (`go list -m`), and verifies every golden fixture in `agentv1/testdata` with the published test keys (controller seed 0x01, agent seed 0x02). Each fixture must also fail with the other party's key. It fails on a fixture it does not know, and on an expected fixture that is missing (AUDIT M-11).
+
+### Verification
+
+- `go test ./internal/agentgateway/ -run TestProtocolGoldenFixtures`: pass, against agent `fb5f243` (4 fixtures). golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 12: per-host, single-use agent enrolment tokens (branch audit/agent-authz)
 
 **Behaviour change:** the shared `MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE` is now optional and refused in production. Hosts enrol with owner-issued tokens.
