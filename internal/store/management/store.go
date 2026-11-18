@@ -16,24 +16,17 @@ import (
 	"github.com/machinarchy/machinarchy/internal/eventing"
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
 	"github.com/machinarchy/machinarchy/internal/secrets"
-	"github.com/machinarchy/machinarchy/internal/utils"
-)
-
-type Dialect uint8
-
-const (
-	SQLite Dialect = iota + 1
-	PostgreSQL
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 type Store struct {
 	db      *sql.DB
-	dialect Dialect
+	dialect sqlx.Dialect
 	logger  *slog.Logger
 }
 
-func New(db *sql.DB, d Dialect, logger *slog.Logger) (*Store, error) {
-	if db == nil || (d != SQLite && d != PostgreSQL) {
+func New(db *sql.DB, d sqlx.Dialect, logger *slog.Logger) (*Store, error) {
+	if db == nil || !d.Valid() {
 		return nil, errors.New("management store requires SQL database and supported dialect")
 	}
 	if logger == nil {
@@ -41,23 +34,8 @@ func New(db *sql.DB, d Dialect, logger *slog.Logger) (*Store, error) {
 	}
 	return &Store{db: db, dialect: d, logger: logger}, nil
 }
-func (s *Store) bind(q string) string {
-	if s.dialect == SQLite {
-		return q
-	}
-	var b strings.Builder
-	n := 1
-	for _, r := range q {
-		if r == '?' {
-			fmt.Fprintf(&b, "$%d", n)
-			n++
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+func (s *Store) bind(q string) string { return s.dialect.Bind(q) }
+func ts(t time.Time) string           { return sqlx.Time(t) }
 
 func (s *Store) Seed(ctx context.Context, c runtimeconfig.Config) (runtimeconfig.Revision, error) {
 	if err := c.Validate(); err != nil {
@@ -75,7 +53,7 @@ func (s *Store) Seed(ctx context.Context, c runtimeconfig.Config) (runtimeconfig
 	if err != nil {
 		return runtimeconfig.Revision{}, err
 	}
-	defer utils.RollbackTx(tx, s.logger, "Seed")
+	defer sqlx.Rollback(tx, s.logger, "Seed")
 	var rev uint64
 	err = tx.QueryRowContext(ctx, s.bind("SELECT revision FROM runtime_config_head WHERE id = 1")).Scan(&rev)
 	if err == nil {
@@ -130,7 +108,7 @@ func (s *Store) ListRevisions(ctx context.Context, limit int, before uint64) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, s.logger, "query revision list")
+	defer sqlx.CloseRows(rows, s.logger, "query revision list")
 	out := make([]runtimeconfig.Revision, 0, limit)
 	for rows.Next() {
 		var r runtimeconfig.Revision
@@ -160,9 +138,9 @@ func (s *Store) Publish(ctx context.Context, expected uint64, c runtimeconfig.Co
 	if err != nil {
 		return runtimeconfig.Revision{}, err
 	}
-	defer utils.RollbackTx(tx, s.logger, "Publish")
+	defer sqlx.Rollback(tx, s.logger, "Publish")
 
-	if s.dialect == PostgreSQL {
+	if s.dialect == sqlx.PostgreSQL {
 		var lock uint64
 		if err = tx.QueryRowContext(ctx, s.bind("SELECT revision FROM runtime_config_head WHERE id=1 FOR UPDATE")).Scan(&lock); err != nil {
 			return runtimeconfig.Revision{}, err
@@ -237,7 +215,7 @@ func (s *Store) ProcessStatuses(ctx context.Context, since time.Time) ([]runtime
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, s.logger, "query process statuses")
+	defer sqlx.CloseRows(rows, s.logger, "query process statuses")
 
 	out := []runtimeconfig.ProcessStatus{}
 	for rows.Next() {
@@ -296,7 +274,7 @@ func (s *Store) CreateSecret(ctx context.Context, m secrets.Metadata, v secrets.
 	if err != nil {
 		return err
 	}
-	defer utils.RollbackTx(tx, s.logger, "create secret")
+	defer sqlx.Rollback(tx, s.logger, "create secret")
 	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO secret_metadata(id,name,description,purpose,current_version,created_at,updated_at,created_by) VALUES(?,?,?,?,?,?,?,?)`), m.ID, m.Name, m.Description, string(m.Purpose), m.CurrentVersion, ts(m.CreatedAt), ts(m.UpdatedAt), v.CreatedBy); err != nil {
 		return err
 	}
@@ -313,7 +291,7 @@ func (s *Store) AppendSecretVersion(ctx context.Context, id string, expected uin
 	if err != nil {
 		return err
 	}
-	defer utils.RollbackTx(tx, s.logger, "append secret version")
+	defer sqlx.Rollback(tx, s.logger, "append secret version")
 
 	res, err := tx.ExecContext(ctx, s.bind(`UPDATE secret_metadata SET current_version=?,updated_at=? WHERE id=? AND current_version=? AND retired_at IS NULL`), v.Ref.Version, ts(v.CreatedAt), id, expected)
 	if err != nil {
@@ -368,7 +346,7 @@ func (s *Store) ListSecrets(ctx context.Context, limit int) ([]secrets.Metadata,
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, s.logger, "query list secrets")
+	defer sqlx.CloseRows(rows, s.logger, "query list secrets")
 	out := []secrets.Metadata{}
 	for rows.Next() {
 		var m secrets.Metadata
@@ -415,7 +393,7 @@ func (s *Store) ListSecretVersions(ctx context.Context, id string) ([]secrets.Ve
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, s.logger, "query list secret versions")
+	defer sqlx.CloseRows(rows, s.logger, "query list secret versions")
 
 	out := []secrets.Version{}
 	for rows.Next() {
@@ -442,7 +420,7 @@ func (s *Store) RetireSecret(ctx context.Context, id string, actor int) error {
 	if err != nil {
 		return err
 	}
-	defer utils.RollbackTx(tx, s.logger, "retire secret")
+	defer sqlx.Rollback(tx, s.logger, "retire secret")
 	now := ts(time.Now())
 	res, err := tx.ExecContext(ctx, s.bind(`UPDATE secret_metadata SET retired_at=?,updated_at=? WHERE id=? AND retired_at IS NULL`), now, now, id)
 	if err != nil {
@@ -471,7 +449,7 @@ func (s *Store) ListRewrapCandidates(ctx context.Context, keyID string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, s.logger, "query secret DEK rewrap batch")
+	defer sqlx.CloseRows(rows, s.logger, "query secret DEK rewrap batch")
 	candidates := make([]secrets.RewrapCandidate, 0, limit)
 	for rows.Next() {
 		var candidate secrets.RewrapCandidate
@@ -489,7 +467,7 @@ func (s *Store) RewrapDEK(ctx context.Context, ref secrets.Ref, oldKeyID, newKey
 	if err != nil {
 		return err
 	}
-	defer utils.RollbackTx(tx, s.logger, "rewrap secret DEK")
+	defer sqlx.Rollback(tx, s.logger, "rewrap secret DEK")
 	result, err := tx.ExecContext(ctx, s.bind(`UPDATE secret_versions SET key_id=?,wrapped_dek=?
 		WHERE secret_id=? AND version=? AND key_id=?`), newKeyID, wrapped, ref.ID, ref.Version, oldKeyID)
 	if err != nil {

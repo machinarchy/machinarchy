@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/machinarchy/machinarchy/internal/utils"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 //go:embed migrations/*
@@ -110,7 +110,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to begin migration tx: %w", err)
 		}
-		defer utils.RollbackTx(tx, m.logger, "migration")
+		defer sqlx.Rollback(tx, m.logger, "migration")
 
 		if _, err := tx.ExecContext(ctx, string(content)); err != nil {
 			return fmt.Errorf("failed to execute migration %d: %w", ver, err)
@@ -149,7 +149,7 @@ func (m *Migrator) getAppliedVersions(ctx context.Context) (map[int]bool, error)
 	if err != nil {
 		return nil, err
 	}
-	defer utils.CloseRows(rows, m.logger, "query schema_migrations")
+	defer sqlx.CloseRows(rows, m.logger, "query schema_migrations")
 
 	applied := make(map[int]bool)
 	for rows.Next() {

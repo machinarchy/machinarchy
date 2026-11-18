@@ -9,7 +9,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
-	"github.com/machinarchy/machinarchy/internal/utils"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 func (s *Store) ListHostKeys(ctx context.Context, cursor resource.HostKeyCursor) ([]resource.HostKey, error) {
@@ -23,7 +23,7 @@ func (s *Store) ListHostKeys(ctx context.Context, cursor resource.HostKeyCursor)
 	if err != nil {
 		return nil, fmt.Errorf("list managed Host keys: %w", err)
 	}
-	defer utils.CloseRows(rows, s.logger, "query list host keys")
+	defer sqlx.CloseRows(rows, s.logger, "query list host keys")
 	keys := make([]resource.HostKey, 0, limit)
 	for rows.Next() {
 		var key resource.HostKey
@@ -50,7 +50,7 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 	if err != nil {
 		return nil, fmt.Errorf("begin outbox claim: %w", err)
 	}
-	defer rollback(tx, s.logger, "outbox claim")
+	defer sqlx.Rollback(tx, s.logger, "outbox claim")
 	query := `SELECT e.event_id, e.event_type, e.schema_version, e.occurred_at, e.producer,
 		e.workspace_id, e.subject_kind, e.subject_id, e.subject_generation, e.subject_revision,
 		e.correlation_id, e.causation_id, e.actor_user_id, e.actor_token_id, e.payload, d.attempts
@@ -58,14 +58,14 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		WHERE d.consumer_group = ? AND d.delivered_at_ns = 0 AND d.quarantined_at_ns = 0
 		AND d.available_at_ns <= ? AND (d.lease_expires_at_ns <= ? OR d.lease_owner = ?)
 		ORDER BY d.available_at_ns, e.event_id LIMIT ?`
-	if s.dialect == PostgreSQL {
+	if s.dialect == sqlx.PostgreSQL {
 		query += ` FOR UPDATE OF d SKIP LOCKED`
 	}
 	rows, err := tx.QueryContext(ctx, s.bind(query), consumer, now.UnixNano(), now.UnixNano(), owner, limit)
 	if err != nil {
 		return nil, fmt.Errorf("select pending outbox deliveries: %w", err)
 	}
-	defer utils.CloseRows(rows, s.logger, "query pending outbox deliveries")
+	defer sqlx.CloseRows(rows, s.logger, "query pending outbox deliveries")
 
 	events := make([]eventing.ClaimedEvent, 0)
 	for rows.Next() {
@@ -110,7 +110,7 @@ func (s *Store) Claim(ctx context.Context, consumer, owner string, now time.Time
 		if err != nil {
 			return nil, fmt.Errorf("lease outbox delivery: %w", err)
 		}
-		if err := s.rowsAffected(result, resource.ErrConflict); err != nil {
+		if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
 			return nil, err
 		}
 	}
@@ -127,7 +127,7 @@ func (s *Store) Acknowledge(ctx context.Context, consumer, owner string, id reso
 	if err != nil {
 		return fmt.Errorf("acknowledge outbox delivery: %w", err)
 	}
-	return s.rowsAffected(result, resource.ErrConflict)
+	return sqlx.RowsAffected(result, resource.ErrConflict)
 }
 
 func (s *Store) Retry(ctx context.Context, consumer, owner string, id resource.ID, availableAt time.Time, failureClass string) error {
@@ -137,7 +137,7 @@ func (s *Store) Retry(ctx context.Context, consumer, owner string, id resource.I
 	if err != nil {
 		return fmt.Errorf("schedule outbox retry: %w", err)
 	}
-	return s.rowsAffected(result, resource.ErrConflict)
+	return sqlx.RowsAffected(result, resource.ErrConflict)
 }
 
 func (s *Store) Quarantine(ctx context.Context, consumer, owner string, id resource.ID, now time.Time, failureClass string) error {
@@ -147,7 +147,7 @@ func (s *Store) Quarantine(ctx context.Context, consumer, owner string, id resou
 	if err != nil {
 		return fmt.Errorf("quarantine outbox delivery: %w", err)
 	}
-	return s.rowsAffected(result, resource.ErrConflict)
+	return sqlx.RowsAffected(result, resource.ErrConflict)
 }
 
 func (s *Store) Prune(ctx context.Context, now time.Time) (int64, error) {
@@ -181,7 +181,7 @@ func boundedFailure(value string) string {
 }
 
 func (s *Store) AcquireResourceLease(ctx context.Context, lease resource.Lease, now time.Time, ttl time.Duration) (resource.Lease, bool, error) {
-	if s.dialect != PostgreSQL {
+	if s.dialect != sqlx.PostgreSQL {
 		return lease, false, resource.ErrLeaseUnsupported
 	}
 	if err := validateLease(lease, ttl); err != nil {
@@ -209,7 +209,7 @@ func (s *Store) AcquireResourceLease(ctx context.Context, lease resource.Lease, 
 }
 
 func (s *Store) RenewResourceLease(ctx context.Context, lease resource.Lease, now time.Time, ttl time.Duration) (resource.Lease, bool, error) {
-	if s.dialect != PostgreSQL {
+	if s.dialect != sqlx.PostgreSQL {
 		return lease, false, resource.ErrLeaseUnsupported
 	}
 	if err := validateLease(lease, ttl); err != nil {
@@ -234,7 +234,7 @@ func (s *Store) RenewResourceLease(ctx context.Context, lease resource.Lease, no
 }
 
 func (s *Store) ReleaseResourceLease(ctx context.Context, lease resource.Lease) error {
-	if s.dialect != PostgreSQL {
+	if s.dialect != sqlx.PostgreSQL {
 		return resource.ErrLeaseUnsupported
 	}
 	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM resource_leases WHERE resource_kind = ? AND workspace_id = ? AND resource_id = ? AND owner_id = ? AND fencing_token = ?`),
@@ -253,7 +253,7 @@ func validateLease(lease resource.Lease, ttl time.Duration) error {
 }
 
 func (s *Store) verifyLeaseFence(ctx context.Context, tx *sql.Tx, fence resource.LeaseFence, workspaceID int, id resource.ID) error {
-	if s.dialect != PostgreSQL || (fence.Kind != "host" && fence.Kind != "operation") || fence.WorkspaceID != workspaceID || fence.ID != string(id) || fence.Token == 0 {
+	if s.dialect != sqlx.PostgreSQL || (fence.Kind != "host" && fence.Kind != "operation") || fence.WorkspaceID != workspaceID || fence.ID != string(id) || fence.Token == 0 {
 		return resource.ErrLeaseRequired
 	}
 	var token, expiresAt int64

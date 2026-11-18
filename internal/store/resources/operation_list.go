@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
-	"github.com/machinarchy/machinarchy/internal/utils"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 // ListOperations returns one keyset page of Operation summaries, newest first.
@@ -31,11 +31,11 @@ func (s *Store) ListOperations(ctx context.Context, filter resource.OperationLis
 	}
 	if !filter.CreatedAfter.IsZero() {
 		query += ` AND o.created_at >= ?`
-		args = append(args, s.nowText(filter.CreatedAfter))
+		args = append(args, sqlx.Time(filter.CreatedAfter))
 	}
 	if !filter.CreatedBefore.IsZero() {
 		query += ` AND o.created_at < ?`
-		args = append(args, s.nowText(filter.CreatedBefore))
+		args = append(args, sqlx.Time(filter.CreatedBefore))
 	}
 	if filter.After != "" {
 		created, id, err := resource.ParseOperationCursor(filter.After)
@@ -52,7 +52,7 @@ func (s *Store) ListOperations(ctx context.Context, filter resource.OperationLis
 	if err != nil {
 		return nil, fmt.Errorf("list Operations: %w", err)
 	}
-	defer utils.CloseRows(rows, s.logger, "query list operations")
+	defer sqlx.CloseRows(rows, s.logger, "query list operations")
 	summaries := make([]resource.OperationSummary, 0)
 	index := map[resource.ID]int{}
 	for rows.Next() {
@@ -67,10 +67,10 @@ func (s *Store) ListOperations(ctx context.Context, filter resource.OperationLis
 		if summary.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
 			return nil, fmt.Errorf("parse Operation creation time: %w", err)
 		}
-		if summary.StartedAt, err = parseTime(started); err != nil {
+		if summary.StartedAt, err = sqlx.ParseNullTime(started); err != nil {
 			return nil, err
 		}
-		if summary.FinishedAt, err = parseTime(finished); err != nil {
+		if summary.FinishedAt, err = sqlx.ParseNullTime(finished); err != nil {
 			return nil, err
 		}
 		summary.Cursor = resource.OperationCursor(created, summary.ID)
@@ -98,7 +98,7 @@ func (s *Store) countTargets(ctx context.Context, summaries []resource.Operation
 	if err != nil {
 		return fmt.Errorf("count Operation targets: %w", err)
 	}
-	defer utils.CloseRows(rows, s.logger, "query count operation targets")
+	defer sqlx.CloseRows(rows, s.logger, "query count operation targets")
 	for rows.Next() {
 		var id, state string
 		var count int

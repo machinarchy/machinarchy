@@ -9,7 +9,6 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
-	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -272,7 +271,7 @@ func readManagementInput(cmd *cobra.Command, file string) (json.RawMessage, erro
 		if e != nil {
 			return nil, clierr.Usage(e)
 		}
-		defer utils.CloseWithLog(f, file)
+		defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
 		r = f
 	}
 	b, e := io.ReadAll(io.LimitReader(r, maxManagementInput+1))

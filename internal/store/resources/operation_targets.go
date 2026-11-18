@@ -8,6 +8,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 // UpdateOperationTarget moves one target forward with a single row update
@@ -29,7 +30,7 @@ func (s *Store) UpdateOperationTarget(ctx context.Context, workspaceID int, oper
 	if err != nil {
 		return fmt.Errorf("begin Operation target update: %w", err)
 	}
-	defer rollback(tx, s.logger, "Operation target update")
+	defer sqlx.Rollback(tx, s.logger, "Operation target update")
 	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
 		if err := s.verifyLeaseFence(ctx, tx, fence, workspaceID, operationID); err != nil {
 			return err

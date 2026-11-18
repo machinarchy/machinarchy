@@ -19,6 +19,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/store"
 	"github.com/machinarchy/machinarchy/internal/store/management"
 	"github.com/machinarchy/machinarchy/internal/store/sqlite"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
@@ -42,7 +43,7 @@ func openFixture(t *testing.T, path string) fixture {
 	if err = store.NewMigrator(db, store.EngineSQLite, nil).Up(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := management.New(db, management.SQLite, slog.Default())
+	repo, err := management.New(db, sqlx.SQLite, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

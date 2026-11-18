@@ -27,7 +27,6 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
-	"github.com/machinarchy/machinarchy/internal/utils"
 )
 
 const (
@@ -193,7 +192,7 @@ func readDocument(path string) (File, []string, error) {
 		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
 			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
 	}
-	defer utils.CloseWithLog(file, "CLI config file")
+	defer func() { _ = file.Close() }() // read-only: a close error cannot lose data
 
 	info, err := file.Stat()
 	if err != nil {

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
-	"github.com/machinarchy/machinarchy/internal/utils"
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
 
@@ -113,7 +112,7 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		if err != nil {
 			return Config{}, errors.New("unable to open bootstrap configuration file")
 		}
-		defer utils.CloseWithLog(f, options.FilePath)
+		defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
 		dec := json.NewDecoder(io.LimitReader(f, 1<<20))
 		dec.DisallowUnknownFields()
 		if err = dec.Decode(&fileValues); err != nil {

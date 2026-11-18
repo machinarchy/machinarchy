@@ -145,22 +145,14 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 	if err != nil {
 		return fail(fmt.Errorf("derive Operation spec encryption key: %w", err))
 	}
-	resourceDialect := resources.SQLite
-	if dialect == sqlx.PostgreSQL {
-		resourceDialect = resources.PostgreSQL
-	}
-	resourceStore, err := resources.New(db, resourceDialect, operationKey, slog.Default(), accountStore.AppendAudit)
+	resourceStore, err := resources.New(db, dialect, operationKey, slog.Default(), accountStore.AppendAudit)
 	if err != nil {
 		return fail(fmt.Errorf("initialize managed resource repositories: %w", err))
 	}
 	stores.Users, stores.Access, stores.Environments, stores.Audit = accountStore, accountStore, accountStore, accountStore
 	stores.ResourceHosts, stores.ResourceProfiles, stores.Operations = resourceStore, resourceStore, resourceStore
 	stores.Outbox, stores.ResourceLeases = resourceStore, resourceStore
-	managementDialect := management.SQLite
-	if engine == EnginePostgres {
-		managementDialect = management.PostgreSQL
-	}
-	managementStore, err := management.New(db, managementDialect, slog.Default())
+	managementStore, err := management.New(db, dialect, slog.Default())
 	if err != nil {
 		return fail(fmt.Errorf("initialize configuration and Secret Store repositories: %w", err))
 	}

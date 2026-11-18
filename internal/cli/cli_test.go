@@ -701,8 +701,7 @@ func TestCLIStaysAnAPIClient(t *testing.T) {
 
 	allowed := func(path string) bool {
 		return strings.HasPrefix(path, modulePrefix+"cli") ||
-			path == modulePrefix+"buildinfo" ||
-			path == modulePrefix+"utils"
+			path == modulePrefix+"buildinfo"
 	}
 
 	roots := []string{".", filepath.Join("..", "..", "cmd", "machinarchy")}

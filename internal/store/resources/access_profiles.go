@@ -13,7 +13,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
-	"github.com/machinarchy/machinarchy/internal/utils"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
 func (s *Store) CreateAccessProfile(ctx context.Context, profile *resource.AccessProfile, revision resource.AccessProfileRevision) error {
@@ -29,12 +29,12 @@ func (s *Store) CreateAccessProfile(ctx context.Context, profile *resource.Acces
 	if err != nil {
 		return fmt.Errorf("begin Access Profile creation: %w", err)
 	}
-	defer rollback(tx, s.logger, "Access Profile creation")
-	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profiles(id,workspace_id,name,description,current_revision,created_at,updated_at,created_by) VALUES(?,?,?,?,?,?,?,?)`), string(profile.ID), profile.WorkspaceID, profile.Name, profile.Description, 1, s.nowText(profile.CreatedAt), s.nowText(profile.UpdatedAt), profile.CreatedBy)
+	defer sqlx.Rollback(tx, s.logger, "Access Profile creation")
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profiles(id,workspace_id,name,description,current_revision,created_at,updated_at,created_by) VALUES(?,?,?,?,?,?,?,?)`), string(profile.ID), profile.WorkspaceID, profile.Name, profile.Description, 1, sqlx.Time(profile.CreatedAt), sqlx.Time(profile.UpdatedAt), profile.CreatedBy)
 	if err != nil {
 		return fmt.Errorf("insert Access Profile: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profile_revisions(profile_id,workspace_id,revision,document,checksum,created_at,created_by) VALUES(?,?,?,?,?,?,?)`), string(profile.ID), profile.WorkspaceID, 1, doc, checksum, s.nowText(revision.CreatedAt), revision.CreatedBy); err != nil {
+	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profile_revisions(profile_id,workspace_id,revision,document,checksum,created_at,created_by) VALUES(?,?,?,?,?,?,?)`), string(profile.ID), profile.WorkspaceID, 1, doc, checksum, sqlx.Time(revision.CreatedAt), revision.CreatedBy); err != nil {
 		return fmt.Errorf("insert initial Access Profile revision: %w", err)
 	}
 	if err = s.accessProfileAuditAndEvent(ctx, tx, profile.WorkspaceID, *profile, revision, true); err != nil {
@@ -66,7 +66,7 @@ func (s *Store) ListAccessProfiles(ctx context.Context, workspaceID int, after r
 	if err != nil {
 		return nil, fmt.Errorf("list Access Profiles: %w", err)
 	}
-	defer utils.CloseRows(rows, s.logger, "query list access profiles")
+	defer sqlx.CloseRows(rows, s.logger, "query list access profiles")
 	profiles := make([]resource.AccessProfile, 0)
 	for rows.Next() {
 		p, err := scanAccessProfile(rows)
@@ -154,9 +154,9 @@ func (s *Store) UpdateAccessProfile(ctx context.Context, workspaceID int, id res
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(tx, s.logger, "Access Profile revision")
+	defer sqlx.Rollback(tx, s.logger, "Access Profile revision")
 	query := `SELECT current_revision FROM access_profiles WHERE workspace_id=? AND id=?`
-	if s.dialect == PostgreSQL {
+	if s.dialect == sqlx.PostgreSQL {
 		query += " FOR UPDATE"
 	}
 	var current uint64
@@ -166,14 +166,14 @@ func (s *Store) UpdateAccessProfile(ctx context.Context, workspaceID int, id res
 	if current != expected {
 		return nil, resource.ErrConflict
 	}
-	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profile_revisions(profile_id,workspace_id,revision,document,checksum,created_at,created_by) VALUES(?,?,?,?,?,?,?)`), string(id), workspaceID, r.Revision, doc, sum, s.nowText(now), actor); err != nil {
+	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO access_profile_revisions(profile_id,workspace_id,revision,document,checksum,created_at,created_by) VALUES(?,?,?,?,?,?,?)`), string(id), workspaceID, r.Revision, doc, sum, sqlx.Time(now), actor); err != nil {
 		return nil, err
 	}
-	res, err := tx.ExecContext(ctx, s.bind(`UPDATE access_profiles SET current_revision=?,updated_at=? WHERE workspace_id=? AND id=? AND current_revision=? AND deleted_at IS NULL`), r.Revision, s.nowText(now), workspaceID, string(id), expected)
+	res, err := tx.ExecContext(ctx, s.bind(`UPDATE access_profiles SET current_revision=?,updated_at=? WHERE workspace_id=? AND id=? AND current_revision=? AND deleted_at IS NULL`), r.Revision, sqlx.Time(now), workspaceID, string(id), expected)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.rowsAffected(res, resource.ErrConflict); err != nil {
+	if err = sqlx.RowsAffected(res, resource.ErrConflict); err != nil {
 		return nil, err
 	}
 	if err = s.accessProfileAuditAndEvent(ctx, tx, workspaceID, *p, r, false); err != nil {
@@ -220,7 +220,7 @@ func (s *Store) DeleteAccessProfile(ctx context.Context, workspaceID int, id res
 	if err != nil {
 		return err
 	}
-	defer rollback(tx, s.logger, "Access Profile deletion")
+	defer sqlx.Rollback(tx, s.logger, "Access Profile deletion")
 	var refs int
 	if err = tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM managed_hosts WHERE workspace_id=? AND access_profile_id=?`), workspaceID, string(id)).Scan(&refs); err != nil {
 		return err
@@ -228,11 +228,11 @@ func (s *Store) DeleteAccessProfile(ctx context.Context, workspaceID int, id res
 	if refs > 0 {
 		return resource.ErrConflict
 	}
-	res, err := tx.ExecContext(ctx, s.bind(`UPDATE access_profiles SET deleted_at=?,updated_at=? WHERE workspace_id=? AND id=? AND deleted_at IS NULL`), s.nowText(now), s.nowText(now), workspaceID, string(id))
+	res, err := tx.ExecContext(ctx, s.bind(`UPDATE access_profiles SET deleted_at=?,updated_at=? WHERE workspace_id=? AND id=? AND deleted_at IS NULL`), sqlx.Time(now), sqlx.Time(now), workspaceID, string(id))
 	if err != nil {
 		return err
 	}
-	if err = s.rowsAffected(res, resource.ErrAccessProfileNotFound); err != nil {
+	if err = sqlx.RowsAffected(res, resource.ErrAccessProfileNotFound); err != nil {
 		return err
 	}
 	if err = s.audit(ctx, tx, workspaceID, domain.AuditResourceHostUpdated, "access-profile", string(id), map[string]string{"action": "tombstoned"}); err != nil {
@@ -260,7 +260,7 @@ func (s *Store) accessProfileAuditAndEvent(ctx context.Context, tx *sql.Tx, work
 	if err != nil {
 		return fmt.Errorf("marshal profile revision payload: %w", err)
 	}
-	now := s.nowText(r.CreatedAt)
+	now := sqlx.Time(r.CreatedAt)
 	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_events(event_id,event_type,schema_version,occurred_at,producer,workspace_id,subject_kind,subject_id,subject_generation,subject_revision,correlation_id,causation_id,actor_user_id,actor_token_id,payload,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), string(id), eventing.AccessProfileChanged, 1, now, "machinarchy.access-profile", workspace, "access-profile", string(p.ID), r.Revision, r.Revision, "", "", r.CreatedBy, nil, string(payload), now)
 	if err != nil {
 		return err
