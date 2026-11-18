@@ -126,6 +126,7 @@ startup. Secrets are accepted only from the environment or `0600` files.
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | Total graceful-shutdown budget, default 25s. |
 | `MACHINARCHY_EXECUTION_ENABLED`, `_ALLOWED_PROGRAMS` | Command execution is off by default. |
 | `MACHINARCHY_SSH_*` | SSH egress policy (deny by default). |
+| `MACHINARCHY_SSH_HOST_KEY_POLICY` | How host keys become trusted: `tofu` (dev default), `approve` (prod default) or `pinned`; profiles can also use `ca`. See [operations](docs/operations.md#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | Agent gateway (off unless `_NATS_URL` is set); see [operations](docs/operations.md#agent-gateway). |
 | `MACHINARCHY_SIGNUP_ENABLED` | Public sign-up, default `false`. |
 | `CORS_ALLOWED_ORIGINS` | Required in production. |

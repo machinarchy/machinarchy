@@ -227,3 +227,51 @@ func TestManagedResourceFlow(t *testing.T) {
 		t.Fatal("a deleted profile is still readable")
 	}
 }
+
+// Moving a Host to another endpoint drops the keys trusted for the old one,
+// unless the owner sends new trust explicitly.
+func TestEndpointChangeClearsHostKeyTrust(t *testing.T) {
+	ctx := context.Background()
+	f := newManagedFixture(t)
+	secret, err := f.secrets.Create(ctx, f.owner, secrets.Input{Name: "k", Purpose: secrets.PurposeSSHCredential, Value: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := f.service.CreateAccessProfile(ctx, f.owner, "p", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Authentication: resource.AuthenticationPrivateKey, Username: "deploy", Enabled: true, Credential: resource.SecretReference{ID: secret.ID, Version: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldKey, newKey = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	spec := resource.HostSpec{Presence: resource.PresenceManaged, AccessProfileID: profile.ID, ProfileRevision: 1,
+		AccessTarget: resource.HostAccessTarget{Endpoint: "192.0.2.10:22", Trust: []string{oldKey}}}
+	host, err := f.service.CreateHost(ctx, f.owner, "mover", nil, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := spec
+	moved.AccessTarget.Endpoint = "192.0.2.20:22"
+	if err := f.service.UpdateHost(ctx, f.operator, host.Metadata.ID, host.Metadata.Revision, host.Metadata.Generation, moved); !errors.Is(err, ErrAccessProfileOwnerRequired) {
+		t.Fatalf("operator moving a bound host = %v", err)
+	}
+	if err := f.service.UpdateHost(ctx, f.owner, host.Metadata.ID, host.Metadata.Revision, host.Metadata.Generation, moved); err != nil {
+		t.Fatal(err)
+	}
+	after, err := f.service.GetHost(ctx, f.owner, host.Metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Spec.AccessTarget.Trust) != 0 {
+		t.Fatalf("trust for the old endpoint survived the move: %v", after.Spec.AccessTarget.Trust)
+	}
+	explicit := moved
+	explicit.AccessTarget.Endpoint = "192.0.2.30:22"
+	explicit.AccessTarget.Trust = []string{newKey}
+	if err := f.service.UpdateHost(ctx, f.owner, host.Metadata.ID, after.Metadata.Revision, after.Metadata.Generation, explicit); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := f.service.GetHost(ctx, f.owner, host.Metadata.ID)
+	if len(final.Spec.AccessTarget.Trust) != 1 || final.Spec.AccessTarget.Trust[0] != newKey {
+		t.Fatalf("explicit trust sent with the move = %v", final.Spec.AccessTarget.Trust)
+	}
+}

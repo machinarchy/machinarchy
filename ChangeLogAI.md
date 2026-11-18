@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: endpoint changes clear trust; host-key docs (branch audit/host-keys)
+
+- `internal/service/managed_resources.go`: changing a bound Host's endpoint (owner only, AUDIT S-02) clears its trusted keys unless new trust is sent with the change, so the new endpoint is scanned again under the profile's policy.
+- `docs/operations.md`: new "SSH host keys" section (policies, the deployment default, the safety rules) and the setting. `docs/runbook.md`: `HostKeyPendingApproval`, `HostKeyChanged`, `HostKeyNotTrusted`. `README.md` and `.env.example`: the setting.
+
+### Verification
+
+- `TestEndpointChangeClearsHostKeyTrust` (an operator move is refused; an owner move clears trust; explicit new trust is kept), `TestOperatorCannotRedirectOwnerCredential` and `TestManagedResourceFlow`: pass. golangci-lint on `internal/service`: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13A: host-key approval API and CLI (branch audit/host-keys)
 
 - `POST /api/v1/managed/hosts/{id}/trust` `{generation, fingerprints, replace}` (owner only, through the service). It is in the OpenAPI spec and in the authorization matrix, which flagged the route as missing before its entry was added.

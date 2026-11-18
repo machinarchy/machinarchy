@@ -37,6 +37,7 @@ keyring file, and the agent gateway key and enrollment token.
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | One budget (default 25s) for HTTP drain, worker drain and closing the database. Keep it below the orchestrator grace period. |
 | `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set; the program list is re-checked when each Operation runs. |
 | `MACHINARCHY_SSH_*` | Egress policy: private ranges, loopback and all ports are denied unless allowed. |
+| `MACHINARCHY_SSH_HOST_KEY_POLICY` | Host-key trust for profiles without their own policy: `tofu` (development default), `approve` (production default) or `pinned`. See [SSH host keys](#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | See [agent gateway](#agent-gateway). Off unless `_NATS_URL` is set. |
 
 ### Agent gateway
@@ -112,6 +113,35 @@ revokes an unused one. Issuing and revoking are audited, and an agent's
 The gateway provisions the `MACHINARCHY_AGENT_COMMANDS` JetStream stream (file
 storage, 24h max age, 15 min duplicate window) and one durable consumer per
 agent. JetStream must be enabled on the NATS server.
+
+## SSH host keys
+
+A Host does not need a hand-entered fingerprint. The Host controller scans its
+SSH host keys before anything authenticates; the scan sends no credential and
+follows the egress policy. The Access Profile's `hostKeyPolicy` then decides:
+
+| Policy | What happens | Use |
+|---|---|---|
+| `tofu` | The keys seen on first contact (every algorithm the host offers) are pinned automatically and audited as `resource_host.host_key_trusted` with `source=tofu`. Allowed only with private-key authentication; a password profile falls back to `approve`. | Networks you trust at enrolment time |
+| `approve` | The Host waits with `HostKeyPendingApproval` and `status.observedHostKeys`. An owner runs `machinarchy trust host NAME`, or `--all-pending [--selector …]` for many hosts, which shows the fingerprints and trusts exactly those. | Production default |
+| `ca` | Hosts present SSH host certificates signed by a CA listed in the profile's `hostCertificateAuthorities` (authorized_keys format), for the dialed host name. No per-host data. | Fleets with an SSH CA |
+| `pinned` | Only fingerprints set in `spec.accessTarget.trust` are trusted, and nothing is scanned. | Keys verified out of band |
+
+A profile without a policy uses `MACHINARCHY_SSH_HOST_KEY_POLICY`: `tofu` in
+development and `approve` in production by default, or `pinned`.
+
+**Safety rules:**
+- **A changed key is never accepted automatically.** If a host presents a key
+  that is not trusted, the Host becomes `HostKeyChanged`, and the condition
+  names both the presented and the trusted fingerprints. Nothing is sent to
+  the host. An owner must check the change out of band and run
+  `machinarchy trust host NAME --replace`.
+- **Moving a Host clears its trust.** Changing a Host's endpoint (owner only)
+  clears its trusted keys, unless new ones are sent with the change, and the
+  new endpoint is scanned again.
+- **Approval names exact keys.** It sends the exact fingerprints the owner
+  reviewed and the spec generation they saw, so a key that changed in the
+  meantime is not trusted by mistake.
 
 ## Containers
 

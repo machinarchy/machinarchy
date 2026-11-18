@@ -66,8 +66,15 @@ The Host controller verifies SSH with the bound Access Profile. Read
 
 - egress denied: the endpoint is outside `MACHINARCHY_SSH_ALLOWED_CIDRS` or
   its port is not allowed;
-- host key mismatch: the server's key is not in `spec.accessTarget.trust`;
-  verify it out of band before adding it;
+- `HostKeyPendingApproval`: the keys were scanned and wait for an owner. Check
+  them out of band if you can, then `machinarchy trust host NAME` (or
+  `--all-pending`);
+- `HostKeyChanged`: the host presents a key that is not trusted. Nothing was
+  sent to it. This may be a reinstalled host or someone in the middle: verify
+  the new key out of band before `machinarchy trust host NAME --replace`;
+- `HostKeyNotTrusted`: the `pinned` policy with no trusted key, or a `ca`
+  profile whose CA did not sign the host's certificate (or the certificate
+  does not name the endpoint's host name);
 - authentication failed: rotate the secret (`machinarchy secret rotate`) and
   update the profile revision.
 

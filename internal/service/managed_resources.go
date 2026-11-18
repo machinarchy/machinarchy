@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -79,6 +80,13 @@ func (s *ManagedResourceService) UpdateHost(ctx context.Context, principal domai
 			if err := authorizeProfileOwner(principal); err != nil {
 				return err
 			}
+		}
+		// Keys trusted for one endpoint say nothing about another: a moved
+		// Host is scanned again under its profile's host-key policy. Trust the
+		// caller changed explicitly together with the endpoint is kept.
+		if current.Spec.AccessTarget.Endpoint != spec.AccessTarget.Endpoint &&
+			slices.Equal(current.Spec.AccessTarget.Trust, spec.AccessTarget.Trust) {
+			spec.AccessTarget.Trust = nil
 		}
 	}
 	return s.hosts.UpdateHostSpec(ctx, principal.WorkspaceID, id, revision, generation, spec, time.Now().UTC())
