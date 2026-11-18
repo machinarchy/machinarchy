@@ -96,7 +96,7 @@ func (h *Handler) controllerKey(c echo.Context) error {
 
 type invokeRequest struct {
 	Capability     string          `json:"capability"`
-	Input          json.RawMessage `json:"input,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty" swaggertype:"object"`
 	TimeoutSeconds int             `json:"timeoutSeconds"`
 }
 

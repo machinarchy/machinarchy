@@ -13,6 +13,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
+	agentstore "github.com/machinarchy/machinarchy/internal/store/agents"
 	v1 "github.com/machinarchy/machinarchy/internal/transport/http/v1"
 )
 
@@ -32,6 +33,7 @@ func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
 	e := echo.New()
 	v1.RegisterRoutes(e.Group("/api"), v1.Repositories{
 		Configuration: &runtimeconfig.Service{}, Secrets: &secrets.Service{}, ManagedResources: &service.ManagedResourceService{},
+		Agents: &agentstore.Store{},
 	}, nil, []byte("x"), false, false, nil, nil, nil)
 
 	param := regexp.MustCompile(`:([A-Za-z]+)`)

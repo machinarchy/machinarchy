@@ -1,5 +1,14 @@
 basePath: /
 definitions:
+  agents.invokeRequest:
+    properties:
+      capability:
+        type: string
+      input:
+        type: object
+      timeoutSeconds:
+        type: integer
+    type: object
   auth.LoginRequest:
     properties:
       email:
@@ -814,6 +823,134 @@ paths:
       summary: Create an account
       tags:
       - Authentication
+  /api/v1/agents:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List enrolled agents
+      tags:
+      - Agents
+  /api/v1/agents/{id}/invoke:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Capability call
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/agents.invokeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Run a capability on an agent and wait for its result
+      tags:
+      - Agents
+  /api/v1/agents/{id}/revoke:
+    post:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke an agent
+      tags:
+      - Agents
+  /api/v1/agents/controller-key:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get the controller public key agents must trust
+      tags:
+      - Agents
   /api/v1/audit/events:
     get:
       description: Requires a human workspace owner session; API tokens are refused.
