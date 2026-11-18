@@ -1,38 +1,13 @@
-# Version control and local tooling
-.git
-.githooks
-.github
-.golangci.yml
-
-# Local configuration and credentials
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-id_rsa*
-
-# Local build/test output
-bin/
-dist/
-dist-binaries/
-coverage.out
-*.test
-*.prof
-
-# Go workspace/cache and editor files
-.gocache/
-.go/
-.idea/
-.vscode/
-.DS_Store
-
-# Local databases and logs
-*.db
-*.sqlite
-*.sqlite3
-*.log
-
-# Dependency/build caches
-node_modules/
-
+# Allowlist: the build sees only what the Dockerfile copies. Local data
+# (data/, *.db), credentials, AUDIT notes and tooling never reach the
+# build context (AUDIT S-15).
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!pkg/
+!docs/embed.go
+!docs/swagger.json
+**/*_test.go
+**/testdata/

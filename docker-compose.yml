@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: server
+      # The agent wire contract comes from the sibling machinarchy-agent checkout.
+      additional_contexts:
+        agent-protocol: ${MACHINARCHY_AGENT_SOURCE:-../machinarchy-agent}/protocol
       args:
         MACHINARCHY_COMMAND: monolit
     ports:

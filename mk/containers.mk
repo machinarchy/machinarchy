@@ -14,11 +14,32 @@ SSH_COMPOSE_PROJECT ?= machinarchy-ssh-test
 SSH_SERVICE         ?=
 SSH_COMPOSE          = $(COMPOSE) --project-name "$(SSH_COMPOSE_PROJECT)" -f "$(SSH_COMPOSE_FILE)"
 
+.PHONY: images image-api image-controlmanager image-monolit image-cli
 .PHONY: infra-config infra-up infra-down infra-ps infra-logs
 .PHONY: apps-config apps-up apps-down apps-ps apps-logs
 .PHONY: dev-up dev-down dev-ps dev-logs
 .PHONY: ssh-servers-prepare ssh-servers-config ssh-servers-up ssh-servers-down
 .PHONY: ssh-servers-ps ssh-servers-logs ssh-servers-restart ssh-servers-pull
+
+##@ Container images
+# Images build with BuildKit; the agent wire contract comes from the sibling
+# checkout AGENT_SOURCE. BUILD_TIME is the commit time, so rebuilding a commit
+# yields the same binary.
+AGENT_SOURCE ?= ../machinarchy-agent
+IMAGE_PREFIX ?= machinarchy
+IMAGE_TAG    ?= $(VERSION)
+COMMIT_TIME  := $(shell git log -1 --format=%cI 2>/dev/null || echo unknown)
+IMAGE_BUILD   = docker buildx build --load \
+	--build-context agent-protocol=$(AGENT_SOURCE)/protocol \
+	--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(COMMIT_TIME)
+
+images: image-api image-controlmanager image-monolit image-cli ## Build all container images
+
+image-api image-controlmanager image-monolit: image-%: ## Build one server image
+	$(IMAGE_BUILD) --target server --build-arg MACHINARCHY_COMMAND=$* -t $(IMAGE_PREFIX)-$*:$(IMAGE_TAG) .
+
+image-cli: ## Build the CLI image
+	$(IMAGE_BUILD) --target cli -t $(IMAGE_PREFIX)-cli:$(IMAGE_TAG) .
 
 ##@ Infrastructure (PostgreSQL, NATS)
 infra-config: ## Validate the infrastructure Compose file
