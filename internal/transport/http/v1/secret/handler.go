@@ -126,7 +126,7 @@ func (h *Handler) Rotate(c echo.Context) error {
 		return httperr.Status(c, 400, "expectedVersion is required")
 	}
 	p, _ := middleware.Principal(c)
-	m, err := h.service.Rotate(c.Request().Context(), p, c.Param("id"), v, secrets.Input{Name: "rotation", Value: in.Value})
+	m, err := h.service.Rotate(c.Request().Context(), p, c.Param("id"), v, secrets.Input{Value: in.Value})
 	if err != nil {
 		return secretError(c, err)
 	}

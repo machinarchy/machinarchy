@@ -177,7 +177,8 @@ func (s *Service) Rotate(ctx context.Context, actor domain.Principal, id string,
 	if expected != meta.CurrentVersion {
 		return Metadata{}, ErrConflict
 	}
-	input.Purpose = meta.Purpose
+	// A rotation changes only the value; name and purpose stay the secret's.
+	input.Name, input.Purpose = meta.Name, meta.Purpose
 	if err := validateInput(input); err != nil {
 		return Metadata{}, err
 	}
