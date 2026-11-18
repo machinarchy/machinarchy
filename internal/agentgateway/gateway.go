@@ -25,9 +25,12 @@ import (
 
 // Config configures the gateway. NATSOptions carries authentication and TLS.
 type Config struct {
-	NATSURL         string
-	NATSOptions     []nats.Option
-	SigningKey      ed25519.PrivateKey
+	NATSURL     string
+	NATSOptions []nats.Option
+	SigningKey  ed25519.PrivateKey
+	// EnrollmentToken is an optional shared token accepted from any host, for
+	// development only (configuration refuses it in production). Hosts
+	// normally enrol with owner-issued, single-use tokens (TokenStore).
 	EnrollmentToken string
 	LeaseTTL        time.Duration
 	Heartbeat       time.Duration
@@ -77,8 +80,8 @@ func New(store Store, cfg Config) (*Gateway, error) {
 	if store == nil || cfg.NATSURL == "" || len(cfg.SigningKey) != ed25519.PrivateKeySize {
 		return nil, errors.New("agent gateway requires a store, a NATS URL and an Ed25519 signing key")
 	}
-	if len(cfg.EnrollmentToken) < agentv1.MinEnrollmentToken || len(cfg.EnrollmentToken) > agentv1.MaxEnrollmentToken {
-		return nil, fmt.Errorf("agent enrollment token must be %d to %d characters", agentv1.MinEnrollmentToken, agentv1.MaxEnrollmentToken)
+	if cfg.EnrollmentToken != "" && (len(cfg.EnrollmentToken) < agentv1.MinEnrollmentToken || len(cfg.EnrollmentToken) > agentv1.MaxEnrollmentToken) {
+		return nil, fmt.Errorf("the shared agent enrollment token must be %d to %d characters", agentv1.MinEnrollmentToken, agentv1.MaxEnrollmentToken)
 	}
 	if cfg.LeaseTTL <= 0 {
 		cfg.LeaseTTL = DefaultLeaseTTL
@@ -248,12 +251,11 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 		return // an unauthenticated message gets no answer
 	}
 	response := &agentv1.RegisterResponse{ProtocolVersion: agentv1.ProtocolVersion, RequestID: request.RequestID}
-	if subtle.ConstantTimeCompare([]byte(request.EnrollmentToken), []byte(g.cfg.EnrollmentToken)) != 1 {
-		g.metrics.registrations.WithLabelValues("rejected").Inc()
-		g.logger.Warn("agent enrollment rejected", "hostname", request.Hostname)
-		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
-		g.reply(msg, agentv1.KindRegisterResponse, response)
-		return
+	// Per-host tokens are checked and consumed by the store, atomically with
+	// the registration; the shared development token is checked here.
+	enrollment := Enrollment{Hostname: request.Hostname, TokenHash: HashEnrollmentToken(request.EnrollmentToken)}
+	if g.cfg.EnrollmentToken != "" && subtle.ConstantTimeCompare([]byte(request.EnrollmentToken), []byte(g.cfg.EnrollmentToken)) == 1 {
+		enrollment = Enrollment{Shared: true, Hostname: request.Hostname}
 	}
 	now := time.Now().UTC()
 	lease, err := g.newLease(now)
@@ -264,7 +266,7 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 			agent, err = g.store.RegisterAgent(context.Background(), Agent{ID: id, Hostname: request.Hostname,
 				AgentVersion: request.AgentVersion, OS: request.OS, Architecture: request.Architecture,
 				Capabilities: request.Capabilities, PublicKey: ed25519.PublicKey(request.AgentPublicKey),
-				LeaseID: lease.LeaseID, LeaseExpiresAt: lease.ExpiresAt, RegisteredAt: now, LastSeenAt: now}, request.RequestID)
+				LeaseID: lease.LeaseID, LeaseExpiresAt: lease.ExpiresAt, RegisteredAt: now, LastSeenAt: now}, request.RequestID, enrollment)
 			if err == nil && agent.ID != id {
 				// A known key re-enrolled: record the lease it is about to get.
 				err = g.store.RenewAgentLease(context.Background(), agent.ID, lease.LeaseID, lease.ExpiresAt, now)
@@ -277,6 +279,14 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 				response.NATSUserJWT, err = g.natsCredential(ed25519.PublicKey(request.AgentPublicKey), agent.ID, now)
 			}
 		}
+	}
+	if errors.Is(err, ErrEnrollmentRejected) {
+		g.metrics.registrations.WithLabelValues("rejected").Inc()
+		g.logger.Warn("agent enrollment rejected", "hostname", request.Hostname)
+		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
+		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
+		g.reply(msg, agentv1.KindRegisterResponse, response)
+		return
 	}
 	if errors.Is(err, ErrAgentRevoked) {
 		g.metrics.registrations.WithLabelValues("revoked").Inc()

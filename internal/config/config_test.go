@@ -427,6 +427,7 @@ func TestLoadAgentGateway(t *testing.T) {
 		"no key":             {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": ""}, false},
 		"world-readable key": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": open}, false},
 		"short token":        {map[string]string{"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": short}, false},
+		"no shared token":    {map[string]string{"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": ""}, true},
 		"heartbeat too long": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_HEARTBEAT": "40s"}, false},
 		"cert without key":   {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_CERT_FILE": "/c"}, false},
 		"custom lease":       {map[string]string{"MACHINARCHY_AGENT_GATEWAY_LEASE_TTL": "2m", "MACHINARCHY_AGENT_GATEWAY_HEARTBEAT": "30s"}, true},
@@ -460,6 +461,10 @@ func TestLoadAgentGateway(t *testing.T) {
 			t.Fatalf("plain NATS in production: %v", err)
 		}
 		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_URL", "tls://nats.example:4222")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "development only") {
+			t.Fatalf("shared enrolment token in production: %v", err)
+		}
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE", "")
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "per-agent NATS credentials") {
 			t.Fatalf("production without NATS account settings: %v", err)
 		}

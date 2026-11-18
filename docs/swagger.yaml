@@ -1,5 +1,36 @@
 basePath: /
 definitions:
+  agents.createTokenRequest:
+    properties:
+      hostname:
+        description: Hostname, when set, is the only hostname this token enrols.
+        type: string
+      ttlSeconds:
+        description: TTLSeconds defaults to 3600; 60 to 86400.
+        type: integer
+    type: object
+  agents.createTokenResponse:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      expiresAt:
+        type: string
+      hostname:
+        type: string
+      id:
+        type: string
+      revokedAt:
+        type: string
+      token:
+        description: Token is the secret, shown only in this response.
+        type: string
+      usedAt:
+        type: string
+      usedByAgent:
+        type: string
+    type: object
   agents.invokeRequest:
     properties:
       capability:
@@ -8,6 +39,32 @@ definitions:
         type: object
       timeoutSeconds:
         type: integer
+    type: object
+  agents.tokenList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.tokenView'
+        type: array
+    type: object
+  agents.tokenView:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      expiresAt:
+        type: string
+      hostname:
+        type: string
+      id:
+        type: string
+      revokedAt:
+        type: string
+      usedAt:
+        type: string
+      usedByAgent:
+        type: string
     type: object
   auth.LoginRequest:
     properties:
@@ -959,6 +1016,94 @@ paths:
       security:
       - BearerAuth: []
       summary: Get the controller public key agents must trust
+      tags:
+      - Agents
+  /api/v1/agents/enrollment-tokens:
+    get:
+      description: Owner only. Secrets are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.tokenList'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List agent enrolment tokens
+      tags:
+      - Agents
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Owner only. The secret is returned once and stored only as a hash. It enrols one agent before it expires
+        (default 1 hour), optionally only from the given hostname. Configure it on the host as
+        MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE.
+      parameters:
+      - description: Optional hostname binding and lifetime
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/agents.createTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/agents.createTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Issue a single-use agent enrolment token
+      tags:
+      - Agents
+  /api/v1/agents/enrollment-tokens/{id}:
+    delete:
+      parameters:
+      - description: Token ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke an unused agent enrolment token
       tags:
       - Agents
   /api/v1/audit/events:

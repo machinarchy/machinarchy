@@ -79,7 +79,7 @@ or a broken credential).
 
 | Symptom | Check | Fix |
 |---|---|---|
-| Agent not listed after start | Agent log `enrollment rejected`; gateway metric `registrations_total{outcome="rejected"}`. | Enrollment tokens differ: use the same token on both sides. |
+| Agent not listed after start | Agent log `controller rejected enrollment` (exit 78); gateway metric `registrations_total{outcome="rejected"}`. | The token is unknown, already used, expired, revoked, or bound to another hostname. Check `GET /api/v1/agents/enrollment-tokens`, then issue a new one. |
 | `registrations_total{outcome="invalid"}` rising | Messages failed signature or schema checks. | A misconfigured or hostile client. Check NATS ACLs. |
 | Agent listed but `connected: false` | Lease expired: no renewals arrive. | Agent down or partitioned; on the agent host `machinarchy-agent --healthcheck` exits 1 with the expiry time. |
 | Agent stops after a renewal with exit code 78; if restarted it is refused (`enrollment_rejected`), gateway metric `registrations_total{outcome="revoked"}` | An owner revoked it; revoked keys are never re-admitted. | Intended. The systemd unit does not restart on 78; under compose, stop the service. To re-admit the host, delete its state file (a new key is generated) and let it enrol again. |

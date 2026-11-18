@@ -163,7 +163,7 @@ Errors are `{"error": "...", "code": "..."}`, lists are
 | Managed hosts | `/api/v1/managed/hosts[/{id}[/labels]]` |
 | Access Profiles | `/api/v1/managed/access-profiles[/{id}]` |
 | Operations | `/api/v1/managed/operations[/preview|/{id}[/cancel]]` |
-| Agents | `/api/v1/agents`, `/controller-key`, `/{id}/invoke`, `/{id}/revoke` |
+| Agents | `/api/v1/agents`, `/controller-key`, `/{id}/invoke`, `/{id}/revoke`, `/enrollment-tokens[/{id}]` |
 | Workspace | `/api/v1/environments`, `/tokens`, `/members`, `/audit` |
 | Owner only | `/api/v1/runtime-config`, `/api/v1/secrets` |
 

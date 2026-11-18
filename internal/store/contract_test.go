@@ -468,8 +468,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 1 {
-		t.Fatalf("applied migrations = %d, want the single baseline", before)
+	if before != 2 {
+		t.Fatalf("applied migrations = %d, want the baseline and 000002 (agent enrolment tokens)", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)
@@ -777,27 +777,95 @@ func testAuditConcurrentAppends(t *testing.T, f *fixture) {
 	}
 }
 
-// testAgents covers the agent gateway store: idempotent registration, lease
-// renewal, revocation and the audit trail, on both dialects.
+// testAgents covers the agent gateway store: registration authorised by an
+// enrolment (shared or a single-use per-host token, consumed atomically),
+// idempotent retries, lease renewal, revocation and the audit trail, on both
+// dialects.
 func testAgents(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)).Public().(ed25519.PublicKey)
-	agent := agentgateway.Agent{ID: "agent-1", Hostname: "web-01", AgentVersion: "1.0.0", OS: "linux", Architecture: "amd64",
-		Capabilities: []string{"runtime.info"}, PublicKey: key, LeaseID: "lease-1", LeaseExpiresAt: now.Add(time.Minute),
-		RegisteredAt: now, LastSeenAt: now}
-	first, err := f.stores.Agents.RegisterAgent(ctx, agent, "req-1")
+	owner := f.member(t, "agent-owner", domain.RoleOwner)
+	agentKey := func(seed byte) ed25519.PublicKey {
+		return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, 32)).Public().(ed25519.PublicKey)
+	}
+	newAgent := func(id string, seed byte) agentgateway.Agent {
+		return agentgateway.Agent{ID: id, Hostname: "web-01", AgentVersion: "1.0.0", OS: "linux", Architecture: "amd64",
+			Capabilities: []string{"runtime.info"}, PublicKey: agentKey(seed), LeaseID: "lease-1", LeaseExpiresAt: now.Add(time.Minute),
+			RegisteredAt: now, LastSeenAt: now}
+	}
+	issue := func(hostname string, ttl time.Duration) (string, agentgateway.EnrollmentToken) {
+		t.Helper()
+		secret, token, err := agentgateway.NewEnrollmentToken(hostname, ttl, owner.ID, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.stores.Agents.CreateEnrollmentToken(ctx, token); err != nil {
+			t.Fatal(err)
+		}
+		return secret, token
+	}
+	withToken := func(secret, hostname string) agentgateway.Enrollment {
+		return agentgateway.Enrollment{TokenHash: agentgateway.HashEnrollmentToken(secret), Hostname: hostname}
+	}
+
+	// A per-host token enrols one agent; a retry needs no new token.
+	secret, token := issue("", time.Hour)
+	agent := newAgent("agent-1", 7)
+	first, err := f.stores.Agents.RegisterAgent(ctx, agent, "req-1", withToken(secret, "web-01"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	retry := agent
 	retry.ID = "agent-2"
-	again, err := f.stores.Agents.RegisterAgent(ctx, retry, "req-1")
+	again, err := f.stores.Agents.RegisterAgent(ctx, retry, "req-1", agentgateway.Enrollment{})
 	if err != nil || again.ID != first.ID {
 		t.Fatalf("retried registration = %+v, %v; want the first agent", again, err)
 	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 8), "req-x", withToken(secret, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a used token enrolled another agent: %v", err)
+	}
+	tokens, err := f.stores.Agents.ListEnrollmentTokens(ctx)
+	if err != nil || len(tokens) != 1 || tokens[0].ID != token.ID || tokens[0].UsedAt == nil || tokens[0].UsedByAgent != "agent-1" {
+		t.Fatalf("tokens after use = %+v, %v", tokens, err)
+	}
+
+	// Hostname binding, expiry and revocation; a refused registration
+	// leaves the token unused.
+	bound, _ := issue("db-01.example", time.Hour)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 8), "req-x", withToken(bound, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a token bound to another host was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-db", 8), "req-db", withToken(bound, "DB-01.example.")); err != nil {
+		t.Fatalf("the bound host was refused: %v", err)
+	}
+	expired, _ := issue("", time.Minute)
+	lateAgent := newAgent("agent-late", 9)
+	lateAgent.RegisteredAt = now.Add(2 * time.Minute)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, lateAgent, "req-late", withToken(expired, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("an expired token was accepted: %v", err)
+	}
+	revokedSecret, revoked := issue("", time.Hour)
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, revoked.ID, owner.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, revoked.ID, owner.ID, now); !errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
+		t.Fatalf("revoking twice = %v", err)
+	}
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, token.ID, owner.ID, now); !errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
+		t.Fatalf("revoking a used token = %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 10), "req-r", withToken(revokedSecret, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a revoked token was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 10), "req-n", agentgateway.Enrollment{}); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a registration without an enrolment was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-shared", 11), "req-s", agentgateway.Enrollment{Shared: true}); err != nil {
+		t.Fatalf("the shared development token was refused: %v", err)
+	}
+
 	got, err := f.stores.Agents.GetAgent(ctx, "agent-1")
-	if err != nil || !got.PublicKey.Equal(key) || got.Capabilities[0] != "runtime.info" || !got.Connected(now) {
+	if err != nil || !got.PublicKey.Equal(agentKey(7)) || got.Capabilities[0] != "runtime.info" || !got.Connected(now) {
 		t.Fatalf("GetAgent = %+v, %v", got, err)
 	}
 	later := now.Add(30 * time.Second)
@@ -813,20 +881,27 @@ func testAgents(t *testing.T, f *fixture) {
 	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-3", later, later); !errors.Is(err, agentgateway.ErrAgentRevoked) {
 		t.Fatalf("renew revoked agent = %v", err)
 	}
-	reenrol := agent
-	reenrol.ID = "agent-3"
-	if _, err := f.stores.Agents.RegisterAgent(ctx, reenrol, "req-2"); !errors.Is(err, agentgateway.ErrAgentRevoked) {
+	fresh, _ := issue("", time.Hour)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-3", 7), "req-2", withToken(fresh, "web-01")); !errors.Is(err, agentgateway.ErrAgentRevoked) {
 		t.Fatalf("re-registering a revoked key = %v, want ErrAgentRevoked", err)
 	}
 	list, err := f.stores.Agents.ListAgents(ctx)
-	if err != nil || len(list) != 1 || list[0].RevokedAt == nil || list[0].Connected(later) {
+	if err != nil || len(list) != 3 || list[0].RevokedAt == nil || list[0].Connected(later) {
 		t.Fatalf("ListAgents = %+v, %v", list, err)
 	}
-	actions := map[string]bool{}
+	actions := map[string]int{}
+	registrations := map[string]string{}
 	for _, event := range auditEvents(t, f, 1) {
-		actions[event.Action] = true
+		actions[event.Action]++
+		if event.Action == domain.AuditAgentRegistered {
+			registrations[event.TargetID] = event.Details["enrollment"] + "/" + event.Details["token_id"]
+		}
 	}
-	if !actions[domain.AuditAgentRegistered] || !actions[domain.AuditAgentRevoked] {
+	if actions[domain.AuditAgentRegistered] != 3 || actions[domain.AuditAgentRevoked] != 1 ||
+		actions[domain.AuditAgentEnrollmentTokenIssued] != 5 || actions[domain.AuditAgentEnrollmentTokenRevoked] != 1 {
 		t.Fatalf("audit actions = %v", actions)
+	}
+	if registrations["agent-1"] != "token/"+token.ID || registrations["agent-shared"] != "shared_token/" {
+		t.Fatalf("registration audit details = %v", registrations)
 	}
 }

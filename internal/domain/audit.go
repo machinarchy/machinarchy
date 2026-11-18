@@ -28,6 +28,9 @@ const (
 	AuditAPITokenRevoked     = "api_token.revoked"
 	AuditAgentRegistered     = "agent.registered"
 	AuditAgentRevoked        = "agent.revoked"
+	// Enrolment tokens (AUDIT M-4); the secret is never recorded.
+	AuditAgentEnrollmentTokenIssued  = "agent.enrollment_token_issued"
+	AuditAgentEnrollmentTokenRevoked = "agent.enrollment_token_revoked"
 
 	AuditRunCreated         = "run.created"
 	AuditRunCancelRequested = "run.cancel_requested"
@@ -43,6 +46,7 @@ const (
 	AuditTargetRun          = "run"
 	AuditTargetOperation    = "operation"
 	AuditTargetAgent        = "agent"
+	AuditTargetEnrollment   = "agent_enrollment_token"
 
 	AuditOutcomeSuccess = "success"
 

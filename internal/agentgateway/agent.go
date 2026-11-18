@@ -40,11 +40,15 @@ var (
 	ErrAgentRevoked  = errors.New("agent has been revoked")
 )
 
-// Store persists agents. RegisterAgent is idempotent on requestID and on the
-// agent's public key: a retry, or a known key enrolling again, returns the
-// existing agent; a revoked key gets ErrAgentRevoked.
+// Store persists agents. RegisterAgent looks agents up by public key:
+//   - a retry (same key and requestID) returns the existing agent and needs
+//     no new enrolment;
+//   - anything else must consume a valid enrollment (ErrEnrollmentRejected
+//     otherwise) in the same transaction: a known key enrolling again gets
+//     the existing agent, a new key a new one;
+//   - a revoked key gets ErrAgentRevoked.
 type Store interface {
-	RegisterAgent(ctx context.Context, agent Agent, requestID string) (Agent, error)
+	RegisterAgent(ctx context.Context, agent Agent, requestID string, enrollment Enrollment) (Agent, error)
 	GetAgent(ctx context.Context, id string) (*Agent, error)
 	RenewAgentLease(ctx context.Context, id, leaseID string, expiresAt, now time.Time) error
 	ListAgents(ctx context.Context) ([]Agent, error)

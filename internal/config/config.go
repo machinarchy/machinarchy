@@ -642,17 +642,21 @@ func loadAgentGateway(get func(string, ...string) string, environment Environmen
 	if cfg.SigningKeySeed, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err != nil || len(cfg.SigningKeySeed) != 32 {
 		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE must hold a base64-encoded 32-byte Ed25519 seed (openssl rand -base64 32)")
 	}
-	tokenFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE"))
-	if tokenFile == "" {
-		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE is required when the agent gateway is enabled")
-	}
-	token, err := readSecretFile(tokenFile, "MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE")
-	if err != nil {
-		return cfg, err
-	}
-	cfg.EnrollmentToken = strings.TrimSpace(string(token))
-	if len(cfg.EnrollmentToken) < 32 || len(cfg.EnrollmentToken) > 256 || strings.ContainsAny(cfg.EnrollmentToken, " \t\r\n") {
-		return cfg, errors.New("the agent enrollment token must be 32 to 256 characters without whitespace")
+	// Hosts enrol with owner-issued, single-use tokens (POST
+	// /api/v1/agents/enrollment-tokens). A shared token accepted from any host
+	// remains for local development only (AUDIT M-4).
+	if tokenFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE")); tokenFile != "" {
+		if environment == Production {
+			return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE (a shared token) is for development only; issue per-host tokens with POST /api/v1/agents/enrollment-tokens")
+		}
+		token, err := readSecretFile(tokenFile, "MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE")
+		if err != nil {
+			return cfg, err
+		}
+		cfg.EnrollmentToken = strings.TrimSpace(string(token))
+		if len(cfg.EnrollmentToken) < 32 || len(cfg.EnrollmentToken) > 256 || strings.ContainsAny(cfg.EnrollmentToken, " \t\r\n") {
+			return cfg, errors.New("the agent enrollment token must be 32 to 256 characters without whitespace")
+		}
 	}
 	if cfg.LeaseTTL, err = parseDurationBounds(get("MACHINARCHY_AGENT_GATEWAY_LEASE_TTL", "60s"), "MACHINARCHY_AGENT_GATEWAY_LEASE_TTL", false); err != nil {
 		return cfg, err

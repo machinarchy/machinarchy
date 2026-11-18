@@ -18,9 +18,11 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
-// Lister reads enrolled agents (the store, available in every process).
+// Lister reads enrolled agents and manages enrolment tokens (the store,
+// available in every process).
 type Lister interface {
 	ListAgents(ctx context.Context) ([]agentgateway.Agent, error)
+	agentgateway.TokenStore
 }
 
 // Gateway runs capabilities and revokes agents; it is nil in processes that
@@ -49,6 +51,129 @@ func RegisterRoutes(read, execute, owner *echo.Group, h *Handler) {
 	read.GET("/controller-key", h.controllerKey)
 	execute.POST("/:id/invoke", h.invoke)
 	owner.POST("/:id/revoke", h.revoke)
+	owner.POST("/enrollment-tokens", h.createToken)
+	owner.GET("/enrollment-tokens", h.listTokens)
+	owner.DELETE("/enrollment-tokens/:id", h.revokeToken)
+}
+
+type createTokenRequest struct {
+	// Hostname, when set, is the only hostname this token enrols.
+	Hostname string `json:"hostname,omitempty"`
+	// TTLSeconds defaults to 3600; 60 to 86400.
+	TTLSeconds int `json:"ttlSeconds,omitempty"`
+}
+
+// tokenView is an enrolment token as the API shows it: never the secret or
+// its hash.
+type tokenView struct {
+	ID          string     `json:"id"`
+	Hostname    string     `json:"hostname,omitempty"`
+	CreatedBy   int        `json:"createdBy"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	UsedAt      *time.Time `json:"usedAt,omitempty"`
+	UsedByAgent string     `json:"usedByAgent,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+}
+
+func viewToken(token agentgateway.EnrollmentToken) tokenView {
+	return tokenView{ID: token.ID, Hostname: token.Hostname, CreatedBy: token.CreatedBy, CreatedAt: token.CreatedAt,
+		ExpiresAt: token.ExpiresAt, UsedAt: token.UsedAt, UsedByAgent: token.UsedByAgent, RevokedAt: token.RevokedAt}
+}
+
+type createTokenResponse struct {
+	tokenView
+	// Token is the secret, shown only in this response.
+	Token string `json:"token"`
+}
+
+type tokenList struct {
+	Items []tokenView `json:"items"`
+}
+
+// createToken godoc
+// @Summary Issue a single-use agent enrolment token
+// @Description Owner only. The secret is returned once and stored only as a hash. It enrols one agent before it expires
+// @Description (default 1 hour), optionally only from the given hostname. Configure it on the host as
+// @Description MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE.
+// @Tags Agents
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body createTokenRequest false "Optional hostname binding and lifetime"
+// @Success 201 {object} createTokenResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/agents/enrollment-tokens [post]
+func (h *Handler) createToken(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	var request createTokenRequest
+	if c.Request().ContentLength != 0 {
+		if err := c.Bind(&request); err != nil {
+			return httperr.BadRequest(c, "invalid request body")
+		}
+	}
+	if request.TTLSeconds < 0 {
+		return httperr.BadRequest(c, "ttlSeconds must be positive")
+	}
+	secret, token, err := agentgateway.NewEnrollmentToken(request.Hostname, time.Duration(request.TTLSeconds)*time.Second, principal.UserID, time.Now())
+	if err != nil {
+		return httperr.BadRequest(c, err.Error())
+	}
+	if err := h.lister.CreateEnrollmentToken(c.Request().Context(), token); err != nil {
+		return mapError(c, err)
+	}
+	return c.JSON(http.StatusCreated, createTokenResponse{tokenView: viewToken(token), Token: secret})
+}
+
+// listTokens godoc
+// @Summary List agent enrolment tokens
+// @Description Owner only. Secrets are never returned.
+// @Tags Agents
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} tokenList
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/agents/enrollment-tokens [get]
+func (h *Handler) listTokens(c echo.Context) error {
+	tokens, err := h.lister.ListEnrollmentTokens(c.Request().Context())
+	if err != nil {
+		return mapError(c, err)
+	}
+	views := make([]tokenView, 0, len(tokens))
+	for _, token := range tokens {
+		views = append(views, viewToken(token))
+	}
+	return c.JSON(http.StatusOK, tokenList{Items: views})
+}
+
+// revokeToken godoc
+// @Summary Revoke an unused agent enrolment token
+// @Tags Agents
+// @Security BearerAuth
+// @Param id path string true "Token ID"
+// @Success 204
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/agents/enrollment-tokens/{id} [delete]
+func (h *Handler) revokeToken(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	if err := h.lister.RevokeEnrollmentToken(c.Request().Context(), c.Param("id"), principal.UserID, time.Now().UTC()); err != nil {
+		if errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
+			return httperr.Status(c, http.StatusNotFound, "no unused enrolment token with this ID")
+		}
+		return mapError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 type agentView struct {

@@ -1,5 +1,33 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 12: per-host, single-use agent enrolment tokens (branch audit/agent-authz)
+
+**Behaviour change:** the shared `MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE` is now optional and refused in production. Hosts enrol with owner-issued tokens.
+
+- Migration `000002_agent_enrollment_tokens` (both dialects): stores the token hash, an optional hostname, the issuer, the expiry, and the usage and revocation fields.
+- `internal/agentgateway/enrollment.go` (new):
+  - `NewEnrollmentToken`: `mae_` plus 32 random bytes, SHA-256 hash only, 1h default lifetime (1m–24h), optional hostname normalised to lower case without a trailing dot;
+  - the `Enrollment` and `TokenStore` types;
+  - `ErrEnrollmentRejected`.
+- `Store.RegisterAgent` now takes the enrolment (AUDIT M-4):
+  - agents are looked up by public key only (before: `request_id OR public_key`);
+  - a retry of the same request needs no new token;
+  - anything else consumes a valid token in the same transaction (the UPDATE re-checks `used_at`, so two registrations cannot share one token);
+  - the `agent.registered` audit event records `enrollment` and `token_id`.
+- The gateway hashes the presented token for the store, and accepts the shared token only if configured.
+- `internal/store/agents`: the token store (create, list, revoke unused), with audit events `agent.enrollment_token_issued` and `agent.enrollment_token_revoked`.
+- API (owner and human only), with views that never include the secret or its hash:
+  - `POST /api/v1/agents/enrollment-tokens` (returns the secret once);
+  - `GET /api/v1/agents/enrollment-tokens`;
+  - `DELETE /api/v1/agents/enrollment-tokens/{id}`.
+- OpenAPI regenerated. Docs: "Enrolling a host" in `docs/operations.md`, the runbook row, the README route list.
+
+### Verification
+
+- `go test -race ./internal/agentgateway/` (`TestPerHostEnrollmentTokens`, `TestNoSharedTokenAcceptsOnlyIssuedTokens`, `TestNewEnrollmentToken`), `./internal/transport/http/v1/agents/` (new `TestEnrollmentTokenEndpoints`) and `./internal/config/`: pass.
+- Store contract `agents` (rewritten: single use, retry, hostname binding, expiry, revocation, no enrolment, shared token, audit details): pass on SQLite and on **PostgreSQL 16**. `migrations are idempotent` now expects 2 migrations.
+- `make api-docs`; the route-coverage test passes. golangci-lint `./internal/...`: only the 2 pre-existing issues. gosec flagged the name `tokenColumns` as a hardcoded credential (false positive); it was renamed.
+
 ## 2026-11-18 — Audit Phase 12: per-agent NATS credentials from the gateway (branch audit/agent-authz)
 
 **Behaviour change:** in production, the agent gateway now requires `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT` and `_NATS_ACCOUNT_SIGNING_KEY_FILE` (NATS operator mode).

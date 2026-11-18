@@ -17,35 +17,87 @@ import (
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
 )
 
-// memStore is an in-memory Store.
+// memStore is an in-memory Store and TokenStore with the same rules as the
+// SQL store (internal/store/agents).
 type memStore struct {
 	mu       sync.Mutex
 	agents   map[string]*Agent
-	requests map[string]string
+	requests map[string]string // agent ID -> registration request ID
+	tokens   map[string]*EnrollmentToken
 }
 
 func newMemStore() *memStore {
-	return &memStore{agents: map[string]*Agent{}, requests: map[string]string{}}
+	return &memStore{agents: map[string]*Agent{}, requests: map[string]string{}, tokens: map[string]*EnrollmentToken{}}
 }
 
-func (s *memStore) RegisterAgent(_ context.Context, agent Agent, requestID string) (Agent, error) {
+func (s *memStore) RegisterAgent(_ context.Context, agent Agent, requestID string, enrollment Enrollment) (Agent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id, ok := s.requests[requestID]; ok {
-		return *s.agents[id], nil
-	}
 	for _, existing := range s.agents {
-		if existing.PublicKey.Equal(agent.PublicKey) {
-			if existing.RevokedAt != nil {
-				return Agent{}, ErrAgentRevoked
-			}
+		if !existing.PublicKey.Equal(agent.PublicKey) {
+			continue
+		}
+		switch {
+		case existing.RevokedAt != nil:
+			return Agent{}, ErrAgentRevoked
+		case s.requests[existing.ID] == requestID:
 			return *existing, nil
 		}
+		if err := s.consume(enrollment, existing.ID, agent.RegisteredAt); err != nil {
+			return Agent{}, err
+		}
+		return *existing, nil
 	}
-	s.requests[requestID] = agent.ID
+	if err := s.consume(enrollment, agent.ID, agent.RegisteredAt); err != nil {
+		return Agent{}, err
+	}
+	s.requests[agent.ID] = requestID
 	copied := agent
 	s.agents[agent.ID] = &copied
 	return agent, nil
+}
+
+func (s *memStore) consume(enrollment Enrollment, agentID string, now time.Time) error {
+	if enrollment.Shared {
+		return nil
+	}
+	for _, token := range s.tokens {
+		if token.Hash == enrollment.TokenHash && token.Usable(now) && token.Matches(enrollment.Hostname) {
+			used := now
+			token.UsedAt, token.UsedByAgent = &used, agentID
+			return nil
+		}
+	}
+	return ErrEnrollmentRejected
+}
+
+func (s *memStore) CreateEnrollmentToken(_ context.Context, token EnrollmentToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := token
+	s.tokens[token.ID] = &copied
+	return nil
+}
+
+func (s *memStore) ListEnrollmentTokens(context.Context) ([]EnrollmentToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var list []EnrollmentToken
+	for _, token := range s.tokens {
+		list = append(list, *token)
+	}
+	return list, nil
+}
+
+func (s *memStore) RevokeEnrollmentToken(_ context.Context, id string, _ int, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.tokens[id]
+	if !ok || token.UsedAt != nil || token.RevokedAt != nil {
+		return ErrEnrollmentTokenNotFound
+	}
+	token.RevokedAt = &now
+	return nil
 }
 
 func (s *memStore) GetAgent(_ context.Context, id string) (*Agent, error) {

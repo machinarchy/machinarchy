@@ -214,6 +214,142 @@
                 }
             }
         },
+        "/api/v1/agents/enrollment-tokens": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Owner only. Secrets are never returned.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agents"
+                ],
+                "summary": "List agent enrolment tokens",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agents.tokenList"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Owner only. The secret is returned once and stored only as a hash. It enrols one agent before it expires\n(default 1 hour), optionally only from the given hostname. Configure it on the host as\nMACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agents"
+                ],
+                "summary": "Issue a single-use agent enrolment token",
+                "parameters": [
+                    {
+                        "description": "Optional hostname binding and lifetime",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/agents.createTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/agents.createTokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/agents/enrollment-tokens/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agents"
+                ],
+                "summary": "Revoke an unused agent enrolment token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Token ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/agents/{id}/invoke": {
             "post": {
                 "security": [
@@ -2922,6 +3058,52 @@
         }
     },
     "definitions": {
+        "agents.createTokenRequest": {
+            "type": "object",
+            "properties": {
+                "hostname": {
+                    "description": "Hostname, when set, is the only hostname this token enrols.",
+                    "type": "string"
+                },
+                "ttlSeconds": {
+                    "description": "TTLSeconds defaults to 3600; 60 to 86400.",
+                    "type": "integer"
+                }
+            }
+        },
+        "agents.createTokenResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "integer"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "revokedAt": {
+                    "type": "string"
+                },
+                "token": {
+                    "description": "Token is the secret, shown only in this response.",
+                    "type": "string"
+                },
+                "usedAt": {
+                    "type": "string"
+                },
+                "usedByAgent": {
+                    "type": "string"
+                }
+            }
+        },
         "agents.invokeRequest": {
             "type": "object",
             "properties": {
@@ -2933,6 +3115,46 @@
                 },
                 "timeoutSeconds": {
                     "type": "integer"
+                }
+            }
+        },
+        "agents.tokenList": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/agents.tokenView"
+                    }
+                }
+            }
+        },
+        "agents.tokenView": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "integer"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "revokedAt": {
+                    "type": "string"
+                },
+                "usedAt": {
+                    "type": "string"
+                },
+                "usedByAgent": {
+                    "type": "string"
                 }
             }
         },
