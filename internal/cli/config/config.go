@@ -19,11 +19,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -93,7 +93,7 @@ type Target struct {
 // A command updates and saves the document only through the methods below.
 type Store struct {
 	path     string
-	v        *viper.Viper
+	v        *settings
 	doc      File
 	warnings []string
 }
@@ -129,47 +129,55 @@ func Load(path string, flags *pflag.FlagSet) (*Store, error) {
 		return nil, err
 	}
 
-	v, err := newViper(flags)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Store{path: resolvedPath, v: v, doc: doc, warnings: warnings}, nil
+	return &Store{path: resolvedPath, v: newSettings(flags), doc: doc, warnings: warnings}, nil
 }
 
 // LoadSettings binds only flags and environment variables and reads no file.
 // Commands that must work with a missing or damaged config file (help,
 // version, completion) use it so global flags still apply.
 func LoadSettings(flags *pflag.FlagSet) (*Store, error) {
-	v, err := newViper(flags)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Store{v: v, doc: newDocument()}, nil
+	return &Store{v: newSettings(flags), doc: newDocument()}, nil
 }
 
-func newViper(flags *pflag.FlagSet) (*viper.Viper, error) {
-	v := viper.New()
-	v.SetEnvPrefix(envPrefix)
-	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
-	v.AutomaticEnv()
+// settings resolves a global setting with the precedence flag (when given on
+// the command line) > MACHINARCHY_CLI_<NAME> environment variable > flag
+// default. It replaces viper, which the CLI used only for this lookup (AUDIT
+// P-02); the config file is read separately by readDocument.
+type settings struct {
+	flags *pflag.FlagSet
+}
 
-	if flags == nil {
-		return v, nil
+func newSettings(flags *pflag.FlagSet) *settings { return &settings{flags: flags} }
+
+// envName maps a flag name to its variable, for example request-timeout to
+// MACHINARCHY_CLI_REQUEST_TIMEOUT.
+func envName(key string) string {
+	return envPrefix + "_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(key))
+}
+
+func (s *settings) GetString(key string) string {
+	var flag *pflag.Flag
+	if s != nil && s.flags != nil {
+		flag = s.flags.Lookup(key)
 	}
-
-	var bindErr error
-	flags.VisitAll(func(flag *pflag.Flag) {
-		if bindErr != nil || flag.Name == flagYes {
-			return
+	if flag != nil && flag.Changed {
+		return flag.Value.String()
+	}
+	// --yes is deliberately not settable through the environment.
+	if key != flagYes {
+		if value, ok := os.LookupEnv(envName(key)); ok {
+			return value
 		}
-		if err := v.BindPFlag(flag.Name, flag); err != nil {
-			bindErr = fmt.Errorf("bind CLI flag --%s: %w", flag.Name, err)
-		}
-	})
+	}
+	if flag != nil {
+		return flag.DefValue
+	}
+	return ""
+}
 
-	return v, bindErr
+func (s *settings) GetBool(key string) bool {
+	value, err := strconv.ParseBool(strings.TrimSpace(s.GetString(key)))
+	return err == nil && value
 }
 
 func newDocument() File {
