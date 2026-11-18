@@ -55,7 +55,6 @@ type Gateway struct {
 	logger  *slog.Logger
 	metrics *gatewayMetrics
 
-	nc        *nats.Conn
 	js        jetstream.JetStream
 	connected atomic.Bool
 
@@ -142,7 +141,6 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect agent gateway to NATS: %w", err)
 	}
-	g.nc = nc
 	if g.js, err = jetstream.New(nc); err != nil {
 		nc.Close()
 		return fmt.Errorf("open JetStream: %w", err)

@@ -127,40 +127,6 @@ func (e Envelope) Validate() error {
 	return nil
 }
 
-// CommandMetadata gives application commands stable identity without treating
-// a command as a persisted fact or a transport message.
-type CommandMetadata struct {
-	ID            string
-	CorrelationID string
-	CausationID   string
-}
-
-type Command interface {
-	CommandName() string
-	Metadata() CommandMetadata
-	Validate() error
-}
-
-type HostSpecUpdateCommand struct {
-	Command            CommandMetadata
-	WorkspaceID        int
-	HostID             resource.ID
-	ExpectedRevision   uint64
-	ExpectedGeneration uint64
-	Spec               resource.HostSpec
-}
-
-func (HostSpecUpdateCommand) CommandName() string         { return "host.spec-update" }
-func (c HostSpecUpdateCommand) Metadata() CommandMetadata { return c.Command }
-
-func (c HostSpecUpdateCommand) Validate() error {
-	if c.Command.ID == "" || len(c.Command.ID) > 128 || len(c.Command.CorrelationID) > 128 || len(c.Command.CausationID) > 128 ||
-		c.WorkspaceID <= 0 || c.HostID.Validate() != nil || c.ExpectedRevision == 0 || c.ExpectedGeneration == 0 {
-		return errors.New("host spec update command requires workspace, resource identity, and concurrency preconditions")
-	}
-	return c.Spec.Validate()
-}
-
 // OutboxStore is the small durable-delivery port used by local dispatchers.
 // Claim is at-least-once: expired claims may be returned again after a crash.
 type OutboxStore interface {

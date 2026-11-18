@@ -289,7 +289,6 @@ func (m *SnapshotManager) Reload(ctx context.Context) error {
 	now := candidate.AppliedAt
 	return m.repo.RecordProcessStatus(ctx, ProcessStatus{ProcessID: m.processID, Role: m.role, AppliedRevision: r.Revision, AttemptedRevision: r.Revision, LastSuccess: &now, Heartbeat: now})
 }
-func (m *SnapshotManager) Check(ctx context.Context) error { return m.Reload(ctx) }
 func (m *SnapshotManager) Run(ctx context.Context, interval time.Duration) error {
 	if ctx == nil {
 		return errors.New("configuration watcher context is required")

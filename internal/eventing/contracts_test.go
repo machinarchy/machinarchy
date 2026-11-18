@@ -24,19 +24,3 @@ func TestEventEnvelopeValidationAndSchemaVersion(t *testing.T) {
 		t.Fatal("unsupported event version was accepted")
 	}
 }
-
-func TestHostSpecCommandRequiresOptimisticPreconditions(t *testing.T) {
-	id, err := resource.NewResourceID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	command := HostSpecUpdateCommand{Command: CommandMetadata{ID: "command-1"}, WorkspaceID: 1, HostID: id, ExpectedRevision: 1, ExpectedGeneration: 2,
-		Spec: resource.HostSpec{Presence: resource.PresenceManaged}}
-	if err := command.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	command.ExpectedGeneration = 0
-	if err := command.Validate(); err == nil {
-		t.Fatal("command without generation precondition was accepted")
-	}
-}

@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 11: remove unreachable code (branch audit/http-hardening)
+
+Removed everything `deadcode -test ./...` reported as unreachable from any program or test (AUDIT/09 F9-04 and §1.3):
+- `Runtime.Metrics` (`internal/bootstrap/runtime.go`), never called;
+- the `Gateway.nc` field (`internal/agentgateway/gateway.go`), written but never read;
+- `SnapshotManager.Check` (`internal/runtimeconfig/config.go`), never called;
+- `eventing.Command`, `CommandMetadata` and `HostSpecUpdateCommand` (`internal/eventing/contracts.go`), used only by their own test, which is removed too. Host spec changes go through `ManagedResourceService` and the outbox events.
+
+### Verification
+
+- `deadcode -test ./...` (x/tools v0.52.0): no findings in machinarchy (before: 4).
+- `go test -race` for `eventing`, `bootstrap`, `agentgateway` and `runtimeconfig`: pass. golangci-lint on those packages: 0 issues.
+
 ## 2026-11-18 — Audit Phase 11: CLI refuses tokens over plain HTTP (branch audit/http-hardening)
 
 **Behaviour change:** a CLI context whose server is `http://` on a non-loopback host now fails with a usage error until the cluster is re-added with `--insecure-http`.

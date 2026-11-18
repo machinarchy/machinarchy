@@ -507,6 +507,3 @@ func (r *Runtime) ensureOwner(parent context.Context, cfg config.Config) error {
 
 // AgentGateway returns the configured gateway, or nil.
 func (r *Runtime) AgentGateway() *agentgateway.Gateway { return r.agentGateway }
-
-// Metrics returns the registry for component metrics of this process.
-func (r *Runtime) Metrics() *prometheus.Registry { return r.metrics }
