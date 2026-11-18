@@ -1,5 +1,37 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: detached-execution runner (branch audit/detached-ssh)
+
+- New `internal/hostaccess/runner`: the POSIX `sh` runner of AUDIT/10b §1.2 (`runner.sh`, embedded), plus Go command builders and strict reply parsers.
+- Actions:
+  - `launch`: an idempotent `mkdir` lock; a retry adopts the running process;
+  - `status`: running, exited, lost, missing; output deltas with head and skip-ahead chunks;
+  - `cancel`: TERM to the process group or tree, KILL after 10 s;
+  - `cleanup`;
+  - a `sweep` of directories older than the retention period, run on launch.
+- Supervisor: `systemd-run` (system, or `--user` with lingering) when usable, otherwise `setsid`/`nohup`. A host-side watchdog enforces the timeout in both modes, and systemd adds `RuntimeMaxSec` and `KillMode=control-group`.
+- Safety:
+  - the command reaches the host only through `domain.QuoteArgv`;
+  - identifiers and the state root are checked in Go and again by the script;
+  - state is owner-only (`umask 077`);
+  - protocol lines are prefixed, so output from shell start-up files is ignored.
+- Not wired into execution yet.
+
+### Verification
+
+- `go test -race -count=3 ./internal/hostaccess/runner/`: pass with `/bin/sh` (bash 3.2) and `dash`. The tests cover:
+  - idempotent launch;
+  - verbatim arguments;
+  - incremental output and skip-ahead;
+  - cancel kills the whole tree;
+  - host-side timeout;
+  - a dead supervisor gives `lost`;
+  - cleanup leaves running targets;
+  - a fake `systemd-run` (arguments, fallback, and a forced `systemd` mode that is refused);
+  - crafted IDs and roots refused by Go and by the script;
+  - parser rejection cases.
+- `shellcheck -s sh -S warning`: clean for the runner and the wrapper. golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13A: host-key change audit and metric (branch audit/host-keys)
 
 - AUDIT/10b §2.2 asks for an audit event and a metric on a key change. Both were missing.
