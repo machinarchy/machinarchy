@@ -24,10 +24,12 @@ const (
 	AuditResourceHostCreated = "resource_host.created"
 	AuditResourceHostUpdated = "resource_host.updated"
 	AuditResourceHostDeleted = "resource_host.deleted"
-	AuditAPITokenCreated     = "api_token.created"
-	AuditAPITokenRevoked     = "api_token.revoked"
-	AuditAgentRegistered     = "agent.registered"
-	AuditAgentRevoked        = "agent.revoked"
+	// AuditResourceHostKeyTrusted records pinned SSH host keys and who trusted them.
+	AuditResourceHostKeyTrusted = "resource_host.host_key_trusted"
+	AuditAPITokenCreated        = "api_token.created"
+	AuditAPITokenRevoked        = "api_token.revoked"
+	AuditAgentRegistered        = "agent.registered"
+	AuditAgentRevoked           = "agent.revoked"
 	// Enrolment tokens (AUDIT M-4); the secret is never recorded.
 	AuditAgentEnrollmentTokenIssued  = "agent.enrollment_token_issued"
 	AuditAgentEnrollmentTokenRevoked = "agent.enrollment_token_revoked"

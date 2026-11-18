@@ -9,7 +9,7 @@ import (
 )
 
 type HostConverger interface {
-	ReconcileHost(context.Context, *resource.Host) (resource.HostPhase, []resource.Condition, error)
+	ReconcileHost(context.Context, *resource.Host) (resource.HostObservation, error)
 }
 
 type HostController struct {
@@ -99,19 +99,29 @@ func (c *HostController) Reconcile(ctx context.Context, key ResourceKey) (Reconc
 		if host.Status.ObservedGeneration == host.Metadata.Generation && sameConditions(host.Status.Conditions, conditions) {
 			return ReconcileResult{RequeueAfter: c.connectorRetry}, nil
 		}
-		if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, host.Status.Phase, conditions, time.Now()); err != nil {
+		if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, host.Status.Phase, conditions, nil, time.Now()); err != nil {
 			return ReconcileResult{}, err
 		}
 		return ReconcileResult{RequeueAfter: c.connectorRetry}, nil
 	}
-	phase, conditions, err := c.converger.ReconcileHost(ctx, host)
+	observed, err := c.converger.ReconcileHost(ctx, host)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
-	if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, phase, conditions, time.Now()); err != nil {
+	if len(observed.TrustHostKeys) > 0 {
+		// TOFU: pin first. Trust is part of the spec, so the generation
+		// changes and the spec-changed event reconciles the Host again, this
+		// time verifying against the pinned keys.
+		err := c.hosts.TrustHostKeys(ctx, key.WorkspaceID, id, host.Metadata.Revision, observed.TrustHostKeys, false, "tofu", time.Now())
+		if err != nil && !errors.Is(err, resource.ErrConflict) {
+			return ReconcileResult{}, err
+		}
+		return ReconcileResult{RequeueAfter: time.Second}, nil
+	}
+	if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, observed.Phase, observed.Conditions, observed.ObservedHostKeys, time.Now()); err != nil {
 		return ReconcileResult{}, err
 	}
-	for _, condition := range conditions {
+	for _, condition := range observed.Conditions {
 		if condition.Type == "Ready" && condition.Status != resource.ConditionTrue {
 			return ReconcileResult{RequeueAfter: c.connectorRetry}, nil
 		}

@@ -1,5 +1,38 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: automatic SSH host-key trust (branch audit/host-keys)
+
+**Behaviour change:** a Host bound to an Access Profile no longer needs a hand-entered fingerprint. Its keys are trusted according to the profile's `hostKeyPolicy`: `tofu` pins them on first contact; `approve` (the production default) waits for an owner; `ca` trusts the profile's host certificate authorities; `pinned` is the old behaviour.
+
+- **Domain** (`internal/domain/resource/hostkeys.go`, new):
+  - `HostKeyPolicy`, and `AccessProfileSpec.HostKeyPolicy` plus `HostCertificateAuthorities` (validated: `tofu` requires private-key authentication; `ca` needs 1–8 keys). `EffectiveHostKeyPolicy` turns `tofu` into `approve` for password profiles, so an impostor on first contact never receives a password.
+  - `HostStatus.ObservedHostKeys`.
+  - `Host.TrustHostKeys` (1–8 distinct `SHA256:` fingerprints; it refuses to replace existing trust unless asked).
+  - `HostObservation`.
+- **Store:**
+  - migration `000003` adds `managed_hosts.observed_host_keys`;
+  - `ObserveHost` records observed keys;
+  - new `TrustHostKeys`, which bumps the generation, emits a spec-changed event and audits `resource_host.host_key_trusted` with the fingerprints, the source (`tofu` or `owner`) and any replaced keys.
+- **Reconciler** (`internal/hostaccess`):
+  - no trust: scan before authenticating, then pin (`tofu`) or report `HostKeyPendingApproval` with the fingerprints (`approve`); `pinned` never scans;
+  - a trusted key no longer presented gives `HostKeyChanged`, naming the presented and trusted keys, with no authentication attempted and nothing replaced.
+  - The connector verifies against the whole fingerprint list and the profile's CAs, and refuses to authenticate with no trust at all. `WithDefaultHostKeyPolicy` sets the default.
+- **Controller:** under TOFU it pins first; the spec-changed event then reconciles again with the pinned keys.
+- **Service:** owner-only `TrustHostKeys`. It requires the exact fingerprints the owner reviewed (approving "whatever is observed now" could trust a key that changed in between) and the spec generation the owner saw (status writes do not conflict with it). CA keys are parsed when a profile is created or updated.
+- **Config:** `MACHINARCHY_SSH_HOST_KEY_POLICY` (`--ssh-host-key-policy`): `tofu` in development and `approve` in production by default; `pinned` is allowed; `ca` is per profile only.
+
+### Verification
+
+- `internal/hostaccess/host_keys_test.go` (new), the real controller loop over SQLite, the Secret Store and SSH test servers:
+  - TOFU pins every presented key (Ed25519 and ECDSA), then verifies, and audits `source=tofu`;
+  - approve: a password profile under a `tofu` default waits with **0 authentication attempts**; operators are refused; approval needs the named fingerprints and the current spec generation, and succeeds after a status write lands in between;
+  - a changed key gives `HostKeyChanged` with **0 authentication attempts**; trust is unchanged, approval without replace is refused, and an explicit replace works;
+  - `pinned` makes **0 connections**;
+  - `ca` verifies a certified host with no fingerprint;
+  - profile validation.
+- `TestLoadSSHHostKeyPolicy` (5 cases).
+- `go test -race -count=3 -shuffle=on` on `hostaccess`, `controlmanager`, `service`, `store` and `sshclient`: pass. golangci-lint: only the 2 pre-existing issues.
+
 ## 2026-11-18 — Audit Phase 13A: SSH host-key scanning and multi-key verification (branch audit/host-keys)
 
 - `pkg/sshclient/hostkeys.go` (new):

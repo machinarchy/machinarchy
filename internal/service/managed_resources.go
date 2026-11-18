@@ -9,6 +9,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/secrets"
+	"github.com/machinarchy/machinarchy/pkg/sshclient"
 )
 
 var ErrAccessProfileOwnerRequired = errors.New("workspace owner permission is required for Access Profile management")
@@ -108,6 +109,9 @@ func (s *ManagedResourceService) CreateAccessProfile(ctx context.Context, princi
 	if err := s.validateSecretReference(ctx, principal, spec); err != nil {
 		return nil, err
 	}
+	if _, err := sshclient.ParseHostCertificateAuthorities(spec.HostCertificateAuthorities); err != nil {
+		return nil, err
+	}
 	profile, revision, err := resource.NewAccessProfile(principal.WorkspaceID, name, description, spec, principal.UserID, time.Now().UTC())
 	if err != nil {
 		return nil, err
@@ -123,6 +127,9 @@ func (s *ManagedResourceService) UpdateAccessProfile(ctx context.Context, princi
 		return nil, err
 	}
 	if err := s.validateSecretReference(ctx, principal, spec); err != nil {
+		return nil, err
+	}
+	if _, err := sshclient.ParseHostCertificateAuthorities(spec.HostCertificateAuthorities); err != nil {
 		return nil, err
 	}
 	return s.profiles.UpdateAccessProfile(ctx, principal.WorkspaceID, id, expected, spec, principal.UserID, time.Now().UTC())
@@ -261,6 +268,44 @@ func (s *ManagedResourceService) CancelOperation(ctx context.Context, principal 
 		if !errors.Is(err, resource.ErrConflict) {
 			return nil, err
 		}
+	}
+	return nil, resource.ErrConflict
+}
+
+// TrustHostKeys pins SSH host key fingerprints for a Host (AUDIT/10b §2).
+// Trusting keys decides where an owner's credential may be presented, so it
+// is owner-only, like binding a credential (AUDIT S-02).
+//
+// The caller must name the exact fingerprints it reviewed: approving
+// "whatever is observed now" would trust keys that changed between review
+// and approval. expectedGeneration is the Host spec generation the caller
+// saw; status updates from the controller do not change it, so approval does
+// not race them. A Host that already trusts keys needs replace, so a changed
+// key is never accepted by accident.
+func (s *ManagedResourceService) TrustHostKeys(ctx context.Context, principal domain.Principal, id resource.ID, expectedGeneration uint64,
+	fingerprints []string, replace bool) (*resource.Host, error) {
+	if err := authorizeProfileOwner(principal); err != nil {
+		return nil, err
+	}
+	if len(fingerprints) == 0 {
+		return nil, fmt.Errorf("%w: name the host key fingerprints to trust", domain.ErrInvalidInput)
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		host, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)
+		if err != nil {
+			return nil, err
+		}
+		if host.Metadata.Generation != expectedGeneration {
+			return nil, resource.ErrConflict
+		}
+		err = s.hosts.TrustHostKeys(ctx, principal.WorkspaceID, id, host.Metadata.Revision, fingerprints, replace, "owner", time.Now().UTC())
+		if errors.Is(err, resource.ErrConflict) {
+			continue // a status write landed in between; the generation check above decides
+		}
+		if err != nil {
+			return nil, err
+		}
+		return s.hosts.GetHost(ctx, principal.WorkspaceID, id)
 	}
 	return nil, resource.ErrConflict
 }

@@ -76,6 +76,9 @@ type HostStatus struct {
 	Phase              HostPhase   `json:"phase"`
 	Conditions         []Condition `json:"conditions,omitempty"`
 	LastObservedAt     *time.Time  `json:"lastObservedAt,omitempty"`
+	// ObservedHostKeys are the SSH host keys last seen on the network, kept
+	// so an owner can approve them (or see what changed).
+	ObservedHostKeys []ObservedHostKey `json:"observedHostKeys,omitempty"`
 }
 
 // Host is the connector-neutral managed resource. Connector credentials and
@@ -215,7 +218,7 @@ func (h *Host) UpdateMetadata(expectedRevision uint64, name string, environmentI
 	return h.Validate()
 }
 
-func (h *Host) Observe(expectedGeneration uint64, phase HostPhase, conditions []Condition, now time.Time) error {
+func (h *Host) Observe(expectedGeneration uint64, phase HostPhase, conditions []Condition, keys []ObservedHostKey, now time.Time) error {
 	if h == nil {
 		return fmt.Errorf("%w: Host is required", ErrInvalidResource)
 	}
@@ -237,6 +240,9 @@ func (h *Host) Observe(expectedGeneration uint64, phase HostPhase, conditions []
 	h.Status.ObservedGeneration = expectedGeneration
 	h.Status.Conditions = normalized
 	h.Status.LastObservedAt = &observed
+	if keys != nil {
+		h.Status.ObservedHostKeys = mergeObservedHostKeys(h.Status.ObservedHostKeys, keys)
+	}
 	h.Metadata.Revision++
 	h.Metadata.UpdatedAt = observed
 	return h.Validate()
@@ -319,4 +325,24 @@ func sanitizeMessage(value string, limit int) string {
 		value = value[:limit]
 	}
 	return strings.TrimSpace(value)
+}
+
+// mergeObservedHostKeys keeps each key's first sighting time and drops keys
+// the host no longer presents.
+func mergeObservedHostKeys(previous, current []ObservedHostKey) []ObservedHostKey {
+	first := map[string]time.Time{}
+	for _, key := range previous {
+		first[key.Fingerprint] = key.FirstSeenAt
+	}
+	merged := make([]ObservedHostKey, 0, len(current))
+	for _, key := range current {
+		if seen, ok := first[key.Fingerprint]; ok {
+			key.FirstSeenAt = seen
+		}
+		merged = append(merged, key)
+	}
+	if len(merged) > MaxTrustedHostKeys {
+		merged = merged[:MaxTrustedHostKeys]
+	}
+	return merged
 }

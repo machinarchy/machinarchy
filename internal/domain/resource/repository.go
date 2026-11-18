@@ -16,7 +16,12 @@ type HostRepository interface {
 	ListHostKeys(context.Context, HostKeyCursor) ([]HostKey, error)
 	UpdateHostSpec(context.Context, int, ID, uint64, uint64, HostSpec, time.Time) error
 	UpdateHostMetadata(context.Context, int, ID, uint64, string, int, map[string]string, time.Time) error
-	ObserveHost(context.Context, int, ID, uint64, HostPhase, []Condition, time.Time) error
+	// ObserveHost records a reconcile result; nil keys keep the stored
+	// observed host keys.
+	ObserveHost(context.Context, int, ID, uint64, HostPhase, []Condition, []ObservedHostKey, time.Time) error
+	// TrustHostKeys pins host key fingerprints (see Host.TrustHostKeys) and
+	// audits who trusted them: an owner, or the TOFU policy.
+	TrustHostKeys(ctx context.Context, workspaceID int, id ID, expectedRevision uint64, fingerprints []string, replace bool, source string, now time.Time) error
 	DeleteHost(context.Context, int, ID, uint64) error
 }
 

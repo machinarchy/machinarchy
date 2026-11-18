@@ -20,6 +20,7 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_SIGNUP_ENABLED":             "",
 		"MACHINARCHY_API_DOCS_ENABLED":           "",
 		"MACHINARCHY_METRICS_LISTEN_ADDR":        "",
+		"MACHINARCHY_SSH_HOST_KEY_POLICY":        "",
 		"MACHINARCHY_DATABASE_ENGINE":            "sqlite",
 		"MACHINARCHY_DATABASE_PATH":              "",
 		"MACHINARCHY_DATABASE_URL":               "",
@@ -571,6 +572,34 @@ func TestLoadOperationalEndpoints(t *testing.T) {
 			}
 			if cfg.APIDocsEnabled != tc.wantDocs || cfg.MetricsListenAddr != tc.wantMetrics {
 				t.Fatalf("docs=%v metrics=%q, want %v %q", cfg.APIDocsEnabled, cfg.MetricsListenAddr, tc.wantDocs, tc.wantMetrics)
+			}
+		})
+	}
+}
+
+func TestLoadSSHHostKeyPolicy(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		want    string
+		wantErr bool
+	}{
+		"development pins on first use": {map[string]string{}, "tofu", false},
+		"production needs approval":     {map[string]string{"MACHINARCHY_ENVIRONMENT": "production"}, "approve", false},
+		"explicit pinned":               {map[string]string{"MACHINARCHY_SSH_HOST_KEY_POLICY": "Pinned"}, "pinned", false},
+		"ca is per profile only":        {map[string]string{"MACHINARCHY_SSH_HOST_KEY_POLICY": "ca"}, "", true},
+		"unknown":                       {map[string]string{"MACHINARCHY_SSH_HOST_KEY_POLICY": "always"}, "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setCommonEnv(t)
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := Load()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && cfg.SSHHostKeyPolicy != tc.want {
+				t.Fatalf("policy = %q, want %q", cfg.SSHHostKeyPolicy, tc.want)
 			}
 		})
 	}

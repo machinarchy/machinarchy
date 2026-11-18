@@ -85,8 +85,11 @@ type Config struct {
 	Database               DatabaseConfig
 	BootstrapAdmin         BootstrapAdminConfig
 	SSHTargetPolicy        netpolicy.Policy
-	Execution              domain.ExecutionPolicy
-	AgentGateway           AgentGatewayConfig
+	// SSHHostKeyPolicy is the host-key trust policy for Access Profiles that
+	// do not set one: tofu, approve or pinned (AUDIT/10b §2).
+	SSHHostKeyPolicy string
+	Execution        domain.ExecutionPolicy
+	AgentGateway     AgentGatewayConfig
 }
 
 // AgentGatewayConfig enables the controller side of the agent protocol. The
@@ -200,6 +203,7 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--ssh-allow-loopback":         "MACHINARCHY_SSH_ALLOW_LOOPBACK",
 		"--ssh-allowed-cidrs":          "MACHINARCHY_SSH_ALLOWED_CIDRS",
 		"--ssh-denied-cidrs":           "MACHINARCHY_SSH_DENIED_CIDRS",
+		"--ssh-host-key-policy":        "MACHINARCHY_SSH_HOST_KEY_POLICY",
 		"--execution-enabled":          "MACHINARCHY_EXECUTION_ENABLED",
 		"--execution-allowed-programs": "MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS",
 	}
@@ -381,6 +385,19 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SSHTargetPolicy = targetPolicy
+	// Development pins the keys seen on first contact; production waits for
+	// an owner to approve them. ca needs per-profile keys, so it is not a
+	// deployment default.
+	hostKeyDefault := "approve"
+	if cfg.Environment == Development {
+		hostKeyDefault = "tofu"
+	}
+	cfg.SSHHostKeyPolicy = strings.ToLower(get("MACHINARCHY_SSH_HOST_KEY_POLICY", hostKeyDefault))
+	switch cfg.SSHHostKeyPolicy {
+	case "tofu", "approve", "pinned":
+	default:
+		return Config{}, errors.New("MACHINARCHY_SSH_HOST_KEY_POLICY must be tofu, approve or pinned")
+	}
 
 	executionEnabled, err := strconv.ParseBool(get("MACHINARCHY_EXECUTION_ENABLED", "false"))
 	if err != nil {

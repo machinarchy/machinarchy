@@ -35,6 +35,7 @@ import (
 // Runtime owns the process-local database connections.
 // Close it only after all servers and workers using it have stopped.
 type Runtime struct {
+	hostKeyPolicy    string // deployment default host-key policy (MACHINARCHY_SSH_HOST_KEY_POLICY)
 	stores           *store.Stores
 	shutdownTimeout  time.Duration
 	configuration    *runtimeconfig.Service
@@ -177,7 +178,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		return nil, errors.Join(err, wrapCloseError("close datastore after agent gateway failure", stores.Close()))
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	runtime := &Runtime{stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
+	runtime := &Runtime{hostKeyPolicy: cfg.SSHHostKeyPolicy, stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
 		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout,
 		metrics: metrics, agentGateway: gateway, agentPublicKey: publicKey}
 	runtime.configWG.Add(1)
@@ -269,7 +270,8 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
 	}
-	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector)
+	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector,
+		hostaccess.WithDefaultHostKeyPolicy(resource.HostKeyPolicy(r.hostKeyPolicy)))
 	if err != nil {
 		return nil, fmt.Errorf("construct managed Host reconciler: %w", err)
 	}

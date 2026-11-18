@@ -134,7 +134,7 @@ func testResourceHost(t *testing.T, f *fixture) {
 		}
 		observeCtx = resource.WithLeaseFence(ctx, resource.LeaseFence{Kind: lease.Kind, WorkspaceID: lease.WorkspaceID, ID: lease.ID, Token: lease.Token})
 	}
-	if err := f.stores.ResourceHosts.ObserveHost(observeCtx, host.Metadata.WorkspaceID, host.Metadata.ID, 2, resource.HostDeleting, nil, time.Now()); err != nil {
+	if err := f.stores.ResourceHosts.ObserveHost(observeCtx, host.Metadata.WorkspaceID, host.Metadata.ID, 2, resource.HostDeleting, nil, nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got, err = f.stores.ResourceHosts.GetHost(ctx, host.Metadata.WorkspaceID, host.Metadata.ID)

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -140,7 +141,7 @@ type queryRower interface {
 
 const hostColumns = `id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
 		access_profile_revision, generation, revision, observed_generation, phase, conditions,
-		last_observed_at, deletion_timestamp, created_at, updated_at`
+		last_observed_at, deletion_timestamp, created_at, updated_at, observed_host_keys`
 
 func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ID) (*resource.Host, error) {
 	host, err := scanHost(q.QueryRowContext(ctx, s.bind(`SELECT `+hostColumns+` FROM managed_hosts WHERE workspace_id = ? AND id = ?`), workspaceID, string(id)))
@@ -154,7 +155,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanHost(row rowScanner) (*resource.Host, error) {
 	var host resource.Host
-	var labelsText, conditionsText, presence, profileID, accessTarget, phase string
+	var labelsText, conditionsText, presence, profileID, accessTarget, phase, observedKeys string
 	var environmentID sql.NullInt64
 	var lastObserved, deletion sql.NullString
 	var created, updated string
@@ -162,7 +163,7 @@ func scanHost(row rowScanner) (*resource.Host, error) {
 		&host.Metadata.ID, &host.Metadata.WorkspaceID, &environmentID, &host.Metadata.Name,
 		&labelsText, &presence, &profileID, &accessTarget, &host.Spec.ProfileRevision, &host.Metadata.Generation,
 		&host.Metadata.Revision, &host.Status.ObservedGeneration, &phase, &conditionsText,
-		&lastObserved, &deletion, &created, &updated)
+		&lastObserved, &deletion, &created, &updated, &observedKeys)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -182,6 +183,9 @@ func scanHost(row rowScanner) (*resource.Host, error) {
 		return nil, err
 	}
 	if err := decodeJSON(conditionsText, &host.Status.Conditions); err != nil {
+		return nil, err
+	}
+	if err := decodeJSON(observedKeys, &host.Status.ObservedHostKeys); err != nil {
 		return nil, err
 	}
 	if host.Status.LastObservedAt, err = sqlx.ParseNullTime(lastObserved); err != nil {
@@ -266,7 +270,32 @@ func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource
 	if host.Spec.Presence == resource.PresenceAbsent {
 		eventType, change = eventing.HostDeletionRequested, "deletion-requested"
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, eventType, change, nil)
+	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, nil, eventType, change, nil)
+}
+
+// TrustHostKeys pins host key fingerprints (resource.Host.TrustHostKeys).
+// Trust is part of the spec: the generation changes and a spec-changed event
+// makes the Host controller verify the Host again. source names who trusted
+// the keys ("owner" or "tofu") in the audit event.
+func (s *Store) TrustHostKeys(ctx context.Context, workspaceID int, id resource.ID, expectedRevision uint64,
+	fingerprints []string, replace bool, source string, now time.Time) error {
+	host, err := s.getHost(ctx, s.db, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	previous := strings.Join(host.Spec.AccessTarget.Trust, " ")
+	if err := host.TrustHostKeys(expectedRevision, fingerprints, replace, now); err != nil {
+		return err
+	}
+	details := map[string]string{"source": source, "fingerprints": strings.Join(fingerprints, " ")}
+	if previous != "" {
+		details["replaced"] = previous
+	}
+	var fence *resource.LeaseFence
+	if value, ok := resource.LeaseFenceFromContext(ctx); ok {
+		fence = &value
+	}
+	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostKeyTrusted, details, eventing.HostSpecChanged, "host-keys-trusted", fence)
 }
 
 func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ID,
@@ -281,16 +310,16 @@ func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id reso
 	if err := host.UpdateMetadata(expectedRevision, name, environmentID, labels, now); err != nil {
 		return err
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, "", "", nil)
+	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, nil, "", "", nil)
 }
 
 func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID,
-	expectedGeneration uint64, phase resource.HostPhase, conditions []resource.Condition, now time.Time) error {
+	expectedGeneration uint64, phase resource.HostPhase, conditions []resource.Condition, keys []resource.ObservedHostKey, now time.Time) error {
 	host, err := s.getHost(ctx, s.db, workspaceID, id)
 	if err != nil {
 		return err
 	}
-	if err := host.Observe(expectedGeneration, phase, conditions, now); err != nil {
+	if err := host.Observe(expectedGeneration, phase, conditions, keys, now); err != nil {
 		return err
 	}
 	var fence *resource.LeaseFence
@@ -300,10 +329,11 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID
 	if s.dialect == sqlx.PostgreSQL && fence == nil {
 		return resource.ErrLeaseRequired
 	}
-	return s.writeHost(ctx, host, host.Metadata.Revision-1, domain.AuditResourceHostUpdated, "", "", fence)
+	return s.writeHost(ctx, host, host.Metadata.Revision-1, domain.AuditResourceHostUpdated, nil, "", "", fence)
 }
 
-func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction, eventType, eventChange string, fence *resource.LeaseFence) error {
+func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction string, auditDetails map[string]string,
+	eventType, eventChange string, fence *resource.LeaseFence) error {
 	labels, err := encodeJSON(host.Metadata.Labels)
 	if err != nil {
 		return err
@@ -313,6 +343,10 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 		return err
 	}
 	accessTarget, err := encodeJSON(host.Spec.AccessTarget)
+	if err != nil {
+		return err
+	}
+	observedKeys, err := encodeJSON(host.Status.ObservedHostKeys)
 	if err != nil {
 		return err
 	}
@@ -328,20 +362,25 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 	}
 	result, err := tx.ExecContext(ctx, s.bind(`UPDATE managed_hosts SET environment_id = ?, name = ?, labels = ?,
 		desired_presence = ?, access_profile_id = ?, access_profile_revision = ?, access_target = ?, generation = ?, revision = ?,
-		observed_generation = ?, phase = ?, conditions = ?, last_observed_at = ?, deletion_timestamp = ?, updated_at = ?
+		observed_generation = ?, phase = ?, conditions = ?, last_observed_at = ?, deletion_timestamp = ?, updated_at = ?,
+		observed_host_keys = ?
 		WHERE workspace_id = ? AND id = ? AND revision = ?`), nullablePositiveID(host.Metadata.EnvironmentID), host.Metadata.Name, labels,
 		string(host.Spec.Presence), string(host.Spec.AccessProfileID), host.Spec.ProfileRevision, accessTarget,
 		host.Metadata.Generation, host.Metadata.Revision, host.Status.ObservedGeneration, string(host.Status.Phase),
 		conditions, nullableTimeText(host.Status.LastObservedAt), nullableTimeText(host.Metadata.DeletionTimestamp),
-		sqlx.Time(host.Metadata.UpdatedAt), host.Metadata.WorkspaceID, string(host.Metadata.ID), expectedRevision)
+		sqlx.Time(host.Metadata.UpdatedAt), observedKeys, host.Metadata.WorkspaceID, string(host.Metadata.ID), expectedRevision)
 	if err != nil {
 		return fmt.Errorf("update managed Host: %w", err)
 	}
 	if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
 		return err
 	}
+	if auditDetails == nil {
+		auditDetails = map[string]string{}
+	}
+	auditDetails["generation"] = fmt.Sprint(host.Metadata.Generation)
 	if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, auditAction, domain.AuditTargetResourceHost,
-		string(host.Metadata.ID), map[string]string{"generation": fmt.Sprint(host.Metadata.Generation)}); err != nil {
+		string(host.Metadata.ID), auditDetails); err != nil {
 		return err
 	}
 	if eventType != "" {

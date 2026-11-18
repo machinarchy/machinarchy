@@ -468,8 +468,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 2 {
-		t.Fatalf("applied migrations = %d, want the baseline and 000002 (agent enrolment tokens)", before)
+	if before != 3 {
+		t.Fatalf("applied migrations = %d, want the baseline, 000002 (agent enrolment tokens) and 000003 (host key observations)", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

@@ -27,7 +27,7 @@ func TestHostGenerationAndRevision(t *testing.T) {
 	if host.Metadata.Generation != 2 || host.Metadata.Revision != 3 {
 		t.Fatalf("spec update should increment generation and revision: generation=%d revision=%d", host.Metadata.Generation, host.Metadata.Revision)
 	}
-	if err := host.Observe(1, HostActive, nil, now.Add(3*time.Minute)); !errors.Is(err, ErrConflict) {
+	if err := host.Observe(1, HostActive, nil, nil, now.Add(3*time.Minute)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale observation error = %v, want ErrConflict", err)
 	}
 }

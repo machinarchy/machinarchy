@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/secrets"
@@ -123,14 +125,17 @@ func (c *SSHConnector) params(ctx context.Context, host *resource.Host, revision
 		host.Spec.AccessProfileID != revision.ProfileID || revision.Spec.Connector != resource.ConnectorSSH {
 		return sshclient.DialParams{}, func() {}, ErrUnavailable
 	}
-	endpoint := strings.TrimSpace(host.Spec.AccessTarget.Endpoint)
-	address, portText, err := net.SplitHostPort(endpoint)
-	if err != nil || strings.TrimSpace(address) == "" || len(host.Spec.AccessTarget.Trust) != 1 {
+	address, port, err := endpointOf(host)
+	if err != nil {
+		return sshclient.DialParams{}, func() {}, err
+	}
+	authorities, err := sshclient.ParseHostCertificateAuthorities(revision.Spec.HostCertificateAuthorities)
+	if err != nil {
 		return sshclient.DialParams{}, func() {}, ErrUnavailable
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return sshclient.DialParams{}, func() {}, ErrUnavailable
+	if len(host.Spec.AccessTarget.Trust) == 0 && len(authorities) == 0 {
+		// Nothing to verify the host against: never authenticate blindly.
+		return sshclient.DialParams{}, func() {}, ErrHostKey
 	}
 	policy := c.policy()
 	if err := policy.CheckHost(address); err != nil {
@@ -151,7 +156,8 @@ func (c *SSHConnector) params(ctx context.Context, host *resource.Host, revision
 		return sshclient.DialParams{}, func() {}, ErrUnavailable
 	}
 	params := sshclient.DialParams{IP: address, Port: port, Username: revision.Spec.Username,
-		AuthMethod: method, SecretData: string(credential), ExpectedFingerprint: host.Spec.AccessTarget.Trust[0], Dialer: policy.DialContext}
+		AuthMethod: method, SecretData: string(credential), TrustedFingerprints: host.Spec.AccessTarget.Trust,
+		HostCertAuthorities: authorities, Dialer: policy.DialContext}
 	return params, func() { wipe(credential); params.SecretData = "" }, nil
 }
 
@@ -195,4 +201,54 @@ func wipe(value []byte) {
 	for i := range value {
 		value[i] = 0
 	}
+}
+
+func endpointOf(host *resource.Host) (string, int, error) {
+	address, portText, err := net.SplitHostPort(strings.TrimSpace(host.Spec.AccessTarget.Endpoint))
+	if err != nil || strings.TrimSpace(address) == "" {
+		return "", 0, ErrUnavailable
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, ErrUnavailable
+	}
+	return address, port, nil
+}
+
+// HostKeyScanner reads a host's SSH host keys without authenticating.
+type HostKeyScanner interface {
+	ScanHostKeys(context.Context, *resource.Host) ([]resource.ObservedHostKey, error)
+}
+
+// ScanHostKeys returns the host's keys as seen now. It resolves no
+// credential and stops before authentication; the egress policy and the
+// connector's concurrency limit apply.
+func (c *SSHConnector) ScanHostKeys(ctx context.Context, host *resource.Host) ([]resource.ObservedHostKey, error) {
+	if c == nil || ctx == nil || host == nil {
+		return nil, ErrUnavailable
+	}
+	address, port, err := endpointOf(host)
+	if err != nil {
+		return nil, err
+	}
+	policy := c.policy()
+	if err := policy.CheckHost(address); err != nil {
+		return nil, domain.ErrTargetNotAllowed
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := c.acquire(callCtx); err != nil {
+		return nil, err
+	}
+	defer c.release()
+	keys, err := sshclient.ScanHostKeys(callCtx, sshclient.DialParams{IP: address, Port: port, Dialer: policy.DialContext})
+	if err != nil {
+		return nil, classify(err)
+	}
+	now := time.Now().UTC()
+	observed := make([]resource.ObservedHostKey, 0, len(keys))
+	for _, key := range keys {
+		observed = append(observed, resource.ObservedHostKey{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), FirstSeenAt: now})
+	}
+	return observed, nil
 }
