@@ -84,6 +84,9 @@ type ObservedHostKey struct {
 	Algorithm   string    `json:"algorithm"`
 	Fingerprint string    `json:"fingerprint"`
 	FirstSeenAt time.Time `json:"firstSeenAt"`
+	// LastSeenAt is when a scan last saw the key. The reconciler reuses a
+	// recent scan instead of connecting again (see HostReconciler).
+	LastSeenAt time.Time `json:"lastSeenAt,omitempty"`
 }
 
 // ValidFingerprint reports whether value looks like an OpenSSH SHA-256 key

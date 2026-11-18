@@ -1,5 +1,21 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: complete host-key scans, rate-limited rescans (branch audit/host-keys)
+
+- `pkg/sshclient/hostkeys.go`: `ScanHostKeys` used to skip a key type whose connection failed and return the rest. Seen live: an `approve` scan offered 2 of 3 keys. It now retries a failed type once, after 500 ms, and if it still fails the whole scan fails. A refused or policy-denied target is not retried.
+- `internal/hostaccess/reconciler.go`: the reconciler reuses a Host's last scan for `DefaultHostKeyRescanInterval` (10 min, `WithHostKeyRescanInterval`) while the Host is pending approval or `HostKeyChanged`. A new generation, or a cached scan that still shows a trusted key (it predates the change), forces a rescan.
+  - Why: seen live, OpenSSH 9.8+ `PerSourcePenalties` ("noauth") blocked the controller's address after it rescanned a pending Host on every retry. The block then broke the verify after approval.
+- `ObservedHostKey.LastSeenAt` (domain and CLI): only a fresh scan sets it, so reuse cannot extend its own window.
+- `docs/operations.md`: the scan is all or nothing; why scans are rate limited and what to do on `srclimit_penalise`.
+
+### Verification
+
+- New tests:
+  - `TestScanHostKeysRetriesADroppedConnection` and `TestScanHostKeysNeverReturnsAPartialSet` (a dialer drops scan connections);
+  - `TestPendingHostReusesARecentScan` (5 reconciles give 1 scan; after the interval there is a 2nd, after a spec change a 3rd);
+  - `TestChangedKeyRescansOnceThenReuses`.
+- `go test -race` on `internal/hostaccess`, `internal/domain/...`, `pkg/sshclient`, `internal/controlmanager` and `internal/cli/...`: pass. `golangci-lint --new-from-rev=HEAD`: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13A: an event no longer waits behind a delayed retry (branch audit/host-keys)
 
 - `internal/controlmanager/queue.go`: `Add` for a key that already had a delayed requeue (`AddAfter`, e.g. the Host controller's connector retry) was coalesced into the delayed entry. The outbox event was acknowledged, but the reconcile waited out the whole delay. An immediate `Add` now replaces the pending delay. Found live: an owner's host-key approval sat at `HostKeyPendingApproval` until the retry interval; this affected any spec change to a Host that was not Ready.

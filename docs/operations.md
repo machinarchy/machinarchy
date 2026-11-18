@@ -142,6 +142,24 @@ development and `approve` in production by default, or `pinned`.
 - **Approval names exact keys.** It sends the exact fingerprints the owner
   reviewed and the spec generation they saw, so a key that changed in the
   meantime is not trusted by mistake.
+- **A scan is all or nothing.** It opens one connection per key type
+  (Ed25519, ECDSA, RSA). If one of them still fails after a retry, the scan
+  fails and nothing is pinned or offered for approval. An incomplete set would
+  break later connections that negotiate the missing type.
+
+**Scans are rate limited.** Each scan connection ends before authentication.
+OpenSSH 9.8 and later (`PerSourcePenalties`, `noauth`) penalises an address
+that makes many such connections and then refuses all of them for a while,
+including real logins.
+
+The controller therefore reuses a Host's last scan for 10 minutes while the
+Host waits for approval or reports `HostKeyChanged`. A spec change, such as
+an approval or a new endpoint, triggers a fresh scan right away.
+
+If a Host shows `ConnectionFailed`, and sshd logs `srclimit_penalise` for the
+controller's address, wait out the penalty. Do not restart the controller in a
+loop. To exempt the controller, use `PerSourcePenaltyExemptList` in
+`sshd_config`.
 
 ## Containers
 

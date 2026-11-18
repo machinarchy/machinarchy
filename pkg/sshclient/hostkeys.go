@@ -84,34 +84,58 @@ func ScanHostKeys(ctx context.Context, params DialParams) ([]ssh.PublicKey, erro
 	}
 	var keys []ssh.PublicKey
 	seen := map[string]bool{}
-	var firstErr error
+	offered := false
 	for _, algorithms := range hostKeyAlgorithmGroups {
-		key, err := scanOne(ctx, params, algorithms)
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-			if firstErr == nil && !isNoCommonAlgorithm(err) {
-				firstErr = err
-			}
-			// A network or policy failure is the same for every group.
-			if errors.Is(err, domain.ErrTargetNotAllowed) || errors.Is(err, domain.ErrConnectionRefused) {
-				return nil, err
-			}
-			continue
+		key, err := scanGroup(ctx, params, algorithms)
+		if isNoCommonAlgorithm(err) {
+			continue // the server has no key of this type
 		}
+		if err != nil {
+			// A partial result would pin or approve an incomplete set, and
+			// a later connection that negotiates the missing type would
+			// then fail verification. Fail the whole scan instead.
+			return nil, err
+		}
+		offered = true
 		if fingerprint := ssh.FingerprintSHA256(key); !seen[fingerprint] {
 			seen[fingerprint] = true
 			keys = append(keys, key)
 		}
 	}
-	if len(keys) == 0 {
-		if firstErr == nil {
-			firstErr = errors.New("the server offered no supported host key algorithm")
-		}
-		return nil, firstErr
+	if !offered {
+		return nil, errors.New("the server offered no supported host key algorithm")
 	}
 	return keys, nil
+}
+
+// scanRetryDelays space the retries of one algorithm group: a server under
+// load (OpenSSH MaxStartups) may drop one of several back-to-back scans.
+// There is only one retry, because every scan connection ends before
+// authentication and OpenSSH 9.8+ PerSourcePenalties charges each one to the
+// controller's address ("noauth"); retrying hard would get it blocked.
+var scanRetryDelays = []time.Duration{500 * time.Millisecond}
+
+func scanGroup(ctx context.Context, params DialParams, algorithms []string) (ssh.PublicKey, error) {
+	for attempt := 0; ; attempt++ {
+		key, err := scanOne(ctx, params, algorithms)
+		if err == nil || isNoCommonAlgorithm(err) {
+			return key, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		// A policy denial or a refused connection does not change on retry.
+		if errors.Is(err, domain.ErrTargetNotAllowed) || errors.Is(err, domain.ErrConnectionRefused) || attempt >= len(scanRetryDelays) {
+			return nil, fmt.Errorf("scan %s host key: %w", algorithms[0], err)
+		}
+		timer := time.NewTimer(scanRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func scanOne(ctx context.Context, params DialParams, algorithms []string) (ssh.PublicKey, error) {

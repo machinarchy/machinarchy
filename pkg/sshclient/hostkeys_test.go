@@ -1,11 +1,14 @@
 package sshclient
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"net"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,5 +131,47 @@ func TestParseHostCertificateAuthorities(t *testing.T) {
 	}
 	if _, err := ParseHostCertificateAuthorities([]string{string(ssh.MarshalAuthorizedKey(certificate))}); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("a certificate as CA = %v", err)
+	}
+}
+
+// dropDials closes the connections whose 1-based dial number is in drop,
+// the way a server throttling unauthenticated connections drops a scan.
+func dropDials(drop func(n int) bool) func(context.Context, string, string) (net.Conn, error) {
+	var count atomic.Int32
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := loopbackDialer(ctx, network, addr)
+		if err == nil && drop(int(count.Add(1))) {
+			_ = conn.Close()
+			client, server := net.Pipe()
+			_ = server.Close()
+			return client, nil
+		}
+		return conn, err
+	}
+}
+
+func TestScanHostKeysRetriesADroppedConnection(t *testing.T) {
+	server := sshtest.Start(t, sshtest.Options{Password: "pw", ExtraECDSAHostKey: true})
+	params := scanParams(server)
+	params.Dialer = dropDials(func(n int) bool { return n == 2 }) // the first ECDSA attempt
+	keys, err := ScanHostKeys(timeout(t, 10*time.Second), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != len(server.Fingerprints) {
+		t.Fatalf("scanned %d keys, want %d", len(keys), len(server.Fingerprints))
+	}
+}
+
+func TestScanHostKeysNeverReturnsAPartialSet(t *testing.T) {
+	server := sshtest.Start(t, sshtest.Options{Password: "pw", ExtraECDSAHostKey: true})
+	params := scanParams(server)
+	params.Dialer = dropDials(func(n int) bool { return n >= 2 }) // ECDSA always fails
+	keys, err := ScanHostKeys(timeout(t, 10*time.Second), params)
+	if err == nil {
+		t.Fatalf("scan with one key type unreachable returned %d keys and no error", len(keys))
+	}
+	if keys != nil {
+		t.Fatalf("a failed scan returned keys: %d", len(keys))
 	}
 }

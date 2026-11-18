@@ -248,7 +248,7 @@ func (c *SSHConnector) ScanHostKeys(ctx context.Context, host *resource.Host) ([
 	now := time.Now().UTC()
 	observed := make([]resource.ObservedHostKey, 0, len(keys))
 	for _, key := range keys {
-		observed = append(observed, resource.ObservedHostKey{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), FirstSeenAt: now})
+		observed = append(observed, resource.ObservedHostKey{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), FirstSeenAt: now, LastSeenAt: now})
 	}
 	return observed, nil
 }

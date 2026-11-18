@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 )
@@ -17,10 +19,18 @@ type ProfileReader interface {
 // HostReconciler resolves the latest profile revision and verifies that the
 // managed Host can authenticate to its endpoint. It performs no remote mutation.
 type HostReconciler struct {
-	profiles      ProfileReader
-	connector     HostConnector
-	defaultPolicy resource.HostKeyPolicy
+	profiles       ProfileReader
+	connector      HostConnector
+	defaultPolicy  resource.HostKeyPolicy
+	rescanInterval time.Duration
+	now            func() time.Time
 }
+
+// DefaultHostKeyRescanInterval is how long a host-key scan is reused. Every
+// scan connection ends before authentication, and OpenSSH 9.8+
+// (PerSourcePenalties "noauth") blocks addresses that make many of those, so
+// a Host waiting for approval must not be rescanned on every retry.
+const DefaultHostKeyRescanInterval = 10 * time.Minute
 
 // Option configures a HostReconciler.
 type Option func(*HostReconciler)
@@ -31,11 +41,17 @@ func WithDefaultHostKeyPolicy(policy resource.HostKeyPolicy) Option {
 	return func(r *HostReconciler) { r.defaultPolicy = policy }
 }
 
+// WithHostKeyRescanInterval overrides DefaultHostKeyRescanInterval.
+func WithHostKeyRescanInterval(interval time.Duration) Option {
+	return func(r *HostReconciler) { r.rescanInterval = interval }
+}
+
 func NewHostReconciler(profiles ProfileReader, connector HostConnector, options ...Option) (*HostReconciler, error) {
 	if profiles == nil || connector == nil {
 		return nil, errors.New("managed Host reconciler requires profile storage and a connector")
 	}
-	r := &HostReconciler{profiles: profiles, connector: connector, defaultPolicy: resource.HostKeyPolicyApprove}
+	r := &HostReconciler{profiles: profiles, connector: connector, defaultPolicy: resource.HostKeyPolicyApprove,
+		rescanInterval: DefaultHostKeyRescanInterval, now: time.Now}
 	for _, option := range options {
 		option(r)
 	}
@@ -81,7 +97,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 			conditions[1].Status, conditions[1].Reason = resource.ConditionUnknown, "HostKeyNotTrusted"
 			return observation(phase, conditions, nil), nil
 		}
-		keys, err := scanner.ScanHostKeys(ctx, host)
+		keys, scanned, err := r.scan(ctx, scanner, host)
 		if err != nil {
 			conditions[0].Reason, conditions[1].Reason = failureReason(err), failureReason(err)
 			return observation(phase, conditions, nil), nil
@@ -89,21 +105,21 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 		conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
 		if policy == resource.HostKeyPolicyTOFU {
 			conditions[0].Reason, conditions[0].Message = "HostKeyTrusting", "pinning the host keys seen on first contact"
-			result := observation(phase, conditions, keys)
+			result := observation(phase, conditions, scanned)
 			result.TrustHostKeys = fingerprints(keys)
 			return result, nil
 		}
 		conditions[0].Reason = "HostKeyPendingApproval"
 		conditions[0].Message = "an owner must approve the host keys: machinarchy trust host " + host.Metadata.Name +
 			" (" + strings.Join(fingerprints(keys), ", ") + ")"
-		return observation(phase, conditions, keys), nil
+		return observation(phase, conditions, scanned), nil
 	}
 	if err := r.connector.Verify(ctx, host, revision); err != nil {
 		conditions[0].Reason = failureReason(err)
 		conditions[1].Reason = failureReason(err)
 		if errors.Is(err, ErrHostKey) && canScan {
 			// Record what the host presents now, so an owner can compare.
-			if keys, scanErr := scanner.ScanHostKeys(ctx, host); scanErr == nil {
+			if keys, scanned, scanErr := r.scan(ctx, scanner, host); scanErr == nil {
 				conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
 				if trusted {
 					conditions[0].Reason = "HostKeyChanged"
@@ -112,7 +128,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 				} else {
 					conditions[0].Reason, conditions[0].Message = "HostKeyNotTrusted", "the host certificate is not signed by a trusted authority"
 				}
-				return observation(phase, conditions, keys), nil
+				return observation(phase, conditions, scanned), nil
 			}
 		}
 		return observation(phase, conditions, nil), nil
@@ -120,6 +136,29 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 	conditions[0].Status, conditions[0].Reason = resource.ConditionTrue, "SSHVerified"
 	conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
 	return observation(phase, conditions, nil), nil
+}
+
+// scan returns the host's keys, reusing the last scan while it is recent,
+// was made for the current generation (an endpoint change bumps it) and
+// shows none of the trusted keys (a scan that still shows them predates a
+// key change). scanned is non-nil only for a new scan, so a reused result
+// does not refresh LastSeenAt and the reuse window cannot extend itself.
+func (r *HostReconciler) scan(ctx context.Context, scanner HostKeyScanner, host *resource.Host) (keys, scanned []resource.ObservedHostKey, err error) {
+	if cached := host.Status.ObservedHostKeys; len(cached) > 0 && r.rescanInterval > 0 &&
+		host.Status.ObservedGeneration == host.Metadata.Generation {
+		fresh := true
+		for _, key := range cached {
+			if key.LastSeenAt.IsZero() || r.now().Sub(key.LastSeenAt) >= r.rescanInterval || slices.Contains(host.Spec.AccessTarget.Trust, key.Fingerprint) {
+				fresh = false
+				break
+			}
+		}
+		if fresh {
+			return cached, nil, nil
+		}
+	}
+	keys, err = scanner.ScanHostKeys(ctx, host)
+	return keys, keys, err
 }
 
 func observation(phase resource.HostPhase, conditions []resource.Condition, keys []resource.ObservedHostKey) resource.HostObservation {

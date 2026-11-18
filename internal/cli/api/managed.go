@@ -52,6 +52,7 @@ type ObservedHostKey struct {
 	Algorithm   string    `json:"algorithm" yaml:"algorithm"`
 	Fingerprint string    `json:"fingerprint" yaml:"fingerprint"`
 	FirstSeenAt time.Time `json:"firstSeenAt" yaml:"firstSeenAt"`
+	LastSeenAt  time.Time `json:"lastSeenAt,omitempty" yaml:"lastSeenAt,omitempty"`
 }
 
 type Condition struct {

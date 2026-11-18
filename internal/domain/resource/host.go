@@ -336,7 +336,7 @@ func mergeObservedHostKeys(previous, current []ObservedHostKey) []ObservedHostKe
 	}
 	merged := make([]ObservedHostKey, 0, len(current))
 	for _, key := range current {
-		if seen, ok := first[key.Fingerprint]; ok {
+		if seen, ok := first[key.Fingerprint]; ok && !seen.IsZero() {
 			key.FirstSeenAt = seen
 		}
 		merged = append(merged, key)
