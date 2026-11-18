@@ -1,5 +1,24 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 12: NATS operator-mode setup generator (branch audit/agent-authz)
+
+- `deployments/nats/generate` (new, `go run ./deployments/nats/generate -out DIR`): creates the operator, the system account, the `MACHINARCHY` account with JetStream and a signing key, and two users:
+  - `controller`, with `agentgateway.ControllerPermissions` and allow-responses;
+  - `bootstrap`, with `agentv1.BootstrapPermissions`.
+  It also writes `nats-server.conf` (memory resolver, TLS block to enable) and env snippets. All files are 0600, and it refuses to overwrite. Written in Go instead of an `nsc` script so it is tested; `nsc` was not available here (AUDIT M-10).
+- `internal/agentgateway/natsjwt.go`: `ControllerPermissions()`, the single definition of the gateway's NATS reach. `natstest.ControllerCredentials` now takes permissions, so the gateway tests run with exactly those, not an unrestricted user.
+- `docs/operations.md`: "NATS in operator mode", with the generated files and a permission table for `nsc` users.
+
+### Verification
+
+- `go test -race ./deployments/nats/generate/`: `TestGeneratedSetup` loads the generated config with `server.ProcessConfigFile`, starts it, and checks:
+  - the controller can create the command stream and answer registrations;
+  - bootstrap can send a registration request, but cannot read registrations or use the JetStream API;
+  - the controller cannot read the default inbox;
+  - the files are 0600, and a second run refuses to overwrite.
+- `TestGatewayIssuesScopedNATSCredentials` passes with the restricted controller user.
+- golangci-lint: only the 2 pre-existing issues. The first run found 4 unchecked `PublicKey` errors and a G302 on the directory chmod (now 0700 with a justified `#nosec`); both were fixed before committing.
+
 ## 2026-11-18 — Audit Phase 12: protocol contract test (branch audit/agent-authz)
 
 - `internal/agentgateway/contract_test.go` (new): `TestProtocolGoldenFixtures` finds the protocol module (`go list -m`), and verifies every golden fixture in `agentv1/testdata` with the published test keys (controller seed 0x01, agent seed 0x02). Each fixture must also fail with the other party's key. It fails on a fixture it does not know, and on an expected fixture that is missing (AUDIT M-11).

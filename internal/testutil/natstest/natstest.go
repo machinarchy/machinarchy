@@ -92,11 +92,12 @@ func Start(t testing.TB) *Server {
 	return &Server{URL: ns.ClientURL(), Account: accountPublic, Signer: signer, SignerSeed: seed, dir: t.TempDir()}
 }
 
-// ControllerCredentials writes a creds file for an unrestricted user (the
-// controller) and returns its path.
-func (s *Server) ControllerCredentials(t testing.TB) string {
+// ControllerCredentials writes a creds file for the controller with the given
+// permissions (agentgateway.ControllerPermissions) and permission to answer
+// requests, and returns its path.
+func (s *Server) ControllerCredentials(t testing.TB, permissions agentv1.Permissions) string {
 	t.Helper()
-	return s.credentials(t, "controller", nil)
+	return s.credentials(t, "controller", &permissions, true)
 }
 
 // BootstrapCredentials writes a creds file with agentv1.BootstrapPermissions
@@ -104,7 +105,7 @@ func (s *Server) ControllerCredentials(t testing.TB) string {
 func (s *Server) BootstrapCredentials(t testing.TB) string {
 	t.Helper()
 	permissions := agentv1.BootstrapPermissions()
-	return s.credentials(t, "bootstrap", &permissions)
+	return s.credentials(t, "bootstrap", &permissions, false)
 }
 
 // SignerFile writes the account signing key seed to a 0600 file.
@@ -117,7 +118,7 @@ func (s *Server) SignerFile(t testing.TB) string {
 	return path
 }
 
-func (s *Server) credentials(t testing.TB, name string, permissions *agentv1.Permissions) string {
+func (s *Server) credentials(t testing.TB, name string, permissions *agentv1.Permissions, allowResponses bool) string {
 	t.Helper()
 	key := must(t, nkeys.CreateUser)
 	claims := jwt.NewUserClaims(mustString(t, key.PublicKey))
@@ -126,6 +127,9 @@ func (s *Server) credentials(t testing.TB, name string, permissions *agentv1.Per
 	if permissions != nil {
 		claims.Pub.Allow.Add(permissions.Publish...)
 		claims.Sub.Allow.Add(permissions.Subscribe...)
+	}
+	if allowResponses {
+		claims.Resp = &jwt.ResponsePermission{MaxMsgs: 1, Expires: time.Minute}
 	}
 	encoded, err := claims.Encode(s.Signer)
 	if err != nil {

@@ -24,7 +24,7 @@ import (
 func TestGatewayIssuesScopedNATSCredentials(t *testing.T) {
 	ns := natstest.Start(t)
 	issuer := &NATSIssuer{Account: ns.Account, Signer: ns.Signer, TTL: 10 * time.Minute}
-	f := startFixture(t, ns.URL, []nats.Option{nats.UserCredentials(ns.ControllerCredentials(t))}, issuer,
+	f := startFixture(t, ns.URL, []nats.Option{nats.UserCredentials(ns.ControllerCredentials(t, ControllerPermissions()))}, issuer,
 		[]nats.Option{nats.UserCredentials(ns.BootstrapCredentials(t))})
 
 	agent := key(2)

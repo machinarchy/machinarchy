@@ -57,6 +57,39 @@ chmod 600 /etc/machinarchy/agent-signing.key
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE` | Seed (`SA...`, file `0600`) of a signing key listed in that account's JWT. The gateway signs agent JWTs with it. |
 | `MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL` | Agent JWT lifetime, default `1h` (5m–24h, at least twice the heartbeat). Renewals refresh it. After a revocation, the agent keeps NATS access only until its current JWT expires. |
 
+#### NATS in operator mode
+
+Production runs NATS in operator (JWT) mode, so each party can reach only its
+own subjects. Generate a setup once:
+
+```sh
+go run ./deployments/nats/generate -out ./nats-auth
+docker run -d --name nats -p 4222:4222 -v "$PWD/nats-auth:/etc/nats:ro" \
+  nats:2.15.3-alpine -c /etc/nats/nats-server.conf
+```
+
+It writes, all `0600`:
+
+| File | Use |
+|---|---|
+| `nats-server.conf` | Operator, system account and the `MACHINARCHY` account (JetStream on), preloaded in a memory resolver. Enable the `tls` block for production. |
+| `controller.creds` | The agent gateway (`MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE`). |
+| `keys/account-signing.nk` | The gateway signs per-agent JWTs with it (`MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE`). |
+| `bootstrap.creds` | Every agent host (`MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE`), used to enrol and to recover an expired JWT. |
+| `machinarchy.env`, `agent.env` | The settings above, ready to copy. |
+| `keys/operator.nk`, `keys/sys.nk`, `keys/machinarchy.nk` | Keep offline; needed only to change accounts. |
+
+The permissions, if you create the users with `nsc` instead:
+
+| User | Publish | Subscribe | Other |
+|---|---|---|---|
+| controller | `machinarchy-agent.v1.>`, `$JS.API.>` | `machinarchy-agent.v1.register`, `machinarchy-agent.v1.lease.renew`, `machinarchy-agent.v1.agent.*.result`, `_INBOX_CONTROLLER.>` | allow responses (1 message) |
+| bootstrap | `machinarchy-agent.v1.register`, `machinarchy-agent.v1.lease.renew` | `_INBOX.>` | — |
+| each agent (issued by the gateway) | register, renew, its own result subject, `$JS.API.CONSUMER.INFO` / `MSG.NEXT` and `$JS.ACK` for its own consumer | `_INBOX_AGENT.<agent-id>.>` | expires after `MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL` |
+
+The lists come from `agentgateway.ControllerPermissions` and
+`agentv1.BootstrapPermissions` / `AgentPermissions`.
+
 #### Enrolling a host
 
 An owner issues one token per host. It is single-use, expires after 1 hour

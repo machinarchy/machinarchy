@@ -70,3 +70,17 @@ func (i *NATSIssuer) mint(agentKey ed25519.PublicKey, agentID string, now time.T
 	claims.Sub.Allow.Add(permissions.Subscribe...)
 	return claims.Encode(i.Signer)
 }
+
+// ControllerPermissions are the NATS permissions of the gateway's own user:
+// serve registration, renewal and results, publish commands and use the
+// JetStream API, and read replies only under ControllerInboxPrefix. The user
+// also needs "allow responses" to answer agent requests, whose reply subjects
+// are in the agents' inboxes. deployments/nats/generate creates the
+// controller user with exactly these permissions.
+func ControllerPermissions() agentv1.Permissions {
+	return agentv1.Permissions{
+		Publish: []string{agentv1.SubjectRoot + ".>", "$JS.API.>"},
+		Subscribe: []string{agentv1.SubjectRegister, agentv1.SubjectLeaseRenew, agentv1.SubjectAllResults,
+			agentv1.ControllerInboxPrefix + ".>"},
+	}
+}
