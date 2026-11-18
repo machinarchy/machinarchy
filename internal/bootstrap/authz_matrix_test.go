@@ -67,7 +67,8 @@ var matrix = map[string]access{
 	"GET /api/v1/managed/hosts": readers, "GET /api/v1/managed/hosts/{id}": readers,
 	"POST /api/v1/managed/hosts": writers, "PUT /api/v1/managed/hosts/{id}": writers,
 	"PATCH /api/v1/managed/hosts/{id}/labels": writers, "DELETE /api/v1/managed/hosts/{id}": writers,
-	"GET /api/v1/managed/access-profiles": readers, "GET /api/v1/managed/access-profiles/{id}": readers,
+	"POST /api/v1/managed/hosts/{id}/trust": ownerOnly, // trusting keys decides where credentials go (S-02)
+	"GET /api/v1/managed/access-profiles":   readers, "GET /api/v1/managed/access-profiles/{id}": readers,
 	"POST /api/v1/managed/access-profiles": ownerOnly, "PUT /api/v1/managed/access-profiles/{id}": ownerOnly,
 	"DELETE /api/v1/managed/access-profiles/{id}": ownerOnly,
 	"GET /api/v1/managed/operations":              readers, "GET /api/v1/managed/operations/{id}": readers,
@@ -281,6 +282,8 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		"PUT /api/v1/environments/{id}":           map[string]string{"name": "matrix"},
 		"POST /api/v1/managed/hosts":              map[string]any{"name": "matrix-new", "spec": map[string]any{"presence": "Managed"}},
 		"PATCH /api/v1/managed/hosts/{id}/labels": map[string]any{"labels": map[string]string{"tier": "web"}},
+		"POST /api/v1/managed/hosts/{id}/trust": map[string]any{"generation": 1,
+			"fingerprints": []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
 		"POST /api/v1/managed/operations/preview": map[string]any{"selector": "tier=web"},
 		"POST /api/v1/managed/access-profiles":    map[string]any{"name": "matrix-other", "spec": profileSpec},
 		"POST /api/v1/agents/enrollment-tokens":   map[string]any{},

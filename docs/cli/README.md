@@ -43,7 +43,16 @@ machinarchy config use-context NAME
 machinarchy config set-cluster NAME --server URL [--insecure-http]
 machinarchy config set-credentials NAME --token-stdin
 machinarchy config set-context NAME --cluster CLUSTER --user USER [--env ENVIRONMENT]
+machinarchy trust host NAME-OR-ID [--replace] [--fingerprint SHA256:...]
+machinarchy trust host --all-pending [--selector SELECTOR]
 ```
+
+`trust host` (owner only) shows the SSH host keys the controller observed for a
+host and, after confirmation, trusts exactly those keys. `--all-pending`
+approves every host waiting with `HostKeyPendingApproval`. A host that already
+trusts keys is changed only with `--replace`: check the new key out of band
+first. Hosts whose Access Profile uses `tofu` or `ca` need no approval (see
+[operations](../operations.md#ssh-host-keys)).
 
 The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
 

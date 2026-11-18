@@ -42,8 +42,16 @@ type HostAccessTarget struct {
 }
 
 type HostStatus struct {
-	Phase      string      `json:"phase" yaml:"phase"`
-	Conditions []Condition `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	Phase            string            `json:"phase" yaml:"phase"`
+	Conditions       []Condition       `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	ObservedHostKeys []ObservedHostKey `json:"observedHostKeys,omitempty" yaml:"observedHostKeys,omitempty"`
+}
+
+// ObservedHostKey is an SSH host key the controller saw on the network.
+type ObservedHostKey struct {
+	Algorithm   string    `json:"algorithm" yaml:"algorithm"`
+	Fingerprint string    `json:"fingerprint" yaml:"fingerprint"`
+	FirstSeenAt time.Time `json:"firstSeenAt" yaml:"firstSeenAt"`
 }
 
 type Condition struct {
@@ -219,6 +227,18 @@ func (c *HTTPClient) SetHostLabels(ctx context.Context, id string, revision uint
 	var host Host
 	err := c.request(ctx, http.MethodPatch, managedPath("hosts", id, "labels"),
 		map[string]any{"revision": revision, "labels": labels}, &host)
+	if err != nil {
+		return nil, err
+	}
+	return &host, nil
+}
+
+// TrustHostKeys approves the given host key fingerprints for a Host whose
+// spec generation is still the one the caller reviewed.
+func (c *HTTPClient) TrustHostKeys(ctx context.Context, id string, generation uint64, fingerprints []string, replace bool) (*Host, error) {
+	var host Host
+	err := c.request(ctx, http.MethodPost, managedPath("hosts", id, "trust"),
+		map[string]any{"generation": generation, "fingerprints": fingerprints, "replace": replace}, &host)
 	if err != nil {
 		return nil, err
 	}

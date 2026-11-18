@@ -1,5 +1,27 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: host-key approval API and CLI (branch audit/host-keys)
+
+- `POST /api/v1/managed/hosts/{id}/trust` `{generation, fingerprints, replace}` (owner only, through the service). It is in the OpenAPI spec and in the authorization matrix, which flagged the route as missing before its entry was added.
+- CLI:
+  - `machinarchy trust host NAME-OR-ID [--replace] [--fingerprint …]` and `--all-pending [--selector …]`;
+  - it always prints the hosts and fingerprints to be trusted before asking for confirmation (also with `--yes`), and sends exactly those fingerprints with the generation it displayed;
+  - it refuses to touch a host that already trusts keys without `--replace`, and refuses a host with no observed keys.
+  - The CLI's `HostStatus` gains `observedHostKeys`.
+- `docs/cli/README.md`: the commands.
+
+### Verification
+
+- `go test ./internal/cli/...`: pass. New subtests:
+  - no change without confirmation, with the keys shown anyway;
+  - trust sends the observed keys at the displayed generation;
+  - `--replace` is required to change keys, and `--fingerprint` overrides them;
+  - a host with no observed keys is refused;
+  - `--all-pending` with a selector only approves pending matching hosts;
+  - 3 usage errors;
+  - the command tree test lists `trust host`.
+- `TestRouteAuthorizationMatrix` and the route-coverage test pass. golangci-lint: only the 2 pre-existing issues.
+
 ## 2026-11-18 — Audit Phase 13A: automatic SSH host-key trust (branch audit/host-keys)
 
 **Behaviour change:** a Host bound to an Access Profile no longer needs a hand-entered fingerprint. Its keys are trusted according to the profile's `hostKeyPolicy`: `tofu` pins them on first contact; `approve` (the production default) waits for an owner; `ca` trusts the profile's host certificate authorities; `pinned` is the old behaviour.

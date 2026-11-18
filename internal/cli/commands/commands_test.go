@@ -99,6 +99,7 @@ type fakeClient struct {
 
 	submitted []api.OperationInput
 	deleted   []string
+	trusted   []string
 	calls     int
 }
 
@@ -147,6 +148,24 @@ func (f *fakeClient) CreateHost(_ context.Context, input api.HostInput) (*api.Ho
 func (f *fakeClient) DeleteHost(_ context.Context, id string, revision uint64) error {
 	f.deleted = append(f.deleted, fmt.Sprintf("%s@%d", id, revision))
 	return nil
+}
+
+func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint64, fingerprints []string, replace bool) (*api.Host, error) {
+	for i := range f.hosts {
+		if f.hosts[i].Metadata.ID == id {
+			if f.hosts[i].Metadata.Generation != generation {
+				return nil, &api.APIError{Status: 409, Message: "resource revision conflict"}
+			}
+			if len(f.hosts[i].Spec.AccessTarget.Trust) > 0 && !replace {
+				return nil, &api.APIError{Status: 409, Message: "the Host already trusts host keys"}
+			}
+			f.hosts[i].Spec.AccessTarget.Trust = fingerprints
+			f.hosts[i].Metadata.Generation++
+			f.trusted = append(f.trusted, id+"="+strings.Join(fingerprints, ","))
+			return &f.hosts[i], nil
+		}
+	}
+	return nil, &api.APIError{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) SetHostLabels(_ context.Context, id string, revision uint64, labels map[string]string) (*api.Host, error) {
@@ -293,6 +312,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"create":         {"host"},
 		"delete":         {"host"},
 		"label":          {"host"},
+		"trust":          {"host"},
 		"run":            nil,
 		"cancel":         {"operation"},
 		"config":         {"current-context", "get-contexts", "set-cluster", "set-context", "set-credentials", "use-context"},
@@ -1155,6 +1175,56 @@ func TestManagedCommands(t *testing.T) {
 		}
 		if bad := run(t, fixtures(), "label", "host", "web-01", "oops"); bad.code != clierr.ExitUsage {
 			t.Fatalf("bad label = %+v", bad)
+		}
+	})
+
+	t.Run("trust host approves exactly the observed keys after confirmation", func(t *testing.T) {
+		const ed, ecdsa = "SHA256:ed25519ed25519ed25519ed25519ed25519ed25", "SHA256:ecdsaecdsaecdsaecdsaecdsaecdsaecdsaecdsaec"
+		pending := func(host api.Host) api.Host {
+			host.Metadata.Generation = 4
+			host.Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
+			host.Status.ObservedHostKeys = []api.ObservedHostKey{{Algorithm: "ssh-ed25519", Fingerprint: ed}, {Algorithm: "ecdsa-sha2-nistp256", Fingerprint: ecdsa}}
+			return host
+		}
+		client := fixtures()
+		client.hosts[0] = pending(client.hosts[0])
+		if got := run(t, client, "trust", "host", "web-01"); got.code != clierr.ExitUsage || len(client.trusted) != 0 ||
+			!strings.Contains(got.stderr+got.stdout, ed) {
+			t.Fatalf("unconfirmed trust = %+v (it must show the keys and change nothing)", got)
+		}
+		if got := run(t, client, "trust", "host", "web-01", "--yes"); got.code != 0 || strings.Join(client.trusted, ";") != "1="+ed+","+ecdsa {
+			t.Fatalf("trust = %+v, trusted %v", got, client.trusted)
+		}
+		// web-01 now trusts keys: changing them needs --replace.
+		if got := run(t, client, "trust", "host", "web-01", "--yes"); got.code != clierr.ExitUsage || len(client.trusted) != 1 ||
+			!strings.Contains(got.stderr, "--replace") {
+			t.Fatalf("re-trust without --replace = %+v", got)
+		}
+		if got := run(t, client, "trust", "host", "web-01", "--replace", "--fingerprint", ecdsa, "--yes"); got.code != 0 || client.trusted[1] != "1="+ecdsa {
+			t.Fatalf("replace = %+v, trusted %v", got, client.trusted)
+		}
+		if got := run(t, client, "trust", "host", "web-02", "--yes"); got.code != clierr.ExitUsage {
+			t.Fatalf("a host with no observed keys = %+v", got)
+		}
+	})
+
+	t.Run("trust host --all-pending approves only pending hosts that match", func(t *testing.T) {
+		client := fixtures()
+		for i := range client.hosts {
+			client.hosts[i].Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
+			client.hosts[i].Status.ObservedHostKeys = []api.ObservedHostKey{{Fingerprint: "SHA256:key-" + client.hosts[i].Metadata.ID}}
+		}
+		client.hosts[1].Status.Conditions[0].Reason = "SSHVerified" // web-02 is not pending
+		if got := run(t, client, "trust", "host", "--all-pending", "--selector", "tier=web", "--yes"); got.code != 0 {
+			t.Fatalf("all-pending = %+v", got)
+		}
+		if strings.Join(client.trusted, ";") != "1=SHA256:key-1" {
+			t.Fatalf("trusted %v, want only the pending web host", client.trusted)
+		}
+		for _, args := range [][]string{{"trust", "host"}, {"trust", "host", "web-01", "--all-pending"}, {"trust", "host", "--all-pending", "--replace"}} {
+			if got := run(t, client, args...); got.code != clierr.ExitUsage {
+				t.Errorf("%v = %+v, want a usage error", args, got)
+			}
 		}
 	})
 

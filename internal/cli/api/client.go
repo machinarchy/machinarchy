@@ -45,6 +45,7 @@ type Client interface {
 	CreateHost(context.Context, HostInput) (*Host, error)
 	DeleteHost(context.Context, string, uint64) error
 	SetHostLabels(context.Context, string, uint64, map[string]string) (*Host, error)
+	TrustHostKeys(context.Context, string, uint64, []string, bool) (*Host, error)
 	ListEnvironments(context.Context) ([]Environment, error)
 	ListAccessProfiles(context.Context, string) (Page[AccessProfile], error)
 	PreviewTargets(context.Context, TargetRule) (*TargetSet, error)

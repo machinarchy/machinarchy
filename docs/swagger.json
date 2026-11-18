@@ -1538,6 +1538,82 @@
                 }
             }
         },
+        "/api/v1/managed/hosts/{id}/trust": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace owner only. Name the exact fingerprints you reviewed (usually status.observedHostKeys) and the\nspec generation you saw. A Host that already trusts keys needs replace=true, so a changed key is never\naccepted by accident. The Host is then verified again with the trusted keys.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Trust a host's SSH host keys",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reviewed fingerprints",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.trustRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/resource.Host"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/managed/operations": {
             "get": {
                 "security": [
@@ -3559,6 +3635,26 @@
                 }
             }
         },
+        "managedresource.trustRequest": {
+            "type": "object",
+            "properties": {
+                "fingerprints": {
+                    "description": "Fingerprints are the exact SHA256:… fingerprints to trust, normally the\nHost's status.observedHostKeys as reviewed.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "generation": {
+                    "description": "Generation is the Host spec generation the caller reviewed.",
+                    "type": "integer"
+                },
+                "replace": {
+                    "description": "Replace must be set to change keys the Host already trusts.",
+                    "type": "boolean"
+                }
+            }
+        },
         "members.SetRoleRequest": {
             "type": "object",
             "properties": {
@@ -3645,6 +3741,20 @@
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "hostCertificateAuthorities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hostKeyPolicy": {
+                    "description": "HostKeyPolicy and HostCertificateAuthorities decide how the hosts that\nuse this profile become trusted (see hostkeys.go).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.HostKeyPolicy"
+                        }
+                    ]
                 },
                 "username": {
                     "type": "string"
@@ -3757,6 +3867,23 @@
                 }
             }
         },
+        "resource.HostKeyPolicy": {
+            "type": "string",
+            "enum": [
+                "",
+                "tofu",
+                "approve",
+                "ca",
+                "pinned"
+            ],
+            "x-enum-varnames": [
+                "HostKeyPolicyDefault",
+                "HostKeyPolicyTOFU",
+                "HostKeyPolicyApprove",
+                "HostKeyPolicyCA",
+                "HostKeyPolicyPinned"
+            ]
+        },
         "resource.HostMetadata": {
             "type": "object",
             "properties": {
@@ -3845,6 +3972,13 @@
                 "observedGeneration": {
                     "type": "integer"
                 },
+                "observedHostKeys": {
+                    "description": "ObservedHostKeys are the SSH host keys last seen on the network, kept\nso an owner can approve them (or see what changed).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/resource.ObservedHostKey"
+                    }
+                },
                 "phase": {
                     "$ref": "#/definitions/resource.HostPhase"
                 }
@@ -3880,6 +4014,20 @@
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "resource.ObservedHostKey": {
+            "type": "object",
+            "properties": {
+                "algorithm": {
+                    "type": "string"
+                },
+                "fingerprint": {
+                    "type": "string"
+                },
+                "firstSeenAt": {
+                    "type": "string"
                 }
             }
         },

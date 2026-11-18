@@ -332,6 +332,22 @@ definitions:
       spec:
         $ref: '#/definitions/resource.AccessProfileSpec'
     type: object
+  managedresource.trustRequest:
+    properties:
+      fingerprints:
+        description: |-
+          Fingerprints are the exact SHA256:… fingerprints to trust, normally the
+          Host's status.observedHostKeys as reviewed.
+        items:
+          type: string
+        type: array
+      generation:
+        description: Generation is the Host spec generation the caller reviewed.
+        type: integer
+      replace:
+        description: Replace must be set to change keys the Host already trusts.
+        type: boolean
+    type: object
   members.SetRoleRequest:
     properties:
       role:
@@ -390,6 +406,16 @@ definitions:
         $ref: '#/definitions/resource.SecretReference'
       enabled:
         type: boolean
+      hostCertificateAuthorities:
+        items:
+          type: string
+        type: array
+      hostKeyPolicy:
+        allOf:
+        - $ref: '#/definitions/resource.HostKeyPolicy'
+        description: |-
+          HostKeyPolicy and HostCertificateAuthorities decide how the hosts that
+          use this profile become trusted (see hostkeys.go).
       username:
         type: string
     type: object
@@ -465,6 +491,20 @@ definitions:
           type: string
         type: array
     type: object
+  resource.HostKeyPolicy:
+    enum:
+    - ""
+    - tofu
+    - approve
+    - ca
+    - pinned
+    type: string
+    x-enum-varnames:
+    - HostKeyPolicyDefault
+    - HostKeyPolicyTOFU
+    - HostKeyPolicyApprove
+    - HostKeyPolicyCA
+    - HostKeyPolicyPinned
   resource.HostMetadata:
     properties:
       createdAt:
@@ -525,6 +565,13 @@ definitions:
         type: string
       observedGeneration:
         type: integer
+      observedHostKeys:
+        description: |-
+          ObservedHostKeys are the SSH host keys last seen on the network, kept
+          so an owner can approve them (or see what changed).
+        items:
+          $ref: '#/definitions/resource.ObservedHostKey'
+        type: array
       phase:
         $ref: '#/definitions/resource.HostPhase'
     type: object
@@ -551,6 +598,15 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  resource.ObservedHostKey:
+    properties:
+      algorithm:
+        type: string
+      fingerprint:
+        type: string
+      firstSeenAt:
+        type: string
     type: object
   resource.Operation:
     properties:
@@ -1783,6 +1839,58 @@ paths:
       security:
       - BearerAuth: []
       summary: Replace a host's labels
+      tags:
+      - Managed
+  /api/v1/managed/hosts/{id}/trust:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Workspace owner only. Name the exact fingerprints you reviewed (usually status.observedHostKeys) and the
+        spec generation you saw. A Host that already trusts keys needs replace=true, so a changed key is never
+        accepted by accident. The Host is then verified again with the trusted keys.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Reviewed fingerprints
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.trustRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Trust a host's SSH host keys
       tags:
       - Managed
   /api/v1/managed/operations:

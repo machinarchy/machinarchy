@@ -58,6 +58,17 @@ type operationRequest struct {
 	ExpectTargetsHash string             `json:"expectTargetsHash,omitempty"`
 	Run               resource.RunSpec   `json:"run"`
 }
+
+// trustRequest approves SSH host keys for a Host.
+type trustRequest struct {
+	// Generation is the Host spec generation the caller reviewed.
+	Generation uint64 `json:"generation"`
+	// Fingerprints are the exact SHA256:… fingerprints to trust, normally the
+	// Host's status.observedHostKeys as reviewed.
+	Fingerprints []string `json:"fingerprints"`
+	// Replace must be set to change keys the Host already trusts.
+	Replace bool `json:"replace,omitempty"`
+}
 type previewRequest struct {
 	Targets domain.TargetRule `json:"targets"`
 }
@@ -69,6 +80,7 @@ func RegisterRoutes(group *echo.Group, handler *Handler) {
 	group.PUT("/hosts/:id", handler.updateHost)
 	group.DELETE("/hosts/:id", handler.deleteHost)
 	group.PATCH("/hosts/:id/labels", handler.setHostLabels)
+	group.POST("/hosts/:id/trust", handler.trustHostKeys)
 	group.GET("/access-profiles", handler.listProfiles)
 	group.POST("/access-profiles", handler.createProfile)
 	group.GET("/access-profiles/:id", handler.getProfile)
@@ -277,6 +289,31 @@ func (h *Handler) setHostLabels(c echo.Context) error {
 	var request labelsRequest
 	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
 		return h.service.SetHostLabels(ctx, p, id, request.Revision, request.Labels)
+	})
+}
+
+// @Summary Trust a host's SSH host keys
+// @Description Workspace owner only. Name the exact fingerprints you reviewed (usually status.observedHostKeys) and the
+// @Description spec generation you saw. A Host that already trusts keys needs replace=true, so a changed key is never
+// @Description accepted by accident. The Host is then verified again with the trusted keys.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param id path string true "Host ID"
+// @Param request body trustRequest true "Reviewed fingerprints"
+// @Success 200 {object} resource.Host
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/managed/hosts/{id}/trust [post]
+func (h *Handler) trustHostKeys(c echo.Context) error {
+	var id resource.ID
+	var request trustRequest
+	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
+		return h.service.TrustHostKeys(ctx, p, id, request.Generation, request.Fingerprints, request.Replace)
 	})
 }
 
