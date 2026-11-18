@@ -128,10 +128,12 @@ func (h *Handler) invoke(c echo.Context) error {
 	}
 	timeout := time.Duration(request.TimeoutSeconds) * time.Second
 	if request.TimeoutSeconds <= 0 {
-		timeout = 30 * time.Second
+		timeout = 15 * time.Second
 	}
-	if timeout > 5*time.Minute {
-		return httperr.BadRequest(c, "timeoutSeconds must be at most 300")
+	// The call is synchronous, so it must finish inside the API's 25s
+	// request deadline.
+	if timeout > 20*time.Second {
+		return httperr.BadRequest(c, "timeoutSeconds must be at most 20")
 	}
 	result, err := h.gateway.Invoke(c.Request().Context(), c.Param("id"), request.Capability, request.Input, timeout)
 	if err != nil {

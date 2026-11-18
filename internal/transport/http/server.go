@@ -138,7 +138,7 @@ func NewServer(
 	e.GET("/openapi.json", echo.WrapHandler(docs.SpecHandler()))
 	e.GET("/scalar", s.scalarReferenceHandler)
 
-	api := e.Group("/api", limiter.Middleware())
+	api := e.Group("/api", limiter.Middleware(), requestDeadline(RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
 		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
 
@@ -440,4 +440,20 @@ func allowedOrigins(environment config.Environment) ([]string, error) {
 		return nil, errors.New("CORS_ALLOWED_ORIGINS must contain at least one explicit origin")
 	}
 	return clean, nil
+}
+
+// RequestTimeout bounds every /api request. It is shorter than the server's
+// 30s WriteTimeout, so database work for a request the client can no longer
+// receive is cancelled instead of running on (AUDIT Q-20).
+const RequestTimeout = 25 * time.Second
+
+func requestDeadline(timeout time.Duration) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			ctx, cancel := context.WithTimeout(c.Request().Context(), timeout)
+			defer cancel()
+			c.SetRequest(c.Request().WithContext(ctx))
+			return next(c)
+		}
+	}
 }
