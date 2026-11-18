@@ -251,6 +251,7 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	}
 	engine, err := controlmanager.NewEngine(controlmanager.Dependencies{
 		Hosts: r.stores.ResourceHosts, Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Leases: leases,
+		Registerer: r.metrics,
 	}, engineConfig)
 	if err != nil {
 		return nil, err
@@ -314,7 +315,7 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 	return operationworker.New(operationworker.Dependencies{Operations: r.stores.Operations, Queue: queue, Hosts: r.stores.ResourceHosts,
 		Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Connector: connector,
 		ExecutionPolicy: r.executionPolicyProvider(domain.ExecutionPolicy{}), Logger: slog.Default(), Leases: operationLeases,
-		Recovery: recovery}, workers)
+		Recovery: recovery, Registerer: r.metrics}, workers)
 }
 
 // defaultSSHConcurrency bounds concurrent SSH sessions per connector until a

@@ -344,7 +344,22 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		t.Fatalf("invoke on a revoked agent status = %d %v", status, bad)
 	}
 
-	// 5. Both processes stop cleanly on SIGTERM.
+	// 5. /metrics serves HTTP, control-loop, worker and gateway metrics.
+	response, err := http.Get(client.base + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	for _, name := range []string{"machinarchy_http_requests_total", "machinarchy_controlmanager_queue_depth",
+		"machinarchy_operationworker_operations_in_progress", `machinarchy_agent_gateway_registrations_total{outcome="registered"} 1`,
+		`machinarchy_agent_gateway_results_total{status="succeeded"}`} {
+		if !strings.Contains(string(metrics), name) {
+			t.Errorf("/metrics lacks %s", name)
+		}
+	}
+
+	// 6. Both processes stop cleanly on SIGTERM.
 	if err := agent.stop(t); err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {

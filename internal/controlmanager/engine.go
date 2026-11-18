@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
 	"golang.org/x/time/rate"
@@ -61,9 +63,12 @@ type Dependencies struct {
 	Outbox eventing.OutboxStore
 	Leases resource.LeaseStore // nil for the SQLite single-manager profile
 	Logger *slog.Logger
+	// Registerer receives the engine's metrics; nil leaves them unexported.
+	Registerer prometheus.Registerer
 }
 
 type Engine struct {
+	metrics        *engineMetrics
 	deps           Dependencies
 	cfg            Config
 	queue          *ResourceQueue
@@ -129,8 +134,20 @@ func NewEngine(deps Dependencies, cfg Config) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate Control Manager instance ID: %w", err)
 	}
-	return &Engine{deps: deps, cfg: cfg, limiter: rate.NewLimiter(cfg.RateLimitPerSecond, cfg.RateBurst),
-		controllers: make(map[ResourceKind]Controller), ownerID: string(id)}, nil
+	engine := &Engine{deps: deps, cfg: cfg, limiter: rate.NewLimiter(cfg.RateLimitPerSecond, cfg.RateBurst),
+		controllers: make(map[ResourceKind]Controller), ownerID: string(id)}
+	engine.metrics = newEngineMetrics(deps.Registerer, engine.queueDepth)
+	return engine, nil
+}
+
+func (e *Engine) queueDepth() float64 {
+	e.mu.Lock()
+	queue := e.queue
+	e.mu.Unlock()
+	if queue == nil {
+		return 0
+	}
+	return float64(queue.Len())
 }
 
 func (e *Engine) Register(controller Controller) error {
@@ -270,6 +287,7 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	e.metrics.deliveries.WithLabelValues("claimed").Add(float64(len(claimed)))
 	for _, delivery := range claimed {
 		if err := ctx.Err(); err != nil {
 			//nolint:errcheck // Best-effort shutdown retry; the delivery can be reclaimed after its lease expires.
@@ -281,6 +299,7 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 			if quarantineErr := e.deps.Outbox.Quarantine(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now(), "unsupported_or_invalid_event"); quarantineErr != nil {
 				return quarantineErr
 			}
+			e.metrics.deliveries.WithLabelValues("quarantined").Inc()
 			continue
 		}
 		if envelope.Type == eventing.AccessProfileChanged {
@@ -464,15 +483,20 @@ func (e *Engine) worker(ctx context.Context) {
 			e.queue.Done(key)
 			continue
 		}
+		started := time.Now()
 		result, err := e.reconcile(ctx, controller, key)
+		e.metrics.duration.WithLabelValues(controller.Name()).Observe(time.Since(started).Seconds())
 		if err != nil {
 			e.deps.Logger.Warn("resource reconciliation failed", "controller", controller.Name(), "error_class", errorClass(err), "error", err)
 			if !isPermanent(err) {
+				e.metrics.reconciles.WithLabelValues(controller.Name(), "retry").Inc()
 				_ = e.queue.AddRateLimited(key)
 			} else {
+				e.metrics.reconciles.WithLabelValues(controller.Name(), "permanent_error").Inc()
 				e.queue.Forget(key)
 			}
 		} else {
+			e.metrics.reconciles.WithLabelValues(controller.Name(), "success").Inc()
 			e.queue.Forget(key)
 			if result.RequeueAfter > 0 {
 				_ = e.queue.AddAfter(key, result.RequeueAfter)

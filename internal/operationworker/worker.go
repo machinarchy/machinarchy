@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
@@ -32,9 +34,12 @@ type Dependencies struct {
 	Leases          resource.LeaseStore
 	Recovery        resource.OperationRecoveryRepository
 	Logger          *slog.Logger
+	// Registerer receives the worker's metrics; nil leaves them unexported.
+	Registerer prometheus.Registerer
 }
 
 type Worker struct {
+	metrics *workerMetrics
 	deps    Dependencies
 	workers int
 	queue   chan resource.OperationKey
@@ -55,7 +60,7 @@ func New(deps Dependencies, workers int) (*Worker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate Operation worker identity: %w", err)
 	}
-	return &Worker{deps: deps, workers: workers, queue: make(chan resource.OperationKey, workers*16), pending: make(map[resource.OperationKey]struct{}), active: make(map[resource.OperationKey]context.CancelFunc), owner: string(id)}, nil
+	return &Worker{metrics: newWorkerMetrics(deps.Registerer), deps: deps, workers: workers, queue: make(chan resource.OperationKey, workers*16), pending: make(map[resource.OperationKey]struct{}), active: make(map[resource.OperationKey]context.CancelFunc), owner: string(id)}, nil
 }
 
 // Start runs a bounded pool and a durable level-triggered scan. Outbox events
@@ -272,11 +277,14 @@ func (w *Worker) Cancel(ctx context.Context, workspace int, id resource.ID) (*re
 // Without this, one panic would terminate the whole process, including the
 // API in monolith mode.
 func (w *Worker) safeExecute(ctx context.Context, key resource.OperationKey) {
+	w.metrics.inProgress.Inc()
+	defer w.metrics.inProgress.Dec()
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
 			return
 		}
+		w.metrics.panics.Inc()
 		w.deps.Logger.Error("Operation execution panicked", "operation_id", key.ID, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
@@ -411,7 +419,9 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		commandCtx, commandCancel := context.WithTimeout(ctx, time.Duration(op.Spec.Run.TimeoutSeconds)*time.Second)
 		watchCtx, stopWatching := context.WithCancel(context.Background())
 		go w.watchCancellation(watchCtx, key, commandCancel)
+		started := time.Now()
 		result, runErr := w.deps.Connector.Execute(commandCtx, host, revision, string(op.ID), op.Spec.Run.Argv)
+		w.metrics.duration.Observe(time.Since(started).Seconds())
 		timedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
 		commandCancel()
 		stopWatching()
@@ -497,6 +507,9 @@ func (w *Worker) completeTarget(ctx context.Context, key resource.OperationKey, 
 	delay := 50 * time.Millisecond
 	for attempt := 1; ; attempt++ {
 		err := w.deps.Operations.UpdateOperationTarget(ctx, key.WorkspaceID, key.ID, hostID, state, result)
+		if err == nil {
+			w.metrics.targets.WithLabelValues(string(state)).Inc()
+		}
 		if err == nil || errors.Is(err, resource.ErrOperationFinished) || errors.Is(err, resource.ErrOperationNotFound) {
 			return
 		}
