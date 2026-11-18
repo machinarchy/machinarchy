@@ -17,6 +17,7 @@ func TestManagedResourceContract(t *testing.T) {
 	for _, engine := range availableEngines(t) {
 		t.Run(engine, func(t *testing.T) {
 			t.Run("host revision and status", func(t *testing.T) { testResourceHost(t, newFixture(t, engine)) })
+			t.Run("host-key observations and trust", func(t *testing.T) { testHostKeyTrust(t, newFixture(t, engine)) })
 			t.Run("Access Profile revision isolation and outbox", func(t *testing.T) { testAccessProfile(t, newFixture(t, engine)) })
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
 			t.Run("operation target writes", func(t *testing.T) { testOperationTargetWrites(t, newFixture(t, engine)) })
@@ -692,5 +693,73 @@ func testResourceListing(t *testing.T, f *fixture) {
 	}
 	if _, err := f.stores.Operations.ListOperations(ctx, resource.OperationListFilter{WorkspaceID: workspaceID, After: "!!"}); !errors.Is(err, resource.ErrInvalidResource) {
 		t.Fatalf("bad cursor error = %v", err)
+	}
+}
+
+// testHostKeyTrust covers migration 000003 (observed_host_keys) and the
+// audited, evented TrustHostKeys write on both engines.
+func testHostKeyTrust(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	host := newManagedHost(t, f, "host-keys")
+	if err := f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	ws, id := host.Metadata.WorkspaceID, host.Metadata.ID
+	observeCtx := ctx
+	if f.engine == "postgres" {
+		lease, ok, err := f.stores.ResourceLeases.AcquireResourceLease(ctx, resource.Lease{Kind: "host", WorkspaceID: ws,
+			ID: string(id), Owner: "contract-test"}, time.Now(), time.Minute)
+		if err != nil || !ok {
+			t.Fatalf("acquire observation lease = %v, %v", ok, err)
+		}
+		observeCtx = resource.WithLeaseFence(ctx, resource.LeaseFence{Kind: lease.Kind, WorkspaceID: lease.WorkspaceID, ID: lease.ID, Token: lease.Token})
+	}
+	const fpA, fpB = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	seen := time.Now().UTC().Truncate(time.Microsecond)
+	keys := []resource.ObservedHostKey{
+		{Algorithm: "ssh-ed25519", Fingerprint: fpA, FirstSeenAt: seen, LastSeenAt: seen},
+		{Algorithm: "ecdsa-sha2-nistp256", Fingerprint: fpB, FirstSeenAt: seen, LastSeenAt: seen},
+	}
+	if err := f.stores.ResourceHosts.ObserveHost(observeCtx, ws, id, 1, resource.HostActive, nil, keys, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.stores.ResourceHosts.GetHost(ctx, ws, id)
+	if err != nil || len(got.Status.ObservedHostKeys) != 2 || got.Status.ObservedHostKeys[1].Fingerprint != fpB ||
+		!got.Status.ObservedHostKeys[0].LastSeenAt.Equal(seen) {
+		t.Fatalf("observed keys = %+v, %v", got.Status.ObservedHostKeys, err)
+	}
+	// nil keeps the stored observation.
+	if err := f.stores.ResourceHosts.ObserveHost(observeCtx, ws, id, 1, resource.HostActive, nil, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = f.stores.ResourceHosts.GetHost(ctx, ws, id); len(got.Status.ObservedHostKeys) != 2 {
+		t.Fatalf("an observation without keys dropped them: %+v", got.Status.ObservedHostKeys)
+	}
+
+	if err := f.stores.ResourceHosts.TrustHostKeys(ctx, ws, id, got.Metadata.Revision-1, []string{fpA}, false, "owner", time.Now()); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("stale revision = %v", err)
+	}
+	if err := f.stores.ResourceHosts.TrustHostKeys(ctx, ws, id, got.Metadata.Revision, []string{fpA, fpB}, false, "owner", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	trusted, err := f.stores.ResourceHosts.GetHost(ctx, ws, id)
+	if err != nil || strings.Join(trusted.Spec.AccessTarget.Trust, ",") != fpA+","+fpB || trusted.Metadata.Generation != got.Metadata.Generation+1 {
+		t.Fatalf("trusted host = %+v, %v", trusted, err)
+	}
+	if err := f.stores.ResourceHosts.TrustHostKeys(ctx, ws, id, trusted.Metadata.Revision, []string{fpB}, false, "owner", time.Now()); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("changing trust without replace = %v", err)
+	}
+	if err := f.stores.ResourceHosts.TrustHostKeys(ctx, ws, id, trusted.Metadata.Revision, []string{fpB}, true, "owner", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	var audits, events int
+	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT COUNT(*) FROM audit_events WHERE action = ? AND target_id = ?`,
+		`SELECT COUNT(*) FROM audit_events WHERE action = $1 AND target_id = $2`), "resource_host.host_key_trusted", string(id)).Scan(&audits); err != nil || audits != 2 {
+		t.Fatalf("trust audit rows = %d, %v", audits, err)
+	}
+	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT COUNT(*) FROM outbox_events WHERE event_type = ? AND subject_id = ? AND payload LIKE '%host-keys-trusted%'`,
+		`SELECT COUNT(*) FROM outbox_events WHERE event_type = $1 AND subject_id = $2 AND payload::text LIKE '%host-keys-trusted%'`), eventing.HostSpecChanged, string(id)).Scan(&events); err != nil || events != 2 {
+		t.Fatalf("trust outbox events = %d, %v", events, err)
 	}
 }

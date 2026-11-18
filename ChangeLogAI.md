@@ -1,5 +1,16 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: host-key store contract on both engines (branch audit/host-keys)
+
+- `internal/store/resource_contract_test.go`: new contract subtest "host-key observations and trust". It runs on SQLite and PostgreSQL and covers:
+  - migration 000003: `observed_host_keys` round-trips including `lastSeenAt`, and an observation without keys keeps the stored ones;
+  - `TrustHostKeys`: a stale revision and a change without replace are refused; trust bumps the generation; every trust writes one `resource_host.host_key_trusted` audit row and one `host.spec-changed` outbox event with change `host-keys-trusted`.
+
+### Verification
+
+- `go test -race -run TestManagedResourceContract ./internal/store/` on SQLite, and with `MACHINARCHY_TEST_POSTGRES_URL` set (postgres:16-alpine container, `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1`): pass on both engines.
+- `./internal/store/...`, `./internal/service/...` and `./internal/hostaccess/...` on PostgreSQL: pass.
+
 ## 2026-11-18 — Audit Phase 13A: complete host-key scans, rate-limited rescans (branch audit/host-keys)
 
 - `pkg/sshclient/hostkeys.go`: `ScanHostKeys` used to skip a key type whose connection failed and return the rest. Seen live: an `approve` scan offered 2 of 3 keys. It now retries a failed type once, after 500 ms, and if it still fails the whole scan fails. A refused or policy-denied target is not retried.
