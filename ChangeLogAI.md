@@ -1,5 +1,26 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: API token, secret and environment tests (branch audit/tests-2)
+
+- `internal/service/api_token_service_test.go` (new):
+  - tokens are `mch_pat_` plus a random value, and only their SHA-256 reaches the store;
+  - the name is trimmed, the default lifetime is 30 days, and an explicit lifetime is honoured;
+  - only owners can issue, list or revoke, and only `operator` or `reader` roles are accepted;
+  - name and lifetime bounds are enforced;
+  - list and revoke are scoped to the caller's user and workspace.
+- `internal/transport/http/v1/secret/handler_test.go` (new), on a real SQLite secrets service:
+  - **no response from any endpoint carries secret material**;
+  - rotation needs `expectedVersion` (409 when stale);
+  - delete retires the secret, keeping its metadata;
+  - rewrap from an unknown key gives 503;
+  - the service itself refuses operators, readers and owner API tokens (403), not only the router.
+- `internal/transport/http/v1/tokens/handler_test.go` (new): the role is normalised; the stored hash is never returned; every error maps to its status, and causes are not leaked.
+- `internal/transport/http/v1/environments/handler_test.go` (new): **every call uses the caller's workspace even when the body names another one**; every error status.
+
+### Verification
+
+- `go test -cover`: `v1/secret` 0% → **93.4%**; `v1/tokens` 0% → **100%**; `v1/environments` 0% → **100%**. golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: login and session tests (branch audit/tests-2)
 
 - `internal/service/auth_service_test.go` (new):
