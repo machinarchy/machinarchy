@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 12: end-to-end test in NATS operator mode (branch audit/agent-authz)
+
+- `test/e2e/agent_test.go`: the real monolith and the real agent now run against NATS in operator mode (`natstest`).
+  - The gateway uses a controller user with `ControllerPermissions`, plus the account signing key; there is no shared enrolment token.
+  - The owner issues a per-host token through `POST /api/v1/agents/enrollment-tokens`, bound to the machine's hostname.
+  - The agent starts with the bootstrap credential.
+  - New checks: a second agent with the same token is refused and exits 78; the token list shows the agent that used it and never the secret; the agent stored its NATS user JWT.
+  - The earlier checks (signed calls, renewal, revocation with exit 78, metrics, SIGTERM) all now run over per-agent credentials.
+
+### Verification
+
+- `MACHINARCHY_E2E_REQUIRED=1 go test -race ./test/e2e/`: pass (20.3 s), against agent `996e8a3`.
+
 ## 2026-11-18 — Audit Phase 12: NATS operator-mode setup generator (branch audit/agent-authz)
 
 - `deployments/nats/generate` (new, `go run ./deployments/nats/generate -out DIR`): creates the operator, the system account, the `MACHINARCHY` account with JetStream and a signing key, and two users:

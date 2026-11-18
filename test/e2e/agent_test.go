@@ -25,7 +25,8 @@ import (
 	"testing"
 	"time"
 
-	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/machinarchy/machinarchy/internal/agentgateway"
+	"github.com/machinarchy/machinarchy/internal/testutil/natstest"
 )
 
 func required() bool { return os.Getenv("MACHINARCHY_E2E_REQUIRED") == "1" }
@@ -57,21 +58,6 @@ func build(t *testing.T, dir, pkg, out string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build %s: %v\n%s", pkg, err, output)
 	}
-}
-
-func startNATS(t *testing.T) string {
-	t.Helper()
-	server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true,
-		StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go server.Start()
-	if !server.ReadyForConnections(10 * time.Second) {
-		t.Fatal("embedded NATS server did not start")
-	}
-	t.Cleanup(server.Shutdown)
-	return server.ClientURL()
 }
 
 func freePort(t *testing.T) int {
@@ -233,12 +219,15 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 	build(t, repoRoot, "./cmd/monolit", monolith)
 	build(t, agentDir, "./cmd/machinarchy-agent", agentBinary)
 
-	natsURL := startNATS(t)
+	// NATS in operator mode, as deployments/nats/generate sets it up: the
+	// gateway has the controller permissions, agents start with the bootstrap
+	// credential and receive their own JWT (AUDIT M-10).
+	ns := natstest.Start(t)
+	natsURL := ns.URL
 	seed := make([]byte, 32)
 	if _, err := rand.Read(seed); err != nil {
 		t.Fatal(err)
 	}
-	token := randomText(t, 24)
 	port := freePort(t)
 	server := start(t, monolith, []string{
 		"MACHINARCHY_ENVIRONMENT=development",
@@ -249,7 +238,9 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		"MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD=e2e-admin-password",
 		"MACHINARCHY_AGENT_GATEWAY_NATS_URL=" + natsURL,
 		"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE=" + secretFile(t, work, "signing.key", base64.StdEncoding.EncodeToString(seed)),
-		"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE=" + secretFile(t, work, "enroll.token", token),
+		"MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE=" + ns.ControllerCredentials(t, agentgateway.ControllerPermissions()),
+		"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT=" + ns.Account,
+		"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE=" + ns.SignerFile(t),
 		"MACHINARCHY_AGENT_GATEWAY_LEASE_TTL=12s",
 		"MACHINARCHY_AGENT_GATEWAY_HEARTBEAT=5s",
 	}, filepath.Join(work, "server.log"))
@@ -279,15 +270,34 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		t.Fatalf("controller key: %d %+v", status, key)
 	}
 
+	// An owner issues a single-use token bound to this host's name (M-4).
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issued struct {
+		ID    string `json:"id"`
+		Token string `json:"token"`
+	}
+	if status := client.do(t, http.MethodPost, "/api/v1/agents/enrollment-tokens",
+		map[string]any{"hostname": hostname, "ttlSeconds": 600}, &issued); status != http.StatusCreated || issued.Token == "" {
+		t.Fatalf("issue enrolment token: %d %+v", status, issued)
+	}
+	tokenFile := secretFile(t, work, "agent.token", issued.Token)
+	bootstrapCreds := ns.BootstrapCredentials(t)
+	agentEnv := func(name, state string) []string {
+		return []string{
+			"MACHINARCHY_ENVIRONMENT=development",
+			"MACHINARCHY_AGENT_NAME=" + name,
+			"MACHINARCHY_AGENT_NATS_URL=" + natsURL,
+			"MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE=" + bootstrapCreds,
+			"MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=" + key.PublicKey,
+			"MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE=" + tokenFile,
+			"MACHINARCHY_AGENT_STATE_FILE=" + state,
+		}
+	}
 	agentState := filepath.Join(work, "agent", "state.json")
-	agent := start(t, agentBinary, []string{
-		"MACHINARCHY_ENVIRONMENT=development",
-		"MACHINARCHY_AGENT_NAME=e2e-agent",
-		"MACHINARCHY_AGENT_NATS_URL=" + natsURL,
-		"MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=" + key.PublicKey,
-		"MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE=" + secretFile(t, work, "agent.token", token),
-		"MACHINARCHY_AGENT_STATE_FILE=" + agentState,
-	}, filepath.Join(work, "agent.log"))
+	agent := start(t, agentBinary, agentEnv("e2e-agent", agentState), filepath.Join(work, "agent.log"))
 	defer func() {
 		if t.Failed() {
 			agent.dump(t)
@@ -301,6 +311,38 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 			len(agents.Items) == 1 && agents.Items[0].Connected
 	})
 	agentID, firstSeen := agents.Items[0].ID, agents.Items[0].LastSeenAt
+
+	// The token is now used up: a second host with the same token is refused
+	// and exits 78, and the token records who used it.
+	second := start(t, agentBinary, agentEnv("e2e-second", filepath.Join(work, "second", "state.json")), filepath.Join(work, "second.log"))
+	select {
+	case <-second.exited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a second agent enrolled with a used token")
+	}
+	var usedToken *exec.ExitError
+	if !errors.As(second.err, &usedToken) || usedToken.ExitCode() != 78 {
+		t.Fatalf("second agent with a used token exited with %v, want status 78", second.err)
+	}
+	var tokens struct {
+		Items []struct {
+			ID          string `json:"id"`
+			UsedByAgent string `json:"usedByAgent"`
+		} `json:"items"`
+	}
+	if status := client.do(t, http.MethodGet, "/api/v1/agents/enrollment-tokens", nil, &tokens); status != http.StatusOK ||
+		len(tokens.Items) != 1 || tokens.Items[0].UsedByAgent != agentID {
+		t.Fatalf("enrolment tokens after use: %d %+v", status, tokens)
+	}
+	if strings.Contains(fmt.Sprint(tokens), issued.Token) {
+		t.Fatal("the token list exposes the secret")
+	}
+
+	// The agent now holds its own NATS credential.
+	stateData, err := os.ReadFile(agentState)
+	if err != nil || !bytes.Contains(stateData, []byte(`"nats_user_jwt"`)) {
+		t.Fatalf("the agent did not store its NATS user JWT (%v)", err)
+	}
 
 	// 2. A capability call round-trips through JetStream, signed both ways.
 	var result struct {
