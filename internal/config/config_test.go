@@ -179,9 +179,6 @@ func TestLoadIgnoresLegacyBrokerSettings(t *testing.T) {
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load() error = %v; the API must not depend on NATS", err)
 	}
-	if _, err := LoadControlManager(); err != nil {
-		t.Fatalf("LoadControlManager() error = %v", err)
-	}
 	if _, err := LoadCommandLine([]string{"--broker-url", "nats://x:4222"}); err == nil {
 		t.Fatal("removed --broker-url flag was accepted")
 	}

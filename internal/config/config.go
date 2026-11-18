@@ -211,12 +211,6 @@ func LoadCommandLine(args []string) (Config, error) {
 	return LoadWithOptions(LoadOptions{FilePath: file, Flags: flags})
 }
 
-// LoadControlManager loads the control manager configuration. Since the
-// legacy NATS adapter was removed it is identical to Load.
-func LoadControlManager() (Config, error) {
-	return load()
-}
-
 func load() (Config, error) {
 	return loadWithGetter(GetEnv)
 }

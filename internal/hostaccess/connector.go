@@ -53,6 +53,9 @@ type SSHConnector struct {
 	workload secrets.WorkloadID
 }
 
+// NewSSHConnector builds a connector with a fixed network policy. Production
+// uses NewSSHConnectorWithPolicyProvider so policy follows runtime
+// configuration; this form serves tests and fixed deployments.
 func NewSSHConnector(resolver CredentialResolver, policy netpolicy.Policy, maxConcurrent int, timeout time.Duration, workload secrets.WorkloadID) (*SSHConnector, error) {
 	if resolver == nil || maxConcurrent < 1 || maxConcurrent > 1024 || timeout <= 0 ||
 		(workload != secrets.WorkloadControlManager && workload != secrets.WorkloadOperationWorker) {

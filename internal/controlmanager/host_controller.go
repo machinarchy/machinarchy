@@ -20,6 +20,8 @@ type HostController struct {
 	operationRefs  resource.OperationHostReferenceRepository
 }
 
+// NewHostController builds a controller with the default resync and no
+// Operation coordination; production uses NewHostControllerWithOperations.
 func NewHostController(hosts resource.HostRepository, converger HostConverger) (*HostController, error) {
 	return NewHostControllerWithResync(hosts, converger, 5*time.Minute)
 }
