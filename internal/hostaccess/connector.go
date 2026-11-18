@@ -5,6 +5,7 @@ package hostaccess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -117,6 +118,33 @@ func (c *SSHConnector) Execute(ctx context.Context, host *resource.Host, profile
 		return result, classify(runErr)
 	}
 	return result, nil
+}
+
+// RunRunner runs a command built by the runner package and returns its
+// standard output. A non-zero exit is not an error here: the runner reports
+// refusals in its output, and the runner parsers turn them into errors.
+// Only connection-level failures are returned, classified like Execute's.
+func (c *SSHConnector) RunRunner(ctx context.Context, host *resource.Host, profile *resource.AccessProfileRevision, operationID, command string) (string, error) {
+	params, cleanup, err := c.params(ctx, host, profile, operationID)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	if err := c.acquire(ctx); err != nil {
+		return "", err
+	}
+	defer c.release()
+	raw, runErr := sshclient.ExecuteRemoteCommandDetailed(ctx, params, command)
+	if runErr != nil {
+		if _, ok := sshclient.ExitStatus(runErr); ok {
+			return raw.Stdout, nil
+		}
+		return "", classify(runErr)
+	}
+	if raw.Truncated {
+		return "", fmt.Errorf("%w: runner reply exceeded the output cap", ErrConnection)
+	}
+	return raw.Stdout, nil
 }
 
 func (c *SSHConnector) params(ctx context.Context, host *resource.Host, revision *resource.AccessProfileRevision, operationID string) (sshclient.DialParams, func(), error) {

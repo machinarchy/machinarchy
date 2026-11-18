@@ -27,7 +27,7 @@ const (
 	ChunkBytes = 32 << 10
 	// HeadBytes is the prefix of each stream that is always read in full;
 	// past it, a poll that has fallen behind skips to the last ChunkBytes.
-	HeadBytes = 16 << 10
+	HeadBytes = 15 << 10 // = resource.CaptureHeadBytes
 	// MaxTimeoutSeconds bounds a detached run (24 h).
 	MaxTimeoutSeconds = 24 * 60 * 60
 	// DefaultMaxFileBytes caps each output file on the host (ulimit -f).
@@ -35,8 +35,9 @@ const (
 	// DefaultRetentionDays is how long a leftover directory stays on a host.
 	DefaultRetentionDays = 7
 	// MaxRefsPerCall bounds one status, cancel or cleanup session, so a
-	// reply stays far below the client's output cap.
-	MaxRefsPerCall = 8
+	// reply (2 × ChunkBytes of base64 per target) stays below the SSH
+	// client's 512 KiB per-stream cap.
+	MaxRefsPerCall = 4
 	protocolPrefix = "@@MR1 "
 	argv0          = "machinarchy-runner"
 )

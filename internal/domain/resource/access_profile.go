@@ -31,6 +31,8 @@ type AccessProfileSpec struct {
 	// use this profile become trusted (see hostkeys.go).
 	HostKeyPolicy              HostKeyPolicy `json:"hostKeyPolicy,omitempty"`
 	HostCertificateAuthorities []string      `json:"hostCertificateAuthorities,omitempty"`
+	// Execution configures detached runs on the profile's hosts.
+	Execution *ExecutionSettings `json:"execution,omitempty"`
 }
 
 type AccessProfileRevision struct {
@@ -85,6 +87,9 @@ func (r AccessProfileRevision) Validate() error {
 	}
 	if r.Spec.Authentication != AuthenticationPassword && r.Spec.Authentication != AuthenticationPrivateKey {
 		return fmt.Errorf("%w: unsupported Access Profile authentication method", ErrInvalidResource)
+	}
+	if err := r.Spec.Execution.validate(); err != nil {
+		return err
 	}
 	if err := r.Spec.validateHostKeys(); err != nil {
 		return err

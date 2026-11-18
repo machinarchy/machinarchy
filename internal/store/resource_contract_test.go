@@ -21,6 +21,7 @@ func TestManagedResourceContract(t *testing.T) {
 			t.Run("Access Profile revision isolation and outbox", func(t *testing.T) { testAccessProfile(t, newFixture(t, engine)) })
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
 			t.Run("operation target writes", func(t *testing.T) { testOperationTargetWrites(t, newFixture(t, engine)) })
+			t.Run("detached targets", func(t *testing.T) { testDetachedTargets(t, newFixture(t, engine)) })
 			t.Run("listing and keyset pagination", func(t *testing.T) { testResourceListing(t, newFixture(t, engine)) })
 			t.Run("transaction rollback", func(t *testing.T) { testResourceRollback(t, newFixture(t, engine)) })
 			t.Run("outbox atomicity", func(t *testing.T) { testOutboxAtomicity(t, newFixture(t, engine)) })
@@ -761,5 +762,126 @@ func testHostKeyTrust(t *testing.T, f *fixture) {
 	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT COUNT(*) FROM outbox_events WHERE event_type = ? AND subject_id = ? AND payload LIKE '%host-keys-trusted%'`,
 		`SELECT COUNT(*) FROM outbox_events WHERE event_type = $1 AND subject_id = $2 AND payload::text LIKE '%host-keys-trusted%'`), eventing.HostSpecChanged, string(id)).Scan(&events); err != nil || events != 2 {
 		t.Fatalf("trust outbox events = %d, %v", events, err)
+	}
+}
+
+// testDetachedTargets covers migration 000004 and the detached-execution
+// store methods on both engines.
+func testDetachedTargets(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	detached, ok := f.stores.Operations.(resource.DetachedTargetRepository)
+	if !ok {
+		t.Fatal("the Operation store does not implement DetachedTargetRepository")
+	}
+	workspaceID := f.newWorkspace(t, "detached-workspace")
+	now := time.Now().UTC()
+	profile, profileRevision, err := resource.NewAccessProfile(workspaceID, "detached-profile", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Username: "deploy", Authentication: resource.AuthenticationPassword, Credential: resource.SecretReference{ID: "detached-secret", Version: 1}, Enabled: true}, 7, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, profileRevision); err != nil {
+		t.Fatal(err)
+	}
+	var targets []resource.OperationTargetSpec
+	for i := range 2 {
+		host, err := resource.NewHost(workspaceID, 0, fmt.Sprintf("detached-host-%d", i), nil, resource.HostSpec{AccessProfileID: profile.ID}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation,
+			DisplayName: host.Metadata.Name, AccessProfileID: profile.ID, AccessProfileRevision: profileRevision.Revision})
+	}
+	op, err := resource.NewRunOperation(workspaceID, resource.ActorRef{UserID: 7}, resource.OperationSpec{Targets: targets,
+		Run: &resource.RunSpec{Argv: []string{"sleep", "3600"}, TimeoutSeconds: 7200, Concurrency: 2, Detach: true}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Operations.CreateOperation(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	handle := resource.LaunchHandle{Mode: "setsid", PID: 4242, Endpoint: "10.0.0.1:22", LaunchedAt: now, Deadline: now.Add(2 * time.Hour)}
+	first, second := targets[0].HostID, targets[1].HostID
+	if err := detached.RecordTargetLaunch(ctx, workspaceID, op.ID, first, handle); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("launch on a queued Operation = %v, want ErrOperationFinished", err)
+	}
+	expected := op.Revision
+	if err := op.Start(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Operations.UpdateOperation(ctx, op, expected); err != nil {
+		t.Fatal(err)
+	}
+	if err := detached.RecordTargetLaunch(ctx, workspaceID, op.ID, first, handle); err != nil {
+		t.Fatal(err)
+	}
+	// Recording again (a confirmed handle replacing an unconfirmed one) is allowed.
+	if err := detached.RecordTargetLaunch(ctx, workspaceID, op.ID, first, handle); err != nil {
+		t.Fatal(err)
+	}
+	var live resource.LiveOutput
+	live.Stdout.Apply(0, 11, []byte("hello\nworld"))
+	live.Polls = 3
+	if err := detached.UpdateTargetLive(ctx, workspaceID, op.ID, first, live); err != nil {
+		t.Fatal(err)
+	}
+	if err := detached.UpdateTargetLive(ctx, workspaceID, op.ID, second, live); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("progress for a target that is not running = %v", err)
+	}
+	listed, err := detached.ListDetachedTargets(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *resource.DetachedTarget
+	for i := range listed {
+		if listed[i].OperationID == op.ID {
+			if found != nil {
+				t.Fatal("a pending target without a launch was listed")
+			}
+			found = &listed[i]
+		}
+	}
+	if found == nil || found.HostID != first || found.Launch.PID != 4242 || found.Live.Polls != 3 ||
+		string(found.Live.Stdout.Head) != "hello\nworld" || found.AccessProfileRevision != profileRevision.Revision {
+		t.Fatalf("listed detached target = %+v", found)
+	}
+	var stored string
+	if err := f.stores.DB.QueryRowContext(ctx, f.pick(`SELECT live FROM operation_targets WHERE host_id = ?`, `SELECT live FROM operation_targets WHERE host_id = $1`), string(first)).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "hello") {
+		t.Fatal("live output is stored in plain text")
+	}
+	got, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil || got.Status.Targets[0].Launch == nil && got.Status.Targets[1].Launch == nil {
+		t.Fatalf("GetOperation lost the launch handle: %+v, %v", got, err)
+	}
+	// A terminal state stores the result, keeps the handle and drops the progress.
+	code := 0
+	if err := f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, first, resource.TargetLost,
+		&resource.TargetResult{ExitCode: &code, Stdout: "partial\n", StdoutBytes: 9000, Truncated: true, ErrorClass: "supervisor_lost"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = f.stores.Operations.GetOperation(ctx, workspaceID, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range got.Status.Targets {
+		if target.Spec.HostID != first {
+			continue
+		}
+		if target.State != resource.TargetLost || target.Live != nil || target.Launch == nil ||
+			target.Result.Stdout != "partial\n" || target.Result.StdoutBytes != 9000 || !target.Result.Truncated {
+			t.Fatalf("lost target = %+v, result %+v", target, target.Result)
+		}
+	}
+	if err := detached.RecordTargetLaunch(ctx, workspaceID, op.ID, first, handle); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("launch over a terminal target = %v", err)
+	}
+	if err := detached.UpdateTargetLive(ctx, workspaceID, op.ID, first, live); !errors.Is(err, resource.ErrOperationFinished) {
+		t.Fatalf("progress for a terminal target = %v", err)
 	}
 }

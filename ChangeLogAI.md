@@ -1,5 +1,32 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: detached-execution model and persistence (branch audit/detached-ssh)
+
+- Domain (`internal/domain/resource/detached.go`, `operation.go`, `access_profile.go`):
+  - `RunSpec.Detach`: timeouts up to 24 h when detached, 900 s otherwise;
+  - the terminal target state `Lost`;
+  - `LaunchHandle` (mode, unit, pid, state root, endpoint, launch time, deadline; an empty mode means an unconfirmed launch);
+  - `LiveOutput` with a `StreamCapture` per stream, which keeps a 15 KiB head and a 15 KiB tail, handles repeated chunks and gaps, and renders with an omission marker;
+  - `TargetResult` gains `stdoutBytes`, `stderrBytes` and `truncated`;
+  - Access Profiles gain `execution` (`supervisor` auto/systemd/setsid/attached, `stateRoot`, `maxOutputFileBytes`).
+- Output keeps newlines and tabs: `sanitizeOutput` still removes other control characters (so no terminal escapes), replaces invalid UTF-8 and never splits a rune. Before this, stored stdout and stderr had every newline replaced by a space.
+- Migration `000004_detached_targets`:
+  - SQLite rebuilds `operation_targets` to allow `Lost`; PostgreSQL swaps the CHECK constraint;
+  - both add `launch` (plain JSON) and `live` (encrypted) plus a partial index.
+  - Checked by hand that the SQLite rebuild keeps existing rows (`integrity_check` ok).
+- Store (`operation_detached.go`), all single-row writes:
+  - `RecordTargetLaunch` (audited, fenced like target updates);
+  - `UpdateTargetLive` (encrypted, not audited, because it is progress);
+  - `ListDetachedTargets`.
+  - `GetOperation` returns the launch and live data; a terminal write clears the live data.
+
+### Verification
+
+- New domain tests: capture fits, gap, unread bytes, output budget, sanitizer, timeout bounds, live output only while running, execution settings.
+- New contract subtest "detached targets" passes on SQLite and PostgreSQL 16. It covers launch only on an active Operation, re-recording, encrypted progress, listing, the `Lost` round-trip with byte counts, and terminal targets refusing launch and progress.
+- The migration-count contract now expects 4.
+- `go test ./internal/...`: pass. golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: detached-execution runner (branch audit/detached-ssh)
 
 - New `internal/hostaccess/runner`: the POSIX `sh` runner of AUDIT/10b §1.2 (`runner.sh`, embedded), plus Go command builders and strict reply parsers.

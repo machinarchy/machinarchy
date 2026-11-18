@@ -56,6 +56,21 @@ type OperationStore interface {
 	OperationTargetRepository
 }
 
+// DetachedTargetRepository persists detached-execution progress (AUDIT/10b
+// §1.3) with single-row writes, like OperationTargetRepository.
+type DetachedTargetRepository interface {
+	// RecordTargetLaunch moves a Pending target to Running with its launch
+	// handle, or replaces the handle of a Running target (an unconfirmed
+	// launch that the poller confirmed). ErrOperationFinished if the
+	// target or Operation is already terminal.
+	RecordTargetLaunch(ctx context.Context, workspaceID int, operationID, hostID ID, handle LaunchHandle) error
+	// UpdateTargetLive stores a Running target's progress.
+	UpdateTargetLive(ctx context.Context, workspaceID int, operationID, hostID ID, live LiveOutput) error
+	// ListDetachedTargets returns Running targets with a launch handle of
+	// active Operations, oldest launch first.
+	ListDetachedTargets(ctx context.Context, limit int) ([]DetachedTarget, error)
+}
+
 type OperationKey struct {
 	WorkspaceID int
 	ID          ID

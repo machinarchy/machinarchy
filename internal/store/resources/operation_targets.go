@@ -36,7 +36,7 @@ func (s *Store) UpdateOperationTarget(ctx context.Context, workspaceID int, oper
 			return err
 		}
 	}
-	updated, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?
+	updated, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?, live = ''
 		WHERE operation_id = ? AND host_id = ? AND state IN (?, ?)
 		AND EXISTS (SELECT 1 FROM operations WHERE id = ? AND workspace_id = ? AND state IN (?, ?))`),
 		string(state), nullableInt(result, func(r *resource.TargetResult) *int { return r.ExitCode }), output, targetErrorClass(result),

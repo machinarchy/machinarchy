@@ -761,7 +761,7 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT host_id, host_generation, display_name,
-		access_profile_id, access_profile_revision, state, exit_code, output, error_class
+		access_profile_id, access_profile_revision, state, exit_code, output, error_class, launch, live
 		FROM operation_targets WHERE operation_id = ? ORDER BY host_id`), string(id))
 	if err != nil {
 		return nil, fmt.Errorf("read Operation targets: %w", err)
@@ -773,11 +773,15 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 	}
 	targetsByHost := make(map[resource.ID]resource.OperationTarget, len(operation.Spec.Targets))
 	for rows.Next() {
-		var hostID, displayName, profileID, targetState, output, errorClass string
+		var hostID, displayName, profileID, targetState, output, errorClass, launchText, liveText string
 		var generation, profileRevision uint64
 		var exitCode sql.NullInt64
-		if err := rows.Scan(&hostID, &generation, &displayName, &profileID, &profileRevision, &targetState, &exitCode, &output, &errorClass); err != nil {
+		if err := rows.Scan(&hostID, &generation, &displayName, &profileID, &profileRevision, &targetState, &exitCode, &output, &errorClass, &launchText, &liveText); err != nil {
 			return nil, fmt.Errorf("scan Operation target: %w", err)
+		}
+		launch, live, err := s.decodeDetached(launchText, liveText)
+		if err != nil {
+			return nil, err
 		}
 		if output != "" {
 			output, err = crypto.Decrypt(output, s.key)
@@ -789,16 +793,14 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 		if !ok || spec.HostGeneration != generation || spec.DisplayName != displayName || spec.AccessProfileID != resource.ID(profileID) || spec.AccessProfileRevision != profileRevision {
 			return nil, fmt.Errorf("stored Operation target does not match immutable spec")
 		}
-		target := resource.OperationTarget{Spec: spec, State: resource.TargetState(targetState)}
+		target := resource.OperationTarget{Spec: spec, State: resource.TargetState(targetState), Launch: launch, Live: live}
 		if exitCode.Valid || output != "" || errorClass != "" {
 			target.Result = &resource.TargetResult{Output: output, ErrorClass: errorClass}
-			var streams struct {
-				Stdout string `json:"stdout"`
-				Stderr string `json:"stderr"`
-			}
+			var streams storedStreams
 			if json.Unmarshal([]byte(output), &streams) == nil && (streams.Stdout != "" || streams.Stderr != "") {
 				target.Result.Output = ""
 				target.Result.Stdout, target.Result.Stderr = streams.Stdout, streams.Stderr
+				target.Result.StdoutBytes, target.Result.StderrBytes, target.Result.Truncated = streams.StdoutBytes, streams.StderrBytes, streams.Truncated
 			}
 			if exitCode.Valid {
 				value := int(exitCode.Int64)
@@ -884,7 +886,7 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 		if err != nil {
 			return fmt.Errorf("encrypt Operation target output: %w", err)
 		}
-		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?
+		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?, live = ''
 			WHERE operation_id = ? AND host_id = ? AND state = ?`), string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
 			output, targetErrorClass(target.Result), string(operation.ID), string(target.Spec.HostID), string(before.State))
 		if err != nil {
@@ -922,10 +924,8 @@ func (s *Store) encryptTargetOutput(result *resource.TargetResult) (string, erro
 	}
 	value := result.Output
 	if result.Stdout != "" || result.Stderr != "" {
-		data, err := json.Marshal(struct {
-			Stdout string `json:"stdout"`
-			Stderr string `json:"stderr"`
-		}{Stdout: result.Stdout, Stderr: result.Stderr})
+		data, err := json.Marshal(storedStreams{Stdout: result.Stdout, Stderr: result.Stderr,
+			StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes, Truncated: result.Truncated})
 		if err != nil {
 			return "", fmt.Errorf("encode Operation output streams: %w", err)
 		}
@@ -933,6 +933,16 @@ func (s *Store) encryptTargetOutput(result *resource.TargetResult) (string, erro
 	}
 	return crypto.Encrypt(value, s.key)
 }
+
+// storedStreams is the encrypted form of a target's output streams.
+type storedStreams struct {
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	StdoutBytes int64  `json:"stdoutBytes,omitempty"`
+	StderrBytes int64  `json:"stderrBytes,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+}
+
 func targetErrorClass(result *resource.TargetResult) string {
 	if result == nil {
 		return ""

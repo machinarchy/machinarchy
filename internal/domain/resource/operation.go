@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
@@ -53,6 +54,11 @@ type RunSpec struct {
 	Argv           []string `json:"argv"`
 	TimeoutSeconds int      `json:"timeoutSeconds"`
 	Concurrency    int      `json:"concurrency"`
+	// Detach runs the command under a supervisor on each host and ends the
+	// SSH session right after the launch (AUDIT/10b §1). The timeout may
+	// then be up to MaxDetachedTimeoutSeconds; attached runs keep
+	// MaxAttachedTimeoutSeconds.
+	Detach bool `json:"detach,omitempty"`
 }
 
 type OperationTargetSpec struct {
@@ -75,12 +81,22 @@ type TargetResult struct {
 	Stdout     string `json:"stdout,omitempty"`
 	Stderr     string `json:"stderr,omitempty"`
 	ErrorClass string `json:"errorClass,omitempty"`
+	// StdoutBytes and StderrBytes are the streams' full sizes on the host;
+	// Truncated means the stored text omits part of them (detached runs keep
+	// a head and a tail of each stream).
+	StdoutBytes int64 `json:"stdoutBytes,omitempty"`
+	StderrBytes int64 `json:"stderrBytes,omitempty"`
+	Truncated   bool  `json:"truncated,omitempty"`
 }
 
 type OperationTarget struct {
 	Spec   OperationTargetSpec `json:"spec"`
 	State  TargetState         `json:"state"`
 	Result *TargetResult       `json:"result,omitempty"`
+	// Launch and Live are set for detached runs: how to reach the command,
+	// and its progress while it runs.
+	Launch *LaunchHandle `json:"launch,omitempty"`
+	Live   *LiveOutput   `json:"live,omitempty"`
 }
 
 type OperationStatus struct {
@@ -136,7 +152,11 @@ func (o *Operation) Validate() error {
 	if len(strings.Join(o.Spec.Run.Argv, "\x00")) > MaxOperationArgvBytes {
 		return fmt.Errorf("%w: operation arguments exceed %d bytes", ErrInvalidResource, MaxOperationArgvBytes)
 	}
-	if o.Spec.Run.TimeoutSeconds < 1 || o.Spec.Run.TimeoutSeconds > 900 || o.Spec.Run.Concurrency < 1 || o.Spec.Run.Concurrency > 20 {
+	maxTimeout := MaxAttachedTimeoutSeconds
+	if o.Spec.Run.Detach {
+		maxTimeout = MaxDetachedTimeoutSeconds
+	}
+	if o.Spec.Run.TimeoutSeconds < 1 || o.Spec.Run.TimeoutSeconds > maxTimeout || o.Spec.Run.Concurrency < 1 || o.Spec.Run.Concurrency > 20 {
 		return fmt.Errorf("%w: Run timeout or concurrency is outside supported bounds", ErrInvalidResource)
 	}
 	seen := make(map[ID]struct{}, len(o.Spec.Targets))
@@ -181,6 +201,12 @@ func (o *Operation) Validate() error {
 		}
 		if (target.State == TargetRunning) && o.Status.State != OperationRunning && o.Status.State != OperationCancelRequested {
 			return fmt.Errorf("%w: running target requires an active Operation", ErrInvalidResource)
+		}
+		if target.Live != nil && target.State != TargetRunning {
+			return fmt.Errorf("%w: only a running target has live output", ErrInvalidResource)
+		}
+		if target.Launch != nil && target.State == TargetPending {
+			return fmt.Errorf("%w: a pending target has no launch", ErrInvalidResource)
 		}
 		if target.Result != nil {
 			if target.State == TargetPending || target.State == TargetRunning {
@@ -315,7 +341,7 @@ func validFinalOperationState(state OperationState) bool {
 
 func validTargetState(state TargetState) bool {
 	switch state {
-	case TargetPending, TargetRunning, TargetSucceeded, TargetFailed, TargetTimedOut, TargetCancelled, TargetInterrupted:
+	case TargetPending, TargetRunning, TargetSucceeded, TargetFailed, TargetTimedOut, TargetCancelled, TargetInterrupted, TargetLost:
 		return true
 	default:
 		return false
@@ -334,14 +360,14 @@ func NormalizeTargetResult(result *TargetResult) *TargetResult {
 		return nil
 	}
 	copyResult := *result
-	copyResult.Output = sanitizeMessage(copyResult.Output, MaxTargetOutputBytes)
+	copyResult.Output = sanitizeOutput(copyResult.Output, MaxTargetOutputBytes)
 	remaining := MaxTargetOutputBytes - len(copyResult.Output)
-	copyResult.Stdout = sanitizeMessage(copyResult.Stdout, remaining)
+	copyResult.Stdout = sanitizeOutput(copyResult.Stdout, remaining)
 	remaining -= len(copyResult.Stdout)
 	if remaining < 0 {
 		remaining = 0
 	}
-	copyResult.Stderr = sanitizeMessage(copyResult.Stderr, remaining)
+	copyResult.Stderr = sanitizeOutput(copyResult.Stderr, remaining)
 	copyResult.ErrorClass = sanitizeMessage(copyResult.ErrorClass, 128)
 	return &copyResult
 }
@@ -362,3 +388,23 @@ func TargetProgress(state TargetState) int {
 
 // ValidTargetState reports whether state is a known target state.
 func ValidTargetState(state TargetState) bool { return validTargetState(state) }
+
+// sanitizeOutput bounds command output and removes control characters except
+// newline and tab, so output keeps its lines but cannot carry terminal escape
+// sequences. Invalid UTF-8 is replaced.
+func sanitizeOutput(value string, limit int) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	value = strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value)
+	if len(value) > limit {
+		value = value[:limit]
+		for len(value) > 0 && !utf8.ValidString(value) {
+			value = value[:len(value)-1] // do not split a rune
+		}
+	}
+	return strings.TrimRight(value, " ")
+}
