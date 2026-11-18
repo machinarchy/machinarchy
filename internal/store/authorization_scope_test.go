@@ -2,9 +2,11 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,5 +224,32 @@ func TestSQLiteSignupsShareDefaultWorkspaceAndBootstrapOwnerIsIdempotent(t *test
 	}
 	if err := stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, 9999, domain.RoleOwner); !errors.Is(err, domain.ErrUserNotFound) {
 		t.Fatalf("promoting a non-member error = %v, want ErrUserNotFound", err)
+	}
+}
+
+// TestPreBaselineDatabaseIsRefused covers the B8c schema squash: a database
+// that recorded versions from the old migration chain must be recreated, and
+// the error says so instead of failing later on a missing table.
+func TestPreBaselineDatabaseIsRefused(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "old.db")
+	if err := os.Chmod(filepath.Dir(databasePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_migrations(version) VALUES (1), (13);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Open(ctx, store.Config{Engine: store.EngineSQLite, SQLitePath: databasePath,
+		EncryptionSecret: "integration-test-secret-with-more-than-thirty-two-bytes"})
+	if !errors.Is(err, store.ErrIncompatibleSchema) || !strings.Contains(err.Error(), "version 13") {
+		t.Fatalf("Open() on a pre-baseline database = %v, want ErrIncompatibleSchema naming version 13", err)
 	}
 }

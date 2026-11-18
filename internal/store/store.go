@@ -1,4 +1,6 @@
-// Package store provides a unified interface for accessing different database engines (SQLite and PostgreSQL) and their associated domain stores. It handles database connection, configuration, migrations, and readiness checks.
+// Package store opens the configured database (SQLite or PostgreSQL), applies
+// the embedded schema, and assembles the dialect-neutral repositories:
+// accounts, managed resources and management (configuration, secrets).
 package store
 
 import (
@@ -13,9 +15,13 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/store/accounts"
 	"github.com/machinarchy/machinarchy/internal/store/management"
 	"github.com/machinarchy/machinarchy/internal/store/postgres"
+	"github.com/machinarchy/machinarchy/internal/store/resources"
 	"github.com/machinarchy/machinarchy/internal/store/sqlite"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
+	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
 // Database engine identifiers.
@@ -65,10 +71,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 
 	switch engine {
 	case "sqlite":
-		db, err = sqlite.OpenDB(sqlite.Config{
-			DatabasePath:     cfg.SQLitePath,
-			EncryptionSecret: cfg.EncryptionSecret,
-		})
+		db, err = sqlite.OpenDB(sqlite.Config{DatabasePath: cfg.SQLitePath})
 
 	case "postgres":
 		db, err = postgres.OpenDB(postgres.Config{
@@ -130,37 +133,29 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		engine: engine,
 	}
 
-	switch engine {
-	case "sqlite":
-		storeInstance, err := sqlite.NewStore(db, cfg.EncryptionSecret, slog.Default())
-		if err != nil {
-			return fail(err)
-		}
-
-		stores.Users = storeInstance
-		stores.Access = storeInstance
-		stores.Environments = storeInstance
-		stores.Audit = storeInstance
-		stores.ResourceHosts = storeInstance.Resources
-		stores.ResourceProfiles = storeInstance.Resources
-		stores.Operations = storeInstance.Resources
-		stores.Outbox = storeInstance.Resources
-		stores.ResourceLeases = storeInstance.Resources
-	case "postgres":
-		storeInstance, err := postgres.NewStore(db, cfg.EncryptionSecret, slog.Default())
-		if err != nil {
-			return fail(err)
-		}
-		stores.Users = storeInstance
-		stores.Access = storeInstance
-		stores.Environments = storeInstance
-		stores.Audit = storeInstance
-		stores.ResourceHosts = storeInstance.Resources
-		stores.ResourceProfiles = storeInstance.Resources
-		stores.Operations = storeInstance.Resources
-		stores.Outbox = storeInstance.Resources
-		stores.ResourceLeases = storeInstance.Resources
+	dialect := sqlx.SQLite
+	if engine == EnginePostgres {
+		dialect = sqlx.PostgreSQL
 	}
+	accountStore, err := accounts.New(db, dialect, slog.Default())
+	if err != nil {
+		return fail(err)
+	}
+	operationKey, err := crypto.DeriveKey(cfg.EncryptionSecret, "machinarchy-operation-spec-v1")
+	if err != nil {
+		return fail(fmt.Errorf("derive Operation spec encryption key: %w", err))
+	}
+	resourceDialect := resources.SQLite
+	if dialect == sqlx.PostgreSQL {
+		resourceDialect = resources.PostgreSQL
+	}
+	resourceStore, err := resources.New(db, resourceDialect, operationKey, slog.Default(), accountStore.AppendAudit)
+	if err != nil {
+		return fail(fmt.Errorf("initialize managed resource repositories: %w", err))
+	}
+	stores.Users, stores.Access, stores.Environments, stores.Audit = accountStore, accountStore, accountStore, accountStore
+	stores.ResourceHosts, stores.ResourceProfiles, stores.Operations = resourceStore, resourceStore, resourceStore
+	stores.Outbox, stores.ResourceLeases = resourceStore, resourceStore
 	managementDialect := management.SQLite
 	if engine == EnginePostgres {
 		managementDialect = management.PostgreSQL

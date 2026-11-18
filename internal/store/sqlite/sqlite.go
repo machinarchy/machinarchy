@@ -1,4 +1,6 @@
-// Package sqlite provides a SQLite database store implementation for Machinarchy.
+// Package sqlite opens and configures the SQLite database: file permissions,
+// one connection, foreign keys, busy timeout and WAL. Queries live in the
+// dialect-neutral stores.
 package sqlite
 
 import (
@@ -6,14 +8,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/machinarchy/machinarchy/internal/domain"
-	resourceStore "github.com/machinarchy/machinarchy/internal/store/resources"
-	"github.com/machinarchy/machinarchy/pkg/crypto"
 
 	// Import modernc.org/sqlite to register the SQLite database driver.
 	_ "modernc.org/sqlite"
@@ -21,39 +18,7 @@ import (
 
 // Config contains the settings required to open a SQLite database.
 type Config struct {
-	DatabasePath     string
-	EncryptionSecret string
-}
-
-// Store provides SQLite-backed persistence for Machinarchy.
-type Store struct {
-	DB        *sql.DB
-	Resources *resourceStore.Store
-	logger    *slog.Logger
-}
-
-// NewStore creates a Store using the provided database connection,
-// encryption secret, and logger.
-// It returns an error if the store cannot be initialized.
-func NewStore(db *sql.DB, secret string, logger *slog.Logger) (*Store, error) {
-	if db == nil {
-		return nil, errors.New("SQLite database handle is required")
-	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-	operationKey, err := crypto.DeriveKey(secret, "machinarchy-operation-spec-v1")
-	if err != nil {
-		return nil, fmt.Errorf("derive SQLite Operation spec encryption key: %w", err)
-	}
-	resources, err := resourceStore.New(db, resourceStore.SQLite, operationKey, logger,
-		func(ctx context.Context, tx *sql.Tx, event domain.AuditEvent) error {
-			return appendAudit(ctx, tx, event)
-		})
-	if err != nil {
-		return nil, fmt.Errorf("initialize SQLite managed resource repositories: %w", err)
-	}
-	return &Store{DB: db, logger: logger, Resources: resources}, nil
+	DatabasePath string
 }
 
 // OpenDB opens a SQLite database using the provided configuration.
@@ -134,17 +99,6 @@ func SecureFile(path string) error {
 	}
 	if err := os.Chmod(absolutePath, 0o600); err != nil {
 		return fmt.Errorf("restrict SQLite database file permissions: %w", err)
-	}
-	return nil
-}
-
-func requireRowsAffected(result sql.Result, notFound error) error {
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read affected row count: %w", err)
-	}
-	if rows == 0 {
-		return notFound
 	}
 	return nil
 }

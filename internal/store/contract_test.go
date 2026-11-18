@@ -137,24 +137,13 @@ func (f *fixture) pick(sqliteSQL, postgresSQL string) string {
 
 func (f *fixture) newWorkspace(t *testing.T, name string) int {
 	t.Helper()
-	ctx := context.Background()
 	var id int
-	if f.engine == store.EnginePostgres {
-		if err := f.stores.DB.QueryRowContext(ctx, `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`, name).Scan(&id); err != nil {
-			t.Fatalf("create workspace: %v", err)
-		}
-		return id
-	}
-	result, err := f.stores.DB.ExecContext(ctx, `INSERT INTO workspaces (name, created_at) VALUES (?, ?)`,
-		name, time.Now().UTC().Format(time.RFC3339Nano))
-	if err != nil {
+	query := f.pick(`INSERT INTO workspaces (name, created_at) VALUES (?, ?) RETURNING id`,
+		`INSERT INTO workspaces (name, created_at) VALUES ($1, $2) RETURNING id`)
+	if err := f.stores.DB.QueryRowContext(context.Background(), query, name, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	last, err := result.LastInsertId()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return int(last)
+	return id
 }
 
 func (f *fixture) member(t *testing.T, name string, role domain.Role) *domain.User {
@@ -474,8 +463,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before < 4 {
-		t.Fatalf("applied migrations = %d, want at least 4", before)
+	if before != 1 {
+		t.Fatalf("applied migrations = %d, want the single baseline", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

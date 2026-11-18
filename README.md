@@ -63,6 +63,10 @@ The CLI stores its context file under the user config directory by default. Use 
 
 Build the default API container with `docker build -t machinarchy-api .`. Select another process with `docker build --build-arg MACHINARCHY_COMMAND=controlmanager -t machinarchy-controlmanager .`, `docker build --build-arg MACHINARCHY_COMMAND=monolit -t machinarchy-monolit .`, or `docker build --build-arg MACHINARCHY_COMMAND=machinarchy -t machinarchy-cli .`. Run server containers with the values from `.env` and mount a named volume at `/data` for SQLite persistence. The image runs as an unprivileged user.
 
+## Database schema
+
+The schema is one baseline per dialect (`internal/store/migrations/*/000001_baseline.up.sql`). While the project is in development, schema changes may be squashed into it again: a database created by an older migration chain is refused at startup with an error that says to recreate it (`rm data/machinarchy.db*`, or drop the PostgreSQL database).
+
 ## API overview
 
 The interactive reference is rendered by Scalar. The generated API contract is available as [JSON](docs/swagger.json) or [YAML](docs/swagger.yaml); Scalar accepts the Swagger 2.0 document and upgrades it when rendering.

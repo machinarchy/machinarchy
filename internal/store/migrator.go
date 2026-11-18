@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -16,6 +17,9 @@ import (
 
 //go:embed migrations/*
 var storageModule embed.FS
+
+// ErrIncompatibleSchema reports a database created before the schema baseline.
+var ErrIncompatibleSchema = errors.New("the database was created by an incompatible schema version")
 
 // Migrator handles database schema migrations for different database engines.
 type Migrator struct {
@@ -76,6 +80,16 @@ func (m *Migrator) Up(ctx context.Context) error {
 	applied, err := m.getAppliedVersions(ctx)
 	if err != nil {
 		return err
+	}
+	// A version this binary does not ship means the database was built by an
+	// older migration chain; the schema was squashed into one baseline during
+	// development (AUDIT/05 B8c), so such a database must be recreated.
+	for version := range applied {
+		if _, known := migrationFiles[version]; !known {
+			return fmt.Errorf("%w: it records schema version %d, which this release does not ship; "+
+				"the migrations were squashed into one baseline, so delete the SQLite file or drop the PostgreSQL database and start again",
+				ErrIncompatibleSchema, version)
+		}
 	}
 
 	// 4. Run pending migrations atomically
