@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
@@ -44,19 +46,19 @@ type EnvSavePayload struct {
 func (h *Handler) Create(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	var body EnvSavePayload
 	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Name) == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid environment metadata parameters"})
+		return httperr.Status(c, http.StatusBadRequest, "invalid environment request")
 	}
 
 	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.CreateEnvironment(c.Request().Context(), env); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return c.JSON(http.StatusConflict, map[string]string{"error": "Environment name is already registered"})
+			return httperr.Status(c, http.StatusConflict, "an environment with this name already exists")
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Unable to create environment"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to create environment")
 	}
 	return c.JSON(http.StatusCreated, env)
 }
@@ -73,11 +75,11 @@ func (h *Handler) Create(c echo.Context) error {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	list, err := h.repo.ListEnvironments(c.Request().Context(), principal.WorkspaceID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Unable to retrieve environments"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to list environments")
 	}
 	return c.JSON(http.StatusOK, list)
 }
@@ -100,27 +102,27 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Update(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid URL request ID format"})
+		return httperr.Status(c, http.StatusBadRequest, "invalid environment ID")
 	}
 
 	var body EnvSavePayload
 	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Name) == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid mutation updates layout"})
+		return httperr.Status(c, http.StatusBadRequest, "invalid environment request")
 	}
 
 	env := &domain.Environment{ID: id, WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.UpdateEnvironment(c.Request().Context(), env); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
-			return c.JSON(http.StatusNotFound, map[string]string{"error": "Environment not found"})
+			return httperr.Status(c, http.StatusNotFound, "environment not found")
 		}
 		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return c.JSON(http.StatusConflict, map[string]string{"error": "Environment name is already registered"})
+			return httperr.Status(c, http.StatusConflict, "an environment with this name already exists")
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Unable to update environment"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to update environment")
 	}
 	return c.JSON(http.StatusOK, env)
 }
@@ -140,18 +142,18 @@ func (h *Handler) Update(c echo.Context) error {
 func (h *Handler) Delete(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid URL delete parameters ID target"})
+		return httperr.Status(c, http.StatusBadRequest, "invalid environment ID")
 	}
 
 	if err := h.repo.DeleteEnvironment(c.Request().Context(), principal.WorkspaceID, id); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentNotFound) {
-			return c.JSON(http.StatusNotFound, map[string]string{"error": "Environment not found"})
+			return httperr.Status(c, http.StatusNotFound, "environment not found")
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Unable to delete environment"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to delete environment")
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Environment structure removed successfully"})
 }

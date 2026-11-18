@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
 	"github.com/machinarchy/machinarchy/docs"
@@ -105,6 +107,7 @@ func NewServer(
 	}
 
 	e := echo.New()
+	e.HTTPErrorHandler = httperr.Handler
 	e.HideBanner = true
 	e.IPExtractor = echo.ExtractIPDirect()
 	e.Use(echomw.BodyLimit("1M"))
@@ -195,6 +198,7 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 	)
 
 	e := echo.New()
+	e.HTTPErrorHandler = httperr.Handler
 	e.HideBanner = true
 	e.IPExtractor = echo.ExtractIPDirect()
 	e.Use(echomw.Recover())

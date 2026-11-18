@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
@@ -28,7 +30,7 @@ func (h *Handler) List(c echo.Context) error {
 	if raw := c.QueryParam("limit"); raw != "" {
 		v, e := strconv.Atoi(raw)
 		if e != nil {
-			return c.JSON(400, map[string]string{"error": "invalid limit"})
+			return httperr.Status(c, 400, "invalid limit")
 		}
 		limit = v
 	}
@@ -36,7 +38,7 @@ func (h *Handler) List(c echo.Context) error {
 	if raw := c.QueryParam("before"); raw != "" {
 		v, e := strconv.ParseUint(raw, 10, 64)
 		if e != nil {
-			return c.JSON(400, map[string]string{"error": "invalid before revision"})
+			return httperr.Status(c, 400, "invalid before revision")
 		}
 		before = v
 	}
@@ -49,7 +51,7 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Get(c echo.Context) error {
 	v, err := strconv.ParseUint(c.Param("revision"), 10, 64)
 	if err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid revision"})
+		return httperr.Status(c, 400, "invalid revision")
 	}
 	r, err := h.service.Get(c.Request().Context(), v)
 	if err != nil {
@@ -69,21 +71,21 @@ func (h *Handler) Validate(c echo.Context) error {
 		Config runtimeconfig.Config `json:"config"`
 	}
 	if err := decode(c, &body); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	if err := body.Config.Validate(); err != nil {
-		return c.JSON(422, map[string]string{"error": err.Error()})
+		return httperr.Status(c, 422, err.Error())
 	}
 	return c.JSON(200, map[string]any{"valid": true, "classifications": runtimeconfig.Classifications()})
 }
 func (h *Handler) Publish(c echo.Context) error {
 	var req publishRequest
 	if err := decode(c, &req); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	p, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(401, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, 401, "unauthorized")
 	}
 	r, err := h.service.Publish(c.Request().Context(), p, req.ExpectedRevision, req.Config, req.ChangeNote)
 	if errors.Is(err, runtimeconfig.ErrApplyPending) {
@@ -101,11 +103,11 @@ func (h *Handler) Rollback(c echo.Context) error {
 		ChangeNote       string `json:"changeNote,omitempty"`
 	}
 	if err := decode(c, &req); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	p, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(401, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, 401, "unauthorized")
 	}
 	r, err := h.service.Rollback(c.Request().Context(), p, req.ExpectedRevision, req.TargetRevision, req.ChangeNote)
 	if errors.Is(err, runtimeconfig.ErrApplyPending) {
@@ -138,14 +140,14 @@ func decode(c echo.Context, dst any) error {
 func configError(c echo.Context, err error) error {
 	switch {
 	case errors.Is(err, runtimeconfig.ErrConflict):
-		return c.JSON(409, map[string]string{"error": "configuration revision conflict"})
+		return httperr.Status(c, 409, "configuration revision conflict")
 	case errors.Is(err, runtimeconfig.ErrInvalid), errors.Is(err, runtimeconfig.ErrRestartRequired), errors.Is(err, domain.ErrInvalidInput):
-		return c.JSON(422, map[string]string{"error": err.Error()})
+		return httperr.Status(c, 422, err.Error())
 	case errors.Is(err, domain.ErrPermissionDenied):
-		return c.JSON(403, map[string]string{"error": "permission denied"})
+		return httperr.Status(c, 403, "permission denied")
 	case errors.Is(err, runtimeconfig.ErrNotFound):
-		return c.JSON(404, map[string]string{"error": "configuration revision not found"})
+		return httperr.Status(c, 404, "configuration revision not found")
 	default:
-		return c.JSON(500, map[string]string{"error": "configuration operation failed"})
+		return httperr.Status(c, 500, "configuration operation failed")
 	}
 }

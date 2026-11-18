@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"golang.org/x/time/rate"
 )
@@ -195,9 +197,7 @@ func (rl *RateLimiter) Middleware() echo.MiddlewareFunc {
 				c.Response().Header().Set("Retry-After", strconv.Itoa(retryAfter))
 
 				shard.mu.Unlock()
-				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Rate limit exceeded. Your ban duration has been extended due to continued requests.",
-				})
+				return httperr.Status(c, http.StatusTooManyRequests, "Rate limit exceeded. Your ban duration has been extended due to continued requests.")
 			}
 
 			// 2. Token Bucket check (.Allow() consumes 1 token if available)
@@ -226,9 +226,7 @@ func (rl *RateLimiter) Middleware() echo.MiddlewareFunc {
 
 				shard.mu.Unlock()
 
-				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Rate limit exceeded. You are temporarily blocked.",
-				})
+				return httperr.Status(c, http.StatusTooManyRequests, "Rate limit exceeded. You are temporarily blocked.")
 			}
 
 			shard.mu.Unlock()

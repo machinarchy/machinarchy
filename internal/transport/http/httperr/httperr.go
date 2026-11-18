@@ -40,6 +40,63 @@ func Write(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, Body{Error: message, Code: code})
 }
 
+// CodeFor returns the default code for an HTTP status.
+func CodeFor(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge, http.StatusMethodNotAllowed:
+		return CodeInvalidRequest
+	case http.StatusUnauthorized:
+		return CodeUnauthorized
+	case http.StatusForbidden:
+		return CodePermissionDenied
+	case http.StatusNotFound:
+		return CodeNotFound
+	case http.StatusConflict:
+		return CodeConflict
+	case http.StatusTooManyRequests:
+		return CodeTooManyRequests
+	case http.StatusServiceUnavailable:
+		return CodeUnavailable
+	}
+	if status >= 500 {
+		return CodeInternal
+	}
+	return CodeInvalidRequest
+}
+
+// Status writes message with the default code for status.
+func Status(c echo.Context, status int, message string) error {
+	return Write(c, status, CodeFor(status), message)
+}
+
+// Handler is the Echo HTTPErrorHandler: errors that escape handlers, and the
+// framework's own (unknown route, method not allowed, body too large,
+// panics recovered by middleware), use the same JSON shape.
+func Handler(err error, c echo.Context) {
+	if c.Response().Committed {
+		return
+	}
+	status, message := http.StatusInternalServerError, "request failed"
+	var httpError *echo.HTTPError
+	if errors.As(err, &httpError) {
+		status = httpError.Code
+		if text, ok := httpError.Message.(string); ok && status < 500 {
+			message = text
+		} else if status < 500 {
+			message = http.StatusText(status)
+		}
+	}
+	var writeErr error
+	if c.Request().Method == http.MethodHead {
+		writeErr = c.NoContent(status)
+	} else {
+		writeErr = Status(c, status, message)
+	}
+	if writeErr != nil {
+		c.Logger().Error(writeErr)
+	}
+}
+
 // BadRequest reports a malformed request.
 func BadRequest(c echo.Context, message string) error {
 	if message == "" {

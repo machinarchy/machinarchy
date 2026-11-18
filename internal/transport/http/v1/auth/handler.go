@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
@@ -44,10 +46,8 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required" example:"account-password"`
 }
 
-// ErrorResponse represents a standardized API error response.
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
+// ErrorResponse is the API error document (see package httperr).
+type ErrorResponse = httperr.Body
 
 // MessageResponse represents a simple API response containing a message.
 type MessageResponse struct {
@@ -104,20 +104,20 @@ func (h *Handler) SignUp(c echo.Context) error {
 		enabled = h.signupProvider()
 	}
 	if !enabled {
-		return c.JSON(http.StatusForbidden, ErrorResponse{Error: "Account registration is disabled"})
+		return httperr.Status(c, http.StatusForbidden, "Account registration is disabled")
 	}
 
 	var req SignUpRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Invalid request payload"})
+		return httperr.Status(c, http.StatusBadRequest, "Invalid request payload")
 	}
 
 	if req.Username == "" || req.Password == "" {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Username and password are required"})
+		return httperr.Status(c, http.StatusBadRequest, "Username and password are required")
 	}
 
 	if len([]byte(req.Password)) < 12 || len([]byte(req.Password)) > 72 {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Password must be between 12 and 72 bytes"})
+		return httperr.Status(c, http.StatusBadRequest, "Password must be between 12 and 72 bytes")
 	}
 
 	ctx := c.Request().Context()
@@ -128,12 +128,12 @@ func (h *Handler) SignUp(c echo.Context) error {
 	})
 	if err != nil {
 		if errors.Is(err, domain.ErrUserAlreadyExists) {
-			return c.JSON(http.StatusConflict, ErrorResponse{Error: "Username or email is already registered"})
+			return httperr.Status(c, http.StatusConflict, "Username or email is already registered")
 		}
 		if errors.Is(err, domain.ErrInvalidInput) {
-			return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Invalid account details"})
+			return httperr.Status(c, http.StatusBadRequest, "Invalid account details")
 		}
-		return c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Unable to create account"})
+		return httperr.Status(c, http.StatusInternalServerError, "Unable to create account")
 	}
 
 	setAuthCookie(c, res.Token, h.secureCookie)
@@ -155,11 +155,11 @@ func (h *Handler) SignUp(c echo.Context) error {
 func (h *Handler) Login(c echo.Context) error {
 	var req LoginRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Invalid request body"})
+		return httperr.Status(c, http.StatusBadRequest, "Invalid request body")
 	}
 
 	if req.Password == "" || (req.Email == "" && req.Username == "") {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Missing validation credentials"})
+		return httperr.Status(c, http.StatusBadRequest, "Missing validation credentials")
 	}
 
 	ctx := c.Request().Context()
@@ -170,9 +170,9 @@ func (h *Handler) Login(c echo.Context) error {
 	})
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
-			return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Invalid credentials"})
+			return httperr.Status(c, http.StatusUnauthorized, "Invalid credentials")
 		}
-		return c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Unable to authenticate"})
+		return httperr.Status(c, http.StatusInternalServerError, "Unable to authenticate")
 	}
 
 	setAuthCookie(c, res.Token, h.secureCookie)
@@ -191,16 +191,16 @@ func (h *Handler) Login(c echo.Context) error {
 func (h *Handler) GetMe(c echo.Context) error {
 	username, ok := c.Get("username").(string)
 	if !ok || username == "" {
-		return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Unauthorized session configuration"})
+		return httperr.Status(c, http.StatusUnauthorized, "Unauthorized session configuration")
 	}
 
 	ctx := c.Request().Context()
 	userResp, err := h.authService.VerifySession(ctx, username)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
-			return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Session user is no longer active"})
+			return httperr.Status(c, http.StatusUnauthorized, "Session user is no longer active")
 		}
-		return c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Unable to verify session"})
+		return httperr.Status(c, http.StatusInternalServerError, "Unable to verify session")
 	}
 
 	return c.JSON(http.StatusOK, userResp)

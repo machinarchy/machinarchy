@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
@@ -24,7 +26,7 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Create(c echo.Context) error {
 	var in secrets.Input
 	if err := c.Bind(&in); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	p, _ := middleware.Principal(c)
 	m, err := h.service.Create(c.Request().Context(), p, in)
@@ -55,11 +57,11 @@ func (h *Handler) Rotate(c echo.Context) error {
 		Value           string `json:"value"`
 	}
 	if err := c.Bind(&in); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	v, err := strconv.ParseUint(strconv.FormatUint(in.ExpectedVersion, 10), 10, 64)
 	if err != nil || v == 0 {
-		return c.JSON(400, map[string]string{"error": "expectedVersion is required"})
+		return httperr.Status(c, 400, "expectedVersion is required")
 	}
 	p, _ := middleware.Principal(c)
 	m, err := h.service.Rotate(c.Request().Context(), p, c.Param("id"), v, secrets.Input{Name: "rotation", Value: in.Value})
@@ -81,7 +83,7 @@ func (h *Handler) Rewrap(c echo.Context) error {
 		BatchSize int    `json:"batchSize"`
 	}
 	if err := c.Bind(&in); err != nil {
-		return c.JSON(400, map[string]string{"error": "invalid request body"})
+		return httperr.Status(c, 400, "invalid request body")
 	}
 	p, _ := middleware.Principal(c)
 	result, err := h.service.RewrapKey(c.Request().Context(), p, in.OldKeyID, in.BatchSize)
@@ -93,16 +95,16 @@ func (h *Handler) Rewrap(c echo.Context) error {
 func secretError(c echo.Context, err error) error {
 	switch {
 	case errors.Is(err, secrets.ErrUnauthorized):
-		return c.JSON(403, map[string]string{"error": "permission denied"})
+		return httperr.Status(c, 403, "permission denied")
 	case errors.Is(err, secrets.ErrNotFound):
-		return c.JSON(404, map[string]string{"error": "secret not found"})
+		return httperr.Status(c, 404, "secret not found")
 	case errors.Is(err, secrets.ErrConflict):
-		return c.JSON(409, map[string]string{"error": "secret version conflict"})
+		return httperr.Status(c, 409, "secret version conflict")
 	case errors.Is(err, secrets.ErrInvalid):
-		return c.JSON(400, map[string]string{"error": "invalid secret request"})
+		return httperr.Status(c, 400, "invalid secret request")
 	case errors.Is(err, secrets.ErrKeyUnavailable):
-		return c.JSON(503, map[string]string{"error": "configured secret key is unavailable"})
+		return httperr.Status(c, 503, "configured secret key is unavailable")
 	default:
-		return c.JSON(500, map[string]string{"error": "secret operation failed"})
+		return httperr.Status(c, 500, "secret operation failed")
 	}
 }

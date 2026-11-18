@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
@@ -39,20 +41,20 @@ func NewHandler(service domain.AuditService) *Handler {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	filter := domain.AuditFilter{Action: c.QueryParam("action")}
 	if raw := c.QueryParam("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "limit must be a number"})
+			return httperr.Status(c, http.StatusBadRequest, "limit must be a number")
 		}
 		filter.Limit = limit
 	}
 	if raw := c.QueryParam("before_id"); raw != "" {
 		before, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "before_id must be a number"})
+			return httperr.Status(c, http.StatusBadRequest, "before_id must be a number")
 		}
 		filter.BeforeID = before
 	}
@@ -77,7 +79,7 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Verify(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 	}
 	result, err := h.service.Verify(c.Request().Context(), principal)
 	if err != nil {
@@ -89,10 +91,10 @@ func (h *Handler) Verify(c echo.Context) error {
 func auditError(c echo.Context, err error) error {
 	switch {
 	case errors.Is(err, domain.ErrInvalidInput):
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return httperr.Status(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, domain.ErrPermissionDenied):
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "permission denied"})
+		return httperr.Status(c, http.StatusForbidden, "permission denied")
 	default:
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "unable to read the audit trail"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to read the audit trail")
 	}
 }

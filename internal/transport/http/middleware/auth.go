@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -34,7 +36,7 @@ func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if len(key) == 0 || access == nil {
-				return c.JSON(http.StatusInternalServerError, echo.Map{"error": "authentication is not configured"})
+				return httperr.Status(c, http.StatusInternalServerError, "authentication is not configured")
 			}
 			tokenString := tokenFromRequest(c)
 			if tokenString == "" {
@@ -73,7 +75,7 @@ func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
 				return unauthorized(c)
 			}
 			if err != nil {
-				return c.JSON(http.StatusInternalServerError, echo.Map{"error": "unable to validate authorization"})
+				return httperr.Status(c, http.StatusInternalServerError, "unable to validate authorization")
 			}
 
 			c.Set("user_id", claims.UserID)
@@ -95,7 +97,7 @@ func authenticateAPIToken(c echo.Context, next echo.HandlerFunc, access domain.A
 		return unauthorized(c)
 	}
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "unable to validate authorization"})
+		return httperr.Status(c, http.StatusInternalServerError, "unable to validate authorization")
 	}
 	if principal == nil || principal.UserID <= 0 || principal.WorkspaceID <= 0 || !domain.ValidRole(principal.Role) {
 		return unauthorized(c)
@@ -114,7 +116,7 @@ func RequirePermission(permission domain.Permission) echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			principal, ok := c.Get("principal").(domain.Principal)
 			if !ok || !principal.Role.Allows(permission) {
-				return c.JSON(http.StatusForbidden, echo.Map{"error": "permission denied"})
+				return httperr.Status(c, http.StatusForbidden, "permission denied")
 			}
 			return next(c)
 		}
@@ -128,7 +130,7 @@ func RequireHuman() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			principal, ok := c.Get("principal").(domain.Principal)
 			if !ok || principal.APITokenID != 0 {
-				return c.JSON(http.StatusForbidden, echo.Map{"error": "a user session is required"})
+				return httperr.Status(c, http.StatusForbidden, "a user session is required")
 			}
 			return next(c)
 		}
@@ -142,10 +144,10 @@ func RequireOwner() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			principal, ok := Principal(c)
 			if !ok {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
 			}
 			if principal.Role != domain.RoleOwner || principal.APITokenID != 0 {
-				return c.JSON(http.StatusForbidden, map[string]string{"error": "permission denied"})
+				return httperr.Status(c, http.StatusForbidden, "permission denied")
 			}
 			return next(c)
 		}
@@ -172,7 +174,7 @@ func bearerTokenFromRequest(c echo.Context) string {
 }
 
 func unauthorized(c echo.Context) error {
-	return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid or expired authorization token"})
+	return httperr.Status(c, http.StatusUnauthorized, "invalid or expired authorization token")
 }
 
 // Principal retrieves the authenticated principal from the Echo context.
