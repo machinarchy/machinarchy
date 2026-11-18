@@ -343,6 +343,15 @@ func (s *Server) metricsEndpoint(c echo.Context) error {
 	return nil
 }
 
+// Handler returns the API listener's handler, for in-process tests of the
+// fully wired server.
+func (s *Server) Handler() http.Handler {
+	if s == nil || s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Handler
+}
+
 // Start binds the requested address and serves until shutdown or listener failure.
 func (s *Server) Start(address string) error {
 	return s.StartWithReady(address, nil)

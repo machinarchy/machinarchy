@@ -1,5 +1,22 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: route authorization matrix (branch audit/tests-2)
+
+- `internal/bootstrap/authz_matrix_test.go` (new): `TestRouteAuthorizationMatrix` builds the fully wired API server (`Runtime.NewAPIServer`: real SQLite stores, services, JWT and role middleware).
+  - It creates an owner, an operator and a reader, plus reader and operator API tokens, through the API, and real resources so path IDs exist.
+  - It calls every route documented in `/openapi.json` as each of the 6 principals: 401 for anonymous, 403 for a forbidden role, and anything else for an allowed one.
+  - A documented route missing from the matrix, or a matrix entry that is not documented, fails the test.
+- `internal/transport/http/server.go`: `Server.Handler()`, a test seam that returns the wired handler.
+
+### Verification
+
+- The test passes (59 routes × 6 principals).
+- Mutation checks, reverted afterwards:
+  - letting readers through the environments write group fails the test with 6 errors;
+  - removing the owner check from `ManagedResourceService.CreateAccessProfile` fails it with 4 errors.
+  - Removing `RequireHuman` from `/tokens` was **not** detected, because API tokens cannot hold the owner role that `tokens:manage` requires, so that check is redundant there. This is recorded rather than changed.
+- golangci-lint on the changed packages: 0 issues.
+
 ## 2026-11-18 — Audit Phase 12: end-to-end test in NATS operator mode (branch audit/agent-authz)
 
 - `test/e2e/agent_test.go`: the real monolith and the real agent now run against NATS in operator mode (`natstest`).
