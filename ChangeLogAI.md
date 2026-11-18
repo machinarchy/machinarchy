@@ -1,5 +1,23 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: login and session tests (branch audit/tests-2)
+
+- `internal/service/auth_service_test.go` (new):
+  - signup normalises the username and email, stores only a bcrypt hash, enforces the 12–72 byte password bounds, and refuses duplicates in any case;
+  - login works by username or email in any case;
+  - a wrong password and an unknown account give the same `ErrInvalidCredentials`, while a store failure does not;
+  - session JWTs are HS256 with issuer `machinarchy`, carry the user and workspace claims, use the configured lifetime (24h when 0), and fail to verify with another secret;
+  - `VerifySession`, and no session for a user without a workspace.
+- `internal/transport/http/v1/auth/handler_test.go`:
+  - the session cookie is HttpOnly, SameSite=Lax and `Path=/`, with `Secure` following production mode;
+  - no cookie on any failure, and a store error is not leaked;
+  - signup follows the runtime setting over the static one, with 409, 400 and 403 cases;
+  - logout expires the cookie; `GET /me` cases.
+
+### Verification
+
+- `go test -cover`: `v1/auth` 12.1% → **93.1%**; `service` 28.9% → 38.5%. golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: route authorization matrix (branch audit/tests-2)
 
 - `internal/bootstrap/authz_matrix_test.go` (new): `TestRouteAuthorizationMatrix` builds the fully wired API server (`Runtime.NewAPIServer`: real SQLite stores, services, JWT and role middleware).

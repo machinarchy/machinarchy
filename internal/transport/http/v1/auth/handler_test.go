@@ -1,11 +1,16 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
+
+	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
 func TestSignUpDisabled(t *testing.T) {
@@ -21,5 +26,164 @@ func TestSignUpDisabled(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
+type fakeAuth struct {
+	signUp    func(domain.AuthSignUpRequest) (*domain.AuthTokenResponse, error)
+	login     func(domain.AuthLoginRequest) (*domain.AuthTokenResponse, error)
+	verify    func(string) (*domain.UserResponse, error)
+	signedUps int
+}
+
+func (f *fakeAuth) SignUp(_ context.Context, r domain.AuthSignUpRequest) (*domain.AuthTokenResponse, error) {
+	f.signedUps++
+	return f.signUp(r)
+}
+func (f *fakeAuth) Login(_ context.Context, r domain.AuthLoginRequest) (*domain.AuthTokenResponse, error) {
+	return f.login(r)
+}
+func (f *fakeAuth) VerifySession(_ context.Context, u string) (*domain.UserResponse, error) {
+	return f.verify(u)
+}
+
+func serve(h *Handler, method, path, body string, username string) *httptest.ResponseRecorder {
+	e := echo.New()
+	group := e.Group("/api/auth")
+	RegisterRoutes(group, h)
+	e.GET("/api/v1/me", h.GetMe, func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if username != "" {
+				c.Set("username", username)
+			}
+			return next(c)
+		}
+	})
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	e.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func sessionCookie(t *testing.T, recorder *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == "auth_token" {
+			return cookie
+		}
+	}
+	return nil
+}
+
+func TestLoginSetsAHardenedSessionCookie(t *testing.T) {
+	auth := &fakeAuth{login: func(r domain.AuthLoginRequest) (*domain.AuthTokenResponse, error) {
+		if r.Password != "right-password" {
+			return nil, domain.ErrInvalidCredentials
+		}
+		return &domain.AuthTokenResponse{Token: "session-token", User: domain.UserResponse{ID: 1, Username: r.Username}}, nil
+	}}
+	for _, secure := range []bool{true, false} {
+		recorder := serve(NewHandler(auth, secure, false), http.MethodPost, "/api/auth/login", `{"username":"alice","password":"right-password"}`, "")
+		cookie := sessionCookie(t, recorder)
+		switch {
+		case recorder.Code != http.StatusOK || cookie == nil:
+			t.Fatalf("secure=%v: login = %d, cookie %v", secure, recorder.Code, cookie)
+		case cookie.Value != "session-token" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/":
+			t.Fatalf("secure=%v: cookie = %+v", secure, cookie)
+		case cookie.Secure != secure:
+			t.Fatalf("cookie Secure = %v, want %v (it follows production mode)", cookie.Secure, secure)
+		}
+	}
+
+	handler := NewHandler(auth, true, false)
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"wrong password": {`{"username":"alice","password":"wrong"}`, http.StatusUnauthorized},
+		"no password":    {`{"username":"alice"}`, http.StatusBadRequest},
+		"no identity":    {`{"password":"right-password"}`, http.StatusBadRequest},
+		"not JSON":       {`{`, http.StatusBadRequest},
+	} {
+		recorder := serve(handler, http.MethodPost, "/api/auth/login", tc.body, "")
+		if recorder.Code != tc.want || sessionCookie(t, recorder) != nil {
+			t.Errorf("%s: %d (cookie %v), want %d and no cookie", name, recorder.Code, sessionCookie(t, recorder), tc.want)
+		}
+	}
+	failing := &fakeAuth{login: func(domain.AuthLoginRequest) (*domain.AuthTokenResponse, error) { return nil, errors.New("db down") }}
+	if recorder := serve(NewHandler(failing, true, false), http.MethodPost, "/api/auth/login", `{"username":"a","password":"p"}`, ""); recorder.Code != http.StatusInternalServerError ||
+		strings.Contains(recorder.Body.String(), "db down") {
+		t.Fatalf("store failure = %d %s (it must not leak the cause)", recorder.Code, recorder.Body)
+	}
+}
+
+func TestSignUpFollowsTheLiveSetting(t *testing.T) {
+	auth := &fakeAuth{signUp: func(r domain.AuthSignUpRequest) (*domain.AuthTokenResponse, error) {
+		if r.Username == "taken" {
+			return nil, domain.ErrUserAlreadyExists
+		}
+		return &domain.AuthTokenResponse{Token: "new-session"}, nil
+	}}
+	enabled := false
+	handler := NewHandler(auth, true, true)                          // static setting on...
+	handler.SetSignupEnabledProvider(func() bool { return enabled }) // ...but runtime configuration decides
+	body := `{"username":"bob","password":"long-enough-password"}`
+	if recorder := serve(handler, http.MethodPost, "/api/auth/signup", body, ""); recorder.Code != http.StatusForbidden || auth.signedUps != 0 {
+		t.Fatalf("signup while disabled at runtime = %d (%d calls)", recorder.Code, auth.signedUps)
+	}
+	enabled = true
+	recorder := serve(handler, http.MethodPost, "/api/auth/signup", body, "")
+	if cookie := sessionCookie(t, recorder); recorder.Code != http.StatusCreated || cookie == nil || !cookie.Secure || !cookie.HttpOnly {
+		t.Fatalf("signup = %d, cookie %+v", recorder.Code, cookie)
+	}
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"taken":          {`{"username":"taken","password":"long-enough-password"}`, http.StatusConflict},
+		"short password": {`{"username":"bob","password":"short"}`, http.StatusBadRequest},
+		"long password":  {`{"username":"bob","password":"` + strings.Repeat("p", 73) + `"}`, http.StatusBadRequest},
+		"no username":    {`{"password":"long-enough-password"}`, http.StatusBadRequest},
+	} {
+		if recorder := serve(handler, http.MethodPost, "/api/auth/signup", tc.body, ""); recorder.Code != tc.want {
+			t.Errorf("%s: %d, want %d", name, recorder.Code, tc.want)
+		}
+	}
+}
+
+func TestLogoutClearsTheCookie(t *testing.T) {
+	recorder := serve(NewHandler(&fakeAuth{}, true, false), http.MethodPost, "/api/auth/logout", "", "")
+	cookie := sessionCookie(t, recorder)
+	if recorder.Code != http.StatusOK || cookie == nil || cookie.Value != "" || cookie.MaxAge >= 0 || !cookie.HttpOnly || !cookie.Secure {
+		t.Fatalf("logout = %d, cookie %+v", recorder.Code, cookie)
+	}
+}
+
+func TestGetMe(t *testing.T) {
+	auth := &fakeAuth{verify: func(username string) (*domain.UserResponse, error) {
+		switch username {
+		case "alice":
+			return &domain.UserResponse{ID: 1, Username: "alice"}, nil
+		case "gone":
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, errors.New("db down")
+	}}
+	handler := NewHandler(auth, true, false)
+	if recorder := serve(handler, http.MethodGet, "/api/v1/me", "", "alice"); recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"alice"`) {
+		t.Fatalf("me = %d %s", recorder.Code, recorder.Body)
+	}
+	for name, tc := range map[string]struct {
+		username string
+		want     int
+	}{
+		"no session":      {"", http.StatusUnauthorized},
+		"deleted account": {"gone", http.StatusUnauthorized},
+		"store failure":   {"broken", http.StatusInternalServerError},
+	} {
+		if recorder := serve(handler, http.MethodGet, "/api/v1/me", "", tc.username); recorder.Code != tc.want {
+			t.Errorf("%s: %d, want %d", name, recorder.Code, tc.want)
+		}
 	}
 }
