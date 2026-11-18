@@ -26,6 +26,9 @@ const (
 	AuditResourceHostDeleted = "resource_host.deleted"
 	// AuditResourceHostKeyTrusted records pinned SSH host keys and who trusted them.
 	AuditResourceHostKeyTrusted = "resource_host.host_key_trusted"
+	// AuditResourceHostKeyChanged records a host that started presenting
+	// an untrusted key (Ready reason HostKeyChanged), once per transition.
+	AuditResourceHostKeyChanged = "resource_host.host_key_changed"
 	AuditAPITokenCreated        = "api_token.created"
 	AuditAPITokenRevoked        = "api_token.revoked"
 	AuditAgentRegistered        = "agent.registered"

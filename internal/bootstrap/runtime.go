@@ -279,6 +279,7 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	hostController.RegisterMetrics(r.metrics)
 	if err := engine.Register(hostController); err != nil {
 		return nil, err
 	}

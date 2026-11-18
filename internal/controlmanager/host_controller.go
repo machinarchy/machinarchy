@@ -5,7 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/telemetry"
 )
 
 type HostConverger interface {
@@ -16,6 +19,7 @@ type HostController struct {
 	hosts          resource.HostRepository
 	converger      HostConverger
 	connectorRetry time.Duration
+	hostKeyEvents  *prometheus.CounterVec
 	operations     resource.OperationRepository
 	operationRefs  resource.OperationHostReferenceRepository
 }
@@ -28,6 +32,30 @@ func NewHostController(hosts resource.HostRepository, converger HostConverger) (
 
 func NewHostControllerWithResync(hosts resource.HostRepository, converger HostConverger, resync time.Duration) (*HostController, error) {
 	return NewHostControllerWithOperations(hosts, converger, resync, nil)
+}
+
+// hostKeyEventReasons maps the Ready reasons that need attention to the
+// event label of machinarchy_controlmanager_host_key_events_total.
+var hostKeyEventReasons = map[string]string{
+	"HostKeyPendingApproval": "pending_approval",
+	"HostKeyChanged":         "changed",
+	"HostKeyTrusting":        "tofu_pinned",
+}
+
+// RegisterMetrics exports host-key events: one count per Host entering
+// HostKeyPendingApproval or HostKeyChanged, and per TOFU pin.
+func (c *HostController) RegisterMetrics(registerer prometheus.Registerer) {
+	c.hostKeyEvents = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "machinarchy", Subsystem: "controlmanager",
+		Name: "host_key_events_total", Help: "Hosts entering a host-key state: pending_approval, changed (an untrusted key), tofu_pinned."}, []string{"event"})
+	telemetry.MustRegister(registerer, c.hostKeyEvents)
+}
+
+func (c *HostController) countHostKeyEvent(previous []resource.Condition, reason string) {
+	event, ok := hostKeyEventReasons[reason]
+	if !ok || c.hostKeyEvents == nil || resource.ReadyReason(previous) == reason {
+		return
+	}
+	c.hostKeyEvents.WithLabelValues(event).Inc()
 }
 
 func NewHostControllerWithOperations(hosts resource.HostRepository, converger HostConverger, resync time.Duration, operations resource.OperationRepository) (*HostController, error) {
@@ -116,11 +144,15 @@ func (c *HostController) Reconcile(ctx context.Context, key ResourceKey) (Reconc
 		if err != nil && !errors.Is(err, resource.ErrConflict) {
 			return ReconcileResult{}, err
 		}
+		if err == nil {
+			c.countHostKeyEvent(host.Status.Conditions, "HostKeyTrusting")
+		}
 		return ReconcileResult{RequeueAfter: time.Second}, nil
 	}
 	if err := c.hosts.ObserveHost(ctx, key.WorkspaceID, id, host.Metadata.Generation, observed.Phase, observed.Conditions, observed.ObservedHostKeys, time.Now()); err != nil {
 		return ReconcileResult{}, err
 	}
+	c.countHostKeyEvent(host.Status.Conditions, resource.ReadyReason(observed.Conditions))
 	for _, condition := range observed.Conditions {
 		if condition.Type == "Ready" && condition.Status != resource.ConditionTrue {
 			return ReconcileResult{RequeueAfter: c.connectorRetry}, nil

@@ -224,13 +224,15 @@ Control Manager's operations listener is never public.
 | `machinarchy_controlmanager_reconcile_duration_seconds` | Per-controller latency. |
 | `machinarchy_controlmanager_queue_depth` | Keys waiting; sustained growth means reconciles are slower than changes. |
 | `machinarchy_controlmanager_outbox_deliveries_total{outcome}` | `claimed`, `quarantined` (invalid events). |
+| `machinarchy_controlmanager_host_key_events_total{event}` | Hosts entering `pending_approval` or `changed` (an untrusted key), and TOFU pins (`tofu_pinned`); once per transition, not per retry. |
 | `machinarchy_operationworker_operations_in_progress`, `_targets_total{state}`, `_target_duration_seconds`, `_panics_total` | Command execution. |
 | `machinarchy_agent_gateway_registrations_total{outcome}`, `_lease_renewals_total{outcome}`, `_results_total{status}`, `_commands_total{type,outcome}` | Agent traffic; `invalid` counts unauthenticated messages. |
 
 Suggested alerts: readiness failing for 5 minutes; `queue_depth` above 1000
 for 10 minutes; any increase of `operationworker_panics_total`; a rate of
 `agent_gateway_*_total{outcome="invalid"}` above zero (forged or misconfigured
-agents); `lease_renewals_total{outcome="error"}` above zero.
+agents); `lease_renewals_total{outcome="error"}` above zero; any increase
+of `host_key_events_total{event="changed"}`.
 
 Traces: HTTP spans through OpenTelemetry when `OTEL_EXPORTER_OTLP_ENDPOINT`
 is set. Logs: JSON (`log/slog`) on stdout; every error log carries the cause

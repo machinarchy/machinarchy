@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/machinarchy/machinarchy/internal/controlmanager"
@@ -36,6 +37,7 @@ type trustEnv struct {
 	owner   domain.Principal
 	ports   []uint16
 	policy  resource.HostKeyPolicy
+	metrics *prometheus.Registry
 }
 
 func newTrustEnv(t *testing.T, deploymentDefault resource.HostKeyPolicy, servers ...*sshtest.Server) *trustEnv {
@@ -65,7 +67,8 @@ func newTrustEnv(t *testing.T, deploymentDefault resource.HostKeyPolicy, servers
 		t.Fatal(err)
 	}
 	e := &trustEnv{t: t, ctx: ctx, stores: stores, app: app, secrets: secretService,
-		owner: domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner}, policy: deploymentDefault}
+		owner: domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner}, policy: deploymentDefault,
+		metrics: prometheus.NewRegistry()}
 	for _, server := range servers {
 		e.ports = append(e.ports, uint16(server.Port))
 	}
@@ -85,6 +88,7 @@ func newTrustEnv(t *testing.T, deploymentDefault resource.HostKeyPolicy, servers
 	if err != nil {
 		t.Fatal(err)
 	}
+	controller.RegisterMetrics(e.metrics)
 	if err := engine.Register(controller); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +99,37 @@ func newTrustEnv(t *testing.T, deploymentDefault resource.HostKeyPolicy, servers
 		<-done
 	})
 	return e
+}
+
+// hostKeyEvents reads machinarchy_controlmanager_host_key_events_total.
+func (e *trustEnv) hostKeyEvents(event string) float64 {
+	e.t.Helper()
+	families, err := e.metrics.Gather()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "machinarchy_controlmanager_host_key_events_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "event" && label.GetValue() == event {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func (e *trustEnv) auditEvents(action string) []domain.AuditEvent {
+	e.t.Helper()
+	events, err := e.stores.Audit.ListAuditEvents(e.ctx, 1, domain.AuditFilter{Action: action, Limit: 100})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return events
 }
 
 // profile creates an Access Profile with a private key (authorized on the
@@ -186,6 +221,9 @@ func TestTOFUPinsEveryHostKeyThenVerifies(t *testing.T) {
 	if len(trusted) != 1 || trusted[0].Details["source"] != "tofu" || !strings.Contains(trusted[0].Details["fingerprints"], server.Fingerprint) {
 		t.Fatalf("host key trust audit events = %+v", trusted)
 	}
+	if got := e.hostKeyEvents("tofu_pinned"); got != 1 {
+		t.Fatalf("host_key_events_total{event=tofu_pinned} = %v, want 1", got)
+	}
 }
 
 // Approve: keys are observed without sending anything; an owner approves
@@ -266,6 +304,30 @@ func TestChangedHostKeyIsNeverAccepted(t *testing.T) {
 	}
 	if !strings.Contains(message, impostor.Fingerprint) || !strings.Contains(message, original) {
 		t.Fatalf("condition message %q must name the presented and trusted keys", message)
+	}
+	// The controller retries every second; the change is audited and
+	// counted once, not on every retry.
+	revision := host.Metadata.Revision
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		current, err := e.stores.ResourceHosts.GetHost(e.ctx, 1, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Metadata.Revision >= revision+2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the controller did not retry the changed Host")
+		}
+		time.Sleep(50 * time.Millisecond) // poll interval of a deadline-bounded wait
+	}
+	changed := e.auditEvents(domain.AuditResourceHostKeyChanged)
+	if len(changed) != 1 || changed[0].Details["presented"] != impostor.Fingerprint || changed[0].Details["trusted"] != original {
+		t.Fatalf("host key change audit events = %+v, want one naming both keys", changed)
+	}
+	if got := e.hostKeyEvents("changed"); got != 1 {
+		t.Fatalf("host_key_events_total{event=changed} = %v, want 1", got)
 	}
 	presented := []string{impostor.Fingerprint}
 	if _, err := e.app.TrustHostKeys(e.ctx, e.owner, id, host.Metadata.Generation, presented, false); !errors.Is(err, resource.ErrConflict) {

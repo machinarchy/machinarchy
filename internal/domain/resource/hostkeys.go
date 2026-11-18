@@ -89,6 +89,16 @@ type ObservedHostKey struct {
 	LastSeenAt time.Time `json:"lastSeenAt,omitempty"`
 }
 
+// ReadyReason returns the reason of the Host's Ready condition, or "".
+func ReadyReason(conditions []Condition) string {
+	for _, condition := range conditions {
+		if condition.Type == "Ready" {
+			return condition.Reason
+		}
+	}
+	return ""
+}
+
 // ValidFingerprint reports whether value looks like an OpenSSH SHA-256 key
 // fingerprint ("SHA256:" and 43 base64 characters).
 func ValidFingerprint(value string) bool {

@@ -319,6 +319,7 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID
 	if err != nil {
 		return err
 	}
+	previousReason := resource.ReadyReason(host.Status.Conditions)
 	if err := host.Observe(expectedGeneration, phase, conditions, keys, now); err != nil {
 		return err
 	}
@@ -329,7 +330,16 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID
 	if s.dialect == sqlx.PostgreSQL && fence == nil {
 		return resource.ErrLeaseRequired
 	}
-	return s.writeHost(ctx, host, host.Metadata.Revision-1, domain.AuditResourceHostUpdated, nil, "", "", fence)
+	action, details := domain.AuditResourceHostUpdated, map[string]string(nil)
+	if reason := resource.ReadyReason(host.Status.Conditions); reason == "HostKeyChanged" && previousReason != reason {
+		presented := make([]string, 0, len(host.Status.ObservedHostKeys))
+		for _, key := range host.Status.ObservedHostKeys {
+			presented = append(presented, key.Fingerprint)
+		}
+		action = domain.AuditResourceHostKeyChanged
+		details = map[string]string{"presented": strings.Join(presented, " "), "trusted": strings.Join(host.Spec.AccessTarget.Trust, " ")}
+	}
+	return s.writeHost(ctx, host, host.Metadata.Revision-1, action, details, "", "", fence)
 }
 
 func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction string, auditDetails map[string]string,

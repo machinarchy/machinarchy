@@ -71,7 +71,10 @@ The Host controller verifies SSH with the bound Access Profile. Read
   `--all-pending`);
 - `HostKeyChanged`: the host presents a key that is not trusted. Nothing was
   sent to it. This may be a reinstalled host or someone in the middle: verify
-  the new key out of band before `machinarchy trust host NAME --replace`;
+  the new key out of band before `machinarchy trust host NAME --replace`. The
+  change is audited once as `resource_host.host_key_changed`, with the
+  presented and trusted fingerprints, and counted in
+  `host_key_events_total{event="changed"}`;
 - `HostKeyNotTrusted`: the `pinned` policy with no trusted key, or a `ca`
   profile whose CA did not sign the host's certificate (or the certificate
   does not name the endpoint's host name);

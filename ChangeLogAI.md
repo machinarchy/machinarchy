@@ -1,5 +1,22 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: host-key change audit and metric (branch audit/host-keys)
+
+- AUDIT/10b §2.2 asks for an audit event and a metric on a key change. Both were missing.
+- Audit:
+  - `internal/store/resources/store.go`: `ObserveHost` audits the transition into `HostKeyChanged` as `resource_host.host_key_changed` (`domain.AuditResourceHostKeyChanged`), with `presented` and `trusted` fingerprints, once per transition; other observations stay `resource_host.updated`.
+  - `resource.ReadyReason` helper.
+- Metric:
+  - `internal/controlmanager/host_controller.go`: `HostController.RegisterMetrics` exports `machinarchy_controlmanager_host_key_events_total{event}` (`pending_approval`, `changed`, `tofu_pinned`), counted per transition;
+  - registered in `bootstrap.Runtime`.
+- Docs: `docs/operations.md` (metric and suggested alert), `docs/runbook.md` (`HostKeyChanged`).
+
+### Verification
+
+- `TestChangedHostKeyIsNeverAccepted` waits for two further controller retries, then expects exactly one `host_key_changed` audit row naming both keys and a counter of 1. It fails when the transition guard is removed (mutation run; file restored).
+- `TestTOFUPinsEveryHostKeyThenVerifies` checks `tofu_pinned` = 1.
+- `go test -race -count=2` on the host-key tests: pass.
+
 ## 2026-11-18 — Audit Phase 13A: host-key store contract on both engines (branch audit/host-keys)
 
 - `internal/store/resource_contract_test.go`: new contract subtest "host-key observations and trust". It runs on SQLite and PostgreSQL and covers:
