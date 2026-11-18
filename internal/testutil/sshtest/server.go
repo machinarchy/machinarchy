@@ -8,7 +8,9 @@ package sshtest
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/pem"
@@ -51,6 +53,12 @@ type Options struct {
 	// ExecStreams can independently write ordinary output and SSH extended-data
 	// stderr for connector integration tests. When set, it takes precedence.
 	ExecStreams func(ctx context.Context, command string, stdout, stderr io.Writer) int
+	// ExtraECDSAHostKey adds an ECDSA P-256 host key next to the Ed25519 one,
+	// so clients can see more than one host key algorithm.
+	ExtraECDSAHostKey bool
+	// HostCertificateAuthority, when set, makes the server present an Ed25519
+	// host certificate for 127.0.0.1 signed by this CA.
+	HostCertificateAuthority ssh.Signer
 }
 
 // Server is a running test server.
@@ -62,6 +70,8 @@ type Server struct {
 	HostKeyType string
 	// Fingerprint is the SHA-256 host key fingerprint in the format clients pin.
 	Fingerprint string
+	// Fingerprints lists every host key's fingerprint (Ed25519 first).
+	Fingerprints []string
 
 	opts     Options
 	listener net.Listener
@@ -111,8 +121,33 @@ func Start(t testing.TB, opts Options) *Server {
 		conns:       make(map[net.Conn]struct{}),
 	}
 
+	s.Fingerprints = []string{s.Fingerprint}
 	s.cfg = &ssh.ServerConfig{}
 	s.cfg.AddHostKey(hostSigner)
+	if opts.ExtraECDSAHostKey {
+		ecdsaPrivate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate ECDSA host key: %v", err)
+		}
+		ecdsaSigner, err := ssh.NewSignerFromKey(ecdsaPrivate)
+		if err != nil {
+			t.Fatalf("create ECDSA host key signer: %v", err)
+		}
+		s.cfg.AddHostKey(ecdsaSigner)
+		s.Fingerprints = append(s.Fingerprints, ssh.FingerprintSHA256(ecdsaSigner.PublicKey()))
+	}
+	if opts.HostCertificateAuthority != nil {
+		certificate := &ssh.Certificate{Key: hostSigner.PublicKey(), CertType: ssh.HostCert, KeyId: "sshtest",
+			ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity}
+		if err := certificate.SignCert(rand.Reader, opts.HostCertificateAuthority); err != nil {
+			t.Fatalf("sign host certificate: %v", err)
+		}
+		certSigner, err := ssh.NewCertSigner(certificate, hostSigner)
+		if err != nil {
+			t.Fatalf("create host certificate signer: %v", err)
+		}
+		s.cfg.AddHostKey(certSigner)
+	}
 	if opts.Password != "" {
 		s.cfg.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 			s.authAttempts.Add(1)

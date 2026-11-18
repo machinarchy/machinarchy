@@ -1,5 +1,24 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: SSH host-key scanning and multi-key verification (branch audit/host-keys)
+
+- `pkg/sshclient/hostkeys.go` (new):
+  - `ScanHostKeys` returns a host's keys, one per algorithm family (Ed25519, ECDSA, RSA). Each handshake stops right after the server proves its host key, **before authentication**, and the egress policy applies.
+  - The host-key check accepts any fingerprint in `DialParams.TrustedFingerprints` (plus the old `ExpectedFingerprint`). When `HostCertAuthorities` is set, it also accepts host certificates signed by those CAs for the dialed host name. Any rejection is reported as `ErrHostKeyUnknown` with the presented fingerprint.
+  - `ParseHostCertificateAuthorities` reads CA keys in authorized_keys format and refuses certificates.
+- `pkg/sshclient/client.go`: uses the new check. The connection is now closed when setting the handshake deadline fails (it leaked before).
+- `internal/testutil/sshtest`: options for an extra ECDSA host key and for a host certificate signed by a test CA; `Server.Fingerprints`.
+
+### Verification
+
+- `go test -race -count=3 ./pkg/sshclient/`: pass. New tests:
+  - the scan returns every key and makes 0 authentication attempts;
+  - the scan of a denied target is refused and never reaches the server;
+  - a fingerprint list is accepted, and an unrelated one is refused with no authentication attempt;
+  - a certificate from the trusted CA is accepted, while one from another CA and an uncertified host are refused; a pinned fingerprint still works next to a CA;
+  - CA parsing.
+- golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: stable SSH and policy tests (Q-25, Q-15) (branch audit/tests-2)
 
 - **Q-25, corrected diagnosis.** AUDIT/03 said encrypted SSH keys are decrypted "on every production connection". That is wrong: the connector never sets `DialParams.Passphrase`, so production keys are never passphrase-decrypted (the Secret Store already encrypts them at rest). The intermittent failure came only from the passphrase subtests in `pkg/sshclient`. There, bcrypt-pbkdf takes about 0.1 s normally and 1.3 s under `-race` (measured), far more under shuffled parallel runs, against a 5 s budget. Those subtests now get a 60 s budget, documented in the test. No signer cache was added: it would keep decrypted private keys in memory for no production benefit.

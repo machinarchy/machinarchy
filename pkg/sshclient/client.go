@@ -37,13 +37,19 @@ const (
 
 // DialParams contains the parameters required to establish an SSH connection.
 type DialParams struct {
-	IP                  string
-	Port                int
-	Username            string
-	AuthMethod          AuthMethod
-	SecretData          string
-	Passphrase          string
+	IP         string
+	Port       int
+	Username   string
+	AuthMethod AuthMethod
+	SecretData string
+	Passphrase string
+	// ExpectedFingerprint and TrustedFingerprints are the accepted SHA-256
+	// host key fingerprints (one per key algorithm the host offers).
 	ExpectedFingerprint string
+	TrustedFingerprints []string
+	// HostCertAuthorities, when set, also accept a host certificate signed by
+	// one of these keys for the dialed host name.
+	HostCertAuthorities []ssh.PublicKey
 	// Dialer opens the TCP connection. When nil, a netpolicy.Default() dialer is
 	// used, so targets are always resolved and checked under a policy and the
 	// validated address is the one dialed. Callers with a configured policy pass
@@ -167,13 +173,14 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 	}
 
 	if err := netConn.SetDeadline(deadline); err != nil {
+		cleanupConn()
 		return nil, nil, fmt.Errorf("set SSH handshake deadline: %w", err)
 	}
 
 	clientConfig := &ssh.ClientConfig{
 		User:            params.Username,
 		Auth:            auth,
-		HostKeyCallback: hostKeyCallback(params.ExpectedFingerprint),
+		HostKeyCallback: hostKeyCallback(params),
 		Timeout:         defaultHandshakeTimeout,
 	}
 	sshConn, channels, requests, err := ssh.NewClientConn(netConn, addr, clientConfig)
@@ -240,20 +247,6 @@ func authMethods(params DialParams) ([]ssh.AuthMethod, error) {
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported SSH authentication method %q", domain.ErrInvalidInput, params.AuthMethod)
-	}
-}
-
-func hostKeyCallback(expectedFingerprint string) ssh.HostKeyCallback {
-	return func(hostname string, _ net.Addr, key ssh.PublicKey) error {
-		fingerprint := ssh.FingerprintSHA256(key)
-		if expectedFingerprint == "" || fingerprint != expectedFingerprint {
-			return &domain.ErrHostKeyUnknown{
-				Host:        hostname,
-				Algorithm:   key.Type(),
-				Fingerprint: fingerprint,
-			}
-		}
-		return nil
 	}
 }
 
