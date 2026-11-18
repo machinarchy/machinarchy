@@ -24,6 +24,9 @@ on:
       MY_GITHUB_TOKEN:
         description: "PAT or GitHub App token used by Release Please"
         required: true
+      AGENT_REPO_TOKEN:
+        description: "Read token for a private machinarchy-agent repository (protocol module)"
+        required: false
 
 permissions:
   contents: read
@@ -95,23 +98,36 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.release_sha }}
           fetch-depth: 1
+          path: machinarchy
+          persist-credentials: false
+
+      # go.mod replaces the agent protocol with ../machinarchy-agent/protocol.
+      - name: Checkout machinarchy-agent
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/machinarchy-agent
+          ref: ${{ vars.MACHINARCHY_AGENT_REF || 'main' }}
+          path: machinarchy-agent
+          token: ${{ secrets.AGENT_REPO_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: machinarchy/go.mod
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: machinarchy/go.sum
 
       - name: Build CLI binaries
+        working-directory: machinarchy
         env:
           RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
           RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist-binaries
+          # Binaries go to the workspace root, where the later steps expect them.
+          mkdir -p ../dist-binaries
           BUILD_TIME="$(git show -s --format=%cI "$RELEASE_SHA")"
           BUILDINFO=github.com/machinarchy/machinarchy/internal/buildinfo
           LDFLAGS="-s -w -X ${BUILDINFO}.Version=${RELEASE_TAG} -X ${BUILDINFO}.Commit=${RELEASE_SHA} -X ${BUILDINFO}.BuildTime=${BUILD_TIME}"
@@ -121,7 +137,7 @@ jobs:
             echo "Building ${output} (${goos}/${goarch})"
             env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" \
-              -o "dist-binaries/${output}" "$package"
+              -o "../dist-binaries/${output}" "$package"
           }
 
           # Standalone controller / CLI binaries.

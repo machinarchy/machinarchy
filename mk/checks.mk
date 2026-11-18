@@ -3,7 +3,7 @@
 # ============================================================================
 
 .PHONY: fmt fmt-check tidy-check vet lint shellcheck
-.PHONY: test test-short test-race test-postgres coverage coverage-html bench smoke
+.PHONY: test test-short test-race test-postgres coverage coverage-html bench smoke fuzz
 .PHONY: gosec vuln security
 .PHONY: verify verify-full ci
 
@@ -45,8 +45,21 @@ test-race: ## Run Go tests with the race detector (requires CGO)
 test-postgres: ## Run PostgreSQL integration tests (needs MACHINARCHY_TEST_POSTGRES_URL or DATABASE_URL)
 	bash scripts/db/test-postgres.sh
 
-coverage: ## Run tests and write COVERAGE_FILE (coverage.out)
-	$(GO) test -count=1 -coverprofile="$(COVERAGE_FILE)" ./...
+coverage: ## Run race tests and write COVERAGE_FILE (coverage.out); prints the total
+	$(GO) test -race -count=1 -covermode=atomic -coverprofile="$(COVERAGE_FILE)" ./...
+	@$(GO) tool cover -func="$(COVERAGE_FILE)" | tail -1
+
+FUZZTIME ?= 30s
+FUZZ_TARGETS := internal/domain:FuzzParseSelector internal/domain:FuzzGlobMatch internal/domain:FuzzQuoteArgv \
+	internal/domain:FuzzSanitizeOutput internal/domain/resource:FuzzParseOperationCursor \
+	internal/domain/resource:FuzzParseResourceID pkg/netpolicy:FuzzParsePrefixes
+
+fuzz: ## Run each fuzz target for FUZZTIME (default 30s)
+	@for entry in $(FUZZ_TARGETS); do \
+		pkg=$${entry%%:*}; target=$${entry##*:}; \
+		echo "fuzz $$target ($$pkg)"; \
+		$(GO) test -run=NONE -fuzz="^$$target$$" -fuzztime=$(FUZZTIME) ./$$pkg || exit 1; \
+	done
 
 coverage-html: coverage ## Render the coverage profile as COVERAGE_HTML (coverage.html)
 	$(GO) tool cover -html="$(COVERAGE_FILE)" -o "$(COVERAGE_HTML)"

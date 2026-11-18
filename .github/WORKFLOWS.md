@@ -21,13 +21,32 @@ The production Docker pipeline uses `GITHUB_TOKEN` for GHCR. Ensure the
 repository has `packages: write` permission available and, if the GHCR package
 already exists, grant this repository Actions write access to that package.
 
+## The agent repository
+
+machinarchy imports the agent wire contract,
+`github.com/machinarchy/machinarchy-agent/protocol`, through
+`replace => ../machinarchy-agent/protocol`. Every job therefore checks out
+this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
+`machinarchy-agent/` side by side.
+
+- Repository variable `MACHINARCHY_AGENT_REF` (optional): agent branch, tag or
+  SHA to build against. Defaults to `main`. Pin it for releases.
+- Secret `AGENT_REPO_TOKEN` (needed only if the agent repository is private):
+  a fine-grained token with Contents: Read on `machinarchy-agent`.
+
 ## Workflow behavior
 
-- `ci.yml` runs for pushes to `main` and pull requests.
-- `template-lint.yml` runs formatting and golangci-lint v2 (including gosec).
-- `template-db-validate.yml` calls `make test-postgres`. The repository must
-  include `scripts/db/test-postgres.sh`, and it must consume `DATABASE_URL` or
-  `MACHINARCHY_TEST_POSTGRES_URL`.
+- `ci.yml` runs for pushes to `main` and pull requests:
+  - `verify`: tidy, gofmt, vet, build, `make coverage` (race detector,
+    coverage artifact, PostgreSQL contract suites, OpenAPI route coverage and
+    the real agent end-to-end test, which must not skip), `make smoke`, and
+    golangci-lint (v2.15.0, includes gosec rules).
+  - `security`: govulncheck v1.1.4, gosec v2.22.4 and a 15s run of each fuzz
+    target.
+  - `images`: builds the api, controlmanager, monolit, CLI and agent images;
+    the monolith must turn healthy and exit 0 on `docker stop`.
+  - On `main`, after all three: Release Please, then one published, scanned
+    and signed image per server process.
 - `release.yml` is reusable and runs Release Please after the CI checks pass.
   `dry_run: true` skips Release Please and all release mutations.
 - `template-docker.yml` always builds unless `[docker skip]` is present in the

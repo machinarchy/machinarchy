@@ -36,7 +36,7 @@ on:
         type: string
         default: linux/amd64,linux/arm64
       machinarchy_command:
-        description: "Dockerfile build target: api, controlmanager, monolit, machinarchy, or agent"
+        description: "Server process to build: api, controlmanager or monolit"
         required: false
         type: string
         default: api
@@ -46,6 +46,9 @@ on:
         required: false
       DOCKER_PASSWORD:
         description: "Docker Hub access token; required only for docker.io pushes"
+        required: false
+      AGENT_REPO_TOKEN:
+        description: "Read token for a private machinarchy-agent repository (protocol module)"
         required: false
 
 permissions: {}
@@ -111,7 +114,7 @@ jobs:
             exit 1
           }
           case "$MACHINARCHY_COMMAND" in
-            api|controlmanager|monolit|machinarchy|agent) ;;
+            api|controlmanager|monolit) ;;
             *) echo "::error::Unsupported Machinarchy command target: $MACHINARCHY_COMMAND"; exit 1 ;;
           esac
 
@@ -142,9 +145,20 @@ jobs:
       image_digest: ${{ steps.build.outputs.digest }}
       image_tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - name: Checkout source
+      - name: Checkout machinarchy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: machinarchy
+          persist-credentials: false
+
+      # The image needs the agent's protocol module (named build context).
+      - name: Checkout machinarchy-agent
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/machinarchy-agent
+          ref: ${{ vars.MACHINARCHY_AGENT_REF || 'main' }}
+          path: machinarchy-agent
+          token: ${{ secrets.AGENT_REPO_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Set up QEMU
@@ -158,7 +172,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "build_time=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(git -C machinarchy show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker Hub
         if: ${{ inputs.docker_push && inputs.registry == 'docker.io' }}
@@ -194,8 +208,11 @@ jobs:
         id: build
         uses: docker/build-push-action@v7.4.0
         with:
-          context: .
-          file: ${{ inputs.dockerfile_path }}
+          context: machinarchy
+          file: machinarchy/${{ inputs.dockerfile_path }}
+          target: server
+          build-contexts: |
+            agent-protocol=machinarchy-agent/protocol
           platforms: ${{ inputs.platforms }}
           push: ${{ inputs.docker_push }}
           tags: ${{ steps.meta.outputs.tags }}
