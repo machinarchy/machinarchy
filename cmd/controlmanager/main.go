@@ -11,9 +11,13 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/bootstrap"
 	"github.com/machinarchy/machinarchy/internal/config"
+	"github.com/machinarchy/machinarchy/internal/healthcheck"
 )
 
 func main() {
+	if healthcheck.Requested(os.Args[1:]) {
+		os.Exit(healthcheck.Run(os.Stderr))
+	}
 	if err := run(); err != nil {
 		slog.Error("control manager stopped", "error", err)
 		os.Exit(1)

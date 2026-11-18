@@ -11,6 +11,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/bootstrap"
 	"github.com/machinarchy/machinarchy/internal/config"
+	"github.com/machinarchy/machinarchy/internal/healthcheck"
 )
 
 // @title           Machinarchy API
@@ -23,6 +24,9 @@ import (
 // @name            Authorization
 // @description     Supply a JWT as `Bearer <token>`. The API also accepts the auth_token cookie.
 func main() {
+	if healthcheck.Requested(os.Args[1:]) {
+		os.Exit(healthcheck.Run(os.Stderr))
+	}
 	if err := run(); err != nil {
 		slog.Error("API server stopped", "error", err)
 		os.Exit(1)
