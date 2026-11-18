@@ -47,7 +47,7 @@ Prometheus scrapes `/metrics`. All processes report Go/process and database pool
 - `machinarchy_http_requests_total` and `machinarchy_http_request_duration_seconds`, labeled by method, route template, and status where applicable.
 - `machinarchy_ssh_operations_in_flight`, `machinarchy_ssh_operations_limit`, and `machinarchy_ssh_capacity_rejections_total`.
 
-HTTP server spans and NATS producer/consumer spans use OpenTelemetry. Configure an OTLP/HTTP endpoint with `OTEL_EXPORTER_OTLP_ENDPOINT` and standard SDK environment variables such as service resource attributes and sampling settings. Keep metrics and tracing endpoints behind network policy or authenticated infrastructure when exposed outside a trusted cluster.
+HTTP server spans use OpenTelemetry; metrics are Prometheus only (`/metrics`). Configure an OTLP/HTTP endpoint with `OTEL_EXPORTER_OTLP_ENDPOINT` and standard SDK environment variables such as service resource attributes and sampling settings. Keep metrics and tracing endpoints behind network policy or authenticated infrastructure when exposed outside a trusted cluster.
 
 ## Shutdown and capacity
 

@@ -13,10 +13,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -44,9 +42,10 @@ func Setup(ctx context.Context, serviceName string) (func(context.Context) error
 		slog.Error("OpenTelemetry error", "error", err)
 	}))
 
+	// Metrics are served by Prometheus at /metrics (AUDIT P-04): the OTLP
+	// pipeline only exports traces.
 	tracesEnabled := hasAnyEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-	metricsEnabled := hasAnyEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
-	if !tracesEnabled && !metricsEnabled {
+	if !tracesEnabled {
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -55,71 +54,34 @@ func Setup(ctx context.Context, serviceName string) (func(context.Context) error
 		return nil, fmt.Errorf("create telemetry resource: %w", err)
 	}
 
-	var tracerProvider *sdktrace.TracerProvider
-	if tracesEnabled {
-		sampler, err := configuredSampler()
-		if err != nil {
-			return nil, err
-		}
-		exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithTimeout(exportTimeout))
-		if err != nil {
-			return nil, fmt.Errorf("create OTLP trace exporter: %w", err)
-		}
-		tracerProvider = sdktrace.NewTracerProvider(
-			sdktrace.WithResource(res),
-			sdktrace.WithSampler(sampler),
-			sdktrace.WithBatcher(exporter,
-				sdktrace.WithMaxQueueSize(2048),
-				sdktrace.WithMaxExportBatchSize(512),
-				sdktrace.WithBatchTimeout(5*time.Second),
-			),
-		)
+	sampler, err := configuredSampler()
+	if err != nil {
+		return nil, err
 	}
+	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithTimeout(exportTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("create OTLP trace exporter: %w", err)
+	}
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sampler),
+		sdktrace.WithBatcher(exporter,
+			sdktrace.WithMaxQueueSize(2048),
+			sdktrace.WithMaxExportBatchSize(512),
+			sdktrace.WithBatchTimeout(5*time.Second),
+		),
+	)
 
-	var meterProvider *metric.MeterProvider
-	if metricsEnabled {
-		exporter, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithTimeout(exportTimeout))
-		if err != nil {
-			exporterErr := fmt.Errorf("create OTLP metric exporter: %w", err)
-			if tracerProvider != nil {
-				if shutdownErr := tracerProvider.Shutdown(ctx); shutdownErr != nil {
-					exporterErr = errors.Join(exporterErr, fmt.Errorf("shutdown trace provider after setup failure: %w", shutdownErr))
-				}
-			}
-			return nil, exporterErr
-		}
-		meterProvider = metric.NewMeterProvider(
-			metric.WithResource(res),
-			metric.WithReader(metric.NewPeriodicReader(exporter,
-				metric.WithInterval(30*time.Second),
-				metric.WithTimeout(exportTimeout),
-			)),
-		)
-	}
-
-	if tracerProvider != nil {
-		otel.SetTracerProvider(tracerProvider)
-	}
-	if meterProvider != nil {
-		otel.SetMeterProvider(meterProvider)
-	}
+	otel.SetTracerProvider(tracerProvider)
 
 	return func(shutdownCtx context.Context) error {
 		if shutdownCtx == nil {
 			return errors.New("telemetry shutdown context is required")
 		}
-		var shutdownErrs []error
-		if meterProvider != nil {
-			if err := meterProvider.Shutdown(shutdownCtx); err != nil {
-				shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown metric provider: %w", err))
-			}
+		if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown trace provider: %w", err)
 		}
-		if tracerProvider != nil {
-			if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
-				shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown trace provider: %w", err))
-			}
-		}
-		return errors.Join(shutdownErrs...)
+		return nil
 	}, nil
 }
 
