@@ -143,8 +143,10 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
           go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
+      # Fails on called vulnerabilities unless a reviewed, unexpired entry in
+      # scripts/security/govulncheck-allowlist.txt accepts one with no fix.
       - name: govulncheck
-        run: govulncheck ./...
+        run: make vuln
 
       - name: gosec
         run: gosec -quiet -exclude-generated ./...

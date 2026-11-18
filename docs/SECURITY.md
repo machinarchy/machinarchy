@@ -123,6 +123,22 @@ Runs execute a command on a pinned set of SSH hosts in the background of the API
 
 Residual risks: arguments may contain secrets and are visible to every operator and owner who can read the run (and to the remote host's process list); output may contain secrets and is stored unencrypted for a bounded time with no retention policy yet; the program allow list cannot judge what an allowed program does with its arguments; a run executes in the API process, so its capacity and availability are those of the API; cancellation and shutdown cannot stop a command already running remotely; there is no approval step requiring a second person; and there is no per-run command history export.
 
+## Dependency vulnerabilities
+
+`make vuln` (and CI) runs `scripts/security/govulncheck.sh`. It fails when
+the code calls a vulnerable function, unless
+`scripts/security/govulncheck-allowlist.txt` has an unexpired entry for that
+advisory and no fixed version exists. To accept an advisory:
+
+1. Confirm it is not exploitable in this deployment and record why.
+2. Add `<ID> <expires YYYY-MM-DD> <reason>` with an expiry of at most 90 days.
+3. Remove the entry once a fixed version is adopted. The script notes entries
+   that no longer match anything.
+
+Accepted today: the Echo advisories GO-2026-6875 and GO-2026-6872, which have
+no fix yet. The proxy middleware and Echo's rate limiter are not used, and
+client IPs come from `echo.ExtractIPDirect`.
+
 ## Validation status
 
 SQLite integration coverage verifies fresh migrations, separate account workspaces, scoped environments/jobs/metrics, cross-workspace host-environment reference rejection, and API-token resolution/revocation. Role permission tests and an API-token HTTP middleware test verify least privilege and bearer-only use. These tests do not demonstrate PostgreSQL behavior, exhaustive endpoint authorization, SSH network policy, a full account lifecycle, or resilience under fleet load. See [the roadmap](ROADMAP.md) for follow-up evidence.

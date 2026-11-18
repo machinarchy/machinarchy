@@ -1,5 +1,32 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit follow-up: govulncheck gate with reviewed allowlist (branch audit/followup)
+
+- `scripts/security/govulncheck.sh` (new): runs `govulncheck -format json` and fails (exit 3) on any vulnerability the code calls, unless `scripts/security/govulncheck-allowlist.txt` has an unexpired entry for it and no fixed version exists. It notes allowlist entries that no longer match.
+- `scripts/security/govulncheck-allowlist.txt` (new): accepts GO-2026-6875 and GO-2026-6872 (Echo v4.16.4, no fix; not exploitable here, AUDIT/02 S-22) until 2027-02-16.
+- `make vuln` and the CI `security` job use the script. Before, CI ran plain `govulncheck ./...`, which exits 3 on these two advisories, and `orchestrate-release` needs `security`, so every release was blocked (AUDIT/09 F9-01).
+- `docs/SECURITY.md` explains how to accept an advisory; `.github/WORKFLOWS.md` and `README.md` updated.
+
+### Verification
+
+- `scripts/security/govulncheck.sh` against the real module: exit 0, both advisories reported as accepted.
+- Failure paths: empty allowlist → exit 3 for both; an expired entry → exit 3, and a stale entry is noted; a fake report with a fixed version → exit 3 ("upgrade the module").
+- `shellcheck` clean. `make vuln`: exit 0; with `GOVULNCHECK_ALLOWLIST=/dev/null` it fails. `ci.yml` parses as YAML.
+- Not verified: the workflow on GitHub (nothing pushed).
+
+## 2026-11-18 — Audit Phase 8: tests, CI/CD and operations (branch audit/ops; recorded late)
+
+This entry was missing when Phase 8 was committed; it is added here and summarizes those commits (`99b32db`..`d632af4`).
+
+- **Agent gateway** (`internal/agentgateway`, `internal/store/agents`, `agents` table in both baselines, `/api/v1/agents` routes, `MACHINARCHY_AGENT_GATEWAY_*` settings): controller side of `protocol/agentv1`, imported from `../machinarchy-agent/protocol` through `replace`. Runs in the Control Manager and monolith roles. Synchronous capability calls only; no Operation integration.
+- **Fixes found by new tests:** `globMatch` with `*` in values (fuzz); per-host timeouts recorded as `TimedOut`/`timeout`; secret rotation keeps the stored name; a revoked agent re-enrolling gets `enrollment_rejected`; the image's `/data` is `0700`.
+- **Tests:** agent end-to-end test (`test/e2e`), 7 fuzz targets, operation worker, secrets, JWT middleware and gateway tests.
+- **Runtime:** Control Manager, operation worker and gateway Prometheus metrics; 25 s API request deadline; `healthcheck` subcommand in the server binaries.
+- **Build and CI:** digest-pinned multi-stage images with healthchecks and allowlist `.dockerignore`; reproducible ldflags builds; `ci.yml` rewritten (verify, security, images, release) with the agent repository checked out alongside.
+- **Docs:** README, `docs/operations.md`, new `docs/runbook.md`, `.env.example`.
+
+Verification (run at the time and repeated in AUDIT/09 on a clean clone): build, vet, `go test -race ./...` (33 packages, including the end-to-end test) and PostgreSQL 16 contract suites pass; lint has the 2 pre-existing issues; gosec 0; coverage 48.4%. CI never ran on GitHub.
+
 ## 2026-11-18 — Audit Phase 7: cleanup
 
 **Recreate existing databases.** The schema is now one baseline per dialect; older databases are refused at startup.

@@ -41,8 +41,10 @@ this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
     coverage artifact, PostgreSQL contract suites, OpenAPI route coverage and
     the real agent end-to-end test, which must not skip), `make smoke`, and
     golangci-lint (v2.15.0, includes gosec rules).
-  - `security`: govulncheck v1.1.4, gosec v2.22.4 and a 15s run of each fuzz
-    target.
+  - `security`: govulncheck v1.1.4 through `make vuln` (fails on called
+    vulnerabilities unless a reviewed, unexpired entry in
+    `scripts/security/govulncheck-allowlist.txt` accepts one with no fix),
+    gosec v2.22.4 and a 15s run of each fuzz target.
   - `images`: builds the api, controlmanager, monolit, CLI and agent images;
     the monolith must turn healthy and exit 0 on `docker stop`.
   - On `main`, after all three: Release Please, then one published, scanned

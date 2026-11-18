@@ -99,7 +99,7 @@ make test-postgres  # PostgreSQL contract suites (MACHINARCHY_TEST_POSTGRES_URL)
 make smoke          # CLI end to end against a fresh monolith
 make fuzz           # each fuzz target for FUZZTIME (default 30s)
 make lint vet       # golangci-lint (with gosec rules) and go vet
-make vuln gosec     # govulncheck and gosec
+make vuln gosec     # govulncheck (with the reviewed allowlist) and gosec
 ```
 
 `test/e2e` builds the monolith and the real agent from `../machinarchy-agent`

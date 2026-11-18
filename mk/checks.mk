@@ -76,9 +76,9 @@ gosec: ## Run gosec on its own (lint already includes it)
 	$(call require_tool,$(GOSEC),See https://github.com/securego/gosec.)
 	$(GOSEC) -fmt=text ./...
 
-vuln: ## Check modules and code paths with govulncheck
+vuln: ## govulncheck; fails on called vulnerabilities not accepted in scripts/security/govulncheck-allowlist.txt
 	$(call require_tool,$(GOVULNCHECK),Install with: go install golang.org/x/vuln/cmd/govulncheck@latest)
-	$(GOVULNCHECK) ./...
+	GOVULNCHECK=$(GOVULNCHECK) ./scripts/security/govulncheck.sh
 
 security: gosec vuln ## Run gosec and govulncheck
 
