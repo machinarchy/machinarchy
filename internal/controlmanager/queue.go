@@ -89,6 +89,15 @@ func (q *ResourceQueue) addLocked(key ResourceKey) Admission {
 		return QueueBackpressured
 	}
 	if q.dirty[key] {
+		// An immediate add overrides a pending delayed requeue: a new event
+		// (a spec change, an approval) must not wait for a retry delay.
+		if _, delayed := q.delayed[key]; delayed {
+			delete(q.delayed, key)
+			if !q.processing[key] {
+				q.queue = append(q.queue, key)
+				q.signal()
+			}
+		}
 		return QueueCoalesced
 	}
 	if !q.processing[key] && len(q.queue)+len(q.delayed) >= q.capacity {

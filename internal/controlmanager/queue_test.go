@@ -132,3 +132,38 @@ func TestResourceQueueShutdownWakesAllIdleWorkers(t *testing.T) {
 		}
 	}
 }
+
+// A pending delayed retry must not delay a new event for the same key:
+// before the fix the Add was coalesced into the delayed entry, so an owner's
+// host-key approval waited for the connector retry interval.
+func TestResourceQueueAddOverridesDelayedRetry(t *testing.T) {
+	q := NewResourceQueue(4, time.Millisecond, 20*time.Millisecond)
+	defer q.Shutdown()
+	key := ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: "host-1"}
+	if got := q.AddAfter(key, time.Hour); got != QueueAccepted {
+		t.Fatalf("AddAfter = %v", got)
+	}
+	if got := q.Add(key); got != QueueCoalesced {
+		t.Fatalf("Add over a delayed retry = %v", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if got, ok := q.Get(ctx); !ok || got != key {
+		t.Fatalf("Get after Add = %+v, %v; the delayed retry held the key back", got, ok)
+	}
+
+	// While the key is processing, a delayed retry followed by an event
+	// re-queues it as soon as the current reconcile is done.
+	if got := q.AddAfter(key, time.Hour); got != QueueAccepted {
+		t.Fatalf("AddAfter while processing = %v", got)
+	}
+	q.Add(key)
+	q.Done(key)
+	if got, ok := q.Get(ctx); !ok || got != key {
+		t.Fatalf("Get after Done = %+v, %v", got, ok)
+	}
+	q.Done(key)
+	if q.Len() != 0 {
+		t.Fatalf("queue length = %d", q.Len())
+	}
+}

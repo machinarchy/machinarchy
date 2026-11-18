@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13A: an event no longer waits behind a delayed retry (branch audit/host-keys)
+
+- `internal/controlmanager/queue.go`: `Add` for a key that already had a delayed requeue (`AddAfter`, e.g. the Host controller's connector retry) was coalesced into the delayed entry. The outbox event was acknowledged, but the reconcile waited out the whole delay. An immediate `Add` now replaces the pending delay. Found live: an owner's host-key approval sat at `HostKeyPendingApproval` until the retry interval; this affected any spec change to a Host that was not Ready.
+
+### Verification
+
+- `TestResourceQueueAddOverridesDelayedRetry`: fails without the fix and passes with it. `go test -race -count=3 ./internal/controlmanager/`: pass.
+
 ## 2026-11-18 — Audit Phase 13A: endpoint changes clear trust; host-key docs (branch audit/host-keys)
 
 - `internal/service/managed_resources.go`: changing a bound Host's endpoint (owner only, AUDIT S-02) clears its trusted keys unless new trust is sent with the change, so the new endpoint is scanned again under the profile's policy.
