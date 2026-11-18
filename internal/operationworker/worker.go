@@ -89,7 +89,7 @@ func (w *Worker) Start(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := w.schedule(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				w.deps.Logger.Warn("Operation scheduling scan failed", "error_class", "database_unavailable")
+				w.deps.Logger.Warn("Operation scheduling scan failed", "error", err)
 			}
 		}
 	}
@@ -133,7 +133,7 @@ func (w *Worker) recoverRunning(ctx context.Context) error {
 					if err := w.deps.Leases.ReleaseResourceLease(ctx, lease); err != nil {
 						slog.Warn("failed to release resource lease",
 							"lease_id", lease.ID,
-							"err", err,
+							"error", err,
 						)
 					}
 				}
@@ -317,7 +317,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer releaseCancel()
 			if err := w.deps.Leases.ReleaseResourceLease(releaseCtx, lease); err != nil {
-				w.deps.Logger.Warn("release Operation lease failed", "error_class", "database_unavailable")
+				w.deps.Logger.Warn("release Operation lease failed", "error", err)
 			}
 		}()
 	}
@@ -329,7 +329,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		expected := op.Revision
 		if op.Finish(resource.OperationTimedOut, time.Now()) == nil {
 			if err := w.deps.Operations.UpdateOperation(ctx, op, expected); err != nil {
-				w.deps.Logger.Warn("persist expired Operation failed", "error_class", "database_unavailable")
+				w.deps.Logger.Warn("persist expired Operation failed", "error", err)
 			}
 		}
 		return
@@ -441,7 +441,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		w.completeTarget(context.WithoutCancel(ctx), key, targetSpec.HostID, state, stored)
 	}
 	if err := w.finishResults(context.WithoutCancel(ctx), key); err != nil {
-		w.deps.Logger.Warn("persist Operation completion failed", "error_class", "database_unavailable")
+		w.deps.Logger.Warn("persist Operation completion failed", "error", err)
 	}
 }
 
@@ -570,7 +570,7 @@ func (w *Worker) finishWithoutExecution(ctx context.Context, op *resource.Operat
 			return nil
 		}
 		if !errors.Is(err, resource.ErrConflict) {
-			w.deps.Logger.Warn("persist Operation terminal state failed", "error_class", "database_unavailable")
+			w.deps.Logger.Warn("persist Operation terminal state failed", "error", err)
 			return err
 		}
 	}

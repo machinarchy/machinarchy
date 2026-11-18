@@ -104,28 +104,16 @@ func (e Envelope) Validate() error {
 			return errors.New("event payload is invalid")
 		}
 	case ConfigurationChanged:
-		if e.Subject.Kind != "runtime-config" {
-			return errors.New("runtime configuration event subject kind is invalid")
-		}
-		var payload RuntimeConfigChange
-		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
-			return errors.New("runtime configuration event payload is invalid")
+		if err := validateRevisionPayload(e, "runtime-config", "runtime configuration"); err != nil {
+			return err
 		}
 	case AccessProfileChanged:
-		if e.Subject.Kind != "access-profile" {
-			return errors.New("access profile event subject kind is invalid")
-		}
-		var payload AccessProfileChange
-		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
-			return errors.New("access profile event payload is invalid")
+		if err := validateRevisionPayload(e, "access-profile", "access profile"); err != nil {
+			return err
 		}
 	case OperationCreated:
-		if e.Subject.Kind != "operation" {
-			return errors.New("operation event subject kind is invalid")
-		}
-		var payload OperationChange
-		if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
-			return errors.New("operation event payload is invalid")
+		if err := validateRevisionPayload(e, "operation", "operation"); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unsupported Host event type %q", e.Type)
@@ -186,4 +174,20 @@ type OutboxStore interface {
 type ClaimedEvent struct {
 	Envelope Envelope
 	Attempt  int
+}
+
+// validateRevisionPayload checks the subject kind and that the payload names
+// the subject's revision; the three revisioned payloads share that rule
+// (AUDIT X-10).
+func validateRevisionPayload(e Envelope, kind, label string) error {
+	if e.Subject.Kind != kind {
+		return fmt.Errorf("%s event subject kind is invalid", label)
+	}
+	var payload struct {
+		Revision uint64 `json:"revision"`
+	}
+	if err := json.Unmarshal(e.Data, &payload); err != nil || payload.Revision == 0 || payload.Revision != e.Subject.Revision {
+		return fmt.Errorf("%s event payload is invalid", label)
+	}
+	return nil
 }

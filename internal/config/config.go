@@ -281,14 +281,9 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	}
 	cfg.EncryptionSecret = GetEnv("MACHINARCHY_ENCRYPTION_SECRET")
 	if keyFile := strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_SECRET_FILE")); keyFile != "" {
-		info, statErr := os.Lstat(keyFile)
-		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-			return Config{}, errors.New("MACHINARCHY_ENCRYPTION_SECRET_FILE must be a regular file with permissions 0600 or stricter")
-		}
-		// #nosec G304 -- keyFile is an operator-configured local path.
-		data, readErr := os.ReadFile(keyFile)
-		if readErr != nil {
-			return Config{}, errors.New("unable to read encryption key file")
+		data, err := readSecretFile(keyFile, "MACHINARCHY_ENCRYPTION_SECRET_FILE")
+		if err != nil {
+			return Config{}, err
 		}
 		fileKey := strings.TrimSpace(string(data))
 		if cfg.EncryptionSecret != "" && cfg.EncryptionSecret != fileKey {
@@ -302,14 +297,9 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	}
 	cfg.EncryptionPreviousKeys = map[string]string{}
 	if ringFile := strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_KEYRING_FILE")); ringFile != "" {
-		info, statErr := os.Lstat(ringFile)
-		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-			return Config{}, errors.New("MACHINARCHY_ENCRYPTION_KEYRING_FILE must be a regular file with permissions 0600 or stricter")
-		}
-		// #nosec G304 -- ringFile is an operator-configured local keyring path.
-		raw, readErr := os.ReadFile(ringFile)
-		if readErr != nil {
-			return Config{}, errors.New("unable to read encryption keyring file")
+		raw, err := readSecretFile(ringFile, "MACHINARCHY_ENCRYPTION_KEYRING_FILE")
+		if err != nil {
+			return Config{}, err
 		}
 		if err = json.Unmarshal(raw, &cfg.EncryptionPreviousKeys); err != nil {
 			return Config{}, errors.New("encryption keyring file must contain a JSON object of key identifiers and values")
@@ -538,4 +528,19 @@ func validateListenAddr(address string) error {
 		return errors.New("MACHINARCHY_LISTEN_ADDR port configuration out of structural boundaries [1-65535]")
 	}
 	return nil
+}
+
+// readSecretFile reads key material from an operator-provided file, which must
+// be a regular file (not a symlink) readable by its owner only (AUDIT X-14).
+func readSecretFile(path, setting string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s must be a regular file with permissions 0600 or stricter", setting)
+	}
+	// #nosec G304 -- the path is operator configuration, checked above.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read the file named by %s", setting)
+	}
+	return data, nil
 }

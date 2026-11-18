@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/machinarchy/machinarchy/internal/cli/api"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -23,47 +26,26 @@ func NewRuntimeConfigCommand(factory *cli.Factory) *cobra.Command {
 	return root
 }
 
-func newConfigGet(factory *cli.Factory) *cobra.Command {
-	return &cobra.Command{Use: "get", Short: "Read active runtime configuration", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		client, err := factory.NewManagementClient(cmd.Context())
-		if err != nil {
-			return err
-		}
-		raw, err := client.RuntimeConfig(cmd.Context())
-		if err != nil {
-			return err
-		}
-		return writeJSON(cmd, raw)
-	}}
+func newConfigGet(f *cli.Factory) *cobra.Command {
+	return managementRead(f, &cobra.Command{Use: "get", Short: "Read active runtime configuration", Args: cobra.NoArgs},
+		func(ctx context.Context, c api.ManagementClient, _ []string) (json.RawMessage, error) {
+			return c.RuntimeConfig(ctx)
+		})
 }
 func newConfigHistory(f *cli.Factory) *cobra.Command {
 	var before uint64
-	c := &cobra.Command{Use: "history", Short: "List immutable configuration revisions", RunE: func(cmd *cobra.Command, _ []string) error {
-		client, e := f.NewManagementClient(cmd.Context())
-		if e != nil {
-			return e
-		}
-		raw, e := client.ConfigHistory(cmd.Context(), before)
-		if e != nil {
-			return e
-		}
-		return writeJSON(cmd, raw)
-	}}
+	c := managementRead(f, &cobra.Command{Use: "history", Short: "List immutable configuration revisions", Args: cobra.NoArgs},
+		func(ctx context.Context, c api.ManagementClient, _ []string) (json.RawMessage, error) {
+			return c.ConfigHistory(ctx, before)
+		})
 	c.Flags().Uint64Var(&before, "before", 0, "Return revisions older than this revision")
 	return c
 }
 func newConfigStatus(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{Use: "status", Short: "Show per-process applied configuration revisions", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		client, e := f.NewManagementClient(cmd.Context())
-		if e != nil {
-			return e
-		}
-		raw, e := client.ConfigStatus(cmd.Context())
-		if e != nil {
-			return e
-		}
-		return writeJSON(cmd, raw)
-	}}
+	return managementRead(f, &cobra.Command{Use: "status", Short: "Show per-process applied configuration revisions", Args: cobra.NoArgs},
+		func(ctx context.Context, c api.ManagementClient, _ []string) (json.RawMessage, error) {
+			return c.ConfigStatus(ctx)
+		})
 }
 func newConfigValidate(f *cli.Factory) *cobra.Command {
 	var file string
@@ -143,17 +125,10 @@ func NewSecretCommand(factory *cli.Factory) *cobra.Command {
 	return root
 }
 func newSecretList(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{Use: "list", Short: "List secret metadata", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		c, e := f.NewManagementClient(cmd.Context())
-		if e != nil {
-			return e
-		}
-		raw, e := c.ListSecrets(cmd.Context())
-		if e != nil {
-			return e
-		}
-		return writeJSON(cmd, raw)
-	}}
+	return managementRead(f, &cobra.Command{Use: "list", Short: "List secret metadata", Args: cobra.NoArgs},
+		func(ctx context.Context, c api.ManagementClient, _ []string) (json.RawMessage, error) {
+			return c.ListSecrets(ctx)
+		})
 }
 func newSecretCreate(f *cli.Factory) *cobra.Command {
 	var description string
@@ -185,17 +160,10 @@ func newSecretCreate(f *cli.Factory) *cobra.Command {
 	return c
 }
 func newSecretVersions(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{Use: "versions ID", Short: "List secret version metadata", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		c, e := f.NewManagementClient(cmd.Context())
-		if e != nil {
-			return e
-		}
-		raw, e := c.SecretVersions(cmd.Context(), args[0])
-		if e != nil {
-			return e
-		}
-		return writeJSON(cmd, raw)
-	}}
+	return managementRead(f, &cobra.Command{Use: "versions ID", Short: "List secret version metadata", Args: cobra.ExactArgs(1)},
+		func(ctx context.Context, c api.ManagementClient, args []string) (json.RawMessage, error) {
+			return c.SecretVersions(ctx, args[0])
+		})
 }
 func newSecretRotate(f *cli.Factory) *cobra.Command {
 	var expected uint64
@@ -311,4 +279,22 @@ func writeJSON(cmd *cobra.Command, raw json.RawMessage) error {
 	encoder := json.NewEncoder(cmd.OutOrStdout())
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+// managementRead completes command as a read-only management call whose JSON
+// response is printed as is (AUDIT X-08).
+func managementRead(f *cli.Factory, command *cobra.Command,
+	call func(context.Context, api.ManagementClient, []string) (json.RawMessage, error)) *cobra.Command {
+	command.RunE = func(cmd *cobra.Command, args []string) error {
+		client, err := f.NewManagementClient(cmd.Context())
+		if err != nil {
+			return err
+		}
+		raw, err := call(cmd.Context(), client, args)
+		if err != nil {
+			return err
+		}
+		return writeJSON(cmd, raw)
+	}
+	return command
 }
