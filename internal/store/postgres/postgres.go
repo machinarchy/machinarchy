@@ -8,7 +8,7 @@ import (
 	"time"
 
 	// Register the PostgreSQL driver with database/sql.
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Config holds the configuration for connecting to a PostgreSQL database.
@@ -26,7 +26,7 @@ func OpenDB(cfg Config) (*sql.DB, error) {
 	if dsn == "" {
 		return nil, errors.New("PostgreSQL URL is required")
 	}
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL database: %w", err)
 	}

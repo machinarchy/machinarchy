@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/store"
@@ -74,7 +74,7 @@ func newFixture(t *testing.T, engine string) *fixture {
 			t.Fatal(err)
 		}
 		schema := "contract_" + hex.EncodeToString(suffix)
-		admin, err := sql.Open("postgres", base)
+		admin, err := sql.Open("pgx", base)
 		if err != nil {
 			t.Fatalf("open PostgreSQL admin connection: %v", err)
 		}
@@ -116,7 +116,7 @@ func (f *fixture) raw(t *testing.T) *sql.DB {
 	t.Helper()
 	driver, dsn := "sqlite", f.cfg.SQLitePath
 	if f.engine == store.EnginePostgres {
-		driver, dsn = "postgres", f.cfg.PostgresURL
+		driver, dsn = "pgx", f.cfg.PostgresURL
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
