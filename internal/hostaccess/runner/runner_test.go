@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ type host struct {
 	shell string
 	root  string
 	path  string
+	env   []string
 }
 
 func newHost(t *testing.T, shell string) *host {
@@ -48,7 +50,7 @@ func newHost(t *testing.T, shell string) *host {
 func (h *host) run(command string) string {
 	h.t.Helper()
 	cmd := exec.Command(h.shell, "-c", command)
-	cmd.Env = []string{"PATH=" + h.path, "HOME=" + filepath.Dir(h.root)}
+	cmd.Env = append([]string{"PATH=" + h.path, "HOME=" + filepath.Dir(h.root)}, h.env...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
@@ -121,6 +123,7 @@ func eachShell(t *testing.T, test func(*testing.T, *host)) {
 }
 
 func TestLaunchIsIdempotentAndReportsExit(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		first := h.launch(ref(1), 60, ModeAuto, "sh", "-c", "echo out; echo err >&2; exit 7")
 		if first.Existing || first.Mode != ModeSetsid || first.PID == 0 {
@@ -143,6 +146,7 @@ func TestLaunchIsIdempotentAndReportsExit(t *testing.T) {
 }
 
 func TestArgumentsArriveVerbatim(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		tricky := []string{"it's", "$HOME", "`id`", "a b", "\"q\"", "x;y", "*"}
 		h.launch(ref(1), 60, ModeSetsid, append([]string{"printf", "[%s]"}, tricky...)...)
@@ -158,6 +162,7 @@ func TestArgumentsArriveVerbatim(t *testing.T) {
 }
 
 func TestOutputIsReadIncrementallyAndSkipsAhead(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		// 200 KiB of output: more than the head plus one chunk.
 		h.launch(ref(1), 60, ModeSetsid, "sh", "-c", "i=0; while [ $i -lt 2048 ]; do printf '%099d\\n' $i; i=$((i+1)); done")
@@ -182,6 +187,7 @@ func TestOutputIsReadIncrementallyAndSkipsAhead(t *testing.T) {
 }
 
 func TestCancelKillsTheWholeTree(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		marker := "mr-cancel-" + strconv.Itoa(os.Getpid()) + "-" + filepath.Base(h.shell)
 		h.launch(ref(1), 600, ModeSetsid, "sh", "-c", "sleep 300 & sleep 301; echo "+marker)
@@ -204,6 +210,7 @@ func TestCancelKillsTheWholeTree(t *testing.T) {
 }
 
 func TestHostSideTimeout(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		h.launch(ref(1), 1, ModeSetsid, "sleep", "120")
 		status := h.waitState(ref(1), StateExited)
@@ -214,6 +221,7 @@ func TestHostSideTimeout(t *testing.T) {
 }
 
 func TestLostWhenTheSupervisorDies(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		h.launch(ref(1), 600, ModeSetsid, "sleep", "120")
 		h.waitState(ref(1), StateRunning)
@@ -237,6 +245,7 @@ func TestLostWhenTheSupervisorDies(t *testing.T) {
 }
 
 func TestCleanupRemovesOnlyFinishedTargets(t *testing.T) {
+	t.Parallel()
 	eachShell(t, func(t *testing.T, h *host) {
 		h.launch(ref(1), 60, ModeSetsid, "true")
 		h.launch(ref(2), 600, ModeSetsid, "sleep", "120")
@@ -264,25 +273,66 @@ func TestCleanupRemovesOnlyFinishedTargets(t *testing.T) {
 
 // A fake systemd-run that starts the unit's command detached and records its
 // arguments: proves the runner's systemd path and its fallback.
-func TestSystemdModeAndFallback(t *testing.T) {
-	eachShell(t, func(t *testing.T, h *host) {
-		bin := filepath.Join(filepath.Dir(h.root), "bin")
-		if err := os.MkdirAll(bin, 0o700); err != nil {
-			t.Fatal(err)
+// fakeBin holds one fake script reached as loginctl, systemctl and
+// systemd-run. It is created once per test process: on macOS the first run
+// of every new executable is scanned, which costs seconds per file.
+var (
+	fakeBinOnce sync.Once
+	fakeBinDir  string
+	fakeBinErr  error
+)
+
+const fakeSystemd = `#!/bin/sh
+case ${0##*/} in
+loginctl) echo Linger=yes ;;
+systemctl) exit 0 ;;
+systemd-run)
+	[ -n "${MR_FAKE_SYSTEMD_FAIL:-}" ] && exit 1
+	printf '%s\n' "$@" >"$HOME/systemd-run.args"
+	while [ $# -gt 0 ]; do case $1 in /bin/sh) break ;; *) shift ;; esac; done
+	nohup "$@" </dev/null >/dev/null 2>&1 &
+	;;
+esac
+`
+
+func fakeBin(t *testing.T) string {
+	t.Helper()
+	fakeBinOnce.Do(func() {
+		fakeBinDir, fakeBinErr = os.MkdirTemp("", "mrbin")
+		if fakeBinErr != nil {
+			return
 		}
-		args := filepath.Join(bin, "systemd-run.args")
-		write := func(name, body string) {
-			if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o700); err != nil { // #nosec G306 -- test fixture executable
-				t.Fatal(err)
+		script := filepath.Join(fakeBinDir, "fake")
+		if fakeBinErr = os.WriteFile(script, []byte(fakeSystemd), 0o700); fakeBinErr != nil { // #nosec G306 -- test fixture executable
+			return
+		}
+		for _, name := range []string{"loginctl", "systemctl", "systemd-run"} {
+			if fakeBinErr = os.Symlink(script, filepath.Join(fakeBinDir, name)); fakeBinErr != nil {
+				return
 			}
 		}
-		write("loginctl", "echo Linger=yes\n")
-		write("systemctl", "exit 0\n")
-		write("systemd-run", `printf '%s\n' "$@" >"`+args+`"
-while [ $# -gt 0 ]; do case $1 in /bin/sh) break ;; *) shift ;; esac; done
-nohup "$@" </dev/null >/dev/null 2>&1 &
-`)
-		h.path = bin + ":" + h.path
+	})
+	if fakeBinErr != nil {
+		t.Fatal(fakeBinErr)
+	}
+	return fakeBinDir
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if fakeBinDir != "" {
+		_ = os.RemoveAll(fakeBinDir)
+	}
+	os.Exit(code)
+}
+
+// A fake systemd-run that starts the unit's command detached and records its
+// arguments: proves the runner's systemd path and its fallback.
+func TestSystemdModeAndFallback(t *testing.T) {
+	t.Parallel()
+	eachShell(t, func(t *testing.T, h *host) {
+		args := filepath.Join(filepath.Dir(h.root), "systemd-run.args")
+		h.path = fakeBin(t) + ":" + h.path
 		launched := h.launch(ref(1), 60, ModeAuto, "echo", "via-systemd")
 		if launched.Mode != ModeSystemd || launched.Unit != "machinarchy-op-1-t-1" {
 			t.Fatalf("launch = %+v, want systemd", launched)
@@ -301,7 +351,7 @@ nohup "$@" </dev/null >/dev/null 2>&1 &
 		}
 
 		// A systemd-run that fails: auto falls back, systemd refuses.
-		write("systemd-run", "exit 1\n")
+		h.env = append(h.env, "MR_FAKE_SYSTEMD_FAIL=1")
 		if launched := h.launch(ref(2), 60, ModeAuto, "true"); launched.Mode != ModeSetsid {
 			t.Fatalf("fallback launch = %+v", launched)
 		}
@@ -317,6 +367,7 @@ nohup "$@" </dev/null >/dev/null 2>&1 &
 }
 
 func TestCraftedInputIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []Ref{{"../x", "t"}, {"op", "a/b"}, {"OP", "t"}, {"op", ""}, {"op", "t;rm"}} {
 		if _, err := LaunchCommand(LaunchRequest{Ref: bad, TimeoutSeconds: 1, Argv: []string{"true"}}); !errors.Is(err, domain.ErrInvalidInput) {
 			t.Errorf("launch with %+v = %v", bad, err)
@@ -346,6 +397,7 @@ func TestCraftedInputIsRefused(t *testing.T) {
 }
 
 func TestParsersIgnoreShellNoiseAndRejectGarbage(t *testing.T) {
+	t.Parallel()
 	launched, err := ParseLaunch("Welcome!\n@@MR1 launched setsid 42 - new\r\n")
 	if err != nil || launched.PID != 42 || launched.Mode != ModeSetsid {
 		t.Fatalf("launch with noise = %+v, %v", launched, err)

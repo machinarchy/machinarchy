@@ -85,10 +85,17 @@ type LaunchHandle struct {
 	// treated as unreachable rather than sent to another machine.
 	Endpoint   string    `json:"endpoint"`
 	LaunchedAt time.Time `json:"launchedAt"`
+	// Attempt counts launches of this target (1 for the first). A launch
+	// proven never to have started is retried up to MaxLaunchAttempts.
+	Attempt int `json:"attempt,omitempty"`
 	// Deadline is when the command must have finished: launch time plus
 	// the run's timeout, or the Operation deadline if earlier.
 	Deadline time.Time `json:"deadline"`
 }
+
+// MaxLaunchAttempts bounds relaunches of a target whose launch was cut off
+// before it started anything.
+const MaxLaunchAttempts = 3
 
 // Confirmed reports whether the runner acknowledged the launch.
 func (h LaunchHandle) Confirmed() bool { return h.Mode != "" }

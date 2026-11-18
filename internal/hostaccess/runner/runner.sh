@@ -104,7 +104,15 @@ target_state() {
 	elif [ -f "$1/exit" ]; then
 		STATE=exited
 		CODE=$(cat "$1/exit")
-	elif [ ! -f "$1/pid" ] && [ -f "$1/meta" ] &&
+	elif [ ! -f "$1/meta" ]; then
+		# The launch never got as far as starting the command.
+		lp=$(cat "$1/launching" 2>/dev/null)
+		if [ -n "$lp" ] && alive "$lp" machinarchy-runner; then
+			STATE=running # the launch is in progress
+		else
+			STATE=missing
+		fi
+	elif [ ! -f "$1/pid" ] &&
 		[ $(($(now) - $(sed -n 's/^started=//p' "$1/meta"))) -lt 60 ]; then
 		STATE=running # the supervisor is still starting
 	else
@@ -221,11 +229,23 @@ do_launch() {
 	mkdir -p "$ROOT/ops/$op" || fail mkdir
 	chmod 700 "$ROOT" "$ROOT/ops" "$ROOT/ops/$op" 2>/dev/null
 	if ! mkdir "$D" 2>/dev/null; then
-		# Already launched (a retry after a lost reply): adopt it.
 		[ -d "$D" ] || fail mkdir
-		report_launch "$D" existing
-		return
+		# Already launched (a retry after a lost reply): adopt it.
+		if [ -f "$D/meta" ]; then
+			report_launch "$D" existing
+			return
+		fi
+		# No meta: a launch died before it started anything, or one is in
+		# progress right now. meta is written before the start, so a
+		# directory without it never ran the command.
+		lp=$(cat "$D/launching" 2>/dev/null)
+		if [ -n "$lp" ] && alive "$lp" machinarchy-runner; then
+			fail busy
+		fi
+		rm -rf -- "$D"
+		mkdir "$D" 2>/dev/null || fail busy
 	fi
+	echo $$ >"$D/launching"
 	printf '%s\n' "$cmd" >"$D/cmd"
 	: >"$D/stdout"
 	: >"$D/stderr"

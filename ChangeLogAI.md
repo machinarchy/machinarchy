@@ -1,5 +1,43 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: detached launcher and poller (branch audit/detached-ssh)
+
+- Launcher (`internal/operationworker/detached.go`):
+  - a detached Operation launches its targets `RunSpec.Concurrency` at a time; a worker slot is held only for the launch;
+  - each target gets a launch handle, with its deadline set to the earlier of launch time plus the timeout and the Operation deadline;
+  - a session that failed before anything could start fails the target with a `launch_*` class;
+  - a connection lost during the launch records an unconfirmed handle for the poller to resolve;
+  - a launch already sent is not cut off by worker shutdown or cancel; it finishes and the poller cancels the command if needed;
+  - restart: a detached Operation is never marked Interrupted; Pending targets are resumed.
+- Poller (`internal/operationworker/poller.go`), started with the worker when the store and connector support detached runs:
+  - one status session per host (per profile revision and state root, up to 4 targets each); on PostgreSQL a per-host lease keeps two workers from polling the same host;
+  - the interval grows from 5 s to 30 s with the target's age;
+  - output is captured as head and tail; an exited target is finished only after all its output has been read;
+  - cancel and timeout are sent by the poller; a timeout is enforced past the deadline plus a grace if the host watchdog did not act;
+  - `Lost` when the supervisor is gone, the state directory vanished, or the host stays unreachable past the deadline (or 5 min after a cancel);
+  - an unconfirmed launch the host knows about is adopted (`mode: adopted`); one proven never to have started is relaunched, up to 3 attempts;
+  - a finished target's directory is cleaned up before its result is recorded, because the credential authorizer only serves active Operations; the Operation finishes once every target is terminal.
+- Runner: a launch now records the launching shell's pid. A directory without `meta` whose launcher died is reclaimed (`busy` if the launcher is still alive), and status reports it `missing` instead of `lost`.
+- Metrics: `operationworker_detached_launches_total{outcome}`, `_running_targets`, `_polls_total{outcome}`, `_lost_targets_total`, `_poll_duration_seconds`.
+
+### Verification
+
+- New `internal/operationworker/detached_test.go`: real SQLite store, secret resolution and SSH connector, against an SSH server running commands in a real shell. Tests:
+  - live output while running, the final result with newlines and byte counts, and no state left on the host;
+  - **a restart with 50 targets loses none, and each command runs exactly once**, even when the worker stops mid-launch (39 Pending and 11 Running at the stop);
+  - cancel stops whole process trees;
+  - timeout enforced on the host, and by the poller;
+  - a killed supervisor gives `Lost`;
+  - an unreachable host gives `Lost`;
+  - an unconfirmed launch is adopted, or retried and then failed;
+  - a profile with `supervisor: attached` refuses detached runs.
+- `go test -race -count=2 -shuffle=on` on `operationworker`, `hostaccess/...` and `domain/...`: pass. golangci-lint `--new-from-rev`: 0 issues. `shellcheck`: clean.
+- Test duration: the integration tests run in parallel; `operationworker` takes about 22 s and `hostaccess/runner` about 7.5 s, within the pre-commit hook's 30 s per package. The runner tests' fake `systemd-run`, `systemctl` and `loginctl` are now one shared script reached through symlinks, because macOS scans every new executable on its first run (about 3 s each).
+- Problems found and fixed while writing these tests:
+  - a stopping worker failed targets as `host_snapshot_stale`;
+  - a cleanup after the last result was refused by the authorizer;
+  - a half-made launch directory was adopted as a running command.
+
 ## 2026-11-19 — Audit Phase 13B: detached-execution model and persistence (branch audit/detached-ssh)
 
 - Domain (`internal/domain/resource/detached.go`, `operation.go`, `access_profile.go`):

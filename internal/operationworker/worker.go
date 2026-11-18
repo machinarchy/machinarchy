@@ -36,6 +36,11 @@ type Dependencies struct {
 	Logger          *slog.Logger
 	// Registerer receives the worker's metrics; nil leaves them unexported.
 	Registerer prometheus.Registerer
+	// Poll tunes the detached-target poller (zero values take defaults).
+	// Detached runs need Operations to implement
+	// resource.DetachedTargetRepository and Connector to implement
+	// RunnerConnector.
+	Poll PollConfig
 }
 
 type Worker struct {
@@ -47,6 +52,11 @@ type Worker struct {
 	pending map[resource.OperationKey]struct{}
 	active  map[resource.OperationKey]context.CancelFunc
 	owner   string
+	// detached persists detached-execution progress; nil disables it.
+	detached resource.DetachedTargetRepository
+	// settled lists detached Operations with every target launched, so the
+	// recovery scan does not reload them on every tick.
+	settled map[resource.OperationKey]bool
 }
 
 func New(deps Dependencies, workers int) (*Worker, error) {
@@ -60,7 +70,10 @@ func New(deps Dependencies, workers int) (*Worker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate Operation worker identity: %w", err)
 	}
-	return &Worker{metrics: newWorkerMetrics(deps.Registerer), deps: deps, workers: workers, queue: make(chan resource.OperationKey, workers*16), pending: make(map[resource.OperationKey]struct{}), active: make(map[resource.OperationKey]context.CancelFunc), owner: string(id)}, nil
+	w := &Worker{metrics: newWorkerMetrics(deps.Registerer), deps: deps, workers: workers, queue: make(chan resource.OperationKey, workers*16), pending: make(map[resource.OperationKey]struct{}), active: make(map[resource.OperationKey]context.CancelFunc), owner: string(id),
+		settled: map[resource.OperationKey]bool{}}
+	w.detached, _ = deps.Operations.(resource.DetachedTargetRepository)
+	return w, nil
 }
 
 // Start runs a bounded pool and a durable level-triggered scan. Outbox events
@@ -81,6 +94,10 @@ func (w *Worker) Start(ctx context.Context) error {
 		return fmt.Errorf("initial Operation scheduling: %w", err)
 	}
 	var wg sync.WaitGroup
+	if connector, ok := w.deps.Connector.(RunnerConnector); ok && w.detached != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.runPoller(ctx, connector) }()
+	}
 	for i := 0; i < w.workers; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.runWorker(ctx) }()
@@ -110,8 +127,21 @@ func (w *Worker) recoverRunning(ctx context.Context) error {
 	for _, key := range keys {
 		w.mu.Lock()
 		_, active := w.active[key]
+		settled := w.settled[key]
 		w.mu.Unlock()
-		if active {
+		if active || settled {
+			continue
+		}
+		// A detached Operation keeps running on its hosts across restarts:
+		// it is never interrupted. Targets not launched yet are resumed.
+		if op, err := w.deps.Operations.GetOperation(ctx, key.WorkspaceID, key.ID); err == nil && op.Spec.Run != nil && op.Spec.Run.Detach {
+			if detachedResumeNeeded(op) {
+				w.enqueue(ctx, key)
+			} else {
+				w.mu.Lock()
+				w.settled[key] = true
+				w.mu.Unlock()
+			}
 			continue
 		}
 		fenced := ctx
@@ -330,7 +360,24 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		}()
 	}
 	op, err := w.deps.Operations.GetOperation(ctx, key.WorkspaceID, key.ID)
-	if err != nil || op.Status.State != resource.OperationQueued {
+	if err != nil {
+		return
+	}
+	if (op.Status.State == resource.OperationRunning || op.Status.State == resource.OperationCancelRequested) && detachedResumeNeeded(op) {
+		if err := w.deps.ExecutionPolicy().Check(op.Spec.Run.Argv[0]); err != nil && op.Status.State == resource.OperationRunning {
+			for _, target := range op.Status.Targets {
+				if target.State == resource.TargetPending {
+					w.completeTarget(ctx, key, target.Spec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "execution_denied"})
+				}
+			}
+			w.finishDetachedIfDone(context.WithoutCancel(ctx), key)
+			return
+		}
+		w.launchDetached(ctx, key, op)
+		w.markSettled(key)
+		return
+	}
+	if op.Status.State != resource.OperationQueued {
 		return
 	}
 	if op.Spec.Deadline != nil && !time.Now().Before(*op.Spec.Deadline) {
@@ -360,6 +407,11 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 				slog.Error("failed to finish failed operation", "error", err)
 			}
 		}
+		return
+	}
+	if op.Spec.Run.Detach {
+		w.launchDetached(ctx, key, op)
+		w.markSettled(key)
 		return
 	}
 	for _, targetSpec := range op.Spec.Targets {
@@ -458,6 +510,18 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 	if err := w.finishResults(context.WithoutCancel(ctx), key); err != nil {
 		w.deps.Logger.Warn("persist Operation completion failed", "error", err)
 	}
+}
+
+// markSettled records that a detached Operation has no target left to
+// launch, unless some are still Pending (the worker stopped part-way).
+func (w *Worker) markSettled(key resource.OperationKey) {
+	op, err := w.deps.Operations.GetOperation(context.Background(), key.WorkspaceID, key.ID)
+	if err != nil || detachedResumeNeeded(op) {
+		return
+	}
+	w.mu.Lock()
+	w.settled[key] = true
+	w.mu.Unlock()
 }
 
 func (w *Worker) renewLease(ctx context.Context, lease resource.Lease, cancel context.CancelFunc, stop <-chan struct{}, done chan<- struct{}) {
