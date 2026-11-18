@@ -278,12 +278,14 @@ func globMatch(pattern, s string) bool {
 	star, mark := -1, 0
 	for i < len(s) {
 		switch {
-		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == s[i]):
-			p++
-			i++
+		// The wildcard must be checked first: a literal '*' in s must not
+		// consume the pattern's '*' (found by FuzzGlobMatch).
 		case p < len(pattern) && pattern[p] == '*':
 			star, mark = p, i
 			p++
+		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == s[i]):
+			p++
+			i++
 		case star >= 0:
 			mark++
 			p, i = star+1, mark
