@@ -1,0 +1,112 @@
+# Runbook
+
+Symptoms, how to confirm them, and what to do. Logs are JSON on stdout;
+filter on `"level":"ERROR"` and read the `error` field. Metrics are described
+in [operations](operations.md#metrics).
+
+## The process exits at startup
+
+| Log message contains | Cause | Fix |
+|---|---|---|
+| `load configuration: ... MACHINARCHY_...` | A setting is missing or invalid. | Fix the named setting; secrets must come from the environment or `0600` files. |
+| `must have permissions 0700 or stricter` | The SQLite directory is group- or world-readable. | `chmod 700` the directory (in containers, mount a volume the image initialises, or `chown 65532 && chmod 700` it). |
+| `incompatible schema version` / `ErrIncompatibleSchema` | The database was created by an older migration chain. | Development: delete the SQLite file or drop the PostgreSQL database. Restore a backup if data matters. |
+| `production requires TLS to NATS` | Agent gateway with `nats://` in production. | Use `tls://` or set `MACHINARCHY_AGENT_GATEWAY_NATS_CA_FILE`. |
+| `connect agent gateway to NATS` | NATS unreachable or credentials wrong. | Check the URL, the credentials file and network policy. The process will not start without the gateway once configured; unset `_NATS_URL` to run without agents. |
+| `provision agent command stream` | JetStream disabled or the stream exists with incompatible settings. | Enable JetStream (`-js`); inspect `nats stream info MACHINARCHY_AGENT_COMMANDS`. |
+| `sslmode=verify-full` | Production PostgreSQL URL without full TLS verification. | Fix the URL and CA. |
+
+## Readiness is failing
+
+`GET /healthz/ready` returns the failing check by name.
+
+- **database**: the pool cannot reach the database. Check
+  `machinarchy_db_connection_waits_total` (exhausted pool) and database
+  health. The process recovers on its own once the database is back.
+- **control-manager**: startup recovery has not finished or the engine
+  stopped. Look for `Control Manager startup resync failed` and its `error`.
+- **agent-gateway**: the NATS connection is down (`agent gateway disconnected
+  from NATS`). The client reconnects indefinitely; check NATS.
+
+## Operations stay Queued
+
+1. Execution enabled? A disabled policy fails Operations when they run
+   (`execution is disabled`); set `MACHINARCHY_EXECUTION_ENABLED` and the
+   program list, then submit again.
+2. Is a Control Manager or monolith running against the same database? The
+   standalone API does not execute.
+3. `machinarchy_operationworker_operations_in_progress` at the worker count
+   for a long time means hosts are slow or hanging; compare with
+   `target_duration_seconds` and each Operation's `timeoutSeconds`.
+
+## Operations end Interrupted
+
+- Reason `worker_stopped`: the process stopped while a command ran. The
+  command may or may not have run on the host; Machinarchy never replays it.
+  Check the host, then submit again if needed.
+- Reason `worker_panic`: a bug. `machinarchy_operationworker_panics_total`
+  increased and the log has the stack under `stack`. File it with the log.
+
+## A target is TimedOut or Failed
+
+`GET /api/v1/managed/operations/{id}` (operator or owner) shows each target:
+
+- `TimedOut` / `timeout`: the command exceeded `timeoutSeconds`.
+- `Failed` with an exit code: the program ran and failed; read stdout/stderr.
+- `Failed` / `remote_execution_failed`: SSH connection or authentication
+  failed. Check the host's `Ready` condition (`get hosts`), its endpoint and
+  trusted key, and the Access Profile's secret version.
+- `Failed` / `access_profile_unavailable`: the profile or its pinned revision
+  was deleted or disabled after submission.
+
+## Hosts never become Ready
+
+The Host controller verifies SSH with the bound Access Profile. Read
+`status.conditions` on the host:
+
+- egress denied: the endpoint is outside `MACHINARCHY_SSH_ALLOWED_CIDRS` or
+  its port is not allowed;
+- host key mismatch: the server's key is not in `spec.accessTarget.trust`;
+  verify it out of band before adding it;
+- authentication failed: rotate the secret (`machinarchy secret rotate`) and
+  update the profile revision.
+
+`machinarchy_controlmanager_reconciles_total{outcome="retry"}` rising with a
+growing `queue_depth` means many hosts are failing at once (network outage
+or a broken credential).
+
+## Agents
+
+| Symptom | Check | Fix |
+|---|---|---|
+| Agent not listed after start | Agent log `enrollment rejected`; gateway metric `registrations_total{outcome="rejected"}`. | Enrollment tokens differ: use the same token on both sides. |
+| `registrations_total{outcome="invalid"}` rising | Messages failed signature or schema checks. | A misconfigured or hostile client. Check NATS ACLs. |
+| Agent listed but `connected: false` | Lease expired: no renewals arrive. | Agent down or partitioned; on the agent host `machinarchy-agent --healthcheck` exits 1 with the expiry time. |
+| Agent stops after a renewal; on restart it is refused (`enrollment_rejected`), gateway metric `registrations_total{outcome="revoked"}` | An owner revoked it; revoked keys are never re-admitted. | Intended. To re-admit the host, delete its state file (a new key is generated) and let it enrol again. |
+| Invoke returns 503 | This process does not run the gateway, or the agent has no live lease. | Call a monolith/Control Manager; check `connected`. |
+| Invoke returns 504 | The agent did not answer within the timeout. | Check the agent log for the operation ID; results that arrive later are ignored. |
+| Result `rejected` / `capability_unavailable` | The agent does not offer that capability. | Only `runtime.info`, `system.facts` and opt-in `service.*` exist. |
+
+## Shutdown takes too long or is killed
+
+The process logs `skipping runtime close because a background worker is still
+running` when a worker outlived `MACHINARCHY_SHUTDOWN_TIMEOUT`. Running
+commands are cancelled and their Operations end `Interrupted`. Make sure the
+orchestrator grace period (`stop_grace_period`,
+`terminationGracePeriodSeconds`) is longer than the shutdown timeout.
+
+## Secrets and keys
+
+- `decrypt` errors after a restart: `MACHINARCHY_ENCRYPTION_SECRET` or the key
+  ID changed. Restore the previous key, or list it in the keyring file, then
+  `machinarchy secret rewrap --old-key-id OLD` until `remaining` is 0.
+- Losing the encryption key makes stored credentials unrecoverable; keep it
+  backed up with the database backups that need it.
+- Rotating the agent gateway signing key: every agent must be given the new
+  public key before the restart, or they will reject all commands.
+
+## Audit trail
+
+`GET /api/v1/audit/verify` (owner) checks the hash chain. `valid: false`
+means a stored event was changed or removed: preserve the database for
+investigation and compare with the last recorded `headHash`.

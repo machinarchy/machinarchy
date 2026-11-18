@@ -22,7 +22,7 @@ services:
       - machinarchy-network
 
   nats:
-    image: nats:2-alpine
+    image: nats:2.15.3-alpine
     command: ["-js", "-sd", "/data"]
     ports:
       - "127.0.0.1:4222:4222"

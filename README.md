@@ -1,135 +1,169 @@
 # Machinarchy
 
-Machinarchy is a Go control-plane service for registering SSH-managed hosts, grouping them into environments, and running operations on them. It exposes an Echo-based HTTP API, stores application data in SQLite or PostgreSQL, and delivers internal events through a transactional database outbox.
+Machinarchy is a Go control plane for a fleet of hosts. It keeps an inventory of
+managed hosts, connects to them over SSH with owner-controlled credentials,
+runs shell-free commands on them as audited Operations, and talks to
+`machinarchy-agent` on hosts that run it. It is an HTTP API
+(Echo) over SQLite or PostgreSQL, with a CLI.
 
-> **Implementation status:** Managed hosts with Access Profiles, operations (shell-free command execution over SSH, disabled by default), authentication, environments, the audit trail, runtime configuration and the Secret Store are implemented. The host agent lives in a separate repository and is not integrated yet. See [architecture and current limitations](docs/architecture.md).
+> **Status:** in development. Managed hosts, Access Profiles, Operations,
+> environments, accounts and API tokens, the audit trail, runtime configuration,
+> the Secret Store and a minimal agent gateway are implemented. Existing
+> databases may need to be recreated between development releases.
 
-## Components
+## Architecture
 
-- `cmd/api`: HTTP API process.
-- `cmd/controlmanager`: control-manager worker (outbox consumer and reconcilers) with health and metrics endpoints.
-- `cmd/monolit`: single-process mode that runs the API and control-manager worker together.
-- `cmd/machinarchy`: Cobra-based CLI for API resources and named contexts.
-- The host agent lives in the separate `machinarchy-agent` repository; the controller does not talk to it yet.
-- `internal/bootstrap`: shared composition for database, API, and worker dependencies.
-- `internal/domain`: application entities and storage/service ports.
-- `internal/service`: use cases, including host registration and SSH capacity limiting.
-- `internal/store`: SQLite and PostgreSQL adapters and schema migrations.
-- `internal/transport/http`: HTTP server, middleware, health endpoints, and versioned handlers.
-- `pkg/sshclient`: SSH connection and host-key verification utilities.
+```text
+ machinarchy CLI ──HTTP──▶ API ─┐                       ┌─▶ SSH ──▶ hosts
+                                ├─ SQLite / PostgreSQL ─┤
+ machinarchy-agent ◀─NATS─▶ Control Manager ┘ (outbox)  └─ operation worker
+          (JetStream, signed)   ├ Host reconcilers
+                                └ agent gateway
+```
+
+| Binary | Role |
+|---|---|
+| `cmd/api` | HTTP API: accounts, inventory, Operations, configuration, secrets, agents. Writes intent; never runs SSH. |
+| `cmd/controlmanager` | Background work: Host reconcilers driven by a transactional outbox, the operation worker (SSH execution) and the agent gateway. Serves health and metrics only. |
+| `cmd/monolit` | Both roles in one process (the easiest way to run it). |
+| `cmd/machinarchy` | CLI; uses only the public HTTP API. |
+
+Code layout: `internal/domain` (entities, rules), `internal/service` (use
+cases), `internal/store/{accounts,resources,management,agents}` (one SQL
+implementation per area for both dialects), `internal/controlmanager`,
+`internal/operationworker`, `internal/agentgateway`, `internal/transport/http`.
+More in [docs/architecture.md](docs/architecture.md) and the
+[ADRs](docs/adr/README.md).
 
 ## Requirements
 
-- Go 1.27+ or newer.
-- SQLite (default) or PostgreSQL (optional).
+- Go 1.27.4+ and a checkout of
+  `machinarchy-agent` repository next to this one
+  (`../machinarchy-agent`): the agent wire contract,
+  `github.com/machinarchy/machinarchy-agent/protocol`, is used through a local
+  `replace`.
+- SQLite (built in) or PostgreSQL 16.
+- NATS with JetStream only if you use agents.
+- For development tools: golangci-lint v2, swag v1.16.4, Docker with BuildKit.
 
-No process requires NATS. (`deployments/infra.docker-compose.yml` still starts NATS for the upcoming agent integration.)
-
-## Quick start
+## Build
 
 ```sh
-cp .env.example .env
+make build          # bin/machinarchy{,-api,-controlmanager,-monolit}
+make images         # container images (needs ../machinarchy-agent)
 ```
 
-Set `MACHINARCHY_OPERATOR_TOKEN` to a random value of at least 32 characters. For production, also set a separate `MACHINARCHY_ENCRYPTION_SECRET` and `CORS_ALLOWED_ORIGINS`. The encryption secret must remain stable: stored SSH credentials cannot be decrypted after it changes. Self-registration is disabled by default in every environment; use `MACHINARCHY_SIGNUP_ENABLED=true` only when account registration is intentionally available (each new account can read the whole inventory). `MACHINARCHY_ENVIRONMENT` defaults to `production`; `.env.example` sets `development` for local work.
+Binaries carry their version (`machinarchy version`). Builds are reproducible:
+`-trimpath -buildvcs=false`, with version, commit and commit time from ldflags.
 
-Load the environment and start both application components together:
+## Run locally
 
 ```sh
-set -a
-. ./.env
-set +a
-mkdir -p data
-go run ./cmd/monolit
+cp .env.example .env            # set MACHINARCHY_OPERATOR_TOKEN (32+ chars)
+set -a; . ./.env; set +a
+mkdir -m 700 -p data
+go run ./cmd/monolit            # http://localhost:8080, API reference at /scalar
 ```
 
-SQLite migrations run automatically at startup. The database directory is created as needed. To run only the API, use `go run ./cmd/api`. To run the API and worker as separate local processes, use PostgreSQL and give the worker a distinct operations port, for example `MACHINARCHY_LISTEN_ADDR=:8081 go run ./cmd/controlmanager`. In a multi-container deployment, each service can use its own container port.
-
-`cmd/api` and `cmd/controlmanager` are separate deployable processes. The API owns application HTTP routes; the control-manager owns the outbox consumers and exposes only `/healthz`, `/healthz/live`, `/healthz/ready`, and `/metrics` for operations. For independent production scaling, deploy them separately against shared PostgreSQL. The monolith mode shares one database pool within the process.
-
-The service listens on `MACHINARCHY_LISTEN_ADDR` (default `:8080`). Open the interactive Scalar API reference at <http://localhost:8080/scalar>.
-
-Configure the CLI to use a running API, then query hosts:
+Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` for the first start to create the
+owner account (`admin`). Then, with the CLI:
 
 ```sh
+TOKEN=$(curl -s localhost:8080/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"..."}' | jq -r .token)
 go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
+printf '%s' "$TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
 go run ./cmd/machinarchy config set-context local --cluster local --user local
 go run ./cmd/machinarchy config use-context local
 go run ./cmd/machinarchy get hosts
 ```
 
-The CLI stores its context file under the user config directory by default. Use `--context` to select a context for one command, `--env` (or `-n`) to filter hosts by Machinarchy environment, and `-o json` or `-o yaml` for structured output. See the [CLI guide](docs/cli/README.md), [CLI command examples](docs/cli/example-cli.md), and [SSH host use case](docs/examples/example-usecases.md) for setup and usage.
+The [CLI guide](docs/cli/README.md) and [use cases](docs/examples/example-usecases.md)
+walk through Access Profiles, hosts, `run` and secrets.
 
-Build the default API container with `docker build -t machinarchy-api .`. Select another process with `docker build --build-arg MACHINARCHY_COMMAND=controlmanager -t machinarchy-controlmanager .`, `docker build --build-arg MACHINARCHY_COMMAND=monolit -t machinarchy-monolit .`, or `docker build --build-arg MACHINARCHY_COMMAND=machinarchy -t machinarchy-cli .`. Run server containers with the values from `.env` and mount a named volume at `/data` for SQLite persistence. The image runs as an unprivileged user.
-
-## Database schema
-
-The schema is one baseline per dialect (`internal/store/migrations/*/000001_baseline.up.sql`). While the project is in development, schema changes may be squashed into it again: a database created by an older migration chain is refused at startup with an error that says to recreate it (`rm data/machinarchy.db*`, or drop the PostgreSQL database).
-
-## API overview
-
-The interactive reference is rendered by Scalar. The generated API contract is available as [JSON](docs/swagger.json) or [YAML](docs/swagger.yaml); Scalar accepts the Swagger 2.0 document and upgrades it when rendering.
-
-| Area | Routes |
-| --- | --- |
-| Authentication | `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/logout` |
-| Current user | `GET /api/v1/me` |
-| Environments | `GET`, `POST /api/v1/environments`; `PUT`, `DELETE /api/v1/environments/{id}` |
-| Managed hosts | `GET`, `POST /api/v1/managed/hosts`; `GET`, `PUT`, `DELETE /api/v1/managed/hosts/{id}`; `PATCH /api/v1/managed/hosts/{id}/labels` |
-| Access Profiles | `GET`, `POST /api/v1/managed/access-profiles`; `GET`, `PUT`, `DELETE /api/v1/managed/access-profiles/{id}` |
-| Operations | `GET`, `POST /api/v1/managed/operations`; `POST /api/v1/managed/operations/preview`; `GET /api/v1/managed/operations/{id}`; `POST /api/v1/managed/operations/{id}/cancel` |
-| API tokens | `GET`, `POST /api/v1/tokens`; `DELETE /api/v1/tokens/{id}` |
-
-All accounts share one workspace. Errors use one JSON shape, `{"error": "...", "code": "..."}`, and lists return `{"items": [...], "nextCursor": "..."}`. Workspace owners can issue operator or reader API tokens. The plaintext is returned once; use an `Authorization: Bearer <token>` header and store it in a secret manager. Token details and examples are in the [security guide](docs/SECURITY.md#workspace-authorization-and-api-tokens).
-
-Human protected routes accept an `Authorization: Bearer <JWT>` header or the `auth_token` cookie returned by signup/login. API tokens are bearer-only and are not accepted as cookies. In Scalar, enter `Bearer <credential>` in the Authorization field.
-
-## Configuration
-
-Bootstrap settings use environment variables, a selected JSON file (`--config FILE`), and non-secret startup flags. Precedence is flags, environment, file, then defaults. The application does not load `.env` files itself. Encryption keys are accepted only through environment injection or protected key files, never command-line values or the JSON file. `.env.example` lists the available settings. Key requirements:
-
-| Variable | Purpose |
-| --- | --- |
-| `MACHINARCHY_OPERATOR_TOKEN` | JWT signing secret; required, at least 32 characters, no whitespace. |
-| `MACHINARCHY_ENCRYPTION_SECRET` / `_FILE` | External root key source for database-backed Secret Store envelope encryption; independent of the JWT secret and required in every environment. File permissions must be `0600` or stricter. |
-| `MACHINARCHY_ENCRYPTION_KEY_ID` / `_KEYRING_FILE` | Current external KEK identifier and optional protected JSON map of previous KEKs for decrypting older versions. |
-| `MACHINARCHY_ENVIRONMENT` | `development` or `production` (default). Production enforces secure cookies, explicit CORS origins and PostgreSQL `sslmode=verify-full`. |
-| `MACHINARCHY_SIGNUP_ENABLED` | Enables public account self-registration. Defaults to `false`. |
-| `MACHINARCHY_SHUTDOWN_TIMEOUT` | Total time to stop the HTTP server, background workers and the database after SIGTERM (5s–10m, default `25s`). Keep it below the orchestrator's grace period: Docker `stop_grace_period` (compose sets `30s`) or Kubernetes `terminationGracePeriodSeconds` (default 30s). |
-| `MACHINARCHY_LISTEN_ADDR` | HTTP bind address, default `:8080`. |
-| `MACHINARCHY_DATABASE_ENGINE` | `sqlite` (default) or `postgres`. |
-| `MACHINARCHY_DATABASE_PATH` | SQLite file path, default `./data/machinarchy.db`. |
-| `MACHINARCHY_DATABASE_URL` | PostgreSQL connection URL; production requires `sslmode=verify-full`. |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins; required in production. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP/HTTP collector endpoint. |
-
-Runtime configuration is global and stored as immutable database revisions. Owners manage it through `machinarchy runtime-config get|history|validate|publish|rollback|status`; restart-required settings cannot be changed in a live revision. Secret values are write-only: use `machinarchy secret create NAME --value-stdin` and `rotate ID --expected-version N --value-stdin`. For KEK rotation, set the new external key as current, retain the old key in the protected keyring, restart server processes, then run `machinarchy secret rewrap --old-key-id OLD_ID` until `remaining` is zero. Keep the old key until dependent database backups expire. The API returns metadata only; retirement prevents further resolution while retaining ciphertext for database backup/retention handling. Runtime configuration and secret endpoints are owner and human-session restricted.
-
-Production deployments should manage secrets through a secret manager, restrict the Scalar reference and Prometheus endpoint at the network layer if they are not intended to be public, and use durable storage for the SQLite file or PostgreSQL. Keep signup disabled except during controlled onboarding. Workspace scoping is implemented, while invitations, member removal, and durable audit events remain future work, and the PostgreSQL contract tests need their first verified run (`make test-postgres` or CI). See [the security assessment](docs/SECURITY.md) and [roadmap](docs/ROADMAP.md).
-
-## Operations
-
-- `GET /healthz` and `GET /healthz/live`: process liveness.
-- `GET /healthz/ready`: readiness, including the database check. The control-manager and monolith also check that the control-manager subscription loop is active.
-- `GET /metrics`: process and database pool metrics on all processes; the API and monolith also report HTTP request and SSH bulkhead metrics.
-- Structured logs use Go's `log/slog` JSON handler. HTTP paths are instrumented with OpenTelemetry; OTLP export can be configured through standard `OTEL_*` variables.
-
-See [operations](docs/operations.md) for probes, metrics, telemetry, secret handling, and deployment notes.
-
-## Development
-
-Install the Swaggo CLI to regenerate the checked-in API contract used by Scalar:
+With Docker: `docker compose up` (`docker-compose.yml`, PostgreSQL from
+`deployments/infra.docker-compose.yml`), or run an image directly:
 
 ```sh
-make api-docs
-make build
+make image-monolit IMAGE_TAG=dev
+docker run -p 8080:8080 -v machinarchy-data:/data --env-file .env machinarchy-monolit:dev
 ```
 
-Install the generator with `go install github.com/swaggo/swag/cmd/swag@v1.16.4` if it is not already on your `PATH`. Scalar's pinned browser bundle loads from jsDelivr, so the browser needs access to that CDN; mirror the bundle and update `internal/transport/http/scalar.go` for air-gapped deployments.
+## Test
 
-`make run-api`, `make run-controlmanager`, and `make run-monolit` load `.env` before launching their respective processes. `make lint`, `make vet`, and `make test` run golangci-lint, `go vet`, and `go test ./...` respectively. See [CONTRIBUTING.md](CONTRIBUTING.md) for the change workflow.
+```sh
+make test           # all tests
+make test-race      # with the race detector
+make coverage       # race + coverage.out, prints the total
+make test-postgres  # PostgreSQL contract suites (MACHINARCHY_TEST_POSTGRES_URL)
+make smoke          # CLI end to end against a fresh monolith
+make fuzz           # each fuzz target for FUZZTIME (default 30s)
+make lint vet       # golangci-lint (with gosec rules) and go vet
+make vuln gosec     # govulncheck and gosec
+```
+
+`test/e2e` builds the monolith and the real agent from `../machinarchy-agent`
+and runs them against an embedded NATS server: enrolment, a signed capability
+call, lease renewal, revocation, metrics and graceful shutdown. It is skipped
+when the agent checkout is missing, unless `MACHINARCHY_E2E_REQUIRED=1` (CI).
+
+## Configure
+
+Settings come from environment variables, a JSON file (`--config FILE`) and
+non-secret flags (flags > environment > file > defaults) and are validated at
+startup. Secrets are accepted only from the environment or `0600` files.
+`.env.example` lists everything; the most important:
+
+| Variable | Purpose |
+|---|---|
+| `MACHINARCHY_OPERATOR_TOKEN` | JWT signing secret (required, 32+ characters). |
+| `MACHINARCHY_ENCRYPTION_SECRET` / `_FILE` | Root key of the Secret Store. Keep it stable and backed up. |
+| `MACHINARCHY_ENVIRONMENT` | `production` (default: secure cookies, explicit CORS, verified DB TLS, TLS to NATS) or `development`. |
+| `MACHINARCHY_DATABASE_ENGINE`, `_PATH`, `_URL` | `sqlite` (default, `./data/machinarchy.db`) or `postgres`. |
+| `MACHINARCHY_LISTEN_ADDR` | Default `:8080`. |
+| `MACHINARCHY_SHUTDOWN_TIMEOUT` | Total graceful-shutdown budget, default 25s. |
+| `MACHINARCHY_EXECUTION_ENABLED`, `_ALLOWED_PROGRAMS` | Command execution is off by default. |
+| `MACHINARCHY_SSH_*` | SSH egress policy (deny by default). |
+| `MACHINARCHY_AGENT_GATEWAY_*` | Agent gateway (off unless `_NATS_URL` is set); see [operations](docs/operations.md#agent-gateway). |
+| `MACHINARCHY_SIGNUP_ENABLED` | Public sign-up, default `false`. |
+| `CORS_ALLOWED_ORIGINS` | Required in production. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional trace export. |
+
+Runtime settings (worker counts, timeouts, SSH limits) live in the database as
+immutable revisions: `machinarchy runtime-config get|publish|rollback`.
+
+## Deploy
+
+- Images: distroless, non-root, digest-pinned bases, `HEALTHCHECK` built in,
+  `/data` volume for SQLite. One image per process (`api`, `controlmanager`,
+  `monolit`) plus `cli`. Releases publish signed images to GHCR.
+- Single node: the monolith with SQLite on a volume.
+- Scaled: several API replicas and one or more Control Managers against
+  PostgreSQL (`sslmode=verify-full`).
+- Probes: `/healthz/live` (liveness) and `/healthz/ready` (readiness);
+  `/metrics` for Prometheus. Set the orchestrator grace period above
+  `MACHINARCHY_SHUTDOWN_TIMEOUT`.
+
+See [operations](docs/operations.md) for probes, metrics, alerts and timeouts,
+the [runbook](docs/runbook.md) for failure modes, and [security](docs/SECURITY.md).
+
+## API
+
+The OpenAPI document is generated from handler annotations (`make api-docs`)
+and served at `/openapi.json`; a test fails when a route is missing from it.
+Errors are `{"error": "...", "code": "..."}`, lists are
+`{"items": [...], "nextCursor": "..."}`.
+
+| Area | Routes |
+|---|---|
+| Auth | `POST /api/auth/signup`, `/login`, `/logout`; `GET /api/v1/me` |
+| Managed hosts | `/api/v1/managed/hosts[/{id}[/labels]]` |
+| Access Profiles | `/api/v1/managed/access-profiles[/{id}]` |
+| Operations | `/api/v1/managed/operations[/preview|/{id}[/cancel]]` |
+| Agents | `/api/v1/agents`, `/controller-key`, `/{id}/invoke`, `/{id}/revoke` |
+| Workspace | `/api/v1/environments`, `/tokens`, `/members`, `/audit` |
+| Owner only | `/api/v1/runtime-config`, `/api/v1/secrets` |
 
 ## License
 
-Machinarchy is distributed under the [MIT License](LICENSE).
+[MIT](LICENSE).
