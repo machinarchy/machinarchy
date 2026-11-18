@@ -412,6 +412,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		watchCtx, stopWatching := context.WithCancel(context.Background())
 		go w.watchCancellation(watchCtx, key, commandCancel)
 		result, runErr := w.deps.Connector.Execute(commandCtx, host, revision, string(op.ID), op.Spec.Run.Argv)
+		timedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
 		commandCancel()
 		stopWatching()
 		if ctx.Err() != nil {
@@ -427,7 +428,11 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		stored := &resource.TargetResult{Stdout: result.Stdout, Stderr: result.Stderr}
 		code := result.ExitCode
 		stored.ExitCode = &code
-		if runErr != nil {
+		switch {
+		case runErr != nil && timedOut:
+			state = resource.TargetTimedOut
+			stored = &resource.TargetResult{ErrorClass: "timeout"}
+		case runErr != nil:
 			state = resource.TargetFailed
 			stored = &resource.TargetResult{ErrorClass: "remote_execution_failed"}
 		}
