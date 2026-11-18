@@ -72,7 +72,9 @@ var matrix = map[string]access{
 	"POST /api/v1/managed/access-profiles": ownerOnly, "PUT /api/v1/managed/access-profiles/{id}": ownerOnly,
 	"DELETE /api/v1/managed/access-profiles/{id}": ownerOnly,
 	"GET /api/v1/managed/operations":              readers, "GET /api/v1/managed/operations/{id}": readers,
-	"POST /api/v1/managed/operations": writers, "POST /api/v1/managed/operations/preview": readers,
+	// Output can carry secrets: only callers allowed to execute runs (AUDIT S-04).
+	"GET /api/v1/managed/operations/{id}/targets/{hostId}/output": writers,
+	"POST /api/v1/managed/operations":                             writers, "POST /api/v1/managed/operations/preview": readers,
 	"POST /api/v1/managed/operations/{id}/cancel": writers,
 }
 
@@ -273,7 +275,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 				path = strings.Replace(path, "{revision}", id, 1)
 			}
 		}
-		return strings.NewReplacer("{id}", "missing", "{revision}", "1").Replace(path)
+		return strings.NewReplacer("{id}", "missing", "{revision}", "1", "{hostId}", host.Metadata.ID).Replace(path)
 	}
 	// Bodies that pass validation where it is cheap, so a 400 cannot mask a
 	// missing authorization check.

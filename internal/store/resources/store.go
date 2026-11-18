@@ -794,6 +794,9 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 			return nil, fmt.Errorf("stored Operation target does not match immutable spec")
 		}
 		target := resource.OperationTarget{Spec: spec, State: resource.TargetState(targetState), Launch: launch, Live: live}
+		if live != nil {
+			target.Progress = live.Summary()
+		}
 		if exitCode.Valid || output != "" || errorClass != "" {
 			target.Result = &resource.TargetResult{Output: output, ErrorClass: errorClass}
 			var streams storedStreams

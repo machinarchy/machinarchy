@@ -94,9 +94,13 @@ type OperationTarget struct {
 	State  TargetState         `json:"state"`
 	Result *TargetResult       `json:"result,omitempty"`
 	// Launch and Live are set for detached runs: how to reach the command,
-	// and its progress while it runs.
+	// and its progress while it runs. Live holds captured output; it is
+	// stored encrypted on its own and never serialized with the target (the
+	// output endpoint serves it to callers allowed to see output).
 	Launch *LaunchHandle `json:"launch,omitempty"`
-	Live   *LiveOutput   `json:"live,omitempty"`
+	Live   *LiveOutput   `json:"-"`
+	// Progress summarizes Live for API readers: sizes and timing, no output.
+	Progress *TargetProgressSummary `json:"progress,omitempty"`
 }
 
 type OperationStatus struct {
@@ -388,6 +392,9 @@ func TargetProgress(state TargetState) int {
 
 // ValidTargetState reports whether state is a known target state.
 func ValidTargetState(state TargetState) bool { return validTargetState(state) }
+
+// SanitizeOutput is sanitizeOutput for callers outside the package.
+func SanitizeOutput(value string, limit int) string { return sanitizeOutput(value, limit) }
 
 // sanitizeOutput bounds command output and removes control characters except
 // newline and tab, so output keeps its lines but cannot carry terminal escape

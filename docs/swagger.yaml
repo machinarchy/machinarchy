@@ -406,6 +406,10 @@ definitions:
         $ref: '#/definitions/resource.SecretReference'
       enabled:
         type: boolean
+      execution:
+        allOf:
+        - $ref: '#/definitions/resource.ExecutionSettings'
+        description: Execution configures detached runs on the profile's hosts.
       hostCertificateAuthorities:
         items:
           type: string
@@ -473,6 +477,44 @@ definitions:
     x-enum-varnames:
     - PresenceManaged
     - PresenceAbsent
+  resource.ExecutionSettings:
+    properties:
+      maxOutputFileBytes:
+        description: |-
+          MaxOutputFileBytes caps each output file on the host (ulimit -f);
+          0 means 100 MiB.
+        type: integer
+      stateRoot:
+        description: |-
+          StateRoot holds per-target directories on the host; the default is
+          $HOME/.local/state/machinarchy of the login user.
+        type: string
+      supervisor:
+        allOf:
+        - $ref: '#/definitions/resource.ExecutionSupervisor'
+        description: |-
+          Supervisor: auto (default; systemd-run when usable, else setsid),
+          systemd, setsid, or attached (detached runs are refused).
+    type: object
+  resource.ExecutionSupervisor:
+    enum:
+    - auto
+    - systemd
+    - setsid
+    - attached
+    type: string
+    x-enum-comments:
+      SupervisorAttached: no detached runs
+    x-enum-descriptions:
+    - ""
+    - ""
+    - ""
+    - no detached runs
+    x-enum-varnames:
+    - SupervisorAuto
+    - SupervisorSystemd
+    - SupervisorSetsid
+    - SupervisorAttached
   resource.Host:
     properties:
       metadata:
@@ -599,6 +641,39 @@ definitions:
           type: string
         type: array
     type: object
+  resource.LaunchHandle:
+    properties:
+      attempt:
+        description: |-
+          Attempt counts launches of this target (1 for the first). A launch
+          proven never to have started is retried up to MaxLaunchAttempts.
+        type: integer
+      deadline:
+        description: |-
+          Deadline is when the command must have finished: launch time plus
+          the run's timeout, or the Operation deadline if earlier.
+        type: string
+      endpoint:
+        description: |-
+          Endpoint is the Host endpoint at launch; a poll of a moved Host is
+          treated as unreachable rather than sent to another machine.
+        type: string
+      launchedAt:
+        type: string
+      mode:
+        description: |-
+          Mode is systemd or setsid; empty means the launch reply never arrived
+          (the connection failed mid-launch), so the poller must find out
+          whether the command started.
+        type: string
+      pid:
+        type: integer
+      root:
+        description: Root is the state root used at launch ("" = the default).
+        type: string
+      unit:
+        type: string
+    type: object
   resource.ObservedHostKey:
     properties:
       algorithm:
@@ -606,6 +681,11 @@ definitions:
       fingerprint:
         type: string
       firstSeenAt:
+        type: string
+      lastSeenAt:
+        description: |-
+          LastSeenAt is when a scan last saw the key. The reconciler reuses a
+          recent scan instead of connecting again (see HostReconciler).
         type: string
     type: object
   resource.Operation:
@@ -710,6 +790,19 @@ definitions:
     type: object
   resource.OperationTarget:
     properties:
+      launch:
+        allOf:
+        - $ref: '#/definitions/resource.LaunchHandle'
+        description: |-
+          Launch and Live are set for detached runs: how to reach the command,
+          and its progress while it runs. Live holds captured output; it is
+          stored encrypted on its own and never serialized with the target (the
+          output endpoint serves it to callers allowed to see output).
+      progress:
+        allOf:
+        - $ref: '#/definitions/resource.TargetProgressSummary'
+        description: 'Progress summarizes Live for API readers: sizes and timing,
+          no output.'
       result:
         $ref: '#/definitions/resource.TargetResult'
       spec:
@@ -730,6 +823,14 @@ definitions:
       hostId:
         type: string
     type: object
+  resource.OutputStream:
+    enum:
+    - stdout
+    - stderr
+    type: string
+    x-enum-varnames:
+    - StreamStdout
+    - StreamStderr
   resource.Page-resource_AccessProfile:
     properties:
       items:
@@ -765,6 +866,13 @@ definitions:
         type: array
       concurrency:
         type: integer
+      detach:
+        description: |-
+          Detach runs the command under a supervisor on each host and ends the
+          SSH session right after the launch (AUDIT/10b §1). The timeout may
+          then be up to MaxDetachedTimeoutSeconds; attached runs keep
+          MaxAttachedTimeoutSeconds.
+        type: boolean
       timeoutSeconds:
         type: integer
     type: object
@@ -773,6 +881,44 @@ definitions:
       id:
         type: string
       version:
+        type: integer
+    type: object
+  resource.TargetOutput:
+    properties:
+      bytes:
+        description: |-
+          Bytes is the stream's full size; Truncated means Text omits part of it
+          (a head and a tail are kept).
+        type: integer
+      hostId:
+        type: string
+      live:
+        description: Live is true while the command runs and Text can still grow.
+        type: boolean
+      operationId:
+        type: string
+      state:
+        $ref: '#/definitions/resource.TargetState'
+      stream:
+        $ref: '#/definitions/resource.OutputStream'
+      text:
+        type: string
+      truncated:
+        type: boolean
+    type: object
+  resource.TargetProgressSummary:
+    properties:
+      cancelReason:
+        type: string
+      cancelSentAt:
+        type: string
+      lastContactAt:
+        type: string
+      polls:
+        type: integer
+      stderrBytes:
+        type: integer
+      stdoutBytes:
         type: integer
     type: object
   resource.TargetResult:
@@ -785,11 +931,22 @@ definitions:
         type: string
       stderr:
         type: string
+      stderrBytes:
+        type: integer
       stdout:
         type: string
+      stdoutBytes:
+        description: |-
+          StdoutBytes and StderrBytes are the streams' full sizes on the host;
+          Truncated means the stored text omits part of them (detached runs keep
+          a head and a tail of each stream).
+        type: integer
+      truncated:
+        type: boolean
     type: object
   resource.TargetState:
     enum:
+    - Lost
     - Pending
     - Running
     - Succeeded
@@ -799,6 +956,7 @@ definitions:
     - Interrupted
     type: string
     x-enum-varnames:
+    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -2064,6 +2222,55 @@ paths:
       security:
       - BearerAuth: []
       summary: Request cancellation of an operation
+      tags:
+      - Managed
+  /api/v1/managed/operations/{id}/targets/{hostId}/output:
+    get:
+      description: 'One stream of one target''s output: live while a detached command
+        runs (poll it to follow), final afterwards. Long output keeps its first and
+        last 15 KiB; bytes is the full size. Only callers allowed to execute runs
+        may read output.'
+      parameters:
+      - description: Operation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Target Host ID
+        in: path
+        name: hostId
+        required: true
+        type: string
+      - description: stdout (default) or stderr
+        in: query
+        name: stream
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.TargetOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get one target's output
       tags:
       - Managed
   /api/v1/managed/operations/preview:

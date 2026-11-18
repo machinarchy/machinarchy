@@ -242,9 +242,37 @@ func redactOperation(op *resource.Operation) *resource.Operation {
 			result.Output, result.Stdout, result.Stderr = "", "", ""
 			target.Result = &result
 		}
+		target.Live = nil
 		redacted.Status.Targets[i] = target
 	}
 	return &redacted
+}
+
+// TargetOutput returns one output stream of one Operation target: live
+// while a detached command runs, final afterwards. Output can carry
+// secrets, so only principals allowed to execute runs may read it, as with
+// GetOperation's unredacted view (AUDIT S-04).
+func (s *ManagedResourceService) TargetOutput(ctx context.Context, principal domain.Principal, id, hostID resource.ID, stream resource.OutputStream) (*resource.TargetOutput, error) {
+	if err := authorizeRead(principal, domain.PermissionOperationsRead); err != nil {
+		return nil, err
+	}
+	if !principal.Role.Allows(domain.PermissionRunsExecute) {
+		return nil, domain.ErrPermissionDenied
+	}
+	if stream != resource.StreamStdout && stream != resource.StreamStderr {
+		return nil, fmt.Errorf("%w: stream must be stdout or stderr", domain.ErrInvalidInput)
+	}
+	op, err := s.operations.GetOperation(ctx, principal.WorkspaceID, id)
+	if err != nil {
+		return nil, err
+	}
+	for _, target := range op.Status.Targets {
+		if target.Spec.HostID == hostID {
+			output := target.OutputOf(op.ID, stream)
+			return &output, nil
+		}
+	}
+	return nil, resource.ErrOperationNotFound
 }
 
 func (s *ManagedResourceService) GetHost(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Host, error) {

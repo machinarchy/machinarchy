@@ -1939,6 +1939,77 @@
                 }
             }
         },
+        "/api/v1/managed/operations/{id}/targets/{hostId}/output": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "One stream of one target's output: live while a detached command runs (poll it to follow), final afterwards. Long output keeps its first and last 15 KiB; bytes is the full size. Only callers allowed to execute runs may read output.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Get one target's output",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Operation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Target Host ID",
+                        "name": "hostId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "stdout (default) or stderr",
+                        "name": "stream",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/resource.TargetOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/me": {
             "get": {
                 "security": [
@@ -3742,6 +3813,14 @@
                 "enabled": {
                     "type": "boolean"
                 },
+                "execution": {
+                    "description": "Execution configures detached runs on the profile's hosts.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.ExecutionSettings"
+                        }
+                    ]
+                },
                 "hostCertificateAuthorities": {
                     "type": "array",
                     "items": {
@@ -3837,6 +3916,51 @@
             "x-enum-varnames": [
                 "PresenceManaged",
                 "PresenceAbsent"
+            ]
+        },
+        "resource.ExecutionSettings": {
+            "type": "object",
+            "properties": {
+                "maxOutputFileBytes": {
+                    "description": "MaxOutputFileBytes caps each output file on the host (ulimit -f);\n0 means 100 MiB.",
+                    "type": "integer"
+                },
+                "stateRoot": {
+                    "description": "StateRoot holds per-target directories on the host; the default is\n$HOME/.local/state/machinarchy of the login user.",
+                    "type": "string"
+                },
+                "supervisor": {
+                    "description": "Supervisor: auto (default; systemd-run when usable, else setsid),\nsystemd, setsid, or attached (detached runs are refused).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.ExecutionSupervisor"
+                        }
+                    ]
+                }
+            }
+        },
+        "resource.ExecutionSupervisor": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "systemd",
+                "setsid",
+                "attached"
+            ],
+            "x-enum-comments": {
+                "SupervisorAttached": "no detached runs"
+            },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "no detached runs"
+            ],
+            "x-enum-varnames": [
+                "SupervisorAuto",
+                "SupervisorSystemd",
+                "SupervisorSetsid",
+                "SupervisorAttached"
             ]
         },
         "resource.Host": {
@@ -4017,6 +4141,40 @@
                 }
             }
         },
+        "resource.LaunchHandle": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "description": "Attempt counts launches of this target (1 for the first). A launch\nproven never to have started is retried up to MaxLaunchAttempts.",
+                    "type": "integer"
+                },
+                "deadline": {
+                    "description": "Deadline is when the command must have finished: launch time plus\nthe run's timeout, or the Operation deadline if earlier.",
+                    "type": "string"
+                },
+                "endpoint": {
+                    "description": "Endpoint is the Host endpoint at launch; a poll of a moved Host is\ntreated as unreachable rather than sent to another machine.",
+                    "type": "string"
+                },
+                "launchedAt": {
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode is systemd or setsid; empty means the launch reply never arrived\n(the connection failed mid-launch), so the poller must find out\nwhether the command started.",
+                    "type": "string"
+                },
+                "pid": {
+                    "type": "integer"
+                },
+                "root": {
+                    "description": "Root is the state root used at launch (\"\" = the default).",
+                    "type": "string"
+                },
+                "unit": {
+                    "type": "string"
+                }
+            }
+        },
         "resource.ObservedHostKey": {
             "type": "object",
             "properties": {
@@ -4027,6 +4185,10 @@
                     "type": "string"
                 },
                 "firstSeenAt": {
+                    "type": "string"
+                },
+                "lastSeenAt": {
+                    "description": "LastSeenAt is when a scan last saw the key. The reconciler reuses a\nrecent scan instead of connecting again (see HostReconciler).",
                     "type": "string"
                 }
             }
@@ -4178,6 +4340,22 @@
         "resource.OperationTarget": {
             "type": "object",
             "properties": {
+                "launch": {
+                    "description": "Launch and Live are set for detached runs: how to reach the command,\nand its progress while it runs. Live holds captured output; it is\nstored encrypted on its own and never serialized with the target (the\noutput endpoint serves it to callers allowed to see output).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.LaunchHandle"
+                        }
+                    ]
+                },
+                "progress": {
+                    "description": "Progress summarizes Live for API readers: sizes and timing, no output.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.TargetProgressSummary"
+                        }
+                    ]
+                },
                 "result": {
                     "$ref": "#/definitions/resource.TargetResult"
                 },
@@ -4208,6 +4386,17 @@
                     "type": "string"
                 }
             }
+        },
+        "resource.OutputStream": {
+            "type": "string",
+            "enum": [
+                "stdout",
+                "stderr"
+            ],
+            "x-enum-varnames": [
+                "StreamStdout",
+                "StreamStderr"
+            ]
         },
         "resource.Page-resource_AccessProfile": {
             "type": "object",
@@ -4263,6 +4452,10 @@
                 "concurrency": {
                     "type": "integer"
                 },
+                "detach": {
+                    "description": "Detach runs the command under a supervisor on each host and ends the\nSSH session right after the launch (AUDIT/10b §1). The timeout may\nthen be up to MaxDetachedTimeoutSeconds; attached runs keep\nMaxAttachedTimeoutSeconds.",
+                    "type": "boolean"
+                },
                 "timeoutSeconds": {
                     "type": "integer"
                 }
@@ -4275,6 +4468,60 @@
                     "type": "string"
                 },
                 "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "resource.TargetOutput": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "description": "Bytes is the stream's full size; Truncated means Text omits part of it\n(a head and a tail are kept).",
+                    "type": "integer"
+                },
+                "hostId": {
+                    "type": "string"
+                },
+                "live": {
+                    "description": "Live is true while the command runs and Text can still grow.",
+                    "type": "boolean"
+                },
+                "operationId": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/resource.TargetState"
+                },
+                "stream": {
+                    "$ref": "#/definitions/resource.OutputStream"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "resource.TargetProgressSummary": {
+            "type": "object",
+            "properties": {
+                "cancelReason": {
+                    "type": "string"
+                },
+                "cancelSentAt": {
+                    "type": "string"
+                },
+                "lastContactAt": {
+                    "type": "string"
+                },
+                "polls": {
+                    "type": "integer"
+                },
+                "stderrBytes": {
+                    "type": "integer"
+                },
+                "stdoutBytes": {
                     "type": "integer"
                 }
             }
@@ -4294,14 +4541,25 @@
                 "stderr": {
                     "type": "string"
                 },
+                "stderrBytes": {
+                    "type": "integer"
+                },
                 "stdout": {
                     "type": "string"
+                },
+                "stdoutBytes": {
+                    "description": "StdoutBytes and StderrBytes are the streams' full sizes on the host;\nTruncated means the stored text omits part of them (detached runs keep\na head and a tail of each stream).",
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },
         "resource.TargetState": {
             "type": "string",
             "enum": [
+                "Lost",
                 "Pending",
                 "Running",
                 "Succeeded",
@@ -4311,6 +4569,7 @@
                 "Interrupted"
             ],
             "x-enum-varnames": [
+                "TargetLost",
                 "TargetPending",
                 "TargetRunning",
                 "TargetSucceeded",

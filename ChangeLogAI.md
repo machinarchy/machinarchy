@@ -1,5 +1,24 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: target output endpoint (branch audit/detached-ssh)
+
+- `GET /api/v1/managed/operations/{id}/targets/{hostId}/output?stream=stdout|stderr` returns `resource.TargetOutput`:
+  - live while a detached command runs, final afterwards;
+  - `text`, `bytes` (the full size), `truncated` (a 15 KiB head and tail are kept) and `live`;
+  - escape sequences are stripped.
+  - Access: only callers allowed to execute runs (AUDIT S-04); readers get 403. Listed in the authorization matrix as `writers`.
+- The live capture is never part of the Operation JSON (`OperationTarget.Live` is `json:"-"`; the store encodes it separately). Readers instead see `progress` (stream sizes, last contact, poll count, cancel reason, no output). `redactOperation` also drops the capture.
+- `RunSpec.detach` is accepted by the submit endpoint, with timeouts up to 24 h when set.
+- OpenAPI regenerated (`make api-docs`).
+
+### Verification
+
+- New tests:
+  - `TestDetachedSubmissionAndOutputAccess`: an attached 2 h run is refused and a detached one accepted; an operator reads output, a reader gets 403; a bad stream gives 400 and an unknown target 404;
+  - `TestOperationJSONOmitsLiveOutput`;
+  - `TestOutputOfRunningAndFinishedTargets`.
+- `go test ./internal/bootstrap/` (authorization matrix, including the new route), `./internal/service/` and `./internal/transport/...`: pass. golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: detached launcher and poller (branch audit/detached-ssh)
 
 - Launcher (`internal/operationworker/detached.go`):

@@ -91,6 +91,7 @@ func RegisterRoutes(group *echo.Group, handler *Handler) {
 	group.POST("/operations/preview", handler.previewOperation)
 	group.GET("/operations/:id", handler.getOperation)
 	group.POST("/operations/:id/cancel", handler.cancelOperation)
+	group.GET("/operations/:id/targets/:hostId/output", handler.targetOutput)
 }
 
 // call runs one use case: it resolves the principal, lets parse read the
@@ -506,6 +507,35 @@ func (h *Handler) getOperation(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
 		return h.service.GetOperation(ctx, p, id)
+	})
+}
+
+// @Summary Get one target's output
+// @Description One stream of one target's output: live while a detached command runs (poll it to follow), final afterwards. Long output keeps its first and last 15 KiB; bytes is the full size. Only callers allowed to execute runs may read output.
+// @Tags Managed
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Operation ID"
+// @Param hostId path string true "Target Host ID"
+// @Param stream query string false "stdout (default) or stderr"
+// @Success 200 {object} resource.TargetOutput
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/managed/operations/{id}/targets/{hostId}/output [get]
+func (h *Handler) targetOutput(c echo.Context) error {
+	var id, hostID resource.ID
+	stream := resource.OutputStream(c.QueryParam("stream"))
+	if stream == "" {
+		stream = resource.StreamStdout
+	}
+	parse := all(pathID(c, &id), func() (err error) {
+		hostID, err = resource.ParseResourceID(c.Param("hostId"))
+		return err
+	})
+	return call(c, http.StatusOK, parse, func(ctx context.Context, p domain.Principal) (*resource.TargetOutput, error) {
+		return h.service.TargetOutput(ctx, p, id, hostID, stream)
 	})
 }
 

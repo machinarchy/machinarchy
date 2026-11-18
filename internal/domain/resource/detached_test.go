@@ -156,3 +156,26 @@ func TestExecutionSettingsValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOutputOfRunningAndFinishedTargets(t *testing.T) {
+	op, _ := NewResourceID()
+	running := OperationTarget{State: TargetRunning, Live: &LiveOutput{}}
+	running.Live.Stdout.Apply(0, 6, []byte("hello\n"))
+	running.Live.Stderr.Apply(0, 4, []byte("\x1b[1m"))
+	out := running.OutputOf(op, StreamStdout)
+	if !out.Live || out.Text != "hello\n" || out.Bytes != 6 || out.Truncated {
+		t.Fatalf("running stdout = %+v", out)
+	}
+	if errOut := running.OutputOf(op, StreamStderr); strings.Contains(errOut.Text, "\x1b") {
+		t.Fatalf("an escape sequence reached the output view: %q", errOut.Text)
+	}
+	code := 0
+	done := OperationTarget{State: TargetSucceeded, Result: &TargetResult{ExitCode: &code, Stdout: "a\n", Stderr: "b\n", StdoutBytes: 90000, StderrBytes: 2, Truncated: true}}
+	if out := done.OutputOf(op, StreamStdout); out.Live || out.Text != "a\n" || out.Bytes != 90000 || !out.Truncated {
+		t.Fatalf("finished stdout = %+v", out)
+	}
+	legacy := OperationTarget{State: TargetSucceeded, Result: &TargetResult{Output: "combined"}}
+	if out := legacy.OutputOf(op, StreamStdout); out.Text != "combined" || out.Bytes != 8 {
+		t.Fatalf("legacy output = %+v", out)
+	}
+}

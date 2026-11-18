@@ -201,3 +201,72 @@ func (l *LiveOutput) Result(exitCode *int, errorClass string) *TargetResult {
 	return &TargetResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderr, ErrorClass: errorClass,
 		StdoutBytes: l.Stdout.Size, StderrBytes: l.Stderr.Size, Truncated: stdoutOmitted > 0 || stderrOmitted > 0}
 }
+
+// TargetProgressSummary is what any Operation reader may see of a running
+// detached target: no output, only sizes and timing.
+type TargetProgressSummary struct {
+	StdoutBytes   int64      `json:"stdoutBytes"`
+	StderrBytes   int64      `json:"stderrBytes"`
+	LastContactAt *time.Time `json:"lastContactAt,omitempty"`
+	Polls         int        `json:"polls"`
+	CancelSentAt  *time.Time `json:"cancelSentAt,omitempty"`
+	CancelReason  string     `json:"cancelReason,omitempty"`
+}
+
+// Summary returns the progress summary of l.
+func (l *LiveOutput) Summary() *TargetProgressSummary {
+	return &TargetProgressSummary{StdoutBytes: l.Stdout.Size, StderrBytes: l.Stderr.Size, LastContactAt: l.LastContactAt,
+		Polls: l.Polls, CancelSentAt: l.CancelSentAt, CancelReason: l.CancelReason}
+}
+
+// OutputStream names a target output stream.
+type OutputStream string
+
+const (
+	StreamStdout OutputStream = "stdout"
+	StreamStderr OutputStream = "stderr"
+)
+
+// TargetOutput is one stream of one target's output, live while the target
+// runs detached, final afterwards.
+type TargetOutput struct {
+	OperationID ID           `json:"operationId"`
+	HostID      ID           `json:"hostId"`
+	Stream      OutputStream `json:"stream"`
+	State       TargetState  `json:"state"`
+	// Live is true while the command runs and Text can still grow.
+	Live bool   `json:"live"`
+	Text string `json:"text"`
+	// Bytes is the stream's full size; Truncated means Text omits part of it
+	// (a head and a tail are kept).
+	Bytes     int64 `json:"bytes"`
+	Truncated bool  `json:"truncated"`
+}
+
+// OutputOf returns one stream of target's output.
+func (target OperationTarget) OutputOf(operationID ID, stream OutputStream) TargetOutput {
+	out := TargetOutput{OperationID: operationID, HostID: target.Spec.HostID, Stream: stream, State: target.State}
+	switch {
+	case target.Live != nil && target.State == TargetRunning:
+		capture := &target.Live.Stdout
+		if stream == StreamStderr {
+			capture = &target.Live.Stderr
+		}
+		text, omitted := capture.Render()
+		out.Live, out.Text, out.Bytes, out.Truncated = true, sanitizeOutput(text, MaxTargetOutputBytes), capture.Size, omitted > 0
+	case target.Result != nil:
+		result := target.Result
+		out.Text, out.Bytes, out.Truncated = result.Stdout, result.StdoutBytes, result.Truncated
+		if stream == StreamStderr {
+			out.Text, out.Bytes = result.Stderr, result.StderrBytes
+		} else if result.Stdout == "" && result.Output != "" {
+			out.Text = result.Output // an older combined result
+		}
+		if out.Bytes == 0 {
+			out.Bytes = int64(len(out.Text))
+		}
+	case target.State == TargetRunning:
+		out.Live = true // attached, or not polled yet
+	}
+	return out
+}
