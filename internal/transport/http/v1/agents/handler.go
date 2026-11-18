@@ -102,18 +102,24 @@ type invokeRequest struct {
 
 // invoke godoc
 // @Summary Run a capability on an agent and wait for its result
+// @Description 200 means the agent answered. The body is the agent's signed result: check its `status`.
+// @Description `succeeded` carries `output`. `rejected` (with `code`, for example `capability_unavailable`)
+// @Description and `failed` are the agent's own answers and also return 200.
+// @Description HTTP errors mean there was no answer: 503 when this process runs no gateway or the agent has no live lease,
+// @Description 504 when the agent did not answer within `timeoutSeconds` (default 15, at most 20).
 // @Tags Agents
 // @Accept json
 // @Produce json
 // @Security BearerAuth
 // @Param id path string true "Agent ID"
 // @Param request body invokeRequest true "Capability call"
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} map[string]interface{} "The agent's result; see status"
 // @Failure 400 {object} httperr.Body
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
+// @Failure 504 {object} httperr.Body
 // @Router /api/v1/agents/{id}/invoke [post]
 func (h *Handler) invoke(c echo.Context) error {
 	if _, ok := middleware.Principal(c); !ok {

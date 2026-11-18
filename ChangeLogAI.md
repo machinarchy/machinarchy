@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 11: document invoke results (branch audit/http-hardening)
+
+- `internal/transport/http/v1/agents/handler.go`: the OpenAPI description of `POST /api/v1/agents/{id}/invoke` now says that 200 means the agent answered and the body's `status` must be checked. `rejected` and `failed` are agent answers and return 200; 503 and 504 mean there was no answer. 504 is now listed. Behaviour is unchanged (decision for AUDIT/09 F9-05: keep 200, document it).
+- `docs/swagger.json` and `docs/swagger.yaml` regenerated with swag v1.16.4; only the invoke entry changed.
+
+### Verification
+
+- `make api-docs`; `go test ./internal/transport/http/v1/` (route-coverage test): pass. golangci-lint on the agents handler: 0 issues.
+
 ## 2026-11-18 — Audit Phase 11: remove unreachable code (branch audit/http-hardening)
 
 Removed everything `deadcode -test ./...` reported as unreachable from any program or test (AUDIT/09 F9-04 and §1.3):
