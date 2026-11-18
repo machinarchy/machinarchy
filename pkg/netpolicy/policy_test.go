@@ -240,9 +240,8 @@ func TestDialContextDialsTheValidatedAddressOnly(t *testing.T) {
 		if _, err := policy.DialContext(context.Background(), "tcp", net.JoinHostPort("127.0.0.1", port)); !errors.Is(err, domain.ErrTargetNotAllowed) {
 			t.Fatalf("literal loopback error = %v, want ErrTargetNotAllowed", err)
 		}
-		time.Sleep(50 * time.Millisecond)
-		if accepted.Load() != 0 {
-			t.Fatalf("the listener saw %d connections; a denied target must never be dialed", accepted.Load())
+		if got := sentinelAccepted(t, port, accepted); got != 1 {
+			t.Fatalf("the listener saw %d connections besides the sentinel; a denied target must never be dialed", got-1)
 		}
 	})
 	t.Run("port must be explicitly allowed before DNS resolution", func(t *testing.T) {
@@ -290,4 +289,22 @@ func TestDialContextDialsTheValidatedAddressOnly(t *testing.T) {
 			t.Errorf("missing port error = %v, want ErrInvalidInput", err)
 		}
 	})
+}
+
+// sentinelAccepted proves that no earlier connection reached the listener:
+// it connects once itself and waits for that connection to be accepted.
+// Accepts happen in order, so a count above 1 means something else
+// connected first.
+func sentinelAccepted(t *testing.T, port string, accepted *atomic.Int32) int32 {
+	t.Helper()
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for accepted.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond) // poll interval of a bounded wait
+	}
+	return accepted.Load()
 }

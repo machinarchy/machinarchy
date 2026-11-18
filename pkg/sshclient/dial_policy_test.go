@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,9 +49,8 @@ func TestTestConnectionRefusesLoopbackByDefault(t *testing.T) {
 	if !errors.Is(err, domain.ErrTargetNotAllowed) {
 		t.Fatalf("TestConnection() error = %v, want ErrTargetNotAllowed", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if accepted.Load() != 0 {
-		t.Fatalf("listener saw %d connections; the default policy must stop the dial", accepted.Load())
+	if got := sentinelAccepted(t, strconv.Itoa(port), accepted); got != 1 {
+		t.Fatalf("listener saw %d connections besides the sentinel; the default policy must stop the dial", got-1)
 	}
 }
 
@@ -68,4 +68,22 @@ func TestTestConnectionUsesInjectedDialer(t *testing.T) {
 	if accepted.Load() != 1 {
 		t.Fatalf("listener saw %d connections, want 1", accepted.Load())
 	}
+}
+
+// sentinelAccepted proves that no earlier connection reached the listener:
+// it connects once itself and waits for that connection to be accepted.
+// Accepts happen in order, so a count above 1 means something else
+// connected first.
+func sentinelAccepted(t *testing.T, port string, accepted *atomic.Int32) int32 {
+	t.Helper()
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for accepted.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond) // poll interval of a bounded wait
+	}
+	return accepted.Load()
 }

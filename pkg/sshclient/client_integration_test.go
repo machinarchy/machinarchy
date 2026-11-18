@@ -140,17 +140,23 @@ func TestSSHPrivateKeyAuthentication(t *testing.T) {
 			t.Fatalf("TestConnection() error = %v", err)
 		}
 	})
+	// Decrypting a passphrase-protected key runs bcrypt-pbkdf locally: about
+	// 0.1 s normally, 1.3 s under -race, and far more when shuffled parallel
+	// runs share the CPU. That cost is not network time, so these subtests get
+	// a budget sized for it (AUDIT/03 Q-25). Production never decrypts keys
+	// with a passphrase: the connector does not set one.
+	const decryptBudget = 60 * time.Second
 	t.Run("encrypted key with passphrase", func(t *testing.T) {
 		privatePEM, authorized := sshtest.NewClientKey(t, "s3cret passphrase")
 		server := sshtest.Start(t, sshtest.Options{AuthorizedKeys: []ssh.PublicKey{authorized}})
-		if err := TestConnection(timeout(t, 5*time.Second), keyParams(server, privatePEM, "s3cret passphrase")); err != nil {
+		if err := TestConnection(timeout(t, decryptBudget), keyParams(server, privatePEM, "s3cret passphrase")); err != nil {
 			t.Fatalf("TestConnection() error = %v", err)
 		}
 	})
 	t.Run("wrong passphrase is rejected locally without contacting the host", func(t *testing.T) {
 		privatePEM, authorized := sshtest.NewClientKey(t, "s3cret passphrase")
 		server := sshtest.Start(t, sshtest.Options{AuthorizedKeys: []ssh.PublicKey{authorized}})
-		err := TestConnection(timeout(t, 5*time.Second), keyParams(server, privatePEM, "wrong"))
+		err := TestConnection(timeout(t, decryptBudget), keyParams(server, privatePEM, "wrong"))
 		if !errors.Is(err, domain.ErrInvalidInput) {
 			t.Fatalf("error = %v, want ErrInvalidInput", err)
 		}
@@ -205,16 +211,26 @@ func TestSSHUnreachableAndMisbehavingHosts(t *testing.T) {
 	t.Run("cancellation interrupts a handshake in progress", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Mode: sshtest.ModeSilent})
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Cancel once the server holds the connection, so cancellation hits
+		// the handshake rather than the dial.
+		cancelled := make(chan time.Time, 1)
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			deadline := time.Now().Add(5 * time.Second)
+			for server.Accepted() == 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond) // poll interval of a bounded wait
+			}
+			cancelled <- time.Now()
 			cancel()
 		}()
-		start := time.Now()
 		err := TestConnection(ctx, passwordParams(server))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}
-		if elapsed := time.Since(start); elapsed > 3*time.Second {
+		if server.Accepted() == 0 {
+			t.Fatal("the connection never reached the server; the handshake was not in progress")
+		}
+		if elapsed := time.Since(<-cancelled); elapsed > 3*time.Second {
 			t.Fatalf("took %s after cancellation", elapsed)
 		}
 	})

@@ -239,7 +239,14 @@ func TestEngineSerializesConcurrentReconcileForSameKey(t *testing.T) {
 		close(release)
 		t.Fatalf("event while processing = %v", got)
 	}
-	time.Sleep(50 * time.Millisecond)
+	// While the key is processing, Add only marks it dirty: nothing runnable
+	// is queued, so no worker can pick it up concurrently. This is the
+	// guarantee itself, checked directly instead of waiting and hoping.
+	if queued := engine.queue.Len(); queued != 0 {
+		cancel()
+		close(release)
+		t.Fatalf("a key that is processing was queued again (%d runnable)", queued)
+	}
 	if maxActive.Load() != 1 || calls.Load() != 1 {
 		cancel()
 		close(release)

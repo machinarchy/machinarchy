@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 13: stable SSH and policy tests (Q-25, Q-15) (branch audit/tests-2)
+
+- **Q-25, corrected diagnosis.** AUDIT/03 said encrypted SSH keys are decrypted "on every production connection". That is wrong: the connector never sets `DialParams.Passphrase`, so production keys are never passphrase-decrypted (the Secret Store already encrypts them at rest). The intermittent failure came only from the passphrase subtests in `pkg/sshclient`. There, bcrypt-pbkdf takes about 0.1 s normally and 1.3 s under `-race` (measured), far more under shuffled parallel runs, against a 5 s budget. Those subtests now get a 60 s budget, documented in the test. No signer cache was added: it would keep decrypted private keys in memory for no production benefit.
+- **Q-15:** four sleeps that stood in for synchronisation now check the real condition:
+  - `controlmanager/engine_test.go`: instead of sleeping 50 ms, it asserts that a key re-added while processing is not runnable (`queue.Len() == 0`), which is the guarantee itself;
+  - `sshclient/dial_policy_test.go` and `netpolicy/policy_test.go`: instead of sleeping 50 ms, a sentinel connection proves no denied dial reached the listener (accepts are ordered);
+  - `sshclient/client_integration_test.go`: cancellation now waits until the server holds the connection, and the time is measured from cancellation.
+  The remaining sleeps in tests are poll intervals of deadline-bounded waits, or simulated durations.
+
+### Verification
+
+- `go test -race -count=8 -shuffle=on ./pkg/sshclient/`: pass. `go test -race -count=5 -shuffle=on` on `pkg/sshclient`, `pkg/netpolicy` and `internal/controlmanager`: pass. golangci-lint: 0 issues.
+
 ## 2026-11-18 — Audit Phase 13: managed-resource use cases end to end (branch audit/tests-2)
 
 - `internal/service/managed_flow_test.go` (new): the managed-resource service on real SQLite stores and a real Secret Store, with owner, operator and reader members. It covers:
