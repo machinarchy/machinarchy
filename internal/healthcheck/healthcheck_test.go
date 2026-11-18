@@ -28,8 +28,10 @@ func TestProbe(t *testing.T) {
 	if err := Probe(context.Background(), "0.0.0.0:"+port, time.Second); err == nil {
 		t.Fatal("unready server passed")
 	}
-	if err := Probe(context.Background(), "nonsense", time.Second); err == nil {
-		t.Fatal("bad address passed")
+	for _, bad := range []string{"nonsense", "example.com:" + port, "127.0.0.1:http", "127.0.0.1:0"} {
+		if err := Probe(context.Background(), bad, time.Second); err == nil {
+			t.Fatalf("%q passed", bad)
+		}
 	}
 	t.Setenv("MACHINARCHY_LISTEN_ADDR", "127.0.0.1:"+port)
 	var stderr bytes.Buffer

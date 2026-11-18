@@ -10,7 +10,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,21 +34,32 @@ func Run(stderr io.Writer) int {
 	return 0
 }
 
-// Probe GETs http://<address>/healthz/ready on loopback.
+// Probe GETs http://<address>/healthz/ready. Only the process's own listen
+// address is probed: the host must be an IP literal (wildcards map to
+// loopback) and the port numeric, so the target cannot be redirected.
 func Probe(ctx context.Context, address string, timeout time.Duration) error {
-	host, port, err := net.SplitHostPort(address)
+	host, rawPort, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("invalid listen address %q: %w", address, err)
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+	port, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil || port == 0 {
+		return fmt.Errorf("invalid listen port %q", rawPort)
 	}
+	ip := net.IPv4(127, 0, 0, 1)
+	if parsed := net.ParseIP(host); parsed != nil && !parsed.IsUnspecified() {
+		ip = parsed
+	} else if host != "" && parsed == nil {
+		return fmt.Errorf("listen host %q must be an IP address for the health check", host)
+	}
+	target := url.URL{Scheme: "http", Host: net.JoinHostPort(ip.String(), strconv.FormatUint(port, 10)), Path: "/healthz/ready"}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+"/healthz/ready", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return err
 	}
+	// #nosec G704 -- the target is this process's own listen address (IP literal and numeric port, validated above).
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return err
