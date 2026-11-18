@@ -198,7 +198,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	go func() { defer background.Done(); e.dispatchLoop(admissionCtx) }()
 
 	if err := e.resync(admissionCtx); err != nil {
-		e.deps.Logger.Error("Control Manager startup resync failed", "error_class", errorClass(err))
+		e.deps.Logger.Error("Control Manager startup resync failed", "error_class", errorClass(err), "error", err)
 		stopAdmission()
 		e.queue.Shutdown()
 		cancelWork()
@@ -249,11 +249,11 @@ func (e *Engine) dispatchLoop(ctx context.Context) {
 	nextPrune := time.Now().Add(24 * time.Hour)
 	for {
 		if err := e.dispatchBatch(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			e.deps.Logger.Warn("outbox dispatch failed", "error_class", errorClass(err))
+			e.deps.Logger.Warn("outbox dispatch failed", "error_class", errorClass(err), "error", err)
 		}
 		if time.Now().After(nextPrune) {
 			if _, err := e.deps.Outbox.Prune(ctx, time.Now()); err != nil {
-				e.deps.Logger.Warn("outbox retention pass failed", "error_class", errorClass(err))
+				e.deps.Logger.Warn("outbox retention pass failed", "error_class", errorClass(err), "error", err)
 			}
 			nextPrune = time.Now().Add(24 * time.Hour)
 		}
@@ -354,7 +354,7 @@ func (e *Engine) periodicResync(ctx context.Context) {
 		case <-timer.C:
 		}
 		if err := e.resync(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			e.deps.Logger.Warn("periodic Control Manager resync failed", "error_class", errorClass(err))
+			e.deps.Logger.Warn("periodic Control Manager resync failed", "error_class", errorClass(err), "error", err)
 		}
 	}
 }
@@ -448,7 +448,7 @@ func (e *Engine) releaseResyncLease() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := e.deps.Leases.ReleaseResourceLease(ctx, lease); err != nil {
-		e.deps.Logger.Warn("resync lease release failed", "error_class", errorClass(err))
+		e.deps.Logger.Warn("resync lease release failed", "error_class", errorClass(err), "error", err)
 	}
 }
 
@@ -466,7 +466,7 @@ func (e *Engine) worker(ctx context.Context) {
 		}
 		result, err := e.reconcile(ctx, controller, key)
 		if err != nil {
-			e.deps.Logger.Warn("resource reconciliation failed", "controller", controller.Name(), "error_class", errorClass(err))
+			e.deps.Logger.Warn("resource reconciliation failed", "controller", controller.Name(), "error_class", errorClass(err), "error", err)
 			if !isPermanent(err) {
 				_ = e.queue.AddRateLimited(key)
 			} else {
@@ -530,7 +530,7 @@ func (e *Engine) reconcile(parent context.Context, controller Controller, key Re
 			renewer.Wait()
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if err := e.deps.Leases.ReleaseResourceLease(releaseCtx, lease); err != nil && !errors.Is(err, context.Canceled) {
-				e.deps.Logger.Warn("resource lease release failed", "error_class", errorClass(err))
+				e.deps.Logger.Warn("resource lease release failed", "error_class", errorClass(err), "error", err)
 			}
 			releaseCancel()
 			select {

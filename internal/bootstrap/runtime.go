@@ -170,7 +170,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	go func() {
 		defer runtime.configWG.Done()
 		if e := configuration.Watch(watchCtx, 30*time.Second); e != nil && watchCtx.Err() == nil {
-			slog.Error("runtime configuration watcher stopped", "error_class", "watcher_failed")
+			slog.Error("runtime configuration watcher stopped", "error", e)
 		}
 	}()
 	return runtime, nil
