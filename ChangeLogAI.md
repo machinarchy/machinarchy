@@ -1,5 +1,24 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 12: per-agent NATS credentials from the gateway (branch audit/agent-authz)
+
+**Behaviour change:** in production, the agent gateway now requires `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT` and `_NATS_ACCOUNT_SIGNING_KEY_FILE` (NATS operator mode).
+
+- `internal/agentgateway/natsjwt.go` (new): `NATSIssuer`. Each agent gets a NATS user JWT whose subject is its Ed25519 identity key as a user nkey and whose permissions are `agentv1.AgentPermissions(agentID)`. It is signed with an account signing key, with a lifetime of 1h by default (5m–24h, at least twice the heartbeat) (AUDIT M-10).
+- `internal/agentgateway/gateway.go`: register and renew responses carry the JWT when an issuer is configured. A revoked or unknown agent gets none. The gateway uses the `_INBOX_CONTROLLER` inbox prefix, so enrolling agents cannot read its replies.
+- `internal/config/config.go`: `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT`, `_NATS_ACCOUNT_SIGNING_KEY_FILE` (0600, must be an account seed) and `_AGENT_JWT_TTL`. Both keys go together, and production requires them. `internal/bootstrap/agents.go` wires the issuer and logs whether it is on.
+- `internal/testutil/natstest` (new): embedded NATS in operator mode (operator, system account, JetStream account with a signing key) for tests.
+- `go.mod`: `nats-io/jwt/v2` and `nkeys` become direct requirements (they were already in the graph; same versions).
+- `docs/operations.md`, `.env.example`: the three settings.
+
+### Verification
+
+- `go test -race ./internal/agentgateway/ ./internal/config/`: pass.
+  - New `TestGatewayIssuesScopedNATSCredentials` (operator-mode NATS). The JWT subject is the agent key, the issuer account and permissions are exactly as specified, and the expiry is about the lifetime. With the JWT, the agent renews over its own connection and binds its own consumer, but cannot subscribe to registrations. A revoked agent gets no JWT.
+  - New `TestNATSIssuerValidation` (6 cases), plus 9 new config cases and a production case.
+- `MACHINARCHY_E2E_REQUIRED=1 go test -race ./test/e2e/`: pass, in development mode without JWT issuing, against agent `996e8a3`.
+- golangci-lint on the changed packages: 0 issues.
+
 ## 2026-11-18 — Audit Phase 11: document invoke results (branch audit/http-hardening)
 
 - `internal/transport/http/v1/agents/handler.go`: the OpenAPI description of `POST /api/v1/agents/{id}/invoke` now says that 200 means the agent answered and the body's `status` must be checked. `rejected` and `failed` are agent answers and return 200; 503 and 504 mean there was no answer. 504 is now listed. Behaviour is unchanged (decision for AUDIT/09 F9-05: keep 200, document it).

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nats-io/nkeys"
+
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
@@ -99,6 +101,11 @@ type AgentGatewayConfig struct {
 	NATSKeyFile         string
 	LeaseTTL            time.Duration
 	Heartbeat           time.Duration
+	// NATSAccount and NATSAccountSigningKey enable per-agent NATS user JWTs
+	// (operator mode, AUDIT M-10). Required in production.
+	NATSAccount           string
+	NATSAccountSigningKey []byte // nkey seed (SA...)
+	AgentJWTTTL           time.Duration
 }
 
 // Enabled reports whether the gateway is configured.
@@ -656,5 +663,49 @@ func loadAgentGateway(get func(string, ...string) string, environment Environmen
 	if cfg.Heartbeat < 5*time.Second || cfg.Heartbeat*2 > cfg.LeaseTTL {
 		return cfg, errors.New("MACHINARCHY_AGENT_GATEWAY_HEARTBEAT must be at least 5s and at most half the lease TTL")
 	}
+	if err := loadAgentNATSIssuer(&cfg, get, environment); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// loadAgentNATSIssuer reads the NATS account settings that let the gateway
+// issue each agent its own NATS user JWT. Without them every agent shares the
+// bootstrap credential's permissions, so production requires them.
+func loadAgentNATSIssuer(cfg *AgentGatewayConfig, get func(string, ...string) string, environment Environment) error {
+	cfg.NATSAccount = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT"))
+	keyFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE"))
+	if cfg.NATSAccount == "" && keyFile == "" {
+		if environment == Production {
+			return errors.New("production requires per-agent NATS credentials: set MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT and _NATS_ACCOUNT_SIGNING_KEY_FILE (see docs/operations.md#agent-gateway)")
+		}
+		return nil
+	}
+	if cfg.NATSAccount == "" || keyFile == "" {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT and _NATS_ACCOUNT_SIGNING_KEY_FILE must be set together")
+	}
+	if !nkeys.IsValidPublicAccountKey(cfg.NATSAccount) {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT must be a NATS account public key (starting with A)")
+	}
+	seed, err := readSecretFile(keyFile, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE")
+	if err != nil {
+		return err
+	}
+	seed = []byte(strings.TrimSpace(string(seed)))
+	signer, err := nkeys.FromSeed(seed)
+	if err != nil {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE must hold an account nkey seed (starting with SA)")
+	}
+	if public, err := signer.PublicKey(); err != nil || !nkeys.IsValidPublicAccountKey(public) {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE must hold an account nkey seed (starting with SA)")
+	}
+	signer.Wipe()
+	cfg.NATSAccountSigningKey = seed
+	if cfg.AgentJWTTTL, err = parseDurationBounds(get("MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL", "1h"), "MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL", false); err != nil {
+		return err
+	}
+	if cfg.AgentJWTTTL < 5*time.Minute || cfg.AgentJWTTTL > 24*time.Hour || cfg.AgentJWTTTL < 2*cfg.Heartbeat {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL must be between 5m and 24h and at least twice the heartbeat")
+	}
+	return nil
 }

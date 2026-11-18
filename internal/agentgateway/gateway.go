@@ -35,6 +35,9 @@ type Config struct {
 	ConnectTimeout  time.Duration
 	Logger          *slog.Logger
 	Registerer      prometheus.Registerer
+	// NATSIssuer, when set, gives every enrolled agent its own NATS user JWT
+	// in register and renew responses (operator mode).
+	NATSIssuer *NATSIssuer
 }
 
 // Defaults applied by New when a field is zero.
@@ -92,6 +95,14 @@ func New(store Store, cfg Config) (*Gateway, error) {
 	if cfg.ConnectTimeout <= 0 {
 		cfg.ConnectTimeout = 5 * time.Second
 	}
+	if cfg.NATSIssuer != nil {
+		if cfg.NATSIssuer.TTL == 0 {
+			cfg.NATSIssuer.TTL = DefaultAgentJWTTTL
+		}
+		if err := cfg.NATSIssuer.validate(cfg.Heartbeat); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -136,7 +147,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 		nats.ReconnectHandler(func(*nats.Conn) {
 			g.connected.Store(true)
 			g.logger.Info("agent gateway reconnected to NATS")
-		})}, g.cfg.NATSOptions...)
+		}),
+		// Keep replies to the controller (JetStream API answers included) out
+		// of the _INBOX namespace that enrolling agents may read.
+		nats.CustomInboxPrefix(agentv1.ControllerInboxPrefix)}, g.cfg.NATSOptions...)
 	nc, err := nats.Connect(g.cfg.NATSURL, options...)
 	if err != nil {
 		return fmt.Errorf("connect agent gateway to NATS: %w", err)
@@ -259,12 +273,15 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 				err = g.provision(agent.ID)
 				response.AgentID, response.HostID = agent.ID, agent.ID
 			}
+			if err == nil {
+				response.NATSUserJWT, err = g.natsCredential(ed25519.PublicKey(request.AgentPublicKey), agent.ID, now)
+			}
 		}
 	}
 	if errors.Is(err, ErrAgentRevoked) {
 		g.metrics.registrations.WithLabelValues("revoked").Inc()
 		g.logger.Warn("revoked agent tried to enrol again", "hostname", request.Hostname)
-		response.AgentID, response.HostID = "", ""
+		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
 		g.reply(msg, agentv1.KindRegisterResponse, response)
 		return
@@ -272,7 +289,7 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 	if err != nil {
 		g.metrics.registrations.WithLabelValues("error").Inc()
 		g.logger.Error("agent registration failed", "hostname", request.Hostname, "error", err)
-		response.AgentID, response.HostID = "", ""
+		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorUnavailable, Retryable: true}
 		g.reply(msg, agentv1.KindRegisterResponse, response)
 		return
@@ -281,6 +298,15 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 	g.metrics.registrations.WithLabelValues("registered").Inc()
 	g.logger.Info("agent registered", "agent_id", response.AgentID, "hostname", request.Hostname, "version", request.AgentVersion)
 	g.reply(msg, agentv1.KindRegisterResponse, response)
+}
+
+// natsCredential returns the agent's NATS user JWT, or "" when the gateway
+// does not issue them.
+func (g *Gateway) natsCredential(agentKey ed25519.PublicKey, agentID string, now time.Time) (string, error) {
+	if g.cfg.NATSIssuer == nil {
+		return "", nil
+	}
+	return g.cfg.NATSIssuer.mint(agentKey, agentID, now)
 }
 
 // provision creates the agent's durable pull consumer (M-6).
@@ -313,7 +339,13 @@ func (g *Gateway) keyFor(agentID string) (ed25519.PublicKey, bool) {
 
 func (g *Gateway) onRenew(msg *nats.Msg) {
 	var request agentv1.RenewRequest
-	if err := agentv1.OpenFromAgent(agentv1.KindRenewRequest, msg.Data, agentv1.MaxControlMessageBytes, g.keyForRenewal, &request); err != nil {
+	var agentKey ed25519.PublicKey
+	keyFor := func(agentID string) (ed25519.PublicKey, bool) {
+		key, ok := g.keyForRenewal(agentID)
+		agentKey = key
+		return key, ok
+	}
+	if err := agentv1.OpenFromAgent(agentv1.KindRenewRequest, msg.Data, agentv1.MaxControlMessageBytes, keyFor, &request); err != nil {
 		g.metrics.renewals.WithLabelValues("invalid").Inc()
 		return
 	}
@@ -322,6 +354,11 @@ func (g *Gateway) onRenew(msg *nats.Msg) {
 	lease, err := g.newLease(now)
 	if err == nil {
 		err = g.store.RenewAgentLease(context.Background(), request.AgentID, lease.LeaseID, lease.ExpiresAt, now)
+	}
+	if err == nil {
+		// A fresh credential on every renewal: revocation stops renewals, so a
+		// revoked agent keeps its NATS access only until this JWT expires.
+		response.NATSUserJWT, err = g.natsCredential(agentKey, request.AgentID, now)
 	}
 	switch {
 	case err == nil:
@@ -335,6 +372,7 @@ func (g *Gateway) onRenew(msg *nats.Msg) {
 		g.metrics.renewals.WithLabelValues("unknown").Inc()
 	default:
 		g.logger.Error("agent lease renewal failed", "agent_id", request.AgentID, "error", err)
+		response.NATSUserJWT = ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorUnavailable, Retryable: true}
 		g.metrics.renewals.WithLabelValues("error").Inc()
 	}

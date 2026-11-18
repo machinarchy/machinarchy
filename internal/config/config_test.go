@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nkeys"
 )
 
 // setCommonEnv provisions the baseline test environment variables cleanly using a loop.
@@ -458,10 +460,76 @@ func TestLoadAgentGateway(t *testing.T) {
 			t.Fatalf("plain NATS in production: %v", err)
 		}
 		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_URL", "tls://nats.example:4222")
-		if _, err := Load(); err != nil && strings.Contains(err.Error(), "AGENT_GATEWAY") {
-			t.Fatalf("tls:// in production: %v", err)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "per-agent NATS credentials") {
+			t.Fatalf("production without NATS account settings: %v", err)
+		}
+		account, signingSeed := natsAccountKeys(t)
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT", account)
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE", write("prod-signing", signingSeed, 0o600))
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("tls:// with NATS account settings in production: %v", err)
+		}
+		if cfg.AgentGateway.NATSAccount != account || cfg.AgentGateway.AgentJWTTTL != time.Hour {
+			t.Fatalf("issuer settings = %q %s", cfg.AgentGateway.NATSAccount, cfg.AgentGateway.AgentJWTTTL)
 		}
 	})
+
+	account, signingSeed := natsAccountKeys(t)
+	user, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userSeed, _ := user.Seed()
+	signing := write("signing", signingSeed, 0o600)
+	for name, tc := range map[string]struct {
+		override map[string]string
+		ok       bool
+	}{
+		"issuer":                {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing}, true},
+		"account without key":   {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account}, false},
+		"key without account":   {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing}, false},
+		"not an account key":    {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": "UABC", "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing}, false},
+		"user seed as signer":   {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": write("user-seed", string(userSeed), 0o600)}, false},
+		"world-readable signer": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": write("open-signing", signingSeed, 0o644)}, false},
+		"jwt ttl too short":     {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing, "MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL": "1m"}, false},
+		"jwt ttl too long":      {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing, "MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL": "48h"}, false},
+		"jwt ttl custom":        {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT": account, "MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE": signing, "MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL": "10m"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setCommonEnv(t)
+			for k, v := range valid {
+				t.Setenv(k, v)
+			}
+			for k, v := range tc.override {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load()
+			if (err == nil) != tc.ok {
+				t.Fatalf("Load() error = %v, want ok=%v", err, tc.ok)
+			}
+			if tc.ok && (cfg.AgentGateway.NATSAccount != account || len(cfg.AgentGateway.NATSAccountSigningKey) == 0) {
+				t.Fatalf("issuer settings missing: %+v", cfg.AgentGateway)
+			}
+		})
+	}
+}
+
+// natsAccountKeys returns an account public key and the seed of a second
+// account key used as its signing key.
+func natsAccountKeys(t *testing.T) (string, string) {
+	t.Helper()
+	account, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, _ := account.PublicKey()
+	signer, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, _ := signer.Seed()
+	return public, string(seed)
 }
 
 func TestLoadOperationalEndpoints(t *testing.T) {

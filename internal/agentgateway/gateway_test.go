@@ -116,9 +116,16 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal("NATS did not start")
 	}
 	t.Cleanup(server.Shutdown)
+	return startFixture(t, server.ClientURL(), nil, nil, nil)
+}
+
+// startFixture runs a gateway against url. controller carries the gateway's
+// NATS credentials, client those of the test's own connection.
+func startFixture(t *testing.T, url string, controller []nats.Option, issuer *NATSIssuer, client []nats.Option) *fixture {
+	t.Helper()
 	store := newMemStore()
-	gateway, err := New(store, Config{NATSURL: server.ClientURL(), SigningKey: key(1), EnrollmentToken: enrollmentToken,
-		LeaseTTL: 20 * time.Second, Heartbeat: 5 * time.Second, Registerer: prometheus.NewRegistry()})
+	gateway, err := New(store, Config{NATSURL: url, NATSOptions: controller, SigningKey: key(1), EnrollmentToken: enrollmentToken,
+		LeaseTTL: 20 * time.Second, Heartbeat: 5 * time.Second, Registerer: prometheus.NewRegistry(), NATSIssuer: issuer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +145,7 @@ func newFixture(t *testing.T) *fixture {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	nc, err := nats.Connect(server.ClientURL())
+	nc, err := nats.Connect(url, client...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,12 +175,17 @@ func (f *fixture) register(agent ed25519.PrivateKey, token, requestID string) *a
 
 func (f *fixture) renew(agent ed25519.PrivateKey, agentID string) *agentv1.RenewResponse {
 	f.t.Helper()
+	return f.renewOn(f.nc, agent, agentID)
+}
+
+func (f *fixture) renewOn(nc *nats.Conn, agent ed25519.PrivateKey, agentID string) *agentv1.RenewResponse {
+	f.t.Helper()
 	raw, err := agentv1.Seal(agent, agentv1.KindRenewRequest, &agentv1.RenewRequest{ProtocolVersion: agentv1.ProtocolVersion,
 		RequestID: "renew-1", AgentID: agentID, LeaseID: "lease-x", AgentVersion: "1.0.0", SentAt: time.Now().UTC()})
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	reply, err := f.nc.Request(agentv1.SubjectLeaseRenew, raw, 2*time.Second)
+	reply, err := nc.Request(agentv1.SubjectLeaseRenew, raw, 2*time.Second)
 	if err != nil {
 		return nil // no answer
 	}
