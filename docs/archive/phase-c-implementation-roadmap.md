@@ -34,7 +34,7 @@ Dependencies refer to backlog IDs. A dependency is complete only when its accept
 #### C-001 — Reconcile architecture approval metadata
 
 - **Priority:** P0 · **Category:** Architecture/docs · **Dependencies:** None · **Effort:** Small
-- **Affected packages/files:** `docs/architecture/implementation-baseline.md`, `docs/architecture/phase-12-final-architecture-blueprint.md`, `docs/architecture/decisions/ADR-053-integrated-architecture-review.md`
+- **Affected packages/files:** `docs/archive/implementation-baseline.md`, `docs/archive/phase-12-final-architecture-blueprint.md`, `docs/adr/ADR-053-integrated-architecture-review.md`
 - **Description:** Align document status labels with the owner's instruction to use the baseline and Phase B analysis as approved inputs. Do not change architecture decisions in this task.
 - **Acceptance criteria:** Baseline, Phase 12, and ADR-053 state consistent approval status; deferred and conditional decisions remain labeled; no decision is promoted beyond the user's approval.
 - **Testing requirements:** Markdown link and consistency review; `git diff --check`.
@@ -43,7 +43,7 @@ Dependencies refer to backlog IDs. A dependency is complete only when its accept
 #### C-002 — Decide Host create and connectivity API contract
 
 - **Priority:** P0 · **Category:** Product/API contract · **Dependencies:** C-001 · **Effort:** Small
-- **Affected packages/files:** `internal/transport/http/v1/host`, OpenAPI spec, CLI host workflows, `docs/architecture/phase-8-api-cli-interaction.md`
+- **Affected packages/files:** `internal/transport/http/v1/host`, OpenAPI spec, CLI host workflows, `docs/archive/phase-8-api-cli-interaction.md`
 - **Description:** Record the transition from synchronous SSH-verified create to persisted Host plus asynchronous reachability. Recommended default: return `201 Created` once persisted, with Pending/Unknown observed connectivity and a status URL; use a separate Operation for an explicit verification request.
 - **Acceptance criteria:** Status code, response body, idempotency/precondition behavior, retry UX, and compatibility/version policy are written and approved before endpoint behavior changes.
 - **Testing requirements:** Contract tests planned for persisted-but-unreachable Host and repeated requests; no code test in this decision issue.

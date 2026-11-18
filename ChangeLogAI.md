@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 7: cleanup
+
+**Recreate existing databases.** The schema is now one baseline per dialect; older databases are refused at startup.
+
+- The legacy host, run, fleet, job and metrics-history stack is deleted (API, services, stores, tables). The managed API is complete (list/delete/labels, Access Profile reads, operation lists, target preview bound by a hash) and the CLI uses it: `get hosts|profiles|operations`, `create|delete|label host`, `run`, `cancel operation`.
+- One store implementation per area for SQLite and PostgreSQL (`store/accounts`, `store/resources`, `store/management`, helpers in `store/sqlx`); PostgreSQL uses pgx.
+- One error format, `{"error", "code"}`, and one list format, `{"items", "nextCursor"}`. The OpenAPI spec covers every route and a test keeps it that way.
+- Destructive CLI commands ask for confirmation (`--yes`, `--no-input`).
+- `make smoke` drives the CLI against a fresh monolith. ADRs are merged into `docs/adr` (ADR-055 records the managed-only model); phase documents moved to `docs/archive`.
+
 ## 2026-11-17 — Makefile refactor
 
 ### Changes in this update

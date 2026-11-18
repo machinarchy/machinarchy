@@ -1,58 +1,62 @@
 # Architecture and implementation status
 
+This page describes the system as it is. Design history lives in [the ADRs](adr/README.md) and [the archived phase documents](archive/); the audit that led to the current shape is in `AUDIT/`.
+
 ## Runtime shape
 
-Machinarchy uses a ports-and-adapters layout inside a single Go module:
+One Go module, ports and adapters:
 
 ```text
-HTTP / process entry points
-        ↓
-service use cases ─────── broker / SSH client adapters
-        ↓
-domain contracts
-        ↑
-SQLite and PostgreSQL adapters
+cmd/{api,controlmanager,monolit}      cmd/machinarchy (CLI, HTTP client only)
+        │                                      │
+internal/bootstrap ── composes ───────────────┘ (via /api/v1)
+        │
+transport/http (Echo; httperr; v1 handlers)
+        │
+service (ManagedResourceService, auth, members, tokens, audit)
+        │
+domain + domain/resource (Host, AccessProfile, Operation, selectors)
+        │
+store: accounts · resources · management   ← dialect-neutral (store/sqlx)
+        │
+SQLite (single node)  or  PostgreSQL (shared)
 ```
 
-`internal/domain` contains the core entities and interfaces. Services depend on those ports and injected adapters. HTTP handlers translate requests to service or repository calls, and the process entry points in `cmd/` construct the dependency graph. SQLite and PostgreSQL implement the same storage contracts. Schema changes live in embedded, engine-specific SQL migrations.
+- **API** (`machinarchy-api`) serves `/api/v1` and health/metrics. It does no SSH work: commands are executed by the operation worker.
+- **Control Manager** (`machinarchy-controlmanager`) runs the Host reconcilers from the transactional outbox and the operation worker that executes Operations over SSH.
+- **Monolith** (`machinarchy-monolit`) runs both in one process.
+- **CLI** (`machinarchy`) talks only to the public HTTP API (ADR-035, enforced by a test).
+- The host **agent** is a separate repository (`machinarchy-agent`) and is not integrated yet.
 
-The API, Control Manager, and all-in-one entry points load and validate bootstrap configuration, create a signal-cancelable context, then delegate role composition to `internal/bootstrap`. Bootstrap installs the shared structured logger and telemetry providers, opens the runtime, constructs only the selected role's components, and owns cleanup. The all-in-one mode shares one runtime and composes the existing API server and Control Manager engine. The HTTP listener reports readiness only after binding; shutdown drains HTTP requests, cancels and waits for workers, closes runtime resources, then flushes telemetry. The CLI remains a separate API client and does not initialize server infrastructure. The Agent executable remains an explicit not-implemented placeholder.
+## Resource model
 
-## Processes and dependencies
+- **Managed Host** (`managed_hosts`): name, labels, environment, desired presence, Access Profile binding, endpoint and trusted host keys; observed phase and conditions written by the Host controller. Revisions guard every write.
+- **Access Profile** (`access_profiles`, immutable revisions): connector, username, authentication method and a version-pinned SecretRef. Binding a host to a profile, or changing a bound host's endpoint or trust, needs the workspace owner.
+- **Operation** (`operations`, `operation_targets`): an immutable run spec (argv, no shell) with per-target state. Targets record their results with single-row forward-only writes. Cancellation is recorded and observed by the worker; uncertain executions become `Interrupted` on restart and are never replayed.
+- **Selectors** (`domain.Selector`): `key=value`, `!=`, `in`, `notin`, `key`, `!key` with `*`/`?` globs. For hosts, `id`, `name`, `environment`, `phase`, `presence` and `profile` are built in; anything else is a label. `POST /managed/operations/preview` resolves a rule and returns a targets hash that a submission can require.
 
-- `machinarchy-api` serves application HTTP routes and requires a database and NATS JetStream connection during startup.
-- `machinarchy-controlmanager` polls the SQL transactional outbox, runs the bounded Host resource queue, and serves health endpoints. It does not require NATS. Readiness includes the database and completed startup recovery scan.
-- `machinarchy-monolit` runs the API and control-manager worker in one process, sharing one database pool and one NATS connection. Its readiness includes the worker subscription.
-- `machinarchy-agent` currently exits with an explicit “not implemented” error.
-- The host service verifies SSH connection details and the expected host-key fingerprint before persistence. SSH operations are bounded by a process-wide capacity limiter, and every SSH dial is resolved and checked by the target address policy in `pkg/netpolicy` (see the security assessment).
-- OpenTelemetry propagates trace context through HTTP requests and NATS messages. Prometheus metrics use a process-local registry.
+## Persistence
 
-## Current boundaries and known limitations
+- One schema baseline per dialect (`store/migrations/*/000001_baseline.up.sql`). During development the baseline may be squashed again; an older database is refused and must be recreated.
+- `store/accounts` (users, memberships, API tokens, environments, audit chain), `store/resources` (managed resources, outbox, leases) and `store/management` (runtime configuration, Secret Store) each have one implementation for both dialects; `store/sqlx` holds the dialect, placeholder and error helpers. Timestamps are RFC 3339 text in both dialects.
+- The audit trail is append-only (triggers) and hash-chained per workspace. Every sensitive change writes its event in the same transaction.
+- PostgreSQL uses the pgx driver, delivery claims with `SKIP LOCKED`, fenced per-resource leases and advisory locks for the audit chain and owner changes. SQLite is a single-manager profile with one connection.
 
-- HTTP handlers use narrow domain interfaces for storage and services. `internal/bootstrap` constructs shared infrastructure once and assembles role-specific components. The API and control-manager remain separate process entry points, while monolith mode composes both without coupling their application roles.
-- `internal/domain/resource` defines connector-neutral managed Host resources and separate Run Operations with desired/observed state, generation, revision, conditions, and lifecycle transitions. `internal/store/resources` shares persistence across SQLite and PostgreSQL; migration 000007 adds `managed_hosts`, `operations`, and `operation_targets`, while migration 000008 adds the transactional outbox, deliveries, and PostgreSQL resource leases. Operation specifications and target output are encrypted with a purpose-derived key. These tables remain additive beside legacy `hosts` and `runs`: existing API/CLI paths still use the legacy records, with no data migration or dual-write. `store.Stores.ResourceHosts`, `Operations`, and `Outbox` expose the new ports.
-- Command execution is available when explicitly enabled: `POST /api/v1/runs` starts a run, which the API process executes in the background over SSH, and `GET /api/v1/runs` and `/runs/{id}` report it (see the command-execution section of the security assessment and ADR 0004). The older job endpoints still only read job records, and the `cmd/agent` runtime is a placeholder, so agent-based execution is not available.
-- JWT authentication reloads the user's workspace role on each request. Host, environment, job, and metrics-history operations are scoped in storage; host-to-environment references are checked within the same workspace. Workspace owners can issue hash-only operator/reader API tokens; token permissions cannot exceed the current membership role and revocation is checked on every request.
-- The installation currently uses one shared workspace (`domain.DefaultWorkspaceID`). Every self-registered account joins it as a read-only `reader`; no per-account workspace rows are created. The first owner is created at startup from `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` (with optional `_USERNAME`/`_EMAIL`) only while the workspace has no owner, and there is no built-in default credential. Owners list members and change roles with `GET /api/v1/members` and `PUT /api/v1/members/{id}/role` (human owner sessions only; the last owner cannot be demoted, enforced atomically in the store; changes are recorded in the audit trail); there is no invitation or removal flow yet. Workspace-scoped storage queries and the `workspace_memberships` table are kept so multiple workspaces can return later. Databases created before this change keep their existing per-account workspaces. Member invitation/removal and workspace switching are not implemented. Production signup remains disabled by default.
-- Fleet targeting is shared by listing, preview, and (later) execution. Hosts carry validated labels (keys of 1-63 characters from letters, digits, `.`, `_`, `-`, `/`; values up to 63 characters; at most 50 per host; the built-in field names `id`, `name`, `hostname`, `address`, `status`, `environment`, and `connection` are reserved). A selector is a comma-separated AND of requirements: `key=value`, `key!=value`, `key in (a,b)`, `key notin (a,b)`, `key`, and `!key`; values may use `*` and `?`; built-in fields compare case-insensitively and labels case-sensitively; `!=` and `notin` also match hosts without the label. An empty or invalid selector is an error, never "all hosts". `GET /api/v1/hosts?selector=...` filters the listing, `PATCH /api/v1/hosts/{id}/labels` sets and removes labels atomically without touching connection settings or credentials, and `POST /api/v1/fleet/targets/preview` resolves a rule (`selector`, `include`, `exclude`, or an explicit `all`) to the exact host set, the hosts the exclude list removed, and entries that matched nothing, without contacting any host and without returning credentials. Exclude always wins over selector and include; `all` cannot be combined with a selector or include list.
-- Runs are stored in `runs` and `run_hosts` (migration 6): the host set is pinned as IDs with name, address, and port snapshots, the arguments are encrypted, and each host has its own status, exit code, sanitized output, and error. `service.RunManager` owns execution: `Submit` validates, resolves and pins targets, stores the run (with its audit event), and starts a bounded executor; the executor heartbeats, polls for cancellation through the heartbeat, runs hosts with a worker pool through the shared SSH capacity limiter and target policy, records each result, and finalizes the run. `Recover` (at startup and periodically) interrupts runs whose heartbeat stopped, and `Close` interrupts runs in flight before the stores close. Execution is a single-process concern: another API instance can cancel a run through the database and recover its leftovers, but only the process that accepted a run executes it.
-- Sensitive changes are audited by the stores themselves: account creation, member role changes, host create/update/delete, label patches, and API token create/revoke each write an `audit_events` row in the same transaction. The API middleware `AuditActor` attaches the authenticated principal and request ID to the request context; the stores read it with `domain.AuditActorFrom`. Events are append-only (database triggers) and hash-chained per workspace; owners read them with `GET /api/v1/audit/events` and check integrity with `GET /api/v1/audit/verify`. Event details are small, sanitized, non-secret strings.
-- `POST /api/v1/hosts/bulk` registers up to 100 hosts with partial-success semantics and per-record results (`success`, `valid`, `failed`, `duplicate`). Records are SSH-verified by a bounded worker pool through the same path as single registration, `validate_only` checks without contacting hosts, and no commands are executed. Duplicate detection (case-insensitive name or address:port, against the inventory and earlier records) is a fast path; the authority is the pair of unique indexes added by migration 4 (`(workspace_id, lower(name))` and `(workspace_id, lower(ip_address), port)`), so a record that loses a race with a concurrent registration is reported as a `duplicate` and single create/update return 409. Migration 4 runs a pre-flight check and refuses to start, listing the conflicting host IDs and changing nothing, if existing data already contains duplicates; resolve them by renaming or deleting hosts and restart.
-- The canonical managed Host path writes resource changes and outbox notifications atomically. The Control Manager dispatches key notifications to a local coalescing queue and uses startup/periodic scans for recovery. See the [Phase F implementation notes](architecture/implementation-phase-f-event-control-loop.md).
-- Managed Hosts use the connector-neutral `internal/hostaccess.HostConnector` port with the Go SSH adapter. The Host controller loads the current Access Profile revision, resolves its version-pinned credential through the scoped Secret Store authorizer, verifies the configured SSH host key, and records safe observed conditions. Host endpoint and trust stay on Host; credentials stay in encrypted Secret Store records. Existing legacy Host and Run records are not dual-written or migrated.
-- Imperative Operations are executed by a separate bounded worker pool. Submission persists immutable Host generation and Access Profile revision snapshots; cancellation is recorded in the Operation and observed by the worker. Remote commands are not automatically replayed. On restart, uncertain running Operations become `Interrupted`; PostgreSQL uses per-Operation leases and fencing to prevent competing managers from overwriting progress. SQLite remains a single-manager deployment profile.
-- SSH egress denies private and loopback targets and all TCP ports by default, checks every DNS answer, and dials only validated addresses on explicitly permitted ports. Operators must explicitly configure intended private ranges and ports; metadata destinations remain denied. Network firewall policy remains necessary defense in depth.
-- SQLite remains a one-manager local profile. PostgreSQL uses delivery claims with `SKIP LOCKED`, per-resource fencing leases, and a resync leader lease. PostgreSQL `LISTEN/NOTIFY` was not added; polling remains the correctness path. Multi-manager behavior requires a configured PostgreSQL integration test run before production use.
-- Legacy API event behavior still uses the existing NATS integration; the new canonical resource outbox and Control Manager do not depend on it. Readiness covers the database and the Control Manager recovery scan; API readiness still includes its legacy broker dependency.
+## API conventions
 
-## Architectural direction
+- Errors: `{"error": "...", "code": "..."}` everywhere (`transport/http/httperr`), including the framework's own 404/405/413.
+- Lists: `{"items": [...], "nextCursor": "..."}` with keyset pagination.
+- `docs/swagger.json` is generated by `make api-docs`; a test fails when a registered route is missing from it.
 
-Keep the current modular monolith and ports-and-adapters boundaries while inventory, identity, authorization, and execution contracts are made reliable. Separate API and control-manager binaries already exist for independent deployment; do not split them into more services until measured load, fault isolation, or ownership requires it. Treat SQLite as a single-instance/local option and PostgreSQL as the shared multi-process database.
+## Operations
 
-The workspace authorization baseline is implemented in migration 000003. Existing rows are assigned to workspace 1; the earliest existing account becomes its owner and later existing accounts receive empty private workspaces. Accounts created after the single-workspace change join workspace 1 as readers, so a database migrated earlier keeps its legacy per-account workspaces alongside the shared one. Verify the intended legacy owner and take a database backup before upgrading. See the [security assessment](SECURITY.md) and [roadmap](ROADMAP.md) for migration recovery, token handling, and remaining work.
+- One shutdown budget (`MACHINARCHY_SHUTDOWN_TIMEOUT`, default 25s) covers HTTP drain, worker drain and runtime close; keep it below the orchestrator's grace period.
+- Panics in background work are isolated: an Operation that panics finishes `Interrupted` with reason `worker_panic`.
+- `make smoke` runs the CLI end to end against a fresh monolith.
 
-Use the existing NATS JetStream integration only for its current durable event flow. Do not turn it into a general job queue until job submission, delivery guarantees, deduplication, retry policy, and cancellation semantics are specified.
+## Known limitations
 
-## API contract
-
-Handler comments are the source for the generated API contract. `make api-docs` regenerates `docs/swagger.json` and `docs/swagger.yaml`; Scalar renders that Swagger 2.0 document at `/scalar`, and the JSON is served at `/openapi.json`. Keep route annotations, request/response types, and this contract synchronized when changing handlers.
+- The agent gateway (controller side of `machinarchy-agent`) does not exist; see `AUDIT/04-agent.md` M-1..M-11.
+- `RunSpec.Concurrency` is stored but targets run one at a time.
+- Metrics cover HTTP and the database pool; the control loop and the operation worker have no metrics yet (AUDIT Q-06).
+- One shared workspace; no member invitation or removal flow.

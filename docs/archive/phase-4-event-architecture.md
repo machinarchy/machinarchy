@@ -204,7 +204,7 @@ Evaluate **NATS JetStream** only when at least one is demonstrated: independentl
 
 Evaluate **Kafka** only if measured sustained event throughput, long retention/replay, stream processing, or many independent consumer groups exceed what PostgreSQL outbox plus JetStream can support, and the team accepts operating a streaming platform. There is no present evidence for that dependency.
 
-This recommendation proposes an explicit amendment to the broker timing in [ADR 007](/Users/mleus/Documents/Projects/machinarchy/docs/architecture/decisions/ADR-007-persistence-and-event-notification.md): defer NATS until criteria above are met, with PostgreSQL NOTIFY/poll and local queues as the first distributed notification path. The amendment is in draft ADR 018 and is not accepted until Phase 4 approval.
+This recommendation proposes an explicit amendment to the broker timing in [ADR 007](/Users/mleus/Documents/Projects/machinarchy/docs/adr/ADR-007-persistence-and-event-notification.md): defer NATS until criteria above are met, with PostgreSQL NOTIFY/poll and local queues as the first distributed notification path. The amendment is in draft ADR 018 and is not accepted until Phase 4 approval.
 
 ## Proposed ADRs
 

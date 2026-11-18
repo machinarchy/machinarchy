@@ -168,7 +168,7 @@ Or use the Go command directly:
 go test ./...
 ~~~
 
-There is known test-suite debt: internal/transport/http/v1/history/history_test.go still imports the removed internal/metrics package and uses the previous handler API. As documented in CONTRIBUTING.md, this legacy test needs updating before the full suite can pass. A focused test command for the configuration package is:
+A focused test command for the configuration package is:
 
 ~~~sh
 go test ./internal/config

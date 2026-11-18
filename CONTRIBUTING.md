@@ -36,7 +36,7 @@ Every store method that changes inventory or access data must record an audit ev
 
 Install `golangci-lint` and the Swaggo CLI before using the corresponding targets. Do not commit credentials, local database files, generated binaries, or unreviewed generated API changes.
 
-Current test debt: `internal/transport/http/v1/history/history_test.go` still targets the removed `internal/metrics` package and old handler API. Update that legacy test before treating `make test` as a passing repository check.
+`make smoke` builds the binaries and drives the CLI against a fresh monolith (`scripts/smoke.sh`). After changing a route, run `make api-docs`; a test fails if the generated spec misses a registered route.
 
 ## API and security guidelines
 

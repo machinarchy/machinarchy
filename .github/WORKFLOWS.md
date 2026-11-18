@@ -34,8 +34,6 @@ already exists, grant this repository Actions write access to that package.
   commit message or PR title. With `docker_push: false`, it does not push, scan,
   or sign. With `docker_push: true`, it pushes, scans by immutable digest, and
   signs that digest with Cosign keyless signing.
-- `template-notifications.yml` is optional and requires only the secrets for
-  the notification providers enabled by the caller.
 
 ## Release Please expectations
 

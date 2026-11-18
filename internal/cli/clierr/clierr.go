@@ -10,7 +10,7 @@ import (
 )
 
 // Exit codes returned by the machinarchy process. They follow the contract in
-// ADR-035 and docs/architecture/phase-8-api-cli-interaction.md.
+// ADR-035 and docs/archive/phase-8-api-cli-interaction.md.
 const (
 	// ExitOK reports success.
 	ExitOK = 0

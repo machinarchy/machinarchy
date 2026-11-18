@@ -1,6 +1,6 @@
 # Machinarchy CLI examples
 
-These examples use the CLI from the repository root. Start the API or monolith before issuing API resource commands. See [the CLI guide](docs/cli/README.md) for the full command and configuration reference.
+These examples use the CLI from the repository root. Start the API or monolith before issuing API resource commands. See [the CLI guide](README.md) for the full command and configuration reference.
 
 ## Build and inspect help
 
@@ -112,4 +112,4 @@ go run ./cmd/machinarchy --verbose get hosts
 go build -mod=readonly ./...
 ```
 
-For common authentication, connection, environment, and config errors, see [CLI troubleshooting](docs/cli/troubleshooting.md).
+For common authentication, connection, environment, and config errors, see [CLI troubleshooting](troubleshooting.md).

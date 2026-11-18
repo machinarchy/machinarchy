@@ -47,7 +47,7 @@ machinarchy config set-context NAME --cluster CLUSTER --user USER [--env ENVIRON
 
 The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
 
-See [commands and flags](commands.md) for details and [example-cli.md](../../example-cli.md) for end-to-end recipes.
+See [commands and flags](commands.md) for details and [example-cli.md](example-cli.md) for end-to-end recipes.
 
 ## Security notes
 
@@ -67,5 +67,5 @@ For example, a future `apply` command can be registered in the core group withou
 - [Configuration and contexts](configuration.md)
 - [Commands and flags](commands.md)
 - [Troubleshooting](troubleshooting.md)
-- [Runnable CLI examples](../../example-cli.md)
-- [SSH host registration and execution status](../../example-usecases.md)
+- [Runnable CLI examples](example-cli.md)
+- [SSH host registration and execution status](../examples/example-usecases.md)

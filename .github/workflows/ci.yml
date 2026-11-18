@@ -121,22 +121,3 @@ jobs:
       organization: ${{ github.repository_owner }}
       docker_push: true
 
-  # Notifications are opt-in. Uncomment and configure secrets when needed.
-  # notify:
-  #   name: Notify pipeline result
-  #   if: always()
-  #   needs:
-  #     - lint-and-audit
-  #     - test
-  #     - database-schema-validation
-  #     - orchestrate-release
-  #     - docker-production-delivery
-  #   uses: ./.github/workflows/template-notifications.yml
-  #   with:
-  #     telegram: true
-  #     status: >-
-  #       ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'FAILURE' || 'SUCCESS' }}
-  #     message: "Machinarchy CI pipeline finished."
-  #   secrets:
-  #     TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-  #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

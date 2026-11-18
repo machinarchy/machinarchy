@@ -59,7 +59,7 @@ curl -X POST http://localhost:8080/api/v1/tokens \
   -H 'Content-Type: application/json' \
   -d '{"name":"ci-read","role":"reader","expiresInHours":168}'
 
-curl http://localhost:8080/api/v1/hosts \
+curl http://localhost:8080/api/v1/managed/hosts \
   -H "Authorization: Bearer $MACHINARCHY_API_TOKEN"
 
 curl -X DELETE http://localhost:8080/api/v1/tokens/123 \
@@ -70,11 +70,9 @@ The first response contains the token's plaintext exactly once. Copy it directly
 
 This implementation is not yet a full collaborative organization system: there are no invitations, member removal, workspace switching, or durable audit events (role changes are recorded in the audit trail, which is tamper-evident but not yet exportable or archived). Do not promise multi-user collaboration until those flows exist and are tested.
 
-### Existing database migration
+### Existing databases
 
-Migration 000003 assigns pre-existing hosts, environments, jobs, and metrics history to workspace 1. The earliest existing user (lowest database ID) becomes that workspace's owner. Each later existing user gets a new empty workspace and owner membership. If there are no existing users, the first account created claims workspace 1. This preserves all records while removing shared access for later accounts. Databases migrated this way keep those per-account workspaces; accounts created after the single-workspace change join workspace 1.
-
-Before upgrading an existing installation, inspect the user IDs and confirm the earliest account is the intended owner of legacy records. Take and verify a database backup, rehearse the upgrade on a copy, and keep the original backup until application behavior is confirmed. The migration framework does not run down migrations; recovery is restore-from-backup or a reviewed forward migration. Do not manually change workspace IDs in production without a reviewed data migration.
+The schema is a single baseline per dialect. A database created by the earlier migration chain (with legacy `hosts`, `jobs` and `runs` tables and per-account workspaces) is refused at startup and must be recreated; there is no data migration while the project is in development. Take a backup first if anything in it matters.
 
 Do not rely on hidden UI controls, unguessable IDs, or disabling signup as the authorization boundary. Repository scoping remains authoritative even when the CLI or UI hides resources.
 
