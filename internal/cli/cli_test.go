@@ -551,7 +551,7 @@ func TestFactoryBuildsTargetsFromResolvedConfiguration(t *testing.T) {
 	options.ClientBuilder = builder
 
 	t.Run("from the config file", func(t *testing.T) {
-		path := writeConfig(t, "http://file.example/", "file-token")
+		path := writeConfig(t, "https://file.example/", "file-token")
 
 		result := run(t, options, "--config", path, "client-target")
 		if result.code != 0 {
@@ -560,22 +560,22 @@ func TestFactoryBuildsTargetsFromResolvedConfiguration(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		if got.Server != "http://file.example" || got.Token != "file-token" || got.RequestTimeout != 30*time.Second || got.ContextName != "test" {
+		if got.Server != "https://file.example" || got.Token != "file-token" || got.RequestTimeout != 30*time.Second || got.ContextName != "test" {
 			t.Fatalf("target = %+v", got)
 		}
 	})
 
 	t.Run("flags override the file", func(t *testing.T) {
-		path := writeConfig(t, "http://file.example", "file-token")
+		path := writeConfig(t, "https://file.example", "file-token")
 
-		result := run(t, options, "--config", path, "--server", "http://flag.example", "--request-timeout", "5s", "client-target")
+		result := run(t, options, "--config", path, "--server", "https://flag.example", "--request-timeout", "5s", "client-target")
 		if result.code != 0 {
 			t.Fatalf("result = %+v", result)
 		}
 
 		mu.Lock()
 		defer mu.Unlock()
-		if got.Server != "http://flag.example" || got.RequestTimeout != 5*time.Second || got.Token != "file-token" {
+		if got.Server != "https://flag.example" || got.RequestTimeout != 5*time.Second || got.Token != "file-token" {
 			t.Fatalf("target = %+v", got)
 		}
 	})

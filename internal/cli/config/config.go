@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -73,6 +74,9 @@ type Context struct {
 // Cluster stores the API server base URL.
 type Cluster struct {
 	Server string `yaml:"server"`
+	// InsecureHTTP allows sending the token over plain http:// to a host that
+	// is not loopback (AUDIT S-18). Set only with config set-cluster --insecure-http.
+	InsecureHTTP bool `yaml:"insecure-http,omitempty"`
 }
 
 // User stores an API bearer token.
@@ -301,10 +305,15 @@ func (s *Store) Resolve() (Target, error) {
 	}
 
 	server := strings.TrimSpace(s.v.GetString("server"))
+	insecureAllowed := false
 	if server == "" {
 		server = cluster.Server
+		insecureAllowed = cluster.InsecureHTTP
 	}
 	if err := ValidateServer(server); err != nil {
+		return Target{}, err
+	}
+	if err := checkTransport(server, insecureAllowed); err != nil {
 		return Target{}, err
 	}
 
@@ -459,7 +468,7 @@ func (s *Store) User(name string) (User, bool) {
 }
 
 // SetCluster adds or updates a cluster and saves the config securely.
-func (s *Store) SetCluster(name, server string) error {
+func (s *Store) SetCluster(name, server string, insecureHTTP bool) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return clierr.Usagef("cluster name is required")
@@ -467,7 +476,10 @@ func (s *Store) SetCluster(name, server string) error {
 	if err := ValidateServer(server); err != nil {
 		return err
 	}
-	s.doc.Clusters[name] = Cluster{Server: strings.TrimRight(strings.TrimSpace(server), "/")}
+	if err := checkTransport(server, insecureHTTP); err != nil {
+		return err
+	}
+	s.doc.Clusters[name] = Cluster{Server: strings.TrimRight(strings.TrimSpace(server), "/"), InsecureHTTP: insecureHTTP}
 	return s.save()
 }
 
@@ -523,6 +535,31 @@ func ValidateServer(server string) error {
 		return clierr.Usagef("API server must be an absolute http:// or https:// URL without credentials, query, or fragment")
 	}
 	return nil
+}
+
+// checkTransport refuses to send a bearer token over plain HTTP to a host
+// that is not loopback, where anyone on the path can read it (AUDIT S-18).
+// insecureAllowed is the cluster's explicit --insecure-http opt-in.
+func checkTransport(server string, insecureAllowed bool) error {
+	parsed, err := url.Parse(strings.TrimSpace(server))
+	if err != nil || parsed.Scheme != "http" || insecureAllowed || IsLoopbackHost(parsed.Hostname()) {
+		return nil
+	}
+	return clierr.Wrap(clierr.ExitUsage,
+		fmt.Errorf("refusing to send the API token over plain http:// to %s", parsed.Host),
+		"Use an https:// server URL. If this network is trusted, opt in for this cluster with:\n"+
+			"  machinarchy config set-cluster NAME --server "+server+" --insecure-http")
+}
+
+// IsLoopbackHost reports whether host is localhost, a *.localhost name or a
+// loopback IP literal.
+func IsLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ValidateToken rejects empty, oversized, or whitespace/control-character

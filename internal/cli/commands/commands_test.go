@@ -683,6 +683,7 @@ func TestConfigCommandsEndToEnd(t *testing.T) {
 		args  []string
 	}{
 		{"", []string{"config", "set-cluster", "Prod.EU", "--server", "https://api.example.com/"}},
+		{"", []string{"config", "set-cluster", "Lab", "--server", "http://lab.example.test", "--insecure-http"}},
 		{"tok-abc123\n", []string{"config", "set-credentials", "Ops.User", "--token-stdin"}},
 		{"", []string{"config", "set-context", "Prod.EU", "--cluster", "Prod.EU", "--user", "Ops.User", "--env", "Staging"}},
 		{"", []string{"config", "use-context", "Prod.EU"}},
@@ -766,6 +767,7 @@ func TestConfigCommandErrorsAreUsageErrors(t *testing.T) {
 	}{
 		{"set-cluster without server", "", []string{"config", "set-cluster", "x"}, "--server is required"},
 		{"set-cluster with a bad URL", "", []string{"config", "set-cluster", "x", "--server", "localhost"}, "absolute http:// or https:// URL"},
+		{"set-cluster with remote plain http", "", []string{"config", "set-cluster", "x", "--server", "http://api.example.test"}, "--insecure-http"},
 		{"use-context unknown", "", []string{"config", "use-context", "nope"}, `context "nope" does not exist`},
 		{"current-context unset", "", []string{"config", "current-context"}, "no current context is selected"},
 		{"set-credentials without a source", "", []string{"config", "set-credentials", "x"}, "provide exactly one of"},

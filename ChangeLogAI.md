@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-18 — Audit Phase 11: CLI refuses tokens over plain HTTP (branch audit/http-hardening)
+
+**Behaviour change:** a CLI context whose server is `http://` on a non-loopback host now fails with a usage error until the cluster is re-added with `--insecure-http`.
+
+- `internal/cli/config/config.go`: `checkTransport` and `IsLoopbackHost`. `Resolve` and `SetCluster` refuse plain `http://` to anything but `localhost`, `*.localhost` or a loopback IP. `Cluster.InsecureHTTP` (`insecure-http` in the config file) is the per-cluster opt-in. It does not apply to a server overridden by flag or environment (AUDIT S-18).
+- `internal/cli/commands/config.go`: `config set-cluster --insecure-http`.
+- Tests that used `http://*.example` servers for precedence checks now use `https://`; `docs/cli/README.md` documents the rule.
+
+### Verification
+
+- `go test ./internal/cli/...`: pass. New tests: `TestPlainHTTPTokenTransport` (10 cases, including an override bypass attempt and a `localhost.example.test` look-alike), `TestSetClusterRequiresOptInForRemoteHTTP`, and two command-table cases. With the guard disabled, both new config tests fail.
+- golangci-lint `./internal/cli/...`: only the 2 pre-existing issues (`client_test.go` unused parameter, `APIError` stutter).
+
 ## 2026-11-18 — Audit Phase 11: API docs and metrics off the public listener (branch audit/http-hardening)
 
 **Behaviour change:** in production, `/openapi.json`, `/scalar` and `/scalar/init.js` are no longer served unless `MACHINARCHY_API_DOCS_ENABLED=true`.

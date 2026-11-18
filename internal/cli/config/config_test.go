@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +18,7 @@ const sampleConfig = `apiVersion: machinarchy.io/v1
 current-context: local
 clusters:
   local:
-    server: http://file.example:8080/
+    server: https://file.example:8080/
 users:
   local:
     token: file-token
@@ -121,7 +122,7 @@ func TestNamesArePreservedExactly(t *testing.T) {
 	}
 
 	// Mixed case and dots are exactly what Viper's key handling would mangle.
-	if err := store.SetCluster("Prod.EU", "https://api.example.com"); err != nil {
+	if err := store.SetCluster("Prod.EU", "https://api.example.com", false); err != nil {
 		t.Fatalf("SetCluster: %v", err)
 	}
 	if err := store.SetUser("Ops.User", "token-value"); err != nil {
@@ -173,22 +174,22 @@ func TestResolvePrecedence(t *testing.T) {
 	}{
 		{
 			name:       "config file only",
-			wantServer: "http://file.example:8080",
+			wantServer: "https://file.example:8080",
 			wantToken:  "file-token",
 			wantEnv:    "staging",
 		},
 		{
 			name:       "environment beats file",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "http://env.example", "MACHINARCHY_CLI_TOKEN": "env-token", "MACHINARCHY_CLI_ENV": "prod"},
-			wantServer: "http://env.example",
+			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_TOKEN": "env-token", "MACHINARCHY_CLI_ENV": "prod"},
+			wantServer: "https://env.example",
 			wantToken:  "env-token",
 			wantEnv:    "prod",
 		},
 		{
 			name:       "flag beats environment",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "http://env.example", "MACHINARCHY_CLI_ENV": "prod"},
-			args:       []string{"--server", "http://flag.example/", "--env", "dev"},
-			wantServer: "http://flag.example",
+			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_ENV": "prod"},
+			args:       []string{"--server", "https://flag.example/", "--env", "dev"},
+			wantServer: "https://flag.example",
 			wantToken:  "file-token",
 			wantEnv:    "dev",
 		},
@@ -422,7 +423,7 @@ func TestLoadSettingsIgnoresDamagedFile(t *testing.T) {
 	if got := store.OutputExplicit(); got != "yaml" {
 		t.Fatalf("OutputExplicit = %q, want yaml", got)
 	}
-	if err := store.SetCluster("x", "http://x"); err == nil {
+	if err := store.SetCluster("x", "http://x", false); err == nil {
 		t.Fatal("a settings-only store must refuse to write a config file")
 	}
 }
@@ -438,7 +439,7 @@ func TestSavedFilesAreOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if err := store.SetCluster("local", "http://localhost:8080"); err != nil {
+	if err := store.SetCluster("local", "http://localhost:8080", false); err != nil {
 		t.Fatalf("SetCluster: %v", err)
 	}
 
@@ -545,5 +546,75 @@ func TestValidateToken(t *testing.T) {
 		if err := ValidateToken(token); err == nil {
 			t.Errorf("ValidateToken(%q) = nil, want error", token)
 		}
+	}
+}
+
+func TestPlainHTTPTokenTransport(t *testing.T) {
+	const remote = `apiVersion: machinarchy.io/v1
+current-context: c
+clusters:
+  c:
+    server: http://api.example.test:8080
+%s
+users:
+  c:
+    token: file-token
+contexts:
+  c:
+    cluster: c
+    user: c
+`
+	for _, tc := range []struct {
+		name    string
+		cluster string // extra cluster line
+		env     map[string]string
+		args    []string
+		wantErr bool
+	}{
+		{name: "remote http refused", wantErr: true},
+		{name: "remote http with cluster opt-in", cluster: "    insecure-http: true"},
+		{name: "opt-in does not cover an overriding server", cluster: "    insecure-http: true", args: []string{"--server", "http://other.example.test"}, wantErr: true},
+		{name: "environment override to remote http refused", env: map[string]string{"MACHINARCHY_CLI_SERVER": "http://env.example.test"}, wantErr: true},
+		{name: "loopback IP over http", args: []string{"--server", "http://127.0.0.1:8080"}},
+		{name: "IPv6 loopback over http", args: []string{"--server", "http://[::1]:8080"}},
+		{name: "localhost over http", args: []string{"--server", "http://localhost:8080"}},
+		{name: "dev name under .localhost", args: []string{"--server", "http://api.localhost:8080"}},
+		{name: "https anywhere", args: []string{"--server", "https://api.example.test"}},
+		{name: "look-alike host refused", args: []string{"--server", "http://localhost.example.test"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnvironment(t)
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			store, err := Load(writeConfig(t, fmt.Sprintf(remote, tc.cluster)), newFlags(t, tc.args...))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			_, err = store.Resolve()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Resolve() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "plain http://") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestSetClusterRequiresOptInForRemoteHTTP(t *testing.T) {
+	isolateEnvironment(t)
+	store, err := Load(filepath.Join(t.TempDir(), "config.yaml"), newFlags(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCluster("remote", "http://api.example.test", false); err == nil {
+		t.Fatal("plain http to a remote host was accepted without --insecure-http")
+	}
+	if err := store.SetCluster("remote", "http://api.example.test", true); err != nil {
+		t.Fatalf("opt-in refused: %v", err)
+	}
+	if err := store.SetCluster("local", "http://127.0.0.1:8080", false); err != nil {
+		t.Fatalf("loopback refused: %v", err)
 	}
 }

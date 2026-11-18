@@ -91,6 +91,7 @@ func newUseContextCommand(factory *cli.Factory) *cobra.Command {
 
 func newSetClusterCommand(factory *cli.Factory) *cobra.Command {
 	var server string
+	var insecureHTTP bool
 	command := &cobra.Command{
 		Use:   "set-cluster NAME --server URL",
 		Short: "Add or update an API server",
@@ -99,7 +100,7 @@ func newSetClusterCommand(factory *cli.Factory) *cobra.Command {
 			if strings.TrimSpace(server) == "" {
 				return clierr.Usagef("--server is required")
 			}
-			if err := factory.Config().SetCluster(args[0], server); err != nil {
+			if err := factory.Config().SetCluster(args[0], server, insecureHTTP); err != nil {
 				return err
 			}
 			_, err := fmt.Fprintf(command.OutOrStdout(), "Cluster %q configured.\n", args[0])
@@ -107,6 +108,7 @@ func newSetClusterCommand(factory *cli.Factory) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&server, "server", "", "Machinarchy API base URL")
+	command.Flags().BoolVar(&insecureHTTP, "insecure-http", false, "Allow sending the API token over plain http:// to a non-loopback host")
 	return command
 }
 
