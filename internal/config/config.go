@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -100,6 +101,61 @@ type Config struct {
 	SSHHostKeyPolicy string
 	Execution        domain.ExecutionPolicy
 	AgentGateway     AgentGatewayConfig
+	// HTTP holds the API listener's request handling settings.
+	HTTP HTTPConfig
+}
+
+// HTTPConfig holds the API listener's request handling settings (AUDIT
+// S-10). A zero value means the defaults; the API server requires
+// CORSAllowedOrigins in production.
+type HTTPConfig struct {
+	// CORSAllowedOrigins are the browser origins allowed to call the API
+	// (MACHINARCHY_CORS_ALLOWED_ORIGINS).
+	CORSAllowedOrigins []string
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For is
+	// believed (MACHINARCHY_TRUSTED_PROXIES). Empty: the peer address is the
+	// client.
+	TrustedProxies []netip.Prefix
+	// RateLimitRPS and RateLimitBurst size each client's token bucket
+	// (MACHINARCHY_RATE_LIMIT_RPS, MACHINARCHY_RATE_LIMIT_BURST).
+	RateLimitRPS   float64
+	RateLimitBurst int
+	// MaxBodyBytes caps a request body (MACHINARCHY_HTTP_MAX_BODY_BYTES).
+	MaxBodyBytes int64
+	// RequestTimeout bounds one /api request (MACHINARCHY_HTTP_REQUEST_TIMEOUT).
+	RequestTimeout time.Duration
+}
+
+// HTTP defaults.
+const (
+	DefaultRateLimitRPS       = 20
+	DefaultRateLimitBurst     = 30
+	DefaultMaxBodyBytes       = 1 << 20
+	DefaultHTTPRequestTimeout = 25 * time.Second
+	// MaxHTTPRequestTimeout keeps the deadline under the listener's write
+	// timeout, which is derived from it.
+	MaxHTTPRequestTimeout = 5 * time.Minute
+)
+
+// DevelopmentCORSOrigins are allowed outside production when none are set:
+// the web console's dev server.
+var DevelopmentCORSOrigins = []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+
+// WithDefaults fills unset fields with the defaults.
+func (h HTTPConfig) WithDefaults() HTTPConfig {
+	if h.RateLimitRPS == 0 {
+		h.RateLimitRPS = DefaultRateLimitRPS
+	}
+	if h.RateLimitBurst == 0 {
+		h.RateLimitBurst = DefaultRateLimitBurst
+	}
+	if h.MaxBodyBytes == 0 {
+		h.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if h.RequestTimeout == 0 {
+		h.RequestTimeout = DefaultHTTPRequestTimeout
+	}
+	return h
 }
 
 // AgentGatewayConfig enables the controller side of the agent protocol. The
@@ -199,6 +255,13 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--login-max-backoff":     "MACHINARCHY_LOGIN_MAX_BACKOFF",
 		"--login-ip-max-failures": "MACHINARCHY_LOGIN_IP_MAX_FAILURES",
 		"--login-failure-window":  "MACHINARCHY_LOGIN_FAILURE_WINDOW",
+
+		"--cors-allowed-origins": "MACHINARCHY_CORS_ALLOWED_ORIGINS",
+		"--trusted-proxies":      "MACHINARCHY_TRUSTED_PROXIES",
+		"--rate-limit-rps":       "MACHINARCHY_RATE_LIMIT_RPS",
+		"--rate-limit-burst":     "MACHINARCHY_RATE_LIMIT_BURST",
+		"--http-max-body-bytes":  "MACHINARCHY_HTTP_MAX_BODY_BYTES",
+		"--http-request-timeout": "MACHINARCHY_HTTP_REQUEST_TIMEOUT",
 
 		"--metrics-listen-addr": "MACHINARCHY_METRICS_LISTEN_ADDR",
 		"--api-docs-enabled":    "MACHINARCHY_API_DOCS_ENABLED",
@@ -337,6 +400,12 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 			return Config{}, err
 		}
 	}
+
+	httpConfig, err := loadHTTP(get)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.HTTP = httpConfig
 
 	// Configuration loading returns errors to the caller; it must never exit the
 	// process or silently substitute a predictable signing/encryption secret.
@@ -642,6 +711,79 @@ func parseDurationBounds(raw, key string, allowZero bool) (time.Duration, error)
 		return 0, fmt.Errorf("%s must resolve into a valid %s duration format matching (e.g. 5s, 30m)", key, label)
 	}
 	return val, nil
+}
+
+// loadHTTP reads the API listener settings (AUDIT S-10).
+func loadHTTP(get func(string, ...string) string) (HTTPConfig, error) {
+	var h HTTPConfig
+	// CORS_ALLOWED_ORIGINS is the setting's earlier, unprefixed name.
+	rawOrigins := get("MACHINARCHY_CORS_ALLOWED_ORIGINS", GetEnv("CORS_ALLOWED_ORIGINS"))
+	origins, err := ParseCORSOrigins(rawOrigins)
+	if err != nil {
+		return HTTPConfig{}, err
+	}
+	// Production requires origins, but only where the API is served: the
+	// API server checks it, so a Control Manager process does not need them.
+	h.CORSAllowedOrigins = origins
+
+	for _, raw := range strings.Split(get("MACHINARCHY_TRUSTED_PROXIES", ""), ",") {
+		if raw = strings.TrimSpace(raw); raw == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(raw)
+			if addrErr != nil {
+				return HTTPConfig{}, fmt.Errorf("MACHINARCHY_TRUSTED_PROXIES: %q is not an IP address or CIDR", raw)
+			}
+			prefix = netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen())
+		}
+		if prefix.Bits() == 0 {
+			return HTTPConfig{}, fmt.Errorf("MACHINARCHY_TRUSTED_PROXIES: %q trusts every address; list the proxies' own addresses", raw)
+		}
+		h.TrustedProxies = append(h.TrustedProxies, prefix.Masked())
+	}
+
+	rps, err := strconv.ParseFloat(get("MACHINARCHY_RATE_LIMIT_RPS", strconv.Itoa(DefaultRateLimitRPS)), 64)
+	if err != nil || rps < 0.1 || rps > 100000 {
+		return HTTPConfig{}, errors.New("MACHINARCHY_RATE_LIMIT_RPS must be a number between 0.1 and 100000")
+	}
+	h.RateLimitRPS = rps
+	if h.RateLimitBurst, err = strconv.Atoi(get("MACHINARCHY_RATE_LIMIT_BURST", strconv.Itoa(DefaultRateLimitBurst))); err != nil ||
+		h.RateLimitBurst < 1 || h.RateLimitBurst > 100000 {
+		return HTTPConfig{}, errors.New("MACHINARCHY_RATE_LIMIT_BURST must be a number between 1 and 100000")
+	}
+	if h.MaxBodyBytes, err = strconv.ParseInt(get("MACHINARCHY_HTTP_MAX_BODY_BYTES", strconv.Itoa(DefaultMaxBodyBytes)), 10, 64); err != nil ||
+		h.MaxBodyBytes < 1024 || h.MaxBodyBytes > 64<<20 {
+		return HTTPConfig{}, errors.New("MACHINARCHY_HTTP_MAX_BODY_BYTES must be a number of bytes between 1024 and 67108864")
+	}
+	if h.RequestTimeout, err = parseDurationBounds(get("MACHINARCHY_HTTP_REQUEST_TIMEOUT", DefaultHTTPRequestTimeout.String()),
+		"MACHINARCHY_HTTP_REQUEST_TIMEOUT", false); err != nil {
+		return HTTPConfig{}, err
+	}
+	if h.RequestTimeout < time.Second || h.RequestTimeout > MaxHTTPRequestTimeout {
+		return HTTPConfig{}, errors.New("MACHINARCHY_HTTP_REQUEST_TIMEOUT must be between 1s and 5m")
+	}
+	return h, nil
+}
+
+// ParseCORSOrigins parses a comma-separated list of explicit http(s)
+// origins; "" gives none.
+func ParseCORSOrigins(raw string) ([]string, error) {
+	var origins []string
+	for _, origin := range strings.Split(raw, ",") {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+			parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("invalid CORS origin %q; provide explicit http:// or https:// origins", origin)
+		}
+		origins = append(origins, origin)
+	}
+	return origins, nil
 }
 
 func validateListenAddr(address string) error {

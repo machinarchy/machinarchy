@@ -5,12 +5,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
 
 	"github.com/labstack/echo/v4"
@@ -18,19 +20,15 @@ import (
 )
 
 type clientTracker struct {
-	limiter      *rate.Limiter
-	blockedUntil time.Time
-	banCount     int
-	lastSeen     time.Time
-	lastBannedAt time.Time
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
-// Config defines the configuration options for the HTTP rate limiter.
+// Config sizes each client's token bucket (AUDIT S-10). Limits are kept in
+// memory, so each replica enforces them separately.
 type Config struct {
-	RequestsPerSec       float64
-	Burst                int
-	InitialBlockDuration time.Duration
-	MaxBlockDuration     time.Duration
+	RequestsPerSec float64
+	Burst          int
 }
 
 // Validate checks configuration parameters for logical errors or out-of-bounds values
@@ -40,12 +38,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Burst <= 0 {
 		return errors.New("rate limit Burst must be greater than 0")
-	}
-	if c.InitialBlockDuration <= 0 {
-		return errors.New("rate limit InitialBlockDuration must be greater than 0")
-	}
-	if c.MaxBlockDuration < c.InitialBlockDuration {
-		return errors.New("rate limit MaxBlockDuration cannot be less than InitialBlockDuration")
 	}
 	return nil
 }
@@ -69,7 +61,7 @@ const (
 	maxTrackedClients  = 10000 // Bound client state to prevent memory bloat.
 	clientShardCount   = 64    // Reduce lock contention across independent client IPs.
 	maxClientsPerShard = (maxTrackedClients + clientShardCount - 1) / clientShardCount
-	banDecayDuration   = 30 * time.Minute // Reset banCount if client is clean for 30 mins.
+	idleClientTTL      = 10 * time.Minute // Forget clients idle this long; their bucket is full again anyway.
 )
 
 // NewRateLimiter creates an encapsulated RateLimiter instance and validates config.
@@ -110,7 +102,7 @@ func (rl *RateLimiter) startCleanupWorker() {
 					shard := &rl.shards[i]
 					shard.mu.Lock()
 					for ip, tracker := range shard.clients {
-						if now.Sub(tracker.lastSeen) > 10*time.Minute && now.After(tracker.blockedUntil) {
+						if now.Sub(tracker.lastSeen) > idleClientTTL {
 							delete(shard.clients, ip)
 						}
 					}
@@ -131,12 +123,14 @@ func (rl *RateLimiter) Stop() {
 	<-rl.done
 }
 
-// Middleware returns the Echo middleware function using this RateLimiter instance.
+// Middleware returns the Echo middleware function using this RateLimiter
+// instance. Each client network (domain.ClientKey of the client address, so
+// an IPv6 /64) has one token bucket. A request without a token is refused
+// with 429 and a Retry-After of when the next token arrives; there is no
+// escalating ban, so a client that slows down is served again at once.
 func (rl *RateLimiter) Middleware() echo.MiddlewareFunc {
 	rLimit := rate.Limit(rl.config.RequestsPerSec)
 	burst := rl.config.Burst
-	initialBlockDuration := rl.config.InitialBlockDuration
-	maxBlockDuration := rl.config.MaxBlockDuration
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -149,98 +143,51 @@ func (rl *RateLimiter) Middleware() echo.MiddlewareFunc {
 					ip = c.Request().RemoteAddr
 				}
 			}
+			key := domain.ClientKey(ip)
 
-			shard := rl.shardFor(ip)
+			shard := rl.shardFor(key)
 			shard.mu.Lock()
 			now := time.Now()
-			tracker, exists := shard.clients[ip]
-
+			tracker, exists := shard.clients[key]
 			if !exists {
-				// Eviction strategy: if map exceeds capacity, drop the oldest entry
+				// Bound memory: past capacity, forget the longest-idle client.
 				if len(shard.clients) >= maxClientsPerShard {
-					var oldestIP string
+					var oldestKey string
 					var oldestTime time.Time
-					for existingIP, t := range shard.clients {
-						if oldestIP == "" || t.lastSeen.Before(oldestTime) {
+					for existing, t := range shard.clients {
+						if oldestKey == "" || t.lastSeen.Before(oldestTime) {
 							oldestTime = t.lastSeen
-							oldestIP = existingIP
+							oldestKey = existing
 						}
 					}
-					if oldestIP != "" {
-						delete(shard.clients, oldestIP)
-					}
+					delete(shard.clients, oldestKey)
 				}
-
-				tracker = &clientTracker{
-					limiter:      rate.NewLimiter(rLimit, burst),
-					blockedUntil: now,
-					banCount:     0,
-					lastSeen:     now,
-				}
-				shard.clients[ip] = tracker
+				tracker = &clientTracker{limiter: rate.NewLimiter(rLimit, burst)}
+				shard.clients[key] = tracker
 			}
-
 			tracker.lastSeen = now
-
-			// Decay check: If the client has been unblocked and behaved well for 30+ minutes, reset banCount
-			if now.After(tracker.blockedUntil) && !tracker.lastBannedAt.IsZero() && now.Sub(tracker.lastBannedAt) > banDecayDuration {
-				tracker.banCount = 0
-				tracker.lastBannedAt = time.Time{}
+			reservation := tracker.limiter.ReserveN(now, 1)
+			wait := reservation.DelayFrom(now)
+			if wait > 0 {
+				reservation.CancelAt(now) // a refused request costs no token
 			}
-
-			// 1. Check if client is currently blocked
-			if now.Before(tracker.blockedUntil) {
-				retryAfter := int(time.Until(tracker.blockedUntil).Seconds())
-				if retryAfter < 1 {
-					retryAfter = 1
-				}
-				c.Response().Header().Set("Retry-After", strconv.Itoa(retryAfter))
-
-				shard.mu.Unlock()
-				return httperr.Status(c, http.StatusTooManyRequests, "Rate limit exceeded. Your ban duration has been extended due to continued requests.")
-			}
-
-			// 2. Token Bucket check (.Allow() consumes 1 token if available)
-			if !tracker.limiter.Allow() {
-				tracker.banCount++
-				tracker.lastBannedAt = now
-
-				// Safe exponential backoff calculation preventing overflow
-				currentBlockDuration := initialBlockDuration
-				for i := 1; i < tracker.banCount; i++ {
-					if currentBlockDuration >= maxBlockDuration/2 {
-						currentBlockDuration = maxBlockDuration
-						break
-					}
-					currentBlockDuration *= 2
-				}
-
-				if currentBlockDuration > maxBlockDuration {
-					currentBlockDuration = maxBlockDuration
-				}
-
-				tracker.blockedUntil = now.Add(currentBlockDuration)
-
-				retryAfter := int(currentBlockDuration.Seconds())
-				c.Response().Header().Set("Retry-After", strconv.Itoa(retryAfter))
-
-				shard.mu.Unlock()
-
-				return httperr.Status(c, http.StatusTooManyRequests, "Rate limit exceeded. You are temporarily blocked.")
-			}
-
 			shard.mu.Unlock()
+
+			if wait > 0 {
+				c.Response().Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(wait.Seconds())), 10))
+				return httperr.Status(c, http.StatusTooManyRequests, "Rate limit exceeded; retry after the time in Retry-After.")
+			}
 			return next(c)
 		}
 	}
 }
 
-func (rl *RateLimiter) shardFor(ip string) *clientShard {
+func (rl *RateLimiter) shardFor(key string) *clientShard {
 	const offset = uint64(14695981039346656037)
 	const prime = uint64(1099511628211)
 	hash := rl.seed ^ offset
-	for i := 0; i < len(ip); i++ {
-		hash ^= uint64(ip[i])
+	for i := 0; i < len(key); i++ {
+		hash ^= uint64(key[i])
 		hash *= prime
 	}
 	return &rl.shards[hash%clientShardCount]

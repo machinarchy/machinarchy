@@ -1,5 +1,29 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 14: client address behind proxies, token-bucket rate limits, HTTP settings from config (S-10) (branch audit/sessions)
+
+- **Trusted proxies.** New `MACHINARCHY_TRUSTED_PROXIES` (IPs or CIDRs; `0.0.0.0/0`-style "trust everyone" is refused).
+  - Empty (default): the TCP peer is the client, as before.
+  - Set: `X-Forwarded-For` is read only from a listed proxy, from the right, stopping at the first address that is not a listed proxy. Echo's default trust of loopback, link-local and private ranges is turned off. A client therefore cannot choose its address by sending the header.
+  - Before, every client behind a load balancer shared the balancer's address, so one client's burst or failed logins (S-09 network limit) blocked everyone.
+- **Rate limiter is a plain token bucket per client network** (`domain.ClientKey`: IPv4 address, IPv6 /64).
+  - Removed the escalating bans (1 min doubling to 2 h, extended by every request while banned). A refused request gets 429 with `Retry-After` = seconds until the next token and costs no token, so a client that slows down is served at once.
+  - Limits are per replica; documented.
+- **HTTP settings come from configuration** (env, flags, JSON file), in a new `config.HTTPConfig`:
+  - `MACHINARCHY_CORS_ALLOWED_ORIGINS` (the server read `CORS_ALLOWED_ORIGINS` itself with `os.Getenv`, so it was missing from flags and the config file; the old name still works, and production still requires origins where the API is served);
+  - `MACHINARCHY_RATE_LIMIT_RPS`, `_BURST` (were hardcoded 20 and 30);
+  - `MACHINARCHY_HTTP_MAX_BODY_BYTES` (was hardcoded 1 MiB);
+  - `MACHINARCHY_HTTP_REQUEST_TIMEOUT` (was the constant 25 s); the listener's write timeout is now derived from it (+5 s), so the deadline always ends first (Q-20).
+- Docs: `docs/operations.md` ("Behind a reverse proxy", "Rate limits", settings, timeouts), README, `.env.example`, `docs/SECURITY.md` and the govulncheck allowlist comment (GO-2026-6872 still does not apply: Echo's limiter is unused and our extractor trusts only listed proxies).
+
+### Verification
+
+- `TestClientIPExtractor`: no proxies ignores the header; a forged header from an untrusted peer is ignored; a client cannot prepend its own address; chains of proxies; private and loopback ranges not trusted unless listed; IPv6.
+- `TestRateLimiterIsATokenBucketPerClientNetwork`: burst, 429 with `Retry-After: 2` that does not grow while hammering, other clients unaffected, one IPv6 /64 shares a bucket and another /64 does not.
+- `TestLimitsUseTheClientBehindATrustedProxy` (wired server): through one proxy, client A's network login limit and client B's rate limit do not affect other clients; changing `X-Forwarded-For` from an untrusted peer does not escape the limit.
+- `TestLoadHTTPSettings` (defaults, the old CORS name, every setting, bounds) and `TestAllowedOrigins`.
+- `go test ./...` (cached) passes; golangci-lint `--new-from-rev`: 0 issues. govulncheck traces for GO-2026-6872/6875 are unchanged in kind (package-wide symbols).
+
 ## 2026-11-19 — Audit Phase 14: failed-login throttling and constant-time login (S-09) (branch audit/sessions)
 
 - **Throttling shared in the database.** Migration `000006_login_failures` (SQLite and PostgreSQL) counts failures per account and per client network with one atomic upsert each, so every replica enforces the same limits and concurrent failures are never lost.

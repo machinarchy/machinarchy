@@ -13,6 +13,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/machinarchy/machinarchy/internal/config"
 )
 
 func TestRequestDeadlineBoundsHandlers(t *testing.T) {
@@ -29,8 +31,8 @@ func TestRequestDeadlineBoundsHandlers(t *testing.T) {
 	if remaining := time.Until(deadline); remaining <= 0 || remaining > time.Second {
 		t.Fatalf("request deadline in %s, want within 1s", remaining)
 	}
-	if RequestTimeout >= 30*time.Second {
-		t.Fatal("the request deadline must be shorter than the 30s write timeout")
+	if WriteTimeoutFor(config.DefaultHTTPRequestTimeout) <= config.DefaultHTTPRequestTimeout {
+		t.Fatal("the request deadline must be shorter than the write timeout")
 	}
 }
 

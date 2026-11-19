@@ -37,6 +37,13 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_LOGIN_MAX_BACKOFF":          "",
 		"MACHINARCHY_LOGIN_IP_MAX_FAILURES":      "",
 		"MACHINARCHY_LOGIN_FAILURE_WINDOW":       "",
+		"MACHINARCHY_CORS_ALLOWED_ORIGINS":       "",
+		"CORS_ALLOWED_ORIGINS":                   "",
+		"MACHINARCHY_TRUSTED_PROXIES":            "",
+		"MACHINARCHY_RATE_LIMIT_RPS":             "",
+		"MACHINARCHY_RATE_LIMIT_BURST":           "",
+		"MACHINARCHY_HTTP_MAX_BODY_BYTES":        "",
+		"MACHINARCHY_HTTP_REQUEST_TIMEOUT":       "",
 		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                  "",
@@ -667,5 +674,68 @@ func TestLoadSessionAndLoginSettings(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Errorf("%s=%s accepted", key, bad)
 		}
+	}
+}
+
+// S-10 and the configuration inventory: the API listener's settings come
+// from configuration, CORS included.
+func TestLoadHTTPSettings(t *testing.T) {
+	setCommonEnv(t)
+	cfg, err := Load()
+	want := HTTPConfig{RateLimitRPS: DefaultRateLimitRPS, RateLimitBurst: DefaultRateLimitBurst,
+		MaxBodyBytes: DefaultMaxBodyBytes, RequestTimeout: DefaultHTTPRequestTimeout}
+	if err != nil || len(cfg.HTTP.CORSAllowedOrigins) != 0 || len(cfg.HTTP.TrustedProxies) != 0 ||
+		cfg.HTTP.RateLimitRPS != want.RateLimitRPS || cfg.HTTP.RateLimitBurst != want.RateLimitBurst ||
+		cfg.HTTP.MaxBodyBytes != want.MaxBodyBytes || cfg.HTTP.RequestTimeout != want.RequestTimeout {
+		t.Fatalf("defaults: %+v, %v", cfg.HTTP, err)
+	}
+
+	// The earlier unprefixed name still works; the prefixed one wins.
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://old.example")
+	if cfg, err = Load(); err != nil || len(cfg.HTTP.CORSAllowedOrigins) != 1 || cfg.HTTP.CORSAllowedOrigins[0] != "https://old.example" {
+		t.Fatalf("legacy CORS name: %v, %v", cfg.HTTP.CORSAllowedOrigins, err)
+	}
+	t.Setenv("MACHINARCHY_CORS_ALLOWED_ORIGINS", "https://console.example, http://localhost:5173")
+	t.Setenv("MACHINARCHY_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.7, ::ffff:198.51.100.1, 2001:db8::/32")
+	t.Setenv("MACHINARCHY_RATE_LIMIT_RPS", "2.5")
+	t.Setenv("MACHINARCHY_RATE_LIMIT_BURST", "7")
+	t.Setenv("MACHINARCHY_HTTP_MAX_BODY_BYTES", "2097152")
+	t.Setenv("MACHINARCHY_HTTP_REQUEST_TIMEOUT", "40s")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.HTTP
+	if len(h.CORSAllowedOrigins) != 2 || h.CORSAllowedOrigins[0] != "https://console.example" {
+		t.Fatalf("origins = %v", h.CORSAllowedOrigins)
+	}
+	var proxies []string
+	for _, p := range h.TrustedProxies {
+		proxies = append(proxies, p.String())
+	}
+	if strings.Join(proxies, " ") != "10.0.0.0/8 192.0.2.7/32 198.51.100.1/32 2001:db8::/32" {
+		t.Fatalf("trusted proxies = %v", proxies)
+	}
+	if h.RateLimitRPS != 2.5 || h.RateLimitBurst != 7 || h.MaxBodyBytes != 2<<20 || h.RequestTimeout != 40*time.Second {
+		t.Fatalf("limits = %+v", h)
+	}
+
+	for key, bad := range map[string]string{
+		"MACHINARCHY_CORS_ALLOWED_ORIGINS": "*",
+		"MACHINARCHY_TRUSTED_PROXIES":      "0.0.0.0/0",
+		"MACHINARCHY_RATE_LIMIT_RPS":       "0",
+		"MACHINARCHY_RATE_LIMIT_BURST":     "-1",
+		"MACHINARCHY_HTTP_MAX_BODY_BYTES":  "10",
+		"MACHINARCHY_HTTP_REQUEST_TIMEOUT": "10m",
+	} {
+		setCommonEnv(t)
+		t.Setenv(key, bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("%s=%s accepted", key, bad)
+		}
+	}
+	setCommonEnv(t)
+	t.Setenv("MACHINARCHY_TRUSTED_PROXIES", "proxy.internal")
+	if _, err := Load(); err == nil {
+		t.Error("a host name was accepted as a trusted proxy")
 	}
 }

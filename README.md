@@ -133,7 +133,10 @@ startup. Secrets are accepted only from the environment or `0600` files.
 | `MACHINARCHY_SSH_HOST_KEY_POLICY` | How host keys become trusted: `tofu` (dev default), `approve` (prod default) or `pinned`; profiles can also use `ca`. See [operations](docs/operations.md#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | Agent gateway (off unless `_NATS_URL` is set); see [operations](docs/operations.md#agent-gateway). |
 | `MACHINARCHY_SIGNUP_ENABLED` | Public sign-up, default `false`. |
-| `CORS_ALLOWED_ORIGINS` | Required in production. |
+| `MACHINARCHY_CORS_ALLOWED_ORIGINS` | Browser origins; required in production (`CORS_ALLOWED_ORIGINS` still works). |
+| `MACHINARCHY_TRUSTED_PROXIES` | Proxy IPs/CIDRs whose `X-Forwarded-For` is believed; see [operations](docs/operations.md#behind-a-reverse-proxy). |
+| `MACHINARCHY_RATE_LIMIT_RPS`, `_BURST` | Per-client API rate limit, defaults `20`/`30`, per replica. |
+| `MACHINARCHY_HTTP_MAX_BODY_BYTES`, `MACHINARCHY_HTTP_REQUEST_TIMEOUT` | Request size and deadline, defaults 1 MiB and `25s`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional trace export. |
 
 Runtime settings (worker counts, timeouts, SSH limits) live in the database as

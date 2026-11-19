@@ -10,8 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
-	"os"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -99,16 +98,12 @@ func NewServer(
 	if err != nil {
 		return nil, fmt.Errorf("configure audit service: %w", err)
 	}
-	origins, err := allowedOrigins(cfg.Environment)
+	httpCfg := cfg.HTTP.WithDefaults()
+	origins, err := allowedOrigins(cfg.Environment, httpCfg.CORSAllowedOrigins)
 	if err != nil {
 		return nil, err
 	}
-	limiter, err := custommw.NewRateLimiter(custommw.Config{
-		RequestsPerSec:       20,
-		Burst:                30,
-		InitialBlockDuration: time.Minute,
-		MaxBlockDuration:     2 * time.Hour,
-	})
+	limiter, err := custommw.NewRateLimiter(custommw.Config{RequestsPerSec: httpCfg.RateLimitRPS, Burst: httpCfg.RateLimitBurst})
 	if err != nil {
 		return nil, fmt.Errorf("configure API rate limiter: %w", err)
 	}
@@ -116,8 +111,8 @@ func NewServer(
 	e := echo.New()
 	e.HTTPErrorHandler = httperr.Handler
 	e.HideBanner = true
-	e.IPExtractor = echo.ExtractIPDirect()
-	e.Use(echomw.BodyLimit("1M"))
+	e.IPExtractor = ClientIPExtractor(httpCfg.TrustedProxies)
+	e.Use(echomw.BodyLimit(strconv.FormatInt(httpCfg.MaxBodyBytes, 10)))
 	e.Use(echomw.Recover())
 	e.Use(echomw.RequestID())
 	e.Use(custommw.Logging())
@@ -143,7 +138,7 @@ func NewServer(
 		s.useMetricsListener(cfg.MetricsListenAddr)
 	}
 
-	api := e.Group("/api", limiter.Middleware(), requestDeadline(RequestTimeout))
+	api := e.Group("/api", limiter.Middleware(), requestDeadline(httpCfg.RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
 		repositories.SessionKeys, repositories.SessionTTL, cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
 
@@ -152,7 +147,7 @@ func NewServer(
 		Handler:           otelhttp.NewHandler(e, "machinarchy.http.server"),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      WriteTimeoutFor(httpCfg.RequestTimeout),
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
@@ -486,39 +481,43 @@ func registerHTTPMetrics(registry *prometheus.Registry, databaseStats func() sql
 	}
 }
 
-func allowedOrigins(environment config.Environment) ([]string, error) {
-	const defaults = "http://localhost:5173,http://127.0.0.1:5173"
-	raw := os.Getenv("CORS_ALLOWED_ORIGINS")
-	if strings.TrimSpace(raw) == "" {
-		if environment == config.Production {
-			return nil, errors.New("CORS_ALLOWED_ORIGINS is required in production")
-		}
-		raw = defaults
+// allowedOrigins returns the configured CORS origins; outside production an
+// empty list means the web console's dev server.
+func allowedOrigins(environment config.Environment, configured []string) ([]string, error) {
+	if len(configured) > 0 {
+		return configured, nil
 	}
-	origins := strings.Split(raw, ",")
-	clean := origins[:0]
-	for _, origin := range origins {
-		origin = strings.TrimSpace(origin)
-		if origin == "" {
-			continue
-		}
-		parsed, err := url.Parse(origin)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
-			parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || origin == "*" {
-			return nil, fmt.Errorf("invalid CORS origin %q; provide explicit http:// or https:// origins", origin)
-		}
-		clean = append(clean, origin)
+	if environment == config.Production {
+		return nil, errors.New("MACHINARCHY_CORS_ALLOWED_ORIGINS is required in production")
 	}
-	if len(clean) == 0 {
-		return nil, errors.New("CORS_ALLOWED_ORIGINS must contain at least one explicit origin")
-	}
-	return clean, nil
+	return config.DevelopmentCORSOrigins, nil
 }
 
-// RequestTimeout bounds every /api request. It is shorter than the server's
-// 30s WriteTimeout, so database work for a request the client can no longer
-// receive is cancelled instead of running on (AUDIT Q-20).
-const RequestTimeout = 25 * time.Second
+// ClientIPExtractor returns how the client address is found (AUDIT S-10).
+// With no trusted proxies it is the TCP peer. Otherwise X-Forwarded-For is
+// read from the right, skipping only the listed proxies, so a client cannot
+// choose its own address by sending the header: the first address not in
+// the list is the client. Loopback, link-local and private ranges are not
+// trusted unless listed.
+func ClientIPExtractor(trusted []netip.Prefix) echo.IPExtractor {
+	if len(trusted) == 0 {
+		return echo.ExtractIPDirect()
+	}
+	options := []echo.TrustOption{echo.TrustLoopback(false), echo.TrustLinkLocal(false), echo.TrustPrivateNet(false)}
+	for _, prefix := range trusted {
+		options = append(options, echo.TrustIPRange(&net.IPNet{
+			IP: net.IP(prefix.Addr().AsSlice()), Mask: net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()),
+		}))
+	}
+	return echo.ExtractIPFromXFFHeader(options...)
+}
+
+// WriteTimeoutFor is the listener's write timeout for a request deadline:
+// longer than the deadline, so database work for a request the client can no
+// longer receive is cancelled instead of running on (AUDIT Q-20).
+func WriteTimeoutFor(requestTimeout time.Duration) time.Duration {
+	return requestTimeout + 5*time.Second
+}
 
 func requestDeadline(timeout time.Duration) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

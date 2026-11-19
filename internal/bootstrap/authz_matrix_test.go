@@ -163,7 +163,6 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	cfg := config.Config{
 		ListenAddr: "127.0.0.1:0", Environment: config.Development, SignupEnabled: true, APIDocsEnabled: true,
 		OperatorToken:    "matrix-operator-token-0123456789abcdef",

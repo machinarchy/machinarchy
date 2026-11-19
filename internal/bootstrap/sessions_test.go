@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,7 +41,6 @@ func startSessionServer(t *testing.T, dbPath, operatorToken string, previous ...
 func startSessionServerWith(t *testing.T, dbPath string, mutate func(*config.Config)) *sessionServer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	cfg := config.Config{
 		ListenAddr: "127.0.0.1:0", Environment: config.Development, SignupEnabled: true,
 		OperatorToken: sessionKeyA, SessionTTL: time.Hour,
@@ -277,5 +277,64 @@ func TestLoginThrottlingEndToEnd(t *testing.T) {
 	s.client.mustJSON(http.MethodGet, "/api/v1/audit/events?action=auth.login_throttled", token, nil, http.StatusOK, &events)
 	if len(events) != 1 || events[0].Outcome != "denied" || events[0].Details["network"] != "192.0.2.10" {
 		t.Fatalf("backoff audit events = %+v", events)
+	}
+}
+
+// viaProxy sends a login through a reverse proxy at proxy that saw client.
+func (s *sessionServer) viaProxy(proxy, xff, username, password string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	request.RemoteAddr = proxy
+	request.Header.Set("X-Forwarded-For", xff)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	s.client.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// S-10 end to end: behind a trusted proxy, limits apply to the real client
+// from X-Forwarded-For, so clients sharing the proxy do not share limits; a
+// client that is not a trusted proxy cannot pick its address with the
+// header.
+func TestLimitsUseTheClientBehindATrustedProxy(t *testing.T) {
+	s := startSessionServerWith(t, newDBPath(t), func(cfg *config.Config) {
+		cfg.HTTP.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}
+		cfg.HTTP.RateLimitRPS, cfg.HTTP.RateLimitBurst = 0.01, 4
+		cfg.LoginThrottle = domain.LoginThrottlePolicy{FreeFailures: 5, BaseDelay: time.Second, MaxDelay: time.Minute,
+			IPMaxFailures: 3, Window: 10 * time.Minute}
+	})
+	const proxy = "10.0.0.2:40000"
+
+	// Login throttling: client A's failures block client A's network only.
+	for i := range 3 {
+		s.viaProxy(proxy, "198.51.100.7", fmt.Sprintf("nobody-%d", i), "wrong-password-123")
+	}
+	if got := s.viaProxy(proxy, "198.51.100.7", "admin", "session-admin-password").Code; got != http.StatusTooManyRequests {
+		t.Fatalf("client A after its network limit = %d, want 429", got)
+	}
+	if got := s.viaProxy(proxy, "203.0.113.50", "admin", "session-admin-password").Code; got != http.StatusOK {
+		t.Fatalf("client B through the same proxy = %d, want 200", got)
+	}
+
+	// Rate limiting: client B has used one of its 4 tokens.
+	for range 3 {
+		s.viaProxy(proxy, "203.0.113.50", "admin", "session-admin-password")
+	}
+	if got := s.viaProxy(proxy, "203.0.113.50", "admin", "session-admin-password"); got.Code != http.StatusTooManyRequests ||
+		got.Header().Get("Retry-After") == "" {
+		t.Fatalf("client B past its burst = %d, Retry-After %q", got.Code, got.Header().Get("Retry-After"))
+	}
+	if got := s.viaProxy(proxy, "192.0.2.80", "admin", "session-admin-password").Code; got != http.StatusOK {
+		t.Fatalf("client C through the same proxy = %d, want 200", got)
+	}
+
+	// Not a trusted proxy: the header is ignored, so changing it does not
+	// escape the limit.
+	for i := range 4 {
+		s.viaProxy("192.0.2.200:1", fmt.Sprintf("198.51.100.%d", 100+i), "admin", "session-admin-password")
+	}
+	if got := s.viaProxy("192.0.2.200:1", "198.51.100.250", "admin", "session-admin-password").Code; got != http.StatusTooManyRequests {
+		t.Fatalf("forged X-Forwarded-For from an untrusted peer = %d, want 429", got)
 	}
 }

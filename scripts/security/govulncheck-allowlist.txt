@@ -4,7 +4,8 @@
 # Review each one before extending it; see docs/SECURITY.md.
 
 # Echo v4.16.4. Not exploitable here (AUDIT/02 S-22): the servers use
-# echo.ExtractIPDirect, the rate limiter is our own, and the proxy middleware
-# is not used. Re-check when Echo releases a fix.
+# echo.ExtractIPDirect, or ExtractIPFromXFFHeader with only the configured
+# proxies trusted (AUDIT S-10); the rate limiter is our own, and the proxy
+# middleware is not used. Re-check when Echo releases a fix.
 GO-2026-6875 2027-02-16 Echo proxy forwards X-Real-IP; proxy middleware unused
 GO-2026-6872 2027-02-16 Echo rate limiter trusts X-Forwarded-For; Echo limiter unused, IPs from ExtractIPDirect

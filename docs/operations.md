@@ -31,9 +31,14 @@ keyring file, and the agent gateway key and enrollment token.
 
 | Setting | Notes |
 |---|---|
-| `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
+| `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `MACHINARCHY_CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
 | `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |
 | `MACHINARCHY_API_DOCS_ENABLED` | Serve `/openapi.json` and the `/scalar` reference. Default `true` in development, `false` in production. |
+| `MACHINARCHY_CORS_ALLOWED_ORIGINS` | Comma-separated exact browser origins (`https://console.example.com`). Required in production; in development the console dev server (`http://localhost:5173`, `http://127.0.0.1:5173`). The earlier name `CORS_ALLOWED_ORIGINS` still works. |
+| `MACHINARCHY_TRUSTED_PROXIES` | Reverse proxies whose `X-Forwarded-For` is believed: IPs or CIDRs. Empty (default): the TCP peer is the client. See [behind a reverse proxy](#behind-a-reverse-proxy). |
+| `MACHINARCHY_RATE_LIMIT_RPS`, `_BURST` | Requests per second and burst per client network on `/api`, defaults `20` and `30`. See [rate limits](#rate-limits). |
+| `MACHINARCHY_HTTP_MAX_BODY_BYTES` | Largest request body, default `1048576` (1 MiB). |
+| `MACHINARCHY_HTTP_REQUEST_TIMEOUT` | Deadline of one `/api` request, default `25s` (1s–5m). The listener's write timeout is 5s longer. |
 | `MACHINARCHY_SESSION_TTL` | Login session lifetime, default `24h` (5m–168h). See [sessions](#login-sessions). |
 | `MACHINARCHY_LOGIN_FREE_FAILURES`, `_MAX_BACKOFF`, `_IP_MAX_FAILURES`, `_FAILURE_WINDOW` | Failed-login throttling, defaults `5`, `15m`, `20`, `15m`. See [sessions](#login-sessions). |
 | `MACHINARCHY_SESSION_PREVIOUS_KEYS` | Secret. Earlier `MACHINARCHY_OPERATOR_TOKEN` values (comma-separated) still accepted to verify existing sessions during a key rotation. |
@@ -42,6 +47,36 @@ keyring file, and the agent gateway key and enrollment token.
 | `MACHINARCHY_SSH_*` | Egress policy: private ranges, loopback and all ports are denied unless allowed. |
 | `MACHINARCHY_SSH_HOST_KEY_POLICY` | Host-key trust for profiles without their own policy: `tofu` (development default), `approve` (production default) or `pinned`. See [SSH host keys](#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | See [agent gateway](#agent-gateway). Off unless `_NATS_URL` is set. |
+
+### Behind a reverse proxy
+
+Behind a load balancer or ingress every connection comes from the proxy, so
+without help all clients share one address: one client's failed logins or
+burst would block everyone. List the proxies in `MACHINARCHY_TRUSTED_PROXIES`
+(for example the ingress pods' CIDR `10.42.0.0/16`). Then:
+
+- `X-Forwarded-For` is read only on connections from a listed proxy;
+- it is read from the right, skipping listed proxies, and the first address
+  that is not one is the client, so a client cannot choose its address by
+  sending the header itself;
+- loopback and private ranges are not trusted unless listed.
+
+List only the proxies' own addresses: a range that includes clients lets those
+clients pick their address. Configure the proxy to append to, not pass
+through, `X-Forwarded-For`. The client address is used for rate limits,
+login throttling and the session list.
+
+### Rate limits
+
+Each client network has a token bucket on `/api`: `MACHINARCHY_RATE_LIMIT_BURST`
+requests at once, refilled at `MACHINARCHY_RATE_LIMIT_RPS` per second. IPv6
+clients count per /64. A request without a token gets 429 with `Retry-After`
+(seconds until the next token); there is no escalating ban, so a client that
+slows down is served at once.
+
+These counters are in memory, **per replica**: with N replicas a client can
+make up to N times as many requests. Failed-login throttling is different: it
+is kept in the database and shared (see [sessions](#login-sessions)).
 
 ### Login sessions
 
@@ -354,8 +389,8 @@ under `"error"`.
 
 | Bound | Value |
 |---|---|
-| HTTP read header / read / write / idle | 5s / 15s / 30s / 60s |
-| API request context (database and gateway calls) | 25s |
+| HTTP read header / read / write / idle | 5s / 15s / request timeout + 5s / 60s |
+| API request context (database and gateway calls) | `MACHINARCHY_HTTP_REQUEST_TIMEOUT`, default 25s |
 | Synchronous agent call | 15s default, 20s maximum |
 | Per-host command | `timeoutSeconds` of the Operation: max 900s attached, 86400s detached |
 | Reconcile | runtime configuration `reconciliation.timeoutSeconds` |
