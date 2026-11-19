@@ -1,5 +1,19 @@
 basePath: /
 definitions:
+  agents.controllerKeyResponse:
+    properties:
+      nextPublicKey:
+        description: NextPublicKey is announced for a rotation; empty otherwise.
+        type: string
+      publicKey:
+        description: PublicKey signs today.
+        type: string
+      publicKeys:
+        description: PublicKeys is the value for MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY.
+        items:
+          type: string
+        type: array
+    type: object
   agents.createTokenRequest:
     properties:
       hostname:
@@ -1268,9 +1282,7 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/agents.controllerKeyResponse'
         "401":
           description: Unauthorized
           schema:

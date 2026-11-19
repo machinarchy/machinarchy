@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -17,36 +18,38 @@ import (
 func setCommonEnv(t *testing.T) {
 	t.Helper()
 	envs := map[string]string{
-		"MACHINARCHY_LISTEN_ADDR":                "",
-		"MACHINARCHY_ENVIRONMENT":                "development",
-		"MACHINARCHY_SIGNUP_ENABLED":             "",
-		"MACHINARCHY_API_DOCS_ENABLED":           "",
-		"MACHINARCHY_METRICS_LISTEN_ADDR":        "",
-		"MACHINARCHY_SSH_HOST_KEY_POLICY":        "",
-		"MACHINARCHY_DATABASE_ENGINE":            "sqlite",
-		"MACHINARCHY_DATABASE_PATH":              "",
-		"MACHINARCHY_DATABASE_URL":               "",
-		"MACHINARCHY_DATABASE_MAX_OPEN_CONNS":    "",
-		"MACHINARCHY_DATABASE_MAX_IDLE_CONNS":    "",
-		"MACHINARCHY_DATABASE_CONN_MAX_LIFETIME": "",
-		"MACHINARCHY_DATABASE_CONNECT_TIMEOUT":   "",
-		"MACHINARCHY_DATABASE_MIGRATION_TIMEOUT": "",
-		"MACHINARCHY_SESSION_TTL":                "",
-		"MACHINARCHY_SESSION_PREVIOUS_KEYS":      "",
-		"MACHINARCHY_LOGIN_FREE_FAILURES":        "",
-		"MACHINARCHY_LOGIN_MAX_BACKOFF":          "",
-		"MACHINARCHY_LOGIN_IP_MAX_FAILURES":      "",
-		"MACHINARCHY_LOGIN_FAILURE_WINDOW":       "",
-		"MACHINARCHY_CORS_ALLOWED_ORIGINS":       "",
-		"CORS_ALLOWED_ORIGINS":                   "",
-		"MACHINARCHY_TRUSTED_PROXIES":            "",
-		"MACHINARCHY_RATE_LIMIT_RPS":             "",
-		"MACHINARCHY_RATE_LIMIT_BURST":           "",
-		"MACHINARCHY_HTTP_MAX_BODY_BYTES":        "",
-		"MACHINARCHY_HTTP_REQUEST_TIMEOUT":       "",
-		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
-		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
-		"MACHINARCHY_LOG_LEVEL":                  "",
+		"MACHINARCHY_LISTEN_ADDR":                    "",
+		"MACHINARCHY_ENVIRONMENT":                    "development",
+		"MACHINARCHY_SIGNUP_ENABLED":                 "",
+		"MACHINARCHY_API_DOCS_ENABLED":               "",
+		"MACHINARCHY_METRICS_LISTEN_ADDR":            "",
+		"MACHINARCHY_SSH_HOST_KEY_POLICY":            "",
+		"MACHINARCHY_DATABASE_ENGINE":                "sqlite",
+		"MACHINARCHY_DATABASE_PATH":                  "",
+		"MACHINARCHY_DATABASE_URL":                   "",
+		"MACHINARCHY_DATABASE_MAX_OPEN_CONNS":        "",
+		"MACHINARCHY_DATABASE_MAX_IDLE_CONNS":        "",
+		"MACHINARCHY_DATABASE_CONN_MAX_LIFETIME":     "",
+		"MACHINARCHY_DATABASE_CONNECT_TIMEOUT":       "",
+		"MACHINARCHY_DATABASE_MIGRATION_TIMEOUT":     "",
+		"MACHINARCHY_SESSION_TTL":                    "",
+		"MACHINARCHY_SESSION_PREVIOUS_KEYS":          "",
+		"MACHINARCHY_LOGIN_FREE_FAILURES":            "",
+		"MACHINARCHY_LOGIN_MAX_BACKOFF":              "",
+		"MACHINARCHY_LOGIN_IP_MAX_FAILURES":          "",
+		"MACHINARCHY_LOGIN_FAILURE_WINDOW":           "",
+		"MACHINARCHY_CORS_ALLOWED_ORIGINS":           "",
+		"CORS_ALLOWED_ORIGINS":                       "",
+		"MACHINARCHY_TRUSTED_PROXIES":                "",
+		"MACHINARCHY_RATE_LIMIT_RPS":                 "",
+		"MACHINARCHY_RATE_LIMIT_BURST":               "",
+		"MACHINARCHY_HTTP_MAX_BODY_BYTES":            "",
+		"MACHINARCHY_HTTP_REQUEST_TIMEOUT":           "",
+		"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": "",
+		"MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY":  "",
+		"MACHINARCHY_OPERATOR_TOKEN":                 "0123456789abcdef0123456789abcdef",
+		"MACHINARCHY_ENCRYPTION_SECRET":              "abcdef0123456789abcdef0123456789",
+		"MACHINARCHY_LOG_LEVEL":                      "",
 	}
 
 	for key, value := range envs {
@@ -737,5 +740,31 @@ func TestLoadHTTPSettings(t *testing.T) {
 	t.Setenv("MACHINARCHY_TRUSTED_PROXIES", "proxy.internal")
 	if _, err := Load(); err == nil {
 		t.Error("a host name was accepted as a trusted proxy")
+	}
+}
+
+// AUDIT M-3: a next key can be announced for a rotation.
+func TestAgentGatewayNextPublicKey(t *testing.T) {
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed")
+	if err := os.WriteFile(seed, []byte(base64.StdEncoding.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	load := func(next string) (AgentGatewayConfig, error) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_URL", "nats://127.0.0.1:4222")
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE", seed)
+		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY", next)
+		cfg, err := Load()
+		return cfg.AgentGateway, err
+	}
+	if gw, err := load(""); err != nil || gw.NextPublicKey != nil {
+		t.Fatalf("no next key: %v %v", gw.NextPublicKey, err)
+	}
+	if gw, err := load(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))); err != nil || len(gw.NextPublicKey) != 32 {
+		t.Fatalf("next key: %v %v", gw.NextPublicKey, err)
+	}
+	if _, err := load("short"); err == nil {
+		t.Fatal("a malformed next key was accepted")
 	}
 }

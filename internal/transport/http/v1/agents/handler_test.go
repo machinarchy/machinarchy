@@ -61,7 +61,7 @@ func router(store *fakeStore) *echo.Echo {
 		}
 	}
 	group := e.Group("/api/v1/agents", inject)
-	RegisterRoutes(group, group, group, NewHandler(store, nil, ""))
+	RegisterRoutes(group, group, group, NewHandler(store, nil, nil))
 	return e
 }
 
@@ -131,5 +131,27 @@ func TestEnrollmentTokenEndpoints(t *testing.T) {
 	}
 	if got := call(e, http.MethodDelete, "/api/v1/agents/enrollment-tokens/enr-unknown", ""); got.Code != http.StatusNotFound {
 		t.Fatalf("revoke unknown = %d", got.Code)
+	}
+}
+
+// AUDIT M-3: during a rotation the endpoint announces the next key, and
+// publicKeys is the value agents pin.
+func TestControllerKeyListsTheNextKeyDuringARotation(t *testing.T) {
+	for _, tc := range []struct {
+		keys []string
+		want int
+		body string
+	}{
+		{nil, http.StatusServiceUnavailable, ""},
+		{[]string{"current"}, http.StatusOK, `{"publicKey":"current","publicKeys":["current"]}`},
+		{[]string{"current", "next"}, http.StatusOK, `{"publicKey":"current","nextPublicKey":"next","publicKeys":["current","next"]}`},
+	} {
+		e := echo.New()
+		group := e.Group("/api/v1/agents")
+		RegisterRoutes(group, group, group, NewHandler(&fakeStore{}, nil, tc.keys))
+		recorder := call(e, http.MethodGet, "/api/v1/agents/controller-key", "")
+		if recorder.Code != tc.want || (tc.body != "" && strings.TrimSpace(recorder.Body.String()) != tc.body) {
+			t.Errorf("keys %v: %d %s", tc.keys, recorder.Code, recorder.Body)
+		}
 	}
 }

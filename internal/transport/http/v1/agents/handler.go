@@ -33,15 +33,17 @@ type Gateway interface {
 }
 
 type Handler struct {
-	lister    Lister
-	gateway   Gateway
-	publicKey string
+	lister     Lister
+	gateway    Gateway
+	publicKeys []string
 }
 
-// NewHandler creates the handler. publicKey is the controller key agents must
-// trust (MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY), or "" when not configured.
-func NewHandler(lister Lister, gateway Gateway, publicKey string) *Handler {
-	return &Handler{lister: lister, gateway: gateway, publicKey: publicKey}
+// NewHandler creates the handler. publicKeys are the controller keys agents
+// must pin (MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY): the current one first,
+// then the next one during a rotation; empty when the gateway is not
+// configured.
+func NewHandler(lister Lister, gateway Gateway, publicKeys []string) *Handler {
+	return &Handler{lister: lister, gateway: gateway, publicKeys: publicKeys}
 }
 
 // RegisterRoutes mounts the routes; read needs inventory:read, execute needs
@@ -208,15 +210,31 @@ func (h *Handler) list(c echo.Context) error {
 // @Tags Agents
 // @Produce json
 // @Security BearerAuth
-// @Success 200 {object} map[string]string
+// @Success 200 {object} controllerKeyResponse
 // @Failure 401 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/controller-key [get]
 func (h *Handler) controllerKey(c echo.Context) error {
-	if h.publicKey == "" {
+	if len(h.publicKeys) == 0 {
 		return httperr.Status(c, http.StatusServiceUnavailable, "the agent gateway is not configured")
 	}
-	return c.JSON(http.StatusOK, map[string]string{"publicKey": h.publicKey})
+	response := controllerKeyResponse{PublicKey: h.publicKeys[0], PublicKeys: h.publicKeys}
+	if len(h.publicKeys) > 1 {
+		response.NextPublicKey = h.publicKeys[1]
+	}
+	return c.JSON(http.StatusOK, response)
+}
+
+// controllerKeyResponse lists the keys agents must pin. During a signing-key
+// rotation it holds two: pin both (comma-separated) before the controller
+// switches.
+type controllerKeyResponse struct {
+	// PublicKey signs today.
+	PublicKey string `json:"publicKey"`
+	// NextPublicKey is announced for a rotation; empty otherwise.
+	NextPublicKey string `json:"nextPublicKey,omitempty"`
+	// PublicKeys is the value for MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY.
+	PublicKeys []string `json:"publicKeys"`
 }
 
 type invokeRequest struct {

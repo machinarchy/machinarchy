@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/subtle"
@@ -27,7 +28,10 @@ import (
 type Config struct {
 	NATSURL     string
 	NATSOptions []nats.Option
-	SigningKey  ed25519.PrivateKey
+	// Signer signs everything the gateway sends: a local Ed25519 key or a
+	// key held by a KMS provider (Phase 16 / K-phases). Agents pin its public
+	// key.
+	Signer crypto.Signer
 	// EnrollmentToken is an optional shared token accepted from any host, for
 	// development only (configuration refuses it in production). Hosts
 	// normally enrol with owner-issued, single-use tokens (TokenStore).
@@ -77,8 +81,11 @@ type gatewayMetrics struct {
 
 // New validates cfg and creates a Gateway; Start connects it.
 func New(store Store, cfg Config) (*Gateway, error) {
-	if store == nil || cfg.NATSURL == "" || len(cfg.SigningKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("agent gateway requires a store, a NATS URL and an Ed25519 signing key")
+	if store == nil || cfg.NATSURL == "" || cfg.Signer == nil {
+		return nil, errors.New("agent gateway requires a store, a NATS URL and an Ed25519 signer")
+	}
+	if public, ok := cfg.Signer.Public().(ed25519.PublicKey); !ok || len(public) != ed25519.PublicKeySize {
+		return nil, errors.New("the agent gateway signer must hold an Ed25519 key")
 	}
 	if cfg.EnrollmentToken != "" && (len(cfg.EnrollmentToken) < agentv1.MinEnrollmentToken || len(cfg.EnrollmentToken) > agentv1.MaxEnrollmentToken) {
 		return nil, fmt.Errorf("the shared agent enrollment token must be %d to %d characters", agentv1.MinEnrollmentToken, agentv1.MaxEnrollmentToken)
@@ -218,7 +225,7 @@ func (g *Gateway) CheckReadiness(context.Context) error {
 }
 
 func (g *Gateway) reply(msg *nats.Msg, kind agentv1.Kind, body agentv1.Body) {
-	payload, err := agentv1.Seal(g.cfg.SigningKey, kind, body)
+	payload, err := agentv1.SealWith(g.cfg.Signer, kind, body)
 	if err != nil {
 		g.logger.Error("seal agent reply", "kind", kind, "error", err)
 		return
@@ -440,7 +447,7 @@ func (g *Gateway) send(ctx context.Context, agentID string, cmd agentv1.Command)
 	}
 	cmd.ProtocolVersion, cmd.CommandID, cmd.AgentID = agentv1.ProtocolVersion, id, agentID
 	cmd.IssuedAt, cmd.ExpiresAt = now, now.Add(g.cfg.CommandLifetime)
-	payload, err := agentv1.Seal(g.cfg.SigningKey, agentv1.KindCommand, &cmd)
+	payload, err := agentv1.SealWith(g.cfg.Signer, agentv1.KindCommand, &cmd)
 	if err != nil {
 		return err
 	}

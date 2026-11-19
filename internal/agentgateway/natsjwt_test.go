@@ -102,7 +102,7 @@ func TestNATSIssuerValidation(t *testing.T) {
 	account, _ := nkeys.CreateAccount()
 	accountPublic, _ := account.PublicKey()
 	user, _ := nkeys.CreateUser()
-	valid := Config{NATSURL: "nats://x:4222", SigningKey: key(1), EnrollmentToken: enrollmentToken}
+	valid := Config{NATSURL: "nats://x:4222", Signer: key(1), EnrollmentToken: enrollmentToken}
 	for name, tc := range map[string]struct {
 		issuer *NATSIssuer
 		ok     bool

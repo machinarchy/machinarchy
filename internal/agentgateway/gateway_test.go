@@ -176,7 +176,7 @@ func newFixture(t *testing.T) *fixture {
 func startFixture(t *testing.T, url string, controller []nats.Option, issuer *NATSIssuer, client []nats.Option) *fixture {
 	t.Helper()
 	store := newMemStore()
-	gateway, err := New(store, Config{NATSURL: url, NATSOptions: controller, SigningKey: key(1), EnrollmentToken: enrollmentToken,
+	gateway, err := New(store, Config{NATSURL: url, NATSOptions: controller, Signer: key(1), EnrollmentToken: enrollmentToken,
 		LeaseTTL: 20 * time.Second, Heartbeat: 5 * time.Second, Registerer: prometheus.NewRegistry(), NATSIssuer: issuer})
 	if err != nil {
 		t.Fatal(err)
@@ -339,10 +339,10 @@ func TestResultsMustComeFromTheSigningAgent(t *testing.T) {
 }
 
 func TestNewValidatesConfiguration(t *testing.T) {
-	valid := Config{NATSURL: "nats://x:4222", SigningKey: key(1), EnrollmentToken: enrollmentToken}
+	valid := Config{NATSURL: "nats://x:4222", Signer: key(1), EnrollmentToken: enrollmentToken}
 	for name, mutate := range map[string]func(*Config){
 		"no url":            func(c *Config) { c.NATSURL = "" },
-		"no key":            func(c *Config) { c.SigningKey = nil },
+		"no key":            func(c *Config) { c.Signer = nil },
 		"short token":       func(c *Config) { c.EnrollmentToken = "short" },
 		"heartbeat > ttl/2": func(c *Config) { c.LeaseTTL, c.Heartbeat = 20*time.Second, 15*time.Second },
 	} {

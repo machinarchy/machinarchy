@@ -142,12 +142,35 @@ chmod 600 /etc/machinarchy/agent-signing.key
 |---|---|
 | `MACHINARCHY_AGENT_GATEWAY_NATS_URL` | `tls://host:4222` (production) or `nats://` (development). No credentials in the URL. |
 | `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` | Base64 32-byte Ed25519 seed. Its public key is logged at startup and served at `GET /api/v1/agents/controller-key`; agents pin it (`MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY`). |
+| `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY` | During a [signing-key rotation](#rotating-the-controller-signing-key): the next public key, announced at `/controller-key` so agents can pin both. |
 | `MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE` | **Development only** (refused in production): a shared token any host can enrol with. Normally hosts use per-host tokens; see [enrolling a host](#enrolling-a-host). |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE`, `_NATS_CA_FILE`, `_NATS_CERT_FILE`, `_NATS_KEY_FILE` | NATS authentication and TLS. |
 | `MACHINARCHY_AGENT_GATEWAY_LEASE_TTL` / `_HEARTBEAT` | Default 60s / 15s; the heartbeat must be at least 5s and at most half the TTL. |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT` | Public key (`A...`) of the NATS account the agents use. With the signing key below, every agent gets its own NATS user JWT. **Required in production.** |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE` | Seed (`SA...`, file `0600`) of a signing key listed in that account's JWT. The gateway signs agent JWTs with it. |
 | `MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL` | Agent JWT lifetime, default `1h` (5m–24h, at least twice the heartbeat). Renewals refresh it. After a revocation, the agent keeps NATS access only until its current JWT expires. |
+
+#### Rotating the controller signing key
+
+Agents pin the controller's public key, so changing the key must not stop
+them. Each agent can pin two keys (current and next):
+
+1. Create the next seed (`openssl rand -base64 32 > agent-signing-next.key`,
+   `0600`) and derive its public key: start machinarchy once with it in a
+   scratch setup, or read it from step 2's endpoint after setting it.
+   Set `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY` to it and restart.
+   `GET /api/v1/agents/controller-key` now returns `publicKeys` with both.
+2. On every agent set `MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY` to that
+   comma-separated pair and restart the agent (its identity and lease
+   survive in its state file).
+3. Point `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` at the next seed,
+   remove `_NEXT_PUBLIC_KEY`, restart. Agents that pin both keys do not
+   notice.
+4. Later, pin only the new key on agents and delete the old seed.
+
+`test/e2e/rotation_test.go` runs these steps with real binaries: commands keep
+succeeding and the same agent process stays up. Phase 16 moves the key into
+the Secret Store and turns these steps into owner actions.
 
 #### NATS in operator mode
 

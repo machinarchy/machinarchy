@@ -1,5 +1,19 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 16: gateway signs through crypto.Signer and announces the next key (branch audit/keys)
+
+- `internal/agentgateway`: `Config.Signer crypto.Signer` replaces the raw `SigningKey`; messages are sealed with `agentv1.SealWith`, which checks each signature before sending. A KMS-held key can plug in through the same interface (K-phases).
+- `GET /api/v1/agents/controller-key` returns `publicKey`, `nextPublicKey` (during a rotation) and `publicKeys`, the exact value agents pin. Existing clients reading `publicKey` keep working. OpenAPI regenerated.
+- New `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY`; startup refuses a next key equal to the current one and logs both.
+- `docs/operations.md` "Rotating the controller signing key", `.env.example`.
+- Phase 16 re-planned with the owner (AUDIT/10): built-in default provider first, KMS providers as optional K-phases. A Vault Transit signer written earlier the same day is parked on the local branch `wip/vault-signer` (`4e3ed7f`) for K1; nothing from it is on `audit/keys`.
+
+### Verification
+
+- `TestControllerSigningKeyRotation` (`test/e2e`, real binaries, NATS operator mode): the controller signs with A and announces B; the agent pins both; 3 commands succeed; the controller restarts signing with B; the same agent process renews its lease and runs 4 more commands; its log has no discard, signature or ERROR line.
+- `TestControllerKeyListsTheNextKeyDuringARotation`, `TestAgentGatewayNextPublicKey`; gateway tests with the signer.
+- Cached `go test` of touched packages; e2e package passes (one hook run failed in the e2e package under load and passed on the next two runs).
+
 ## 2026-11-19 — Audit Phase 14: SSH call timeouts follow their settings (branch audit/sessions)
 
 - The Control Manager's SSH connector used a fixed 30 s per call, so raising runtime configuration `reconciliation.timeoutSeconds` above 30 had no effect on host checks. The connector now uses that setting (default 30 s, unchanged).

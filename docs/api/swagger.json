@@ -200,10 +200,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/agents.controllerKeyResponse"
                         }
                     },
                     "401": {
@@ -3398,6 +3395,26 @@
         }
     },
     "definitions": {
+        "agents.controllerKeyResponse": {
+            "type": "object",
+            "properties": {
+                "nextPublicKey": {
+                    "description": "NextPublicKey is announced for a rotation; empty otherwise.",
+                    "type": "string"
+                },
+                "publicKey": {
+                    "description": "PublicKey signs today.",
+                    "type": "string"
+                },
+                "publicKeys": {
+                    "description": "PublicKeys is the value for MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "agents.createTokenRequest": {
             "type": "object",
             "properties": {

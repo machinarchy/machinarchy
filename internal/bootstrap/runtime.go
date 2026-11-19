@@ -47,9 +47,9 @@ type Runtime struct {
 	configWG         sync.WaitGroup
 	// metrics collects component metrics (agent gateway, workers) that every
 	// server of this process also serves on /metrics.
-	metrics        *prometheus.Registry
-	agentGateway   *agentgateway.Gateway
-	agentPublicKey string
+	metrics         *prometheus.Registry
+	agentGateway    *agentgateway.Gateway
+	agentPublicKeys []string
 }
 
 // Open initializes the shared persistence infrastructure for the API and the
@@ -174,14 +174,14 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		return nil, err
 	}
 	metrics := prometheus.NewRegistry()
-	gateway, publicKey, err := newAgentGateway(cfg.AgentGateway, stores, metrics)
+	gateway, publicKeys, err := newAgentGateway(ctx, cfg.AgentGateway, stores, metrics)
 	if err != nil {
 		return nil, errors.Join(err, wrapCloseError("close datastore after agent gateway failure", stores.Close()))
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	runtime := &Runtime{hostKeyPolicy: cfg.SSHHostKeyPolicy, stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
 		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout,
-		metrics: metrics, agentGateway: gateway, agentPublicKey: publicKey}
+		metrics: metrics, agentGateway: gateway, agentPublicKeys: publicKeys}
 	runtime.configWG.Add(1)
 	go func() {
 		defer runtime.configWG.Done()
@@ -386,8 +386,8 @@ func (r *Runtime) NewAPIServer(
 		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Sessions: r.stores.Sessions, SessionKeys: sessionKeys, SessionTTL: sessionTTL,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
-		Agents:         r.stores.Agents,
-		AgentPublicKey: r.agentPublicKey,
+		Agents:          r.stores.Agents,
+		AgentPublicKeys: r.agentPublicKeys,
 		SignupEnabled: func() bool {
 			if snapshot, ok := r.configuration.Snapshot(); ok {
 				return snapshot.Revision.Config.Features.SignupEnabled
