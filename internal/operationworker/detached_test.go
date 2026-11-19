@@ -51,7 +51,10 @@ func (b bindings) GetOperationTarget(c context.Context, w int, op, host resource
 	return b.stores.Operations.(resource.OperationTargetReader).GetOperationTarget(c, w, op, host)
 }
 
-var fastPolls = operationworker.PollConfig{MinInterval: 150 * time.Millisecond, MaxInterval: time.Second, Tick: 50 * time.Millisecond,
+// fastPolls keeps tests quick. Each poll runs the runner script on the
+// "host" (this machine): about 20 short processes per target, so the
+// 50-target tests poll at a slower, production-like pace.
+var fastPolls = operationworker.PollConfig{MinInterval: 300 * time.Millisecond, MaxInterval: time.Second, Tick: 50 * time.Millisecond,
 	CallTimeout: 15 * time.Second, LaunchConfirmGrace: 2 * time.Second, TimeoutGrace: time.Second, UnreachableGrace: time.Second}
 
 type detachedEnv struct {
@@ -327,6 +330,7 @@ func TestDetachedRunReportsOutputAndCleansUp(t *testing.T) {
 func TestRestartWith50RunningTargetsLosesNone(t *testing.T) {
 	t.Parallel()
 	e := newDetachedEnv(t)
+	e.poll.MinInterval, e.poll.MaxInterval = time.Second, 2*time.Second
 	e.start(nil)
 	log := filepath.Join(e.home, "runs.log")
 	id := e.submit(e.hosts(50), 600, 5, "sh", "-c", "echo run >> "+log+"; sleep 4; echo done")

@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: detached tests poll at a sane pace (branch audit/detached-ssh)
+
+- Each detached status poll runs the runner script on the "host", which in these tests is the machine itself: about 20 short processes per target. At 150 ms over 50 separate hosts, the restart test launched thousands of processes per second, and under `-race -count=3` it ran 157–199 s instead of about 15 s.
+- The tests now poll at 300 ms (`fastPolls`), and the 50-target restart test at 1–2 s, like the PostgreSQL test. Production polls every 5–30 s, and each host runs only its own targets' scripts.
+
+### Verification
+
+- `go test -timeout 30s ./internal/operationworker/`: pass in 21.8 s (it was about 35 s).
+- The full race suite could not be judged here: with no test running, this machine showed 471 runnable processes and a load average above 800 (Spotlight indexing, Chrome, macOS services). Timeouts across unrelated packages in the last full runs match that.
+
 ## 2026-11-19 — Audit Phase 13B: consistent Operation reads; full-suite stability (branch audit/detached-ssh)
 
 - **Pre-existing bug, fixed:** `Store.GetOperation` read the Operation row and its target rows with two separate queries. A reader could combine an Operation still `Queued` with a target a worker had already started, and fail validation ("queued Operation targets must be pending"). That is a spurious error for any API reader. Detached runs move targets right after the start, which made it visible in the full suite. It now reads both in one read-only transaction (`REPEATABLE READ` on PostgreSQL; a deferred transaction, a WAL snapshot, on SQLite).
