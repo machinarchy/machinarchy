@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/store"
 	"github.com/machinarchy/machinarchy/internal/store/management"
+	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
 type allowAll struct{}
@@ -131,5 +134,46 @@ func TestResolutionNeedsTheAuthorizer(t *testing.T) {
 	}
 	if _, err := resolve(s, secrets.Ref{ID: "missing", Version: 1}); err == nil {
 		t.Fatal("an unknown secret resolved")
+	}
+}
+
+// Phase 16 upgrade path: a secret stored before the provider interface (bare
+// key ID "kek-a", wrapped with that exact ID in the AAD) still resolves with
+// the local provider, and rewrapping it by the bare ID the operator knows
+// moves it to the new "local:" key.
+func TestSecretsStoredBeforeProvidersStillWork(t *testing.T) {
+	ctx := context.Background()
+	repo := repository(t)
+	const id = "legacy-secret-0001"
+	dek := bytes.Repeat([]byte{9}, 32)
+	wrapAAD := fmt.Sprintf("machinarchy/secret/v1/%s/%d/%s/%s", id, 1, "kek-a", secrets.PurposeSSHCredential)
+	wrapped, err := crypto.EncryptBytes(dek, keyA, []byte("dek:"+wrapAAD))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valueAAD := fmt.Sprintf("machinarchy/secret/value/v2/%s/%d/%s", id, 1, secrets.PurposeSSHCredential)
+	sealed, err := crypto.EncryptBytes([]byte("legacy-password"), dek, []byte("value:"+valueAAD))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := repo.CreateSecret(ctx, secrets.Metadata{ID: id, Name: "legacy", Purpose: secrets.PurposeSSHCredential, CurrentVersion: 1, CreatedAt: now, UpdatedAt: now},
+		secrets.StoredVersion{Version: secrets.Version{Ref: secrets.Ref{ID: id, Version: 1}, CreatedAt: now, CreatedBy: 1},
+			Ciphertext: secrets.Ciphertext{KeyID: "kek-a", AADVersion: 2, WrappedDEK: wrapped, Value: sealed}}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := service(t, repo, &secrets.LocalProvider{KeyID: "kek-a", Key: keyA}, allowAll{})
+	if value, err := resolve(before, secrets.Ref{ID: id, Version: 1}); err != nil || string(value) != "legacy-password" {
+		t.Fatalf("legacy secret after upgrade = %q, %v", value, err)
+	}
+	rotated := service(t, repo, &secrets.LocalProvider{KeyID: "kek-b", Key: keyB, Previous: map[string][]byte{"kek-a": keyA}}, allowAll{})
+	result, err := rotated.RewrapKey(ctx, owner, "kek-a", 10)
+	if err != nil || result.Rewrapped != 1 || result.Remaining != 0 || result.KeyID != "local:kek-b" {
+		t.Fatalf("rewrap of a legacy key ID = %+v, %v", result, err)
+	}
+	onlyNew := service(t, repo, &secrets.LocalProvider{KeyID: "kek-b", Key: keyB}, allowAll{})
+	if value, err := resolve(onlyNew, secrets.Ref{ID: id, Version: 1}); err != nil || string(value) != "legacy-password" {
+		t.Fatalf("after rewrap without the old key = %q, %v", value, err)
 	}
 }

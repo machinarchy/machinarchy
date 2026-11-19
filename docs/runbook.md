@@ -141,8 +141,12 @@ it records which account and network.
   `machinarchy secret rewrap --old-key-id OLD` until `remaining` is 0.
 - Losing the encryption key makes stored credentials unrecoverable; keep it
   backed up with the database backups that need it.
-- Rotating the agent gateway signing key: every agent must be given the new
-  public key before the restart, or they will reject all commands.
+- Rotating the agent gateway signing key: announce the next key first and let
+  agents pin both (`docs/operations.md`, "Rotating the controller signing
+  key"); an agent that pins only the old key rejects every command after the
+  switch.
+- `MACHINARCHY_KMS_PROVIDER=… is not available in this build`: only `local`
+  (the built-in provider) exists so far.
 
 ## Audit trail
 

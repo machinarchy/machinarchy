@@ -46,6 +46,7 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_HTTP_MAX_BODY_BYTES":            "",
 		"MACHINARCHY_HTTP_REQUEST_TIMEOUT":           "",
 		"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": "",
+		"MACHINARCHY_KMS_PROVIDER":                   "",
 		"MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY":  "",
 		"MACHINARCHY_OPERATOR_TOKEN":                 "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":              "abcdef0123456789abcdef0123456789",
@@ -766,5 +767,33 @@ func TestAgentGatewayNextPublicKey(t *testing.T) {
 	}
 	if _, err := load("short"); err == nil {
 		t.Fatal("a malformed next key was accepted")
+	}
+}
+
+// Phase 16: the built-in provider is the default and, for now, the only one.
+func TestKMSProvider(t *testing.T) {
+	setCommonEnv(t)
+	if cfg, err := Load(); err != nil || cfg.KMSProvider != KMSProviderLocal {
+		t.Fatalf("default = %q, %v", cfg.KMSProvider, err)
+	}
+	t.Setenv("MACHINARCHY_KMS_PROVIDER", "Local")
+	if cfg, err := Load(); err != nil || cfg.KMSProvider != KMSProviderLocal {
+		t.Fatalf("explicit local = %q, %v", cfg.KMSProvider, err)
+	}
+	t.Setenv("MACHINARCHY_KMS_PROVIDER", "vault")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("an unavailable provider: %v", err)
+	}
+	// Key IDs are stored as "local:<id>" (VARCHAR(128) on PostgreSQL).
+	setCommonEnv(t)
+	for _, bad := range []string{strings.Repeat("k", 123), "prod:2026"} {
+		t.Setenv("MACHINARCHY_ENCRYPTION_KEY_ID", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("key ID %q accepted", bad)
+		}
+	}
+	t.Setenv("MACHINARCHY_ENCRYPTION_KEY_ID", strings.Repeat("k", 122))
+	if _, err := Load(); err != nil {
+		t.Errorf("a 122-character key ID: %v", err)
 	}
 }

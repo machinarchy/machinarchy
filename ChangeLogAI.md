@@ -1,5 +1,27 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 16.1/16.2/16.6: key providers wrap and unwrap; built-in local provider; provider contract suite (branch audit/keys)
+
+- **Interface** (`internal/secrets/keyprovider.go`): `KeyProvider` no longer returns root-key bytes, which no KMS can do. It has `Name`, `CurrentKeyID`, `Owns`, `Wrap(keyID, dataKey, aad)`, `Unwrap`, `Capabilities` (optional `Ed25519Sign`). The Secret Store builds the same `dek:` AAD as before and passes it in, so stored data is byte-compatible.
+- **`LocalProvider`** (the former `StaticKeyProvider`, kept as a deprecated alias): today's AES-256-GCM wrapping under root keys derived from `MACHINARCHY_ENCRYPTION_SECRET[_FILE]` and the keyring. New key IDs are `local:<id>`; bare IDs written before keep working. `Owns` means "holds this key", so two instances can share a keyring.
+- **`Keyring`**: the current provider plus earlier ones; Unwrap routes by owner. This is what a later provider switch (local → a KMS) uses.
+- **Rewrap** accepts the bare key ID operators know and processes both stored spellings (`kek-a` and `local:kek-a`); `Remaining` counts both. An unconfigured old key still returns `ErrKeyUnavailable` (HTTP 503), as before.
+- **Contract suite** `internal/secrets/providertest`: key IDs name the provider, wrap/unwrap, changed AAD/ciphertext/key ID fail, wrap only under the current key, rotation keeps old data until the old key is retired, concurrent use, keyring routing. `LocalProvider` passes it; every future provider must.
+- **`MACHINARCHY_KMS_PROVIDER`** (`--kms-provider`): `local` (default); any other value fails startup with "not available in this build".
+- `MACHINARCHY_ENCRYPTION_KEY_ID` is now at most 122 characters and may not contain `:`: it is stored as `local:<id>` in a `VARCHAR(128)` column on PostgreSQL, and `:` separates provider from key. A deployment with a longer ID or a `:` gets a clear startup error. Keyring (previous) IDs are unchanged.
+- Docs: operations settings, runbook, `.env.example`.
+
+### Verification
+
+- `TestLocalProviderContract` (7 cases); `TestLocalProviderReadsBareKeyIDs`.
+- `TestSecretsStoredBeforeProvidersStillWork`: a secret written in the old format (bare key ID in the stored row and the AAD) resolves with the local provider, rewraps by the bare ID to `local:kek-b`, and resolves after the old key is removed.
+- Existing `TestSecretLifecycle` (rotation, rewrap, wrong key) and `TestSecretAPIIsWriteOnly` (rewrap from an unknown key is 503) pass unchanged.
+- `TestKMSProvider` (default, explicit, unavailable provider, key-ID bounds); bootstrap tests.
+- Store contract "secret store key providers" on **SQLite and PostgreSQL 16**: create under a 128-character `local:` key ID, resolve, rewrap to the next key, resolve with only the next key. No earlier test ran the Secret Store on PostgreSQL.
+- `TestSecretKEKRewrapResumesInBoundedBatches` (store): the rewrapped row's key ID is now `local:kek-v2` (expected change); its custom raw-key provider was replaced by `LocalProvider`.
+- Cached `go test ./...` passes; golangci-lint `--new-from-rev`: 0 issues.
+- The contract first failed on keyring routing: `Owns` matched any `local:` ID, so two local instances claimed each other's keys. Fixed before commit.
+
 ## 2026-11-19 — Audit Phase 16: gateway signs through crypto.Signer and announces the next key (branch audit/keys)
 
 - `internal/agentgateway`: `Config.Signer crypto.Signer` replaces the raw `SigningKey`; messages are sealed with `agentv1.SealWith`, which checks each signature before sending. A KMS-held key can plug in through the same interface (K-phases).

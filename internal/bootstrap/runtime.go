@@ -164,7 +164,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	if err != nil {
 		return nil, fmt.Errorf("initialize Operation worker Secret Store authorization: %w", err)
 	}
-	keyProvider := &secrets.StaticKeyProvider{KeyID: keyID, Key: root, Previous: previousKeys}
+	keyProvider := &secrets.LocalProvider{KeyID: keyID, Key: root, Previous: previousKeys} // MACHINARCHY_KMS_PROVIDER=local
 	secretService, err := secrets.New(stores.Management, keyProvider, cmAuthorizer)
 	if err != nil {
 		return nil, err

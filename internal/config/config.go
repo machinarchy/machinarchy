@@ -87,7 +87,11 @@ type Config struct {
 	// accepted only to verify sessions signed before a rotation (S-08).
 	SessionPreviousKeys []string
 	// LoginThrottle limits failed logins (MACHINARCHY_LOGIN_*, AUDIT S-09).
-	LoginThrottle          domain.LoginThrottlePolicy
+	LoginThrottle domain.LoginThrottlePolicy
+	// KMSProvider is the Secret Store's root of trust
+	// (MACHINARCHY_KMS_PROVIDER): "local" (built in, the default) for now;
+	// external KMS providers are added as optional adapters.
+	KMSProvider            string
 	EncryptionSecret       string
 	EncryptionKeyID        string
 	EncryptionPreviousKeys map[string]string
@@ -125,6 +129,10 @@ type HTTPConfig struct {
 	// RequestTimeout bounds one /api request (MACHINARCHY_HTTP_REQUEST_TIMEOUT).
 	RequestTimeout time.Duration
 }
+
+// KMSProviderLocal is the built-in key provider: root keys derived from
+// MACHINARCHY_ENCRYPTION_SECRET[_FILE] and the keyring file.
+const KMSProviderLocal = "local"
 
 // HTTP defaults.
 const (
@@ -278,6 +286,7 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--database-connect-timeout":   "MACHINARCHY_DATABASE_CONNECT_TIMEOUT",
 		"--database-migration-timeout": "MACHINARCHY_DATABASE_MIGRATION_TIMEOUT",
 
+		"--kms-provider":            "MACHINARCHY_KMS_PROVIDER",
 		"--encryption-key-id":       "MACHINARCHY_ENCRYPTION_KEY_ID",      // #nosec G101 -- key identifier, not key material
 		"--encryption-secret-file":  "MACHINARCHY_ENCRYPTION_SECRET_FILE", // #nosec G101 -- configuration setting, not secret material
 		"--encryption-keyring-file": "MACHINARCHY_ENCRYPTION_KEYRING_FILE",
@@ -455,6 +464,10 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		}
 		cfg.SessionPreviousKeys = append(cfg.SessionPreviousKeys, previous)
 	}
+	cfg.KMSProvider = strings.ToLower(strings.TrimSpace(get("MACHINARCHY_KMS_PROVIDER", KMSProviderLocal)))
+	if cfg.KMSProvider != KMSProviderLocal {
+		return Config{}, fmt.Errorf("MACHINARCHY_KMS_PROVIDER=%q is not available in this build; use %q (the built-in provider)", cfg.KMSProvider, KMSProviderLocal)
+	}
 	cfg.EncryptionSecret = GetEnv("MACHINARCHY_ENCRYPTION_SECRET")
 	if keyFile := strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_SECRET_FILE")); keyFile != "" {
 		data, err := readSecretFile(keyFile, "MACHINARCHY_ENCRYPTION_SECRET_FILE")
@@ -468,8 +481,10 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		cfg.EncryptionSecret = fileKey
 	}
 	cfg.EncryptionKeyID = strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_KEY_ID", "bootstrap-v1"))
-	if cfg.EncryptionKeyID == "" || len(cfg.EncryptionKeyID) > 128 || strings.ContainsAny(cfg.EncryptionKeyID, " \t\r\n") {
-		return Config{}, errors.New("MACHINARCHY_ENCRYPTION_KEY_ID must be a non-empty identifier without whitespace")
+	// Stored key IDs are "local:<id>" in a 128-character column, and ":"
+	// separates a provider from its key (Phase 16).
+	if cfg.EncryptionKeyID == "" || len(cfg.EncryptionKeyID) > 128-len("local:") || strings.ContainsAny(cfg.EncryptionKeyID, " \t\r\n:") {
+		return Config{}, errors.New("MACHINARCHY_ENCRYPTION_KEY_ID must be a non-empty identifier of at most 122 characters without whitespace or ':'")
 	}
 	cfg.EncryptionPreviousKeys = map[string]string{}
 	if ringFile := strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_KEYRING_FILE")); ringFile != "" {

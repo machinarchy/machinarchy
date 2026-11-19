@@ -181,6 +181,7 @@ var contractTests = []struct {
 	{"signup", testSignup},
 	{"login sessions", testSessions},
 	{"login throttling", testLoginThrottle},
+	{"secret store key providers", testSecretStoreKeyProviders},
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"audit trail", testAuditTrail},

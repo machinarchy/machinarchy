@@ -32,6 +32,7 @@ keyring file, and the agent gateway key and enrollment token.
 | Setting | Notes |
 |---|---|
 | `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `MACHINARCHY_CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
+| `MACHINARCHY_KMS_PROVIDER` | Root of trust for the Secret Store: `local` (default, built in: root keys from `MACHINARCHY_ENCRYPTION_SECRET[_FILE]` and the keyring file). External KMS providers are optional adapters added later. New key IDs are written as `local:<MACHINARCHY_ENCRYPTION_KEY_ID>`; IDs stored without the prefix keep working. |
 | `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |
 | `MACHINARCHY_API_DOCS_ENABLED` | Serve `/openapi.json` and the `/scalar` reference. Default `true` in development, `false` in production. |
 | `MACHINARCHY_CORS_ALLOWED_ORIGINS` | Comma-separated exact browser origins (`https://console.example.com`). Required in production; in development the console dev server (`http://localhost:5173`, `http://127.0.0.1:5173`). The earlier name `CORS_ALLOWED_ORIGINS` still works. |

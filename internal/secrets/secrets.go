@@ -84,10 +84,6 @@ type Repository interface {
 	RewrapDEK(context.Context, Ref, string, string, []byte, int) error
 	CountVersionsByKey(context.Context, string) (int64, error)
 }
-type KeyProvider interface {
-	Current(context.Context) (string, []byte, error)
-	ByID(context.Context, string) ([]byte, error)
-}
 type WorkloadID string
 
 const (
@@ -229,55 +225,82 @@ func (s *Service) RewrapKey(ctx context.Context, actor domain.Principal, oldKeyI
 	if ctx == nil || strings.TrimSpace(oldKeyID) == "" || len(oldKeyID) > 128 || batchSize < 1 || batchSize > 256 {
 		return RewrapResult{}, ErrInvalid
 	}
-	newKeyID, newKEK, err := s.keys.Current(ctx)
-	if err != nil {
+	newKeyID, err := s.keys.CurrentKeyID(ctx)
+	if err != nil || newKeyID == "" {
 		return RewrapResult{}, ErrKeyUnavailable
 	}
-	newKEK = append([]byte(nil), newKEK...)
-	defer wipe(newKEK)
-	if len(newKEK) != 32 || newKeyID == "" {
-		return RewrapResult{}, ErrKeyUnavailable
-	}
-	if oldKeyID == newKeyID {
+	oldSpellings := keyIDSpellings(oldKeyID)
+	if canonicalKeyID(oldKeyID) == canonicalKeyID(newKeyID) {
 		return RewrapResult{}, ErrInvalid
 	}
-	oldKEK, err := s.keys.ByID(ctx, oldKeyID)
-	if err != nil {
-		return RewrapResult{}, ErrKeyUnavailable
-	}
-	oldKEK = append([]byte(nil), oldKEK...)
-	defer wipe(oldKEK)
-	if len(oldKEK) != 32 {
-		return RewrapResult{}, ErrKeyUnavailable
+	if !s.keys.Owns(oldKeyID) {
+		return RewrapResult{}, ErrKeyUnavailable // keep the old key configured until Remaining is 0
 	}
 
 	result := RewrapResult{KeyID: newKeyID}
-	candidates, err := s.repo.ListRewrapCandidates(ctx, oldKeyID, batchSize)
-	if err != nil {
-		return result, err
-	}
-	for _, candidate := range candidates {
-		oldAAD := aadFor(candidate.Ref.ID, candidate.Ref.Version, oldKeyID, candidate.Purpose)
-		dek, decryptErr := crypto.DecryptBytes(candidate.Ciphertext.WrappedDEK, oldKEK, []byte("dek:"+oldAAD))
-		if decryptErr != nil {
-			return result, errors.New("secret key unwrap failed during key rotation")
+	for _, spelling := range oldSpellings {
+		if result.Rewrapped >= batchSize {
+			break
 		}
-		newAAD := aadFor(candidate.Ref.ID, candidate.Ref.Version, newKeyID, candidate.Purpose)
-		wrapped, encryptErr := crypto.EncryptBytes(dek, newKEK, []byte("dek:"+newAAD))
-		wipe(dek)
-		if encryptErr != nil {
-			return result, errors.New("secret key wrap failed during key rotation")
-		}
-		if err = s.repo.RewrapDEK(ctx, candidate.Ref, oldKeyID, newKeyID, wrapped, actor.UserID); err != nil {
-			if errors.Is(err, ErrConflict) {
-				continue
-			}
+		candidates, err := s.repo.ListRewrapCandidates(ctx, spelling, batchSize-result.Rewrapped)
+		if err != nil {
 			return result, err
 		}
-		result.Rewrapped++
+		for _, candidate := range candidates {
+			// The AAD binds the key ID exactly as it was stored.
+			stored := candidate.Ciphertext.KeyID
+			if stored == "" {
+				stored = spelling
+			}
+			oldAAD := aadFor(candidate.Ref.ID, candidate.Ref.Version, stored, candidate.Purpose)
+			dek, decryptErr := s.keys.Unwrap(ctx, stored, candidate.Ciphertext.WrappedDEK, []byte("dek:"+oldAAD))
+			if decryptErr != nil {
+				return result, errors.New("secret key unwrap failed during key rotation")
+			}
+			newAAD := aadFor(candidate.Ref.ID, candidate.Ref.Version, newKeyID, candidate.Purpose)
+			wrapped, encryptErr := s.keys.Wrap(ctx, newKeyID, dek, []byte("dek:"+newAAD))
+			wipe(dek)
+			if encryptErr != nil {
+				return result, errors.New("secret key wrap failed during key rotation")
+			}
+			if err = s.repo.RewrapDEK(ctx, candidate.Ref, stored, newKeyID, wrapped, actor.UserID); err != nil {
+				if errors.Is(err, ErrConflict) {
+					continue
+				}
+				return result, err
+			}
+			result.Rewrapped++
+		}
 	}
-	result.Remaining, err = s.repo.CountVersionsByKey(ctx, oldKeyID)
-	return result, err
+	for _, spelling := range oldSpellings {
+		n, err := s.repo.CountVersionsByKey(ctx, spelling)
+		if err != nil {
+			return result, err
+		}
+		result.Remaining += n
+	}
+	return result, nil
+}
+
+// canonicalKeyID names a key with its provider prefix. Key IDs written
+// before Phase 16 have none; they are always the built-in provider's.
+func canonicalKeyID(id string) string {
+	if strings.Contains(id, ":") {
+		return id
+	}
+	return LocalKeyIDPrefix + id
+}
+
+// keyIDSpellings lists every stored form of a key ID: a local key may be
+// stored bare (before Phase 16) or prefixed (after).
+func keyIDSpellings(id string) []string {
+	if bare, ok := strings.CutPrefix(id, LocalKeyIDPrefix); ok {
+		return []string{id, bare}
+	}
+	if !strings.Contains(id, ":") {
+		return []string{LocalKeyIDPrefix + id, id}
+	}
+	return []string{id}
 }
 
 // Resolve is intentionally not exposed by the HTTP or CLI management API.
@@ -307,17 +330,11 @@ func (s *Service) Resolve(ctx context.Context, request ResolutionRequest) ([]byt
 	if stored.Ciphertext.AADVersion != 1 && stored.Ciphertext.AADVersion != 2 {
 		return nil, errors.New("unsupported secret ciphertext AAD version")
 	}
-	kek, err := s.keys.ByID(ctx, stored.Ciphertext.KeyID)
-	if err != nil {
+	if !s.keys.Owns(stored.Ciphertext.KeyID) {
 		return nil, fmt.Errorf("%w: %s", ErrKeyUnavailable, stored.Ciphertext.KeyID)
 	}
-	kek = append([]byte(nil), kek...)
-	defer wipe(kek)
-	if len(kek) != 32 {
-		return nil, ErrKeyUnavailable
-	}
 	wrapAAD := aadFor(request.Ref.ID, request.Ref.Version, stored.Ciphertext.KeyID, request.Purpose)
-	dek, err := crypto.DecryptBytes(stored.Ciphertext.WrappedDEK, kek, []byte("dek:"+wrapAAD))
+	dek, err := s.keys.Unwrap(ctx, stored.Ciphertext.KeyID, stored.Ciphertext.WrappedDEK, []byte("dek:"+wrapAAD))
 	if err != nil {
 		return nil, errors.New("secret key unwrap failed")
 	}
@@ -330,16 +347,10 @@ func (s *Service) Resolve(ctx context.Context, request ResolutionRequest) ([]byt
 	return plain, nil
 }
 func (s *Service) encrypt(ctx context.Context, id string, version uint64, actor int, value string, purpose Purpose, now time.Time) (StoredVersion, error) {
-	keyID, kek, err := s.keys.Current(ctx)
-	if err != nil {
-		return StoredVersion{}, fmt.Errorf("%w", ErrKeyUnavailable)
-	}
-	kek = append([]byte(nil), kek...)
-	if len(kek) != 32 || keyID == "" {
-		wipe(kek)
+	keyID, err := s.keys.CurrentKeyID(ctx)
+	if err != nil || keyID == "" {
 		return StoredVersion{}, ErrKeyUnavailable
 	}
-	defer wipe(kek)
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(s.random, dek); err != nil {
 		return StoredVersion{}, err
@@ -348,9 +359,9 @@ func (s *Service) encrypt(ctx context.Context, id string, version uint64, actor 
 		wipe(dek)
 	}()
 	wrapAAD := aadFor(id, version, keyID, purpose)
-	wrapped, err := crypto.EncryptBytes(dek, kek, []byte("dek:"+wrapAAD))
+	wrapped, err := s.keys.Wrap(ctx, keyID, dek, []byte("dek:"+wrapAAD))
 	if err != nil {
-		return StoredVersion{}, err
+		return StoredVersion{}, fmt.Errorf("%w: %w", ErrKeyUnavailable, err)
 	}
 	const aadVersion = 2
 	valueAAD := valueAADFor(id, version, aadVersion, "", purpose)
@@ -394,31 +405,4 @@ func valueAADFor(id string, version uint64, aadVersion int, dataAADKeyID string,
 		return aadFor(id, version, dataAADKeyID, purpose)
 	}
 	return fmt.Sprintf("machinarchy/secret/value/v2/%s/%d/%s", id, version, purpose)
-}
-
-// StaticKeyProvider loads the encryption root key from an external bootstrap
-// source. It never persists key material and can optionally retain old KEKs.
-type StaticKeyProvider struct {
-	KeyID    string
-	Key      []byte
-	Previous map[string][]byte
-}
-
-func (p *StaticKeyProvider) Current(context.Context) (string, []byte, error) {
-	if p == nil || p.KeyID == "" || len(p.Key) != 32 {
-		return "", nil, ErrKeyUnavailable
-	}
-	return p.KeyID, append([]byte(nil), p.Key...), nil
-}
-func (p *StaticKeyProvider) ByID(_ context.Context, id string) ([]byte, error) {
-	if p == nil {
-		return nil, ErrKeyUnavailable
-	}
-	if id == p.KeyID && len(p.Key) == 32 {
-		return append([]byte(nil), p.Key...), nil
-	}
-	if k := p.Previous[id]; len(k) == 32 {
-		return append([]byte(nil), k...), nil
-	}
-	return nil, ErrKeyUnavailable
 }

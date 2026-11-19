@@ -270,7 +270,7 @@ func TestSecretServiceDoesNotWipeProviderOwnedKeyMaterial(t *testing.T) {
 	ctx := context.Background()
 	f := openFixture(t, filepath.Join(t.TempDir(), "key-copy.db"))
 	defer f.db.Close()
-	provider := sharedKeyProvider{keyID: "shared-v1", key: []byte("0123456789abcdef0123456789abcdef")}
+	provider := &secrets.LocalProvider{KeyID: "shared-v1", Key: []byte("0123456789abcdef0123456789abcdef")}
 	svc, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestSecretServiceDoesNotWipeProviderOwnedKeyMaterial(t *testing.T) {
 	if _, err = svc.Resolve(ctx, resolutionRequest(secrets.Ref{ID: meta.ID, Version: 1}, secrets.PurposeSSHCredential)); err != nil {
 		t.Fatal(err)
 	}
-	if string(provider.key) != "0123456789abcdef0123456789abcdef" {
+	if string(provider.Key) != "0123456789abcdef0123456789abcdef" {
 		t.Fatal("secret service modified key-provider-owned memory")
 	}
 }
@@ -357,14 +357,9 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 		}
 	}
 	var keyID string
-	if err = f.db.QueryRow(`SELECT key_id FROM secret_versions WHERE secret_id=?`, refs[0].ID).Scan(&keyID); err != nil || keyID != "kek-v2" {
+	if err = f.db.QueryRow(`SELECT key_id FROM secret_versions WHERE secret_id=?`, refs[0].ID).Scan(&keyID); err != nil || keyID != "local:kek-v2" { // Phase 16: key IDs name their provider
 		t.Fatalf("rewrapped key ID=%q err=%v", keyID, err)
 	}
-}
-
-type sharedKeyProvider struct {
-	keyID string
-	key   []byte
 }
 
 type allowSecretResolution struct{}
@@ -406,14 +401,6 @@ func TestSecretResolutionRequiresScopedWorkloadAuthorization(t *testing.T) {
 	if _, err = service.Resolve(ctx, secrets.ResolutionRequest{Ref: secrets.Ref{ID: meta.ID, Version: 1}, Purpose: secrets.PurposeSSHCredential}); !errors.Is(err, secrets.ErrInvalid) {
 		t.Fatalf("unscoped resolution err=%v", err)
 	}
-}
-
-func (p sharedKeyProvider) Current(context.Context) (string, []byte, error) {
-	return p.keyID, p.key, nil
-}
-
-func (p sharedKeyProvider) ByID(context.Context, string) ([]byte, error) {
-	return p.key, nil
 }
 
 func newConfigService(t *testing.T, repo *management.Store, id string) (*runtimeconfig.Service, *runtimeconfig.SnapshotManager) {
