@@ -79,6 +79,20 @@ type gatewayMetrics struct {
 	commands      *prometheus.CounterVec
 }
 
+// snapshotSigner is a Signer whose key can change (agentkeys.Manager):
+// Snapshot fixes the key for one message.
+type snapshotSigner interface {
+	Snapshot() crypto.Signer
+}
+
+// signer returns the key to seal one message with.
+func (g *Gateway) signer() crypto.Signer {
+	if s, ok := g.cfg.Signer.(snapshotSigner); ok {
+		return s.Snapshot()
+	}
+	return g.cfg.Signer
+}
+
 // New validates cfg and creates a Gateway; Start connects it.
 func New(store Store, cfg Config) (*Gateway, error) {
 	if store == nil || cfg.NATSURL == "" || cfg.Signer == nil {
@@ -225,7 +239,7 @@ func (g *Gateway) CheckReadiness(context.Context) error {
 }
 
 func (g *Gateway) reply(msg *nats.Msg, kind agentv1.Kind, body agentv1.Body) {
-	payload, err := agentv1.SealWith(g.cfg.Signer, kind, body)
+	payload, err := agentv1.SealWith(g.signer(), kind, body)
 	if err != nil {
 		g.logger.Error("seal agent reply", "kind", kind, "error", err)
 		return
@@ -447,7 +461,7 @@ func (g *Gateway) send(ctx context.Context, agentID string, cmd agentv1.Command)
 	}
 	cmd.ProtocolVersion, cmd.CommandID, cmd.AgentID = agentv1.ProtocolVersion, id, agentID
 	cmd.IssuedAt, cmd.ExpiresAt = now, now.Add(g.cfg.CommandLifetime)
-	payload, err := agentv1.SealWith(g.cfg.Signer, agentv1.KindCommand, &cmd)
+	payload, err := agentv1.SealWith(g.signer(), agentv1.KindCommand, &cmd)
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,12 @@
 basePath: /
 definitions:
+  agents.SigningKeysResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.signingKeyView'
+        type: array
+    type: object
   agents.controllerKeyResponse:
     properties:
       nextPublicKey:
@@ -53,6 +60,32 @@ definitions:
         type: object
       timeoutSeconds:
         type: integer
+    type: object
+  agents.signingKeyView:
+    properties:
+      activatedAt:
+        type: string
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      id:
+        type: string
+      origin:
+        enum:
+        - generated
+        - imported
+        type: string
+      publicKey:
+        type: string
+      retiredAt:
+        type: string
+      state:
+        enum:
+        - next
+        - active
+        - retired
+        type: string
     type: object
   agents.tokenList:
     properties:
@@ -1382,6 +1415,127 @@ paths:
       security:
       - BearerAuth: []
       summary: Revoke an unused agent enrolment token
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys:
+    get:
+      description: Active signs everything sent to agents; next is announced for a
+        rotation; retired keys are kept for the record. Private keys are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.SigningKeysResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List the controller signing keys (owner)
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys/next:
+    delete:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Discard the next controller signing key (owner)
+      tags:
+      - Agents
+    post:
+      description: Generates a key and announces it at /controller-key. Pin both keys
+        on every agent before activating it.
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Stage the next controller signing key (owner)
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys/next/activate:
+    post:
+      description: The next key starts signing; the active key retires. Agents that
+        do not pin the next key reject every message after this.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Activate the next controller signing key (owner)
       tags:
       - Agents
   /api/v1/audit/events:

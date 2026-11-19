@@ -47,6 +47,11 @@ const (
 	// Enrolment tokens (AUDIT M-4); the secret is never recorded.
 	AuditAgentEnrollmentTokenIssued  = "agent.enrollment_token_issued"
 	AuditAgentEnrollmentTokenRevoked = "agent.enrollment_token_revoked"
+	// Controller signing keys (AUDIT M-3, Phase 16); key material is never
+	// recorded, only the key's ID and public key.
+	AuditAgentSigningKeyCreated   = "agent.signing_key_created"
+	AuditAgentSigningKeyActivated = "agent.signing_key_activated"
+	AuditAgentSigningKeyDiscarded = "agent.signing_key_discarded"
 
 	AuditRunCreated         = "run.created"
 	AuditRunCancelRequested = "run.cancel_requested"
@@ -63,6 +68,7 @@ const (
 	AuditTargetOperation    = "operation"
 	AuditTargetAgent        = "agent"
 	AuditTargetEnrollment   = "agent_enrollment_token"
+	AuditTargetSigningKey   = "agent_signing_key"
 
 	AuditOutcomeSuccess = "success"
 	// AuditOutcomeDenied records a refused attempt, such as a login in

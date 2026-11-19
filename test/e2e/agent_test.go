@@ -8,6 +8,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -50,14 +52,57 @@ func agentSource(t *testing.T) string {
 	return ""
 }
 
-func build(t *testing.T, dir, pkg, out string) {
+// binaries builds the monolith and the agent once per test run and shares
+// them between tests, so the package fits in a short test timeout.
+var binaries = struct {
+	once            sync.Once
+	dir             string
+	monolith, agent string
+	err             error
+}{}
+
+func builtBinaries(t *testing.T) (monolith, agent string) {
 	t.Helper()
+	agentDir := agentSource(t)
+	binaries.once.Do(func() {
+		repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+		if err != nil {
+			binaries.err = err
+			return
+		}
+		if binaries.dir, binaries.err = os.MkdirTemp("", "machinarchy-e2e-*"); binaries.err != nil {
+			return
+		}
+		binaries.monolith = filepath.Join(binaries.dir, "machinarchy-monolit")
+		binaries.agent = filepath.Join(binaries.dir, "machinarchy-agent")
+		if binaries.err = buildBinary(repoRoot, "./cmd/monolit", binaries.monolith); binaries.err != nil {
+			return
+		}
+		binaries.err = buildBinary(agentDir, "./cmd/machinarchy-agent", binaries.agent)
+	})
+	if binaries.err != nil {
+		t.Fatal(binaries.err)
+	}
+	return binaries.monolith, binaries.agent
+}
+
+// TestMain removes the shared binaries.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if binaries.dir != "" {
+		_ = os.RemoveAll(binaries.dir)
+	}
+	os.Exit(code)
+}
+
+func buildBinary(dir, pkg, out string) error {
 	cmd := exec.Command("go", "build", "-o", out, pkg)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build %s: %v\n%s", pkg, err, output)
+		return fmt.Errorf("go build %s: %w\n%s", pkg, err, output)
 	}
+	return nil
 }
 
 func freePort(t *testing.T) int {
@@ -102,7 +147,14 @@ func start(t *testing.T, binary string, env []string, logFile string) *process {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary)
+	// A test timeout panics without running cleanups, which would leave the
+	// child running. Kill it shortly before the test binary's deadline.
+	ctx, cancel := context.Background(), context.CancelFunc(func() {})
+	if deadline, ok := t.Deadline(); ok {
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-2*time.Second))
+	}
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, binary)
 	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, env...)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
@@ -206,18 +258,12 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end test")
 	}
-	agentDir := agentSource(t)
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel() // independent NATS, ports, database and work directory
+	monolith, agentBinary := builtBinaries(t)
 	work := t.TempDir()
 	if err := os.Chmod(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	monolith, agentBinary := filepath.Join(work, "machinarchy-monolit"), filepath.Join(work, "machinarchy-agent")
-	build(t, repoRoot, "./cmd/monolit", monolith)
-	build(t, agentDir, "./cmd/machinarchy-agent", agentBinary)
 
 	// NATS in operator mode, as deployments/nats/generate sets it up: the
 	// gateway has the controller permissions, agents start with the bootstrap

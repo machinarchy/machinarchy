@@ -32,18 +32,27 @@ type Gateway interface {
 	Revoke(ctx context.Context, agentID string) error
 }
 
-type Handler struct {
-	lister     Lister
-	gateway    Gateway
-	publicKeys []string
+// SigningKeys manages the controller signing keys (agentkeys.Manager); nil
+// when the gateway is not configured.
+type SigningKeys interface {
+	// PublicKeys are the keys agents must pin: active, then next.
+	PublicKeys() []string
+	List(ctx context.Context) ([]agentgateway.SigningKey, error)
+	Stage(ctx context.Context, actor domain.Principal) (agentgateway.SigningKey, error)
+	Activate(ctx context.Context, actor domain.Principal) (agentgateway.SigningKey, error)
+	Discard(ctx context.Context, actor domain.Principal) (agentgateway.SigningKey, error)
 }
 
-// NewHandler creates the handler. publicKeys are the controller keys agents
-// must pin (MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY): the current one first,
-// then the next one during a rotation; empty when the gateway is not
+type Handler struct {
+	lister  Lister
+	gateway Gateway
+	keys    SigningKeys
+}
+
+// NewHandler creates the handler. keys is nil when the gateway is not
 // configured.
-func NewHandler(lister Lister, gateway Gateway, publicKeys []string) *Handler {
-	return &Handler{lister: lister, gateway: gateway, publicKeys: publicKeys}
+func NewHandler(lister Lister, gateway Gateway, keys SigningKeys) *Handler {
+	return &Handler{lister: lister, gateway: gateway, keys: keys}
 }
 
 // RegisterRoutes mounts the routes; read needs inventory:read, execute needs
@@ -56,6 +65,10 @@ func RegisterRoutes(read, execute, owner *echo.Group, h *Handler) {
 	owner.POST("/enrollment-tokens", h.createToken)
 	owner.GET("/enrollment-tokens", h.listTokens)
 	owner.DELETE("/enrollment-tokens/:id", h.revokeToken)
+	owner.GET("/signing-keys", h.listSigningKeys)
+	owner.POST("/signing-keys/next", h.stageSigningKey)
+	owner.POST("/signing-keys/next/activate", h.activateSigningKey)
+	owner.DELETE("/signing-keys/next", h.discardSigningKey)
 }
 
 type createTokenRequest struct {
@@ -215,12 +228,16 @@ func (h *Handler) list(c echo.Context) error {
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/controller-key [get]
 func (h *Handler) controllerKey(c echo.Context) error {
-	if len(h.publicKeys) == 0 {
+	var keys []string
+	if h.keys != nil {
+		keys = h.keys.PublicKeys()
+	}
+	if len(keys) == 0 {
 		return httperr.Status(c, http.StatusServiceUnavailable, "the agent gateway is not configured")
 	}
-	response := controllerKeyResponse{PublicKey: h.publicKeys[0], PublicKeys: h.publicKeys}
-	if len(h.publicKeys) > 1 {
-		response.NextPublicKey = h.publicKeys[1]
+	response := controllerKeyResponse{PublicKey: keys[0], PublicKeys: keys}
+	if len(keys) > 1 {
+		response.NextPublicKey = keys[1]
 	}
 	return c.JSON(http.StatusOK, response)
 }
@@ -322,4 +339,126 @@ func mapError(c echo.Context, err error) error {
 		return httperr.Status(c, http.StatusGatewayTimeout, "the agent did not answer in time")
 	}
 	return httperr.FromError(c, err, httperr.Mapping{Target: domain.ErrInvalidInput, Status: http.StatusBadRequest, Code: httperr.CodeInvalidRequest})
+}
+
+// signingKeyView is a signing key as the API shows it: public data only,
+// never the secret reference or key material.
+type signingKeyView struct {
+	ID          string     `json:"id"`
+	State       string     `json:"state" enums:"next,active,retired"`
+	PublicKey   string     `json:"publicKey"`
+	Origin      string     `json:"origin" enums:"generated,imported"`
+	CreatedBy   int        `json:"createdBy,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ActivatedAt *time.Time `json:"activatedAt,omitempty"`
+	RetiredAt   *time.Time `json:"retiredAt,omitempty"`
+}
+
+func viewSigningKey(key agentgateway.SigningKey) signingKeyView {
+	return signingKeyView{ID: key.ID, State: string(key.State), PublicKey: agentv1.EncodePublicKey(key.PublicKey),
+		Origin: string(key.Origin), CreatedBy: key.CreatedBy, CreatedAt: key.CreatedAt, ActivatedAt: key.ActivatedAt, RetiredAt: key.RetiredAt}
+}
+
+// SigningKeysResponse lists the controller signing keys.
+type SigningKeysResponse struct {
+	Items []signingKeyView `json:"items"`
+}
+
+func (h *Handler) signingKeyAction(c echo.Context, act func(context.Context, domain.Principal) (agentgateway.SigningKey, error), status int) error {
+	if h.keys == nil {
+		return httperr.Status(c, http.StatusServiceUnavailable, "the agent gateway is not configured")
+	}
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	key, err := act(c.Request().Context(), principal)
+	switch {
+	case errors.Is(err, agentgateway.ErrSigningKeyStaged):
+		return httperr.Status(c, http.StatusConflict, "a next signing key is already staged; activate or discard it first")
+	case errors.Is(err, agentgateway.ErrNoStagedSigningKey):
+		return httperr.Status(c, http.StatusConflict, "no next signing key is staged")
+	case err != nil:
+		return mapError(c, err)
+	}
+	return c.JSON(status, viewSigningKey(key))
+}
+
+// listSigningKeys godoc
+// @Summary List the controller signing keys (owner)
+// @Description Active signs everything sent to agents; next is announced for a rotation; retired keys are kept for the record. Private keys are never returned.
+// @Tags Agents
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} SigningKeysResponse
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 503 {object} httperr.Body
+// @Router /api/v1/agents/signing-keys [get]
+func (h *Handler) listSigningKeys(c echo.Context) error {
+	if h.keys == nil {
+		return httperr.Status(c, http.StatusServiceUnavailable, "the agent gateway is not configured")
+	}
+	keys, err := h.keys.List(c.Request().Context())
+	if err != nil {
+		return mapError(c, err)
+	}
+	items := make([]signingKeyView, len(keys))
+	for i, key := range keys {
+		items[i] = viewSigningKey(key)
+	}
+	return c.JSON(http.StatusOK, SigningKeysResponse{Items: items})
+}
+
+// stageSigningKey godoc
+// @Summary Stage the next controller signing key (owner)
+// @Description Generates a key and announces it at /controller-key. Pin both keys on every agent before activating it.
+// @Tags Agents
+// @Produce json
+// @Security BearerAuth
+// @Success 201 {object} signingKeyView
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 503 {object} httperr.Body
+// @Router /api/v1/agents/signing-keys/next [post]
+func (h *Handler) stageSigningKey(c echo.Context) error {
+	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
+		return h.keys.Stage(ctx, p)
+	}, http.StatusCreated)
+}
+
+// activateSigningKey godoc
+// @Summary Activate the next controller signing key (owner)
+// @Description The next key starts signing; the active key retires. Agents that do not pin the next key reject every message after this.
+// @Tags Agents
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} signingKeyView
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 503 {object} httperr.Body
+// @Router /api/v1/agents/signing-keys/next/activate [post]
+func (h *Handler) activateSigningKey(c echo.Context) error {
+	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
+		return h.keys.Activate(ctx, p)
+	}, http.StatusOK)
+}
+
+// discardSigningKey godoc
+// @Summary Discard the next controller signing key (owner)
+// @Tags Agents
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} signingKeyView
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 503 {object} httperr.Body
+// @Router /api/v1/agents/signing-keys/next [delete]
+func (h *Handler) discardSigningKey(c echo.Context) error {
+	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
+		return h.keys.Discard(ctx, p)
+	}, http.StatusOK)
 }

@@ -17,39 +17,29 @@ import (
 	"github.com/machinarchy/machinarchy/internal/testutil/natstest"
 )
 
-// TestControllerSigningKeyRotation is the runbook procedure of AUDIT M-3 with
-// real binaries: the controller announces the next key, the agent pins both,
-// the controller switches keys across a restart, and the same agent process
-// keeps serving commands without a failure or a discarded message.
+// TestControllerSigningKeyRotation is the runbook procedure of AUDIT M-3
+// (Phase 16) with real binaries: the old key file is imported into the Secret
+// Store, the owner stages the next key, the agent pins both, the owner
+// activates it without a restart, and the same agent process keeps serving
+// commands. A restart without the key file keeps the active key.
 func TestControllerSigningKeyRotation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end test")
 	}
-	agentDir := agentSource(t)
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel() // independent NATS, ports, database and work directory
+	monolith, agentBinary := builtBinaries(t)
 	work := t.TempDir()
 	if err := os.Chmod(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	monolith, agentBinary := filepath.Join(work, "machinarchy-monolit"), filepath.Join(work, "machinarchy-agent")
-	build(t, repoRoot, "./cmd/monolit", monolith)
-	build(t, agentDir, "./cmd/machinarchy-agent", agentBinary)
 
 	ns := natstest.Start(t)
-	newSeed := func() ([]byte, string) {
-		seed := make([]byte, 32)
-		if _, err := rand.Read(seed); err != nil {
-			t.Fatal(err)
-		}
-		return seed, agentv1.EncodePublicKey(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
 	}
-	seedA, keyA := newSeed()
-	seedB, keyB := newSeed()
-	fileA := secretFile(t, work, "signing-a.key", base64.StdEncoding.EncodeToString(seedA))
-	fileB := secretFile(t, work, "signing-b.key", base64.StdEncoding.EncodeToString(seedB))
+	keyA := agentv1.EncodePublicKey(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
+	keyFile := secretFile(t, work, "signing.key", base64.StdEncoding.EncodeToString(seed))
 
 	port := freePort(t)
 	common := []string{
@@ -87,16 +77,35 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 		NextPublicKey string   `json:"nextPublicKey"`
 		PublicKeys    []string `json:"publicKeys"`
 	}
-
-	// Step 1: the controller signs with A and announces B.
-	before := startServer("server-a", "MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE="+fileA, "MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY="+keyB)
-	var announced keys
-	if status := client.do(t, http.MethodGet, "/api/v1/agents/controller-key", nil, &announced); status != http.StatusOK ||
-		announced.PublicKey != keyA || announced.NextPublicKey != keyB || strings.Join(announced.PublicKeys, ",") != keyA+","+keyB {
-		t.Fatalf("announced keys: %d %+v", status, announced)
+	controllerKeys := func() keys {
+		var k keys
+		if status := client.do(t, http.MethodGet, "/api/v1/agents/controller-key", nil, &k); status != http.StatusOK {
+			t.Fatalf("controller-key: %d", status)
+		}
+		return k
 	}
 
-	// Step 2: the agent pins both, exactly as the endpoint lists them.
+	// 1. The first start imports the key file: enrolled agents keep their pin.
+	server := startServer("server-1", "MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE="+keyFile)
+	if k := controllerKeys(); k.PublicKey != keyA || len(k.PublicKeys) != 1 {
+		t.Fatalf("after import: %+v, want the file's key %s", k, keyA)
+	}
+
+	// 2. The owner stages the next key; the endpoint announces both.
+	var staged struct {
+		ID        string `json:"id"`
+		State     string `json:"state"`
+		PublicKey string `json:"publicKey"`
+	}
+	if status := client.do(t, http.MethodPost, "/api/v1/agents/signing-keys/next", nil, &staged); status != http.StatusCreated || staged.State != "next" {
+		t.Fatalf("stage: %d %+v", status, staged)
+	}
+	announced := controllerKeys()
+	if announced.PublicKey != keyA || announced.NextPublicKey != staged.PublicKey || len(announced.PublicKeys) != 2 {
+		t.Fatalf("announced keys: %+v", announced)
+	}
+
+	// 3. The agent pins both, exactly as the endpoint lists them.
 	hostname, _ := os.Hostname()
 	var issued struct {
 		Token string `json:"token"`
@@ -116,6 +125,7 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 	defer func() {
 		if t.Failed() {
 			agent.dump(t)
+			server.dump(t)
 		}
 	}()
 	var agents agentList
@@ -134,38 +144,50 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 		}
 	}
 	for i := range 3 {
-		invoke(fmt.Sprintf("signed with A (%d)", i+1))
+		invoke(fmt.Sprintf("signed with the imported key (%d)", i+1))
 	}
 
-	// Step 3: the controller switches to B (a restart, as an operator would).
-	if err := before.stop(t); err != nil {
-		t.Fatalf("controller A did not stop cleanly: %v", err)
+	// 4. The owner activates the next key; no restart.
+	if status := client.do(t, http.MethodPost, "/api/v1/agents/signing-keys/next/activate", nil, nil); status != http.StatusOK {
+		t.Fatalf("activate: %d", status)
 	}
-	after := startServer("server-b", "MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE="+fileB)
-	defer func() {
-		if t.Failed() {
-			after.dump(t)
-		}
-	}()
-	var current keys
-	if status := client.do(t, http.MethodGet, "/api/v1/agents/controller-key", nil, &current); status != http.StatusOK ||
-		current.PublicKey != keyB || current.NextPublicKey != "" || len(current.PublicKeys) != 1 {
-		t.Fatalf("keys after the switch: %d %+v", status, current)
+	if k := controllerKeys(); k.PublicKey != staged.PublicKey || len(k.PublicKeys) != 1 {
+		t.Fatalf("after activation: %+v", k)
 	}
-	// The same agent process renews its lease with B's responses and runs
-	// commands signed by B.
-	waitFor(t, 30*time.Second, "the agent connected to the new controller", func() bool {
-		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && len(agents.Items) == 1 && agents.Items[0].Connected
-	})
 	for i := range 3 {
-		invoke(fmt.Sprintf("signed with B (%d)", i+1))
+		invoke(fmt.Sprintf("signed with the new key (%d)", i+1))
 	}
-	firstRenewalUnderB := agents.Items[0].LastSeenAt
-	waitFor(t, 20*time.Second, "a lease renewal answered with key B", func() bool {
-		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].LastSeenAt.After(firstRenewalUnderB)
+	waitFor(t, 30*time.Second, "agent connected", func() bool {
+		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].Connected
 	})
-	invoke("after a renewal under B")
+	firstRenewal := agents.Items[0].LastSeenAt
+	waitFor(t, 20*time.Second, "a lease renewal answered with the new key", func() bool {
+		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].LastSeenAt.After(firstRenewal)
+	})
 
+	// 5. A restart without the key file keeps the active key (Secret Store).
+	if err := server.stop(t); err != nil {
+		t.Fatalf("controller did not stop cleanly: %v", err)
+	}
+	server = startServer("server-2")
+	if k := controllerKeys(); k.PublicKey != staged.PublicKey {
+		t.Fatalf("after a restart without the key file: %+v", k)
+	}
+	waitFor(t, 30*time.Second, "agent reconnected", func() bool {
+		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].Connected
+	})
+	invoke("after a restart without the key file")
+
+	var list struct {
+		Items []struct {
+			State  string `json:"state"`
+			Origin string `json:"origin"`
+		} `json:"items"`
+	}
+	if status := client.do(t, http.MethodGet, "/api/v1/agents/signing-keys", nil, &list); status != http.StatusOK || len(list.Items) != 2 ||
+		list.Items[0].State != "active" || list.Items[1].State != "retired" || list.Items[1].Origin != "imported" {
+		t.Fatalf("signing keys: %d %+v", status, list)
+	}
 	select {
 	case <-agent.exited:
 		t.Fatalf("the agent exited during the rotation: %v", agent.err)

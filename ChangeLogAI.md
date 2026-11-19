@@ -1,5 +1,35 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 16.3/16.4: controller signing key in the Secret Store; rotation as owner actions (branch audit/keys)
+
+- **Migration `000007_agent_signing_keys`** (SQLite and PostgreSQL): public key, state (`next`/`active`/`retired`), origin (`generated`/`imported`), who and when; the private seed is referenced by Secret Store ID and version. Partial unique indexes allow one active and one next key, also across replicas.
+- **Secret Store system secrets**: new purpose `agent-signing-key`, created and read only through `CreateSystem`/`ResolveSystem`. Owner rotate and delete of such a secret, owner create with that purpose, and workload resolution are all refused. Same envelope and key provider as every secret.
+- **`internal/agentkeys.Manager`**:
+  - `Ensure` imports `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` at the first start, so enrolled agents keep working, or generates a key. Later a different file is ignored with a warning.
+  - `Stage`/`Activate`/`Discard` are the owner actions.
+  - `Refresh` every 5 s, so every replica follows an activation.
+  - `Signer` hands the gateway a fixed snapshot per message (`SealWith` reads `Public` then `Sign`).
+  - A seed that does not match its recorded public key is refused.
+- **Owner API** (owner session, audited `agent.signing_key_created/_activated/_discarded`): `GET /api/v1/agents/signing-keys`, `POST …/next`, `POST …/next/activate`, `DELETE …/next`. Responses carry public data only. `/controller-key` reads the manager live. Authorization matrix and OpenAPI updated.
+- **Config**: the key file is optional (import only); `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY` (added earlier today, never released) is removed in favour of the owner actions.
+- Docs: `docs/operations.md` "Agent gateway" and "Rotating the controller signing key" (4 steps), `docs/runbook.md`, `.env.example`.
+
+### Verification
+
+- `test/e2e` `TestControllerSigningKeyRotation`, real binaries in NATS operator mode:
+  - the first start imports the key file (`/controller-key` equals the file's key);
+  - stage → both announced → the agent pins both → 3 commands;
+  - activate with no restart → 3 commands and a lease renewal;
+  - a restart **without** the key file keeps the new key, and a command succeeds;
+  - the key list shows active + retired/imported;
+  - the agent stays up and its log has no discard, signature or ERROR line.
+- `internal/agentkeys` (race detector): import once then ignore a different file; generate without a file; 4 concurrent replicas end with one key; stage/activate/discard with another replica switching only after its refresh; a snapshot keeps its key; a tampered seed is refused.
+- Store contract "agent signing keys" on **SQLite and PostgreSQL 16**: one active and one next at most, activation retires, discard, `created_by` from the actor, 5 audit events.
+- `TestSystemSecretsAreOnlyForTheController`; `TestSigningKeyEndpoints` (409s, 201/200, no secret reference in the list, 503 without a gateway); authorization matrix with the 4 routes as owner-only; migration count 7.
+- `test/e2e`: the monolith and agent binaries are built once per run and shared; the two tests run in parallel (each has its own NATS, ports, database and work directory); child processes are started with a context that ends 2 s before the test deadline. Before this, a test killed by `-timeout` left its monolith and agent running: 11 orphans from earlier runs were found and stopped.
+- Pre-commit hook: it runs `go test -timeout=30s` per staged package. The e2e package needs about 37 s at load average 70–100 (each test about 30 s), so the hook fails on any commit that stages `test/e2e`. The hook was not changed (owner rule). With normal timeouts every check passes: gofmt, `go vet ./...`, `go test ./internal/... -count=1`, and e2e in 37.3 s.
+- Known gap: if replicas race at the very first start, or a key row fails after its secret was written, the losing seed stays as an unused system secret (encrypted, never resolved).
+
 ## 2026-11-19 — Audit Phase 16.1/16.2/16.6: key providers wrap and unwrap; built-in local provider; provider contract suite (branch audit/keys)
 
 - **Interface** (`internal/secrets/keyprovider.go`): `KeyProvider` no longer returns root-key bytes, which no KMS can do. It has `Name`, `CurrentKeyID`, `Owns`, `Wrap(keyID, dataKey, aad)`, `Unwrap`, `Capabilities` (optional `Ed25519Sign`). The Secret Store builds the same `dek:` AAD as before and passes it in, so stored data is byte-compatible.

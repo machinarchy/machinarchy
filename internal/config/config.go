@@ -169,11 +169,10 @@ func (h HTTPConfig) WithDefaults() HTTPConfig {
 // AgentGatewayConfig enables the controller side of the agent protocol. The
 // gateway is off unless NATSURL is set.
 type AgentGatewayConfig struct {
-	NATSURL        string
-	SigningKeySeed []byte // 32-byte Ed25519 seed
-	// NextPublicKey is announced to agents before a signing-key rotation
-	// (MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY); nil otherwise.
-	NextPublicKey       []byte
+	NATSURL string
+	// SigningKeySeed is imported into the Secret Store once, then unused
+	// (MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE, optional).
+	SigningKeySeed      []byte
 	EnrollmentToken     string
 	NATSCredentialsFile string
 	NATSCAFile          string
@@ -905,12 +904,14 @@ func loadAgentGateway(get func(string, ...string) string, environment Environmen
 // loadAgentNATSIssuer reads the NATS account settings that let the gateway
 // issue each agent its own NATS user JWT. Without them every agent shares the
 // bootstrap credential's permissions, so production requires them.
-// loadAgentSigner reads the controller signing key and, during a rotation,
-// the next public key to announce (AUDIT M-3).
+// loadAgentSigner reads the optional signing-key file. The controller
+// signing key lives in the Secret Store (Phase 16); the file is imported
+// once, at the first start after the upgrade, so enrolled agents keep
+// working. Without it a key is generated.
 func loadAgentSigner(cfg *AgentGatewayConfig, get func(string, ...string) string, _ Environment) error {
 	keyFile := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE"))
 	if keyFile == "" {
-		return errors.New("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE is required when the agent gateway is enabled")
+		return nil
 	}
 	raw, err := readSecretFile(keyFile, "MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE")
 	if err != nil {
@@ -918,13 +919,6 @@ func loadAgentSigner(cfg *AgentGatewayConfig, get func(string, ...string) string
 	}
 	if cfg.SigningKeySeed, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err != nil || len(cfg.SigningKeySeed) != 32 {
 		return errors.New("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE must hold a base64-encoded 32-byte Ed25519 seed (openssl rand -base64 32)")
-	}
-	if next := strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY")); next != "" {
-		key, err := base64.StdEncoding.DecodeString(next)
-		if err != nil || len(key) != 32 {
-			return errors.New("MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY must be a base64 Ed25519 public key")
-		}
-		cfg.NextPublicKey = key
 	}
 	return nil
 }

@@ -3,7 +3,9 @@ package agents
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -134,17 +136,53 @@ func TestEnrollmentTokenEndpoints(t *testing.T) {
 	}
 }
 
+// fakeKeys is a SigningKeys with an active and, optionally, a next key.
+type fakeKeys struct {
+	pins   []string
+	staged bool
+	calls  []string
+}
+
+func (f *fakeKeys) PublicKeys() []string { return f.pins }
+func (f *fakeKeys) List(context.Context) ([]agentgateway.SigningKey, error) {
+	return []agentgateway.SigningKey{{ID: "k1", State: agentgateway.SigningKeyActive, PublicKey: make(ed25519.PublicKey, 32), SecretID: "secret-must-not-leak"}}, nil
+}
+func (f *fakeKeys) Stage(_ context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
+	f.calls = append(f.calls, fmt.Sprintf("stage by %d", p.UserID))
+	if f.staged {
+		return agentgateway.SigningKey{}, agentgateway.ErrSigningKeyStaged
+	}
+	f.staged = true
+	return agentgateway.SigningKey{ID: "k2", State: agentgateway.SigningKeyNext, PublicKey: make(ed25519.PublicKey, 32)}, nil
+}
+func (f *fakeKeys) Activate(context.Context, domain.Principal) (agentgateway.SigningKey, error) {
+	f.calls = append(f.calls, "activate")
+	if !f.staged {
+		return agentgateway.SigningKey{}, agentgateway.ErrNoStagedSigningKey
+	}
+	f.staged = false
+	return agentgateway.SigningKey{ID: "k2", State: agentgateway.SigningKeyActive, PublicKey: make(ed25519.PublicKey, 32)}, nil
+}
+func (f *fakeKeys) Discard(context.Context, domain.Principal) (agentgateway.SigningKey, error) {
+	f.calls = append(f.calls, "discard")
+	if !f.staged {
+		return agentgateway.SigningKey{}, agentgateway.ErrNoStagedSigningKey
+	}
+	f.staged = false
+	return agentgateway.SigningKey{ID: "k2", State: agentgateway.SigningKeyRetired, PublicKey: make(ed25519.PublicKey, 32)}, nil
+}
+
 // AUDIT M-3: during a rotation the endpoint announces the next key, and
 // publicKeys is the value agents pin.
 func TestControllerKeyListsTheNextKeyDuringARotation(t *testing.T) {
 	for _, tc := range []struct {
-		keys []string
+		keys SigningKeys
 		want int
 		body string
 	}{
 		{nil, http.StatusServiceUnavailable, ""},
-		{[]string{"current"}, http.StatusOK, `{"publicKey":"current","publicKeys":["current"]}`},
-		{[]string{"current", "next"}, http.StatusOK, `{"publicKey":"current","nextPublicKey":"next","publicKeys":["current","next"]}`},
+		{&fakeKeys{pins: []string{"current"}}, http.StatusOK, `{"publicKey":"current","publicKeys":["current"]}`},
+		{&fakeKeys{pins: []string{"current", "next"}}, http.StatusOK, `{"publicKey":"current","nextPublicKey":"next","publicKeys":["current","next"]}`},
 	} {
 		e := echo.New()
 		group := e.Group("/api/v1/agents")
@@ -153,5 +191,49 @@ func TestControllerKeyListsTheNextKeyDuringARotation(t *testing.T) {
 		if recorder.Code != tc.want || (tc.body != "" && strings.TrimSpace(recorder.Body.String()) != tc.body) {
 			t.Errorf("keys %v: %d %s", tc.keys, recorder.Code, recorder.Body)
 		}
+	}
+}
+
+// Phase 16: the owner stages, activates and discards signing keys; the
+// secret reference never appears in a response.
+func TestSigningKeyEndpoints(t *testing.T) {
+	keys := &fakeKeys{pins: []string{"current"}}
+	e := echo.New()
+	inject := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("principal", domain.Principal{UserID: 42, WorkspaceID: 1, Role: domain.RoleOwner})
+			return next(c)
+		}
+	}
+	group := e.Group("/api/v1/agents", inject)
+	RegisterRoutes(group, group, group, NewHandler(&fakeStore{}, nil, keys))
+	for _, step := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/api/v1/agents/signing-keys/next/activate", http.StatusConflict},
+		{http.MethodDelete, "/api/v1/agents/signing-keys/next", http.StatusConflict},
+		{http.MethodPost, "/api/v1/agents/signing-keys/next", http.StatusCreated},
+		{http.MethodPost, "/api/v1/agents/signing-keys/next", http.StatusConflict},
+		{http.MethodPost, "/api/v1/agents/signing-keys/next/activate", http.StatusOK},
+		{http.MethodPost, "/api/v1/agents/signing-keys/next", http.StatusCreated},
+		{http.MethodDelete, "/api/v1/agents/signing-keys/next", http.StatusOK},
+	} {
+		if got := call(e, step.method, step.path, ""); got.Code != step.want {
+			t.Fatalf("%s %s = %d %s, want %d", step.method, step.path, got.Code, got.Body, step.want)
+		}
+	}
+	if keys.calls[2] != "stage by 42" {
+		t.Fatalf("calls = %v", keys.calls)
+	}
+	list := call(e, http.MethodGet, "/api/v1/agents/signing-keys", "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"publicKey":"`) || strings.Contains(list.Body.String(), "secret-must-not-leak") {
+		t.Fatalf("list = %d %s", list.Code, list.Body)
+	}
+	off := echo.New()
+	offGroup := off.Group("/api/v1/agents", inject)
+	RegisterRoutes(offGroup, offGroup, offGroup, NewHandler(&fakeStore{}, nil, nil))
+	if got := call(off, http.MethodPost, "/api/v1/agents/signing-keys/next", ""); got.Code != http.StatusServiceUnavailable {
+		t.Fatalf("without a gateway = %d", got.Code)
 	}
 }

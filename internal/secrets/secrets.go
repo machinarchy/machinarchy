@@ -120,7 +120,15 @@ const (
 	PurposeSSHCredential Purpose = "ssh-credential" // #nosec G101 -- purpose identifier, not credential material
 	PurposeOperation     Purpose = "operation"
 	PurposeConfiguration Purpose = "runtime-configuration"
+	// PurposeAgentSigning holds a controller signing seed for the agent
+	// gateway (AUDIT M-3). It is a system purpose: only the controller
+	// creates and reads these secrets (CreateSystem, ResolveSystem); the
+	// owner API cannot rotate, delete or resolve them.
+	PurposeAgentSigning Purpose = "agent-signing-key"
 )
+
+// systemPurpose reports purposes that only the controller itself manages.
+func systemPurpose(p Purpose) bool { return p == PurposeAgentSigning }
 
 type Service struct {
 	repo       Repository
@@ -170,6 +178,9 @@ func (s *Service) Rotate(ctx context.Context, actor domain.Principal, id string,
 	if meta.RetiredAt != nil {
 		return Metadata{}, ErrNotFound
 	}
+	if systemPurpose(meta.Purpose) {
+		return Metadata{}, ErrInvalid // rotated through the agent signing-key actions
+	}
 	if expected != meta.CurrentVersion {
 		return Metadata{}, ErrConflict
 	}
@@ -211,6 +222,13 @@ func (s *Service) Versions(ctx context.Context, actor domain.Principal, id strin
 func (s *Service) Delete(ctx context.Context, actor domain.Principal, id string) error {
 	if err := authorize(actor); err != nil {
 		return err
+	}
+	meta, err := s.repo.GetSecret(ctx, id)
+	if err != nil {
+		return err
+	}
+	if systemPurpose(meta.Purpose) {
+		return ErrInvalid // retired through the agent signing-key actions
 	}
 	return s.repo.RetireSecret(ctx, id, actor.UserID)
 }
@@ -324,21 +342,26 @@ func (s *Service) Resolve(ctx context.Context, request ResolutionRequest) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if meta.Purpose != request.Purpose {
+	if meta.Purpose != request.Purpose || systemPurpose(meta.Purpose) {
 		return nil, ErrUnauthorized
 	}
+	return s.decrypt(ctx, request.Ref, request.Purpose, stored)
+}
+
+// decrypt unwraps the data key through the provider and opens the value.
+func (s *Service) decrypt(ctx context.Context, ref Ref, purpose Purpose, stored StoredVersion) ([]byte, error) {
 	if stored.Ciphertext.AADVersion != 1 && stored.Ciphertext.AADVersion != 2 {
 		return nil, errors.New("unsupported secret ciphertext AAD version")
 	}
 	if !s.keys.Owns(stored.Ciphertext.KeyID) {
 		return nil, fmt.Errorf("%w: %s", ErrKeyUnavailable, stored.Ciphertext.KeyID)
 	}
-	wrapAAD := aadFor(request.Ref.ID, request.Ref.Version, stored.Ciphertext.KeyID, request.Purpose)
+	wrapAAD := aadFor(ref.ID, ref.Version, stored.Ciphertext.KeyID, purpose)
 	dek, err := s.keys.Unwrap(ctx, stored.Ciphertext.KeyID, stored.Ciphertext.WrappedDEK, []byte("dek:"+wrapAAD))
 	if err != nil {
 		return nil, errors.New("secret key unwrap failed")
 	}
-	valueAAD := valueAADFor(request.Ref.ID, request.Ref.Version, stored.Ciphertext.AADVersion, stored.Ciphertext.DataAADKeyID, request.Purpose)
+	valueAAD := valueAADFor(ref.ID, ref.Version, stored.Ciphertext.AADVersion, stored.Ciphertext.DataAADKeyID, purpose)
 	plain, err := crypto.DecryptBytes(stored.Ciphertext.Value, dek, []byte("value:"+valueAAD))
 	wipe(dek)
 	if err != nil {
@@ -346,6 +369,49 @@ func (s *Service) Resolve(ctx context.Context, request ResolutionRequest) ([]byt
 	}
 	return plain, nil
 }
+
+// CreateSystem stores a secret the controller itself owns (a system
+// purpose such as PurposeAgentSigning), with the same envelope and key
+// provider as every other secret. It is not reachable from the owner API.
+func (s *Service) CreateSystem(ctx context.Context, name string, purpose Purpose, value []byte) (Ref, error) {
+	if ctx == nil || !systemPurpose(purpose) || name == "" || len(name) > 128 || len(value) == 0 || len(value) > 4096 {
+		return Ref{}, ErrInvalid
+	}
+	idValue, err := resource.NewResourceID()
+	if err != nil {
+		return Ref{}, err
+	}
+	now := time.Now().UTC()
+	meta := Metadata{ID: string(idValue), Name: name, Purpose: purpose, CurrentVersion: 1, CreatedAt: now, UpdatedAt: now}
+	stored, err := s.encrypt(ctx, meta.ID, 1, 0, string(value), purpose, now)
+	if err != nil {
+		return Ref{}, err
+	}
+	if err := s.repo.CreateSecret(ctx, meta, stored); err != nil {
+		return Ref{}, err
+	}
+	return Ref{ID: meta.ID, Version: 1}, nil
+}
+
+// ResolveSystem reads a system secret created by CreateSystem.
+func (s *Service) ResolveSystem(ctx context.Context, ref Ref, purpose Purpose) ([]byte, error) {
+	if ctx == nil || ref.ID == "" || ref.Version == 0 || !systemPurpose(purpose) {
+		return nil, ErrInvalid
+	}
+	meta, err := s.repo.GetSecret(ctx, ref.ID)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Purpose != purpose {
+		return nil, ErrUnauthorized
+	}
+	stored, err := s.repo.GetSecretVersion(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return s.decrypt(ctx, ref, purpose, stored)
+}
+
 func (s *Service) encrypt(ctx context.Context, id string, version uint64, actor int, value string, purpose Purpose, now time.Time) (StoredVersion, error) {
 	keyID, err := s.keys.CurrentKeyID(ctx)
 	if err != nil || keyID == "" {

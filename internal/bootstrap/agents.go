@@ -2,9 +2,7 @@ package bootstrap
 
 import (
 	"context"
-	"crypto"
 	"crypto/ed25519"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -12,30 +10,33 @@ import (
 	"github.com/nats-io/nkeys"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
-
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
+	"github.com/machinarchy/machinarchy/internal/agentkeys"
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/store"
+	"github.com/machinarchy/machinarchy/internal/transport/http/v1/agents"
 )
 
 // newAgentGateway builds the gateway when it is configured, or returns nil.
-func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores *store.Stores, registry prometheus.Registerer) (*agentgateway.Gateway, []string, error) {
+func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores *store.Stores, secretStore agentkeys.SecretStore,
+	registry prometheus.Registerer) (*agentgateway.Gateway, *agentkeys.Manager, error) {
 	if !cfg.Enabled() {
 		return nil, nil, nil
 	}
-	signer, err := newControllerSigner(ctx, cfg)
+	// The signing key lives in the Secret Store (Phase 16). The key file, if
+	// still configured, is imported once so enrolled agents keep working.
+	keys, err := agentkeys.New(stores.Agents, secretStore, slog.Default())
 	if err != nil {
 		return nil, nil, err
 	}
-	current := signer.Public().(ed25519.PublicKey)
-	publicKeys := []string{agentv1.EncodePublicKey(current)}
-	if cfg.NextPublicKey != nil {
-		if current.Equal(ed25519.PublicKey(cfg.NextPublicKey)) {
-			return nil, nil, errors.New("MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY is the key in use; announce a different key")
-		}
-		publicKeys = append(publicKeys, agentv1.EncodePublicKey(ed25519.PublicKey(cfg.NextPublicKey)))
+	var importSeed []byte
+	if len(cfg.SigningKeySeed) == ed25519.SeedSize {
+		importSeed = cfg.SigningKeySeed
 	}
+	if err := keys.Ensure(ctx, importSeed); err != nil {
+		return nil, nil, fmt.Errorf("agent gateway signing key: %w", err)
+	}
+	publicKeys := keys.PublicKeys()
 	var options []nats.Option
 	if cfg.NATSCredentialsFile != "" {
 		options = append(options, nats.UserCredentials(cfg.NATSCredentialsFile))
@@ -55,7 +56,7 @@ func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores 
 		issuer = &agentgateway.NATSIssuer{Account: cfg.NATSAccount, Signer: signer, TTL: cfg.AgentJWTTTL}
 	}
 	gateway, err := agentgateway.New(stores.Agents, agentgateway.Config{
-		NATSURL: cfg.NATSURL, NATSOptions: options, Signer: signer, EnrollmentToken: cfg.EnrollmentToken,
+		NATSURL: cfg.NATSURL, NATSOptions: options, Signer: keys.Signer(), EnrollmentToken: cfg.EnrollmentToken,
 		LeaseTTL: cfg.LeaseTTL, Heartbeat: cfg.Heartbeat, Logger: slog.Default(), Registerer: registry,
 		NATSIssuer: issuer,
 	})
@@ -67,15 +68,14 @@ func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores 
 		attrs = append(attrs, "next_controller_public_key", publicKeys[1])
 	}
 	slog.Info("agent gateway configured", attrs...)
-	return gateway, publicKeys, nil
+	return gateway, keys, nil
 }
 
-// newControllerSigner returns the key the gateway signs with (AUDIT M-3).
-// Phase 16.3 moves it into the Secret Store; a KMS signer can plug in through
-// the same crypto.Signer interface later (K-phases).
-func newControllerSigner(_ context.Context, cfg config.AgentGatewayConfig) (crypto.Signer, error) {
-	if len(cfg.SigningKeySeed) != ed25519.SeedSize {
-		return nil, errors.New("agent gateway signer: the signing key seed is missing")
+// agentKeyAPI adapts the manager for the HTTP API; nil when the gateway is
+// off, so the endpoints answer 503.
+func agentKeyAPI(keys *agentkeys.Manager) agents.SigningKeys {
+	if keys == nil {
+		return nil
 	}
-	return ed25519.NewKeyFromSeed(cfg.SigningKeySeed), nil
+	return keys
 }

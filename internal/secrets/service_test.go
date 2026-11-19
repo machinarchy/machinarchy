@@ -59,6 +59,12 @@ func resolve(s *secrets.Service, ref secrets.Ref) ([]byte, error) {
 		Purpose: secrets.PurposeSSHCredential, WorkspaceID: 1, AccessProfileID: "profile", AccessProfileRevision: 1, HostID: "host"})
 }
 
+// resolveAs resolves like a runtime workload, with the given purpose.
+func resolveAs(s *secrets.Service, ref secrets.Ref, purpose secrets.Purpose) ([]byte, error) {
+	return s.Resolve(context.Background(), secrets.ResolutionRequest{WorkloadID: secrets.WorkloadControlManager, Ref: ref,
+		Purpose: purpose, WorkspaceID: 1, AccessProfileID: "profile", AccessProfileRevision: 1, HostID: "host"})
+}
+
 // TestSecretLifecycle covers the Secret Store end to end on a real database:
 // owner-only writes, versioned rotation with a precondition, write-only
 // values, resolution through the authorizer, key rotation (rewrap) and
@@ -175,5 +181,41 @@ func TestSecretsStoredBeforeProvidersStillWork(t *testing.T) {
 	onlyNew := service(t, repo, &secrets.LocalProvider{KeyID: "kek-b", Key: keyB}, allowAll{})
 	if value, err := resolve(onlyNew, secrets.Ref{ID: id, Version: 1}); err != nil || string(value) != "legacy-password" {
 		t.Fatalf("after rewrap without the old key = %q, %v", value, err)
+	}
+}
+
+// Phase 16: the controller's own secrets (the agent signing seed) use the
+// same envelope, but the owner API and runtime workloads cannot reach them.
+func TestSystemSecretsAreOnlyForTheController(t *testing.T) {
+	ctx := context.Background()
+	s := service(t, repository(t), &secrets.LocalProvider{KeyID: "k", Key: keyA}, allowAll{})
+	ref, err := s.CreateSystem(ctx, "agent-gateway-signing-key-x", secrets.PurposeAgentSigning, []byte("seed-bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := s.ResolveSystem(ctx, ref, secrets.PurposeAgentSigning); err != nil || string(value) != "seed-bytes" {
+		t.Fatalf("ResolveSystem = %q, %v", value, err)
+	}
+	if _, err := resolveAs(s, ref, secrets.PurposeAgentSigning); !errors.Is(err, secrets.ErrInvalid) && !errors.Is(err, secrets.ErrUnauthorized) {
+		t.Fatalf("a workload resolved a system secret: %v", err)
+	}
+	if _, err := s.Rotate(ctx, owner, ref.ID, 1, secrets.Input{Value: "x"}); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("owner rotate of a system secret = %v", err)
+	}
+	if err := s.Delete(ctx, owner, ref.ID); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("owner delete of a system secret = %v", err)
+	}
+	if _, err := s.Create(ctx, owner, secrets.Input{Name: "fake", Purpose: secrets.PurposeAgentSigning, Value: "x"}); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("owner created a system-purpose secret: %v", err)
+	}
+	if _, err := s.CreateSystem(ctx, "x", secrets.PurposeSSHCredential, []byte("x")); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("CreateSystem with an owner purpose = %v", err)
+	}
+	user, err := s.Create(ctx, owner, secrets.Input{Name: "deploy", Purpose: secrets.PurposeSSHCredential, Value: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveSystem(ctx, secrets.Ref{ID: user.ID, Version: 1}, secrets.PurposeAgentSigning); !errors.Is(err, secrets.ErrUnauthorized) {
+		t.Fatalf("ResolveSystem of an owner secret = %v", err)
 	}
 }

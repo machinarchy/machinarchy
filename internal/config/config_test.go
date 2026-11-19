@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -47,7 +46,6 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_HTTP_REQUEST_TIMEOUT":           "",
 		"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": "",
 		"MACHINARCHY_KMS_PROVIDER":                   "",
-		"MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY":  "",
 		"MACHINARCHY_OPERATOR_TOKEN":                 "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":              "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                      "",
@@ -445,7 +443,7 @@ func TestLoadAgentGateway(t *testing.T) {
 		"valid":              {nil, true},
 		"bad scheme":         {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_URL": "http://x:4222"}, false},
 		"credentials in url": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_NATS_URL": "nats://u:p@x:4222"}, false},
-		"no key":             {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": ""}, false},
+		"no key file":        {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": ""}, true},
 		"world-readable key": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE": open}, false},
 		"short token":        {map[string]string{"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": short}, false},
 		"no shared token":    {map[string]string{"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": ""}, true},
@@ -465,7 +463,12 @@ func TestLoadAgentGateway(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("Load() error = %v, want ok=%v", err, tc.ok)
 			}
-			if tc.ok && (!cfg.AgentGateway.Enabled() || len(cfg.AgentGateway.SigningKeySeed) != 32) {
+			// The key file is optional since Phase 16 (imported once).
+			wantSeed := 32
+			if v, set := tc.override["MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE"]; set && v == "" {
+				wantSeed = 0
+			}
+			if tc.ok && (!cfg.AgentGateway.Enabled() || len(cfg.AgentGateway.SigningKeySeed) != wantSeed) {
 				t.Fatalf("gateway config = %+v", cfg.AgentGateway)
 			}
 		})
@@ -741,32 +744,6 @@ func TestLoadHTTPSettings(t *testing.T) {
 	t.Setenv("MACHINARCHY_TRUSTED_PROXIES", "proxy.internal")
 	if _, err := Load(); err == nil {
 		t.Error("a host name was accepted as a trusted proxy")
-	}
-}
-
-// AUDIT M-3: a next key can be announced for a rotation.
-func TestAgentGatewayNextPublicKey(t *testing.T) {
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "seed")
-	if err := os.WriteFile(seed, []byte(base64.StdEncoding.EncodeToString(make([]byte, 32))), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	load := func(next string) (AgentGatewayConfig, error) {
-		setCommonEnv(t)
-		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NATS_URL", "nats://127.0.0.1:4222")
-		t.Setenv("MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE", seed)
-		t.Setenv("MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY", next)
-		cfg, err := Load()
-		return cfg.AgentGateway, err
-	}
-	if gw, err := load(""); err != nil || gw.NextPublicKey != nil {
-		t.Fatalf("no next key: %v %v", gw.NextPublicKey, err)
-	}
-	if gw, err := load(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))); err != nil || len(gw.NextPublicKey) != 32 {
-		t.Fatalf("next key: %v %v", gw.NextPublicKey, err)
-	}
-	if _, err := load("short"); err == nil {
-		t.Fatal("a malformed next key was accepted")
 	}
 }
 

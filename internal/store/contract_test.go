@@ -182,6 +182,7 @@ var contractTests = []struct {
 	{"login sessions", testSessions},
 	{"login throttling", testLoginThrottle},
 	{"secret store key providers", testSecretStoreKeyProviders},
+	{"agent signing keys", testAgentSigningKeys},
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"audit trail", testAuditTrail},
@@ -471,8 +472,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 6 {
-		t.Fatalf("applied migrations = %d, want the baseline and 000002-000006 (agent enrolment tokens, host key observations, detached targets, user sessions, login failures)", before)
+	if before != 7 {
+		t.Fatalf("applied migrations = %d, want the baseline and 000002-000007 (agent enrolment tokens, host key observations, detached targets, user sessions, login failures, agent signing keys)", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

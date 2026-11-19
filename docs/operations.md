@@ -134,16 +134,14 @@ it carry no session ID. Log in again.
 
 ### Agent gateway
 
-```sh
-openssl rand -base64 32 > /etc/machinarchy/agent-signing.key   # Ed25519 seed
-chmod 600 /etc/machinarchy/agent-signing.key
-```
+The gateway is on when `MACHINARCHY_AGENT_GATEWAY_NATS_URL` is set. Its
+signing key is generated at the first start and kept in the Secret Store;
+see [rotating the controller signing key](#rotating-the-controller-signing-key).
 
 | Variable | Purpose |
 |---|---|
 | `MACHINARCHY_AGENT_GATEWAY_NATS_URL` | `tls://host:4222` (production) or `nats://` (development). No credentials in the URL. |
-| `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` | Base64 32-byte Ed25519 seed. Its public key is logged at startup and served at `GET /api/v1/agents/controller-key`; agents pin it (`MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY`). |
-| `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY` | During a [signing-key rotation](#rotating-the-controller-signing-key): the next public key, announced at `/controller-key` so agents can pin both. |
+| `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` | Optional. The controller signing key lives in the Secret Store. This file (a base64 32-byte Ed25519 seed) is imported once, at the first start after upgrading, so enrolled agents keep working; without it a key is generated. Remove the setting afterwards. The public key agents pin is at `GET /api/v1/agents/controller-key`. |
 | `MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE` | **Development only** (refused in production): a shared token any host can enrol with. Normally hosts use per-host tokens; see [enrolling a host](#enrolling-a-host). |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_CREDENTIALS_FILE`, `_NATS_CA_FILE`, `_NATS_CERT_FILE`, `_NATS_KEY_FILE` | NATS authentication and TLS. |
 | `MACHINARCHY_AGENT_GATEWAY_LEASE_TTL` / `_HEARTBEAT` | Default 60s / 15s; the heartbeat must be at least 5s and at most half the TTL. |
@@ -153,25 +151,28 @@ chmod 600 /etc/machinarchy/agent-signing.key
 
 #### Rotating the controller signing key
 
-Agents pin the controller's public key, so changing the key must not stop
-them. Each agent can pin two keys (current and next):
+The gateway signs everything it sends to agents with the **active** key,
+whose private half is a Secret Store secret (protected by
+`MACHINARCHY_KMS_PROVIDER`). Agents pin its public key and can pin two
+during a rotation, so a key changes without stopping anything. Owner
+actions, each audited (`agent.signing_key_*`):
 
-1. Create the next seed (`openssl rand -base64 32 > agent-signing-next.key`,
-   `0600`) and derive its public key: start machinarchy once with it in a
-   scratch setup, or read it from step 2's endpoint after setting it.
-   Set `MACHINARCHY_AGENT_GATEWAY_NEXT_PUBLIC_KEY` to it and restart.
-   `GET /api/v1/agents/controller-key` now returns `publicKeys` with both.
-2. On every agent set `MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY` to that
-   comma-separated pair and restart the agent (its identity and lease
-   survive in its state file).
-3. Point `MACHINARCHY_AGENT_GATEWAY_SIGNING_KEY_FILE` at the next seed,
-   remove `_NEXT_PUBLIC_KEY`, restart. Agents that pin both keys do not
-   notice.
-4. Later, pin only the new key on agents and delete the old seed.
+| Step | Action | Effect |
+|---|---|---|
+| 1 | `POST /api/v1/agents/signing-keys/next` | Generates the next key; `GET /api/v1/agents/controller-key` returns `publicKeys` with both |
+| 2 | On every agent: `MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=<publicKeys, comma-separated>`, restart the agent | Agents accept either key; identity and lease survive the restart |
+| 3 | `POST /api/v1/agents/signing-keys/next/activate` | The next key signs; the old one retires. Other controller replicas follow within 5 s. No restart. |
+| 4 | Later, on every agent: pin only the new key | — |
 
-`test/e2e/rotation_test.go` runs these steps with real binaries: commands keep
-succeeding and the same agent process stays up. Phase 16 moves the key into
-the Secret Store and turns these steps into owner actions.
+`DELETE /api/v1/agents/signing-keys/next` discards a staged key;
+`GET /api/v1/agents/signing-keys` lists all keys (never key material). An
+agent that skipped step 2 logs `discarding unauthenticated or malformed
+command` after step 3: pin both keys on it and restart it.
+
+`test/e2e/rotation_test.go` runs these steps with real binaries: import of
+the old key file, stage, pin, activate without a restart, and a restart
+without the file. Commands keep succeeding and the same agent process stays
+up.
 
 #### NATS in operator mode
 

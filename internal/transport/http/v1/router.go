@@ -40,11 +40,11 @@ type Repositories struct {
 	Secrets          *secrets.Service
 	ManagedResources *service.ManagedResourceService
 	// Agents lists enrolled agents; AgentGateway is nil where the gateway
-	// does not run; AgentPublicKeys is empty when it is not configured.
-	Agents          agents.Lister
-	AgentGateway    agents.Gateway
-	AgentPublicKeys []string
-	SignupEnabled   func() bool
+	// does not run; AgentKeys is nil when it is not configured.
+	Agents        agents.Lister
+	AgentGateway  agents.Gateway
+	AgentKeys     agents.SigningKeys
+	SignupEnabled func() bool
 }
 
 // RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
@@ -118,7 +118,7 @@ func RegisterRoutes(
 				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionInventoryRead)),
 				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionRunsExecute)),
 				apiv1.Group("/agents", middleware.RequireOwner(), middleware.RequireHuman()),
-				agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentPublicKeys))
+				agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentKeys))
 		}
 		if repos.ManagedResources != nil {
 			managedresource.RegisterRoutes(apiv1.Group("/managed"), managedresource.NewHandler(repos.ManagedResources))
