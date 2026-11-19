@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 14: SSH call timeouts follow their settings (branch audit/sessions)
+
+- The Control Manager's SSH connector used a fixed 30 s per call, so raising runtime configuration `reconciliation.timeoutSeconds` above 30 had no effect on host checks. The connector now uses that setting (default 30 s, unchanged).
+- The Operation worker's connector used a literal 15 min; it now uses `domain.MaxRunTimeout` (900 s, the same value), so the two cannot drift apart.
+
+### Verification
+
+- `go build ./...`, `go vet`, and the cached `go test ./...` pass; golangci-lint `--new-from-rev`: 0 issues. No dedicated test: the value is passed straight through to the existing connector constructor.
+
 ## 2026-11-19 — Audit Phase 14: client address behind proxies, token-bucket rate limits, HTTP settings from config (S-10) (branch audit/sessions)
 
 - **Trusted proxies.** New `MACHINARCHY_TRUSTED_PROXIES` (IPs or CIDRs; `0.0.0.0/0`-style "trust everyone" is refused).

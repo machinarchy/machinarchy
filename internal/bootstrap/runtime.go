@@ -273,11 +273,15 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 		hostResync = time.Duration(snap.Revision.Config.Reconciliation.ManagedHostResyncSeconds) * time.Second
 	}
 	sshLimit := defaultSSHConcurrency
+	// One SSH call of a reconcile gets the whole reconcile budget
+	// (reconciliation.timeoutSeconds); a fixed 30 s used to cap it.
+	reconcileTimeout := controlmanager.DefaultConfig().ReconcileTimeout
 	if snap, ok := r.configuration.Snapshot(); ok {
 		sshLimit = snap.Revision.Config.SSH.MaxConcurrent
+		reconcileTimeout = time.Duration(snap.Revision.Config.Reconciliation.TimeoutSeconds) * time.Second
 	}
 	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.secrets, r.targetPolicyProvider(netpolicy.Default()), sshLimit,
-		30*time.Second, secrets.WorkloadControlManager)
+		reconcileTimeout, secrets.WorkloadControlManager)
 	if err != nil {
 		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
 	}
@@ -310,7 +314,7 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 		workers = snap.Revision.Config.ControlManager.Workers
 	}
 	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.operationSecrets, r.targetPolicyProvider(netpolicy.Default()),
-		concurrency, 15*time.Minute, secrets.WorkloadOperationWorker)
+		concurrency, domain.MaxRunTimeout*time.Second, secrets.WorkloadOperationWorker)
 	if err != nil {
 		return nil, fmt.Errorf("construct Operation SSH connector: %w", err)
 	}
