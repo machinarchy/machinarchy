@@ -5,6 +5,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -122,6 +123,7 @@ func (h *Handler) SignUp(c echo.Context) error {
 
 	ctx := c.Request().Context()
 	res, err := h.authService.SignUp(ctx, domain.AuthSignUpRequest{
+		Client:   clientInfo(c),
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -164,6 +166,7 @@ func (h *Handler) Login(c echo.Context) error {
 
 	ctx := c.Request().Context()
 	res, err := h.authService.Login(ctx, domain.AuthLoginRequest{
+		Client:   clientInfo(c),
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -206,13 +209,169 @@ func (h *Handler) GetMe(c echo.Context) error {
 	return c.JSON(http.StatusOK, userResp)
 }
 
-// Logout clears the session cookie.
+// Logout ends the current session: the session is revoked on the server, so a
+// copy of the token stops working too, and the cookie is cleared.
 // @Summary Log out
+// @Description Revokes the session of the token sent (cookie or bearer) and clears the cookie. Succeeds even without a valid session.
 // @Tags Authentication
 // @Produce json
 // @Success 200 {object} MessageResponse
+// @Failure 500 {object} httperr.Body
 // @Router /api/auth/logout [post]
 func (h *Handler) Logout(c echo.Context) error {
 	clearAuthCookie(c, h.secureCookie)
+	if err := h.authService.Logout(c.Request().Context(), sessionToken(c)); err != nil {
+		return httperr.Status(c, http.StatusInternalServerError, "Unable to end the session")
+	}
 	return c.JSON(http.StatusOK, MessageResponse{Message: "Operation completed successfully"})
+}
+
+// sessionToken returns the login-session token of the request (bearer first,
+// then cookie); API tokens are ignored.
+func sessionToken(c echo.Context) string {
+	if value, ok := strings.CutPrefix(c.Request().Header.Get(echo.HeaderAuthorization), "Bearer "); ok {
+		if value = strings.TrimSpace(value); value != "" && !strings.HasPrefix(value, "mch_pat_") {
+			return value
+		}
+	}
+	if cookie, err := c.Cookie("auth_token"); err == nil {
+		return cookie.Value
+	}
+	return ""
+}
+
+// clientInfo is recorded with a new session.
+func clientInfo(c echo.Context) domain.ClientInfo {
+	return domain.ClientInfo{IP: c.RealIP(), UserAgent: c.Request().UserAgent()}
+}
+
+// SessionsResponse lists the caller's active sessions.
+type SessionsResponse struct {
+	Items []domain.Session `json:"items"`
+}
+
+// RevokedResponse reports how many sessions ended.
+type RevokedResponse struct {
+	Revoked int `json:"revoked"`
+}
+
+// PasswordChangeRequest changes the caller's password.
+type PasswordChangeRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// ListSessions returns the caller's active login sessions.
+// @Summary List my sessions
+// @Description The caller's active login sessions, newest first; "current" marks the one used for this request. Needs a login session (API tokens are refused).
+// @Tags Authentication
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} SessionsResponse
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/sessions [get]
+func (h *Handler) ListSessions(c echo.Context) error {
+	sessions, err := h.authService.ListSessions(c.Request().Context(), principalOf(c))
+	if err != nil {
+		return sessionError(c, err)
+	}
+	return c.JSON(http.StatusOK, SessionsResponse{Items: sessions})
+}
+
+// RevokeSession ends one of the caller's sessions.
+// @Summary Revoke one of my sessions
+// @Tags Authentication
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 200 {object} MessageResponse
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Router /api/v1/sessions/{id} [delete]
+func (h *Handler) RevokeSession(c echo.Context) error {
+	principal := principalOf(c)
+	id := c.Param("id")
+	if err := h.authService.RevokeSession(c.Request().Context(), principal, id); err != nil {
+		return sessionError(c, err)
+	}
+	if id == principal.SessionID {
+		clearAuthCookie(c, h.secureCookie)
+	}
+	return c.JSON(http.StatusOK, MessageResponse{Message: "Session revoked"})
+}
+
+// RevokeAllSessions ends every session of the caller, including this one.
+// @Summary Log out everywhere
+// @Description Revokes every login session of the caller, including the current one. API tokens are not affected.
+// @Tags Authentication
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} RevokedResponse
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/sessions [delete]
+func (h *Handler) RevokeAllSessions(c echo.Context) error {
+	revoked, err := h.authService.RevokeAllSessions(c.Request().Context(), principalOf(c))
+	if err != nil {
+		return sessionError(c, err)
+	}
+	clearAuthCookie(c, h.secureCookie)
+	return c.JSON(http.StatusOK, RevokedResponse{Revoked: revoked})
+}
+
+// ChangePassword replaces the caller's password and ends all their sessions.
+// @Summary Change my password
+// @Description Checks the current password, stores the new one (12–72 bytes) and revokes every login session of the caller, including this one: log in again. API tokens are not affected.
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body PasswordChangeRequest true "Current and new password"
+// @Success 200 {object} MessageResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/me/password [post]
+func (h *Handler) ChangePassword(c echo.Context) error {
+	var req PasswordChangeRequest
+	if err := c.Bind(&req); err != nil || req.CurrentPassword == "" || req.NewPassword == "" {
+		return httperr.Status(c, http.StatusBadRequest, "currentPassword and newPassword are required")
+	}
+	err := h.authService.ChangePassword(c.Request().Context(), principalOf(c), req.CurrentPassword, req.NewPassword)
+	if errors.Is(err, domain.ErrInvalidCredentials) {
+		return httperr.Status(c, http.StatusForbidden, "the current password is incorrect")
+	}
+	if err != nil {
+		return sessionError(c, err)
+	}
+	clearAuthCookie(c, h.secureCookie)
+	return c.JSON(http.StatusOK, MessageResponse{Message: "Password changed; every session was ended, log in again"})
+}
+
+func principalOf(c echo.Context) domain.Principal {
+	principal, _ := c.Get("principal").(domain.Principal)
+	return principal
+}
+
+func sessionError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, domain.ErrPermissionDenied):
+		return httperr.Status(c, http.StatusForbidden, "a login session is required; API tokens cannot manage sessions or passwords")
+	case errors.Is(err, domain.ErrSessionNotFound):
+		return httperr.Status(c, http.StatusNotFound, "session not found")
+	case errors.Is(err, domain.ErrInvalidInput):
+		return httperr.Status(c, http.StatusBadRequest, err.Error())
+	default:
+		return httperr.Status(c, http.StatusInternalServerError, "unable to manage sessions")
+	}
+}
+
+// RegisterSessionRoutes adds the authenticated self-service routes.
+func RegisterSessionRoutes(g *echo.Group, h *Handler) {
+	g.GET("/sessions", h.ListSessions)
+	g.DELETE("/sessions", h.RevokeAllSessions)
+	g.DELETE("/sessions/:id", h.RevokeSession)
+	g.POST("/me/password", h.ChangePassword)
 }

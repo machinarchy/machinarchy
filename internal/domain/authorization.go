@@ -47,6 +47,8 @@ type Principal struct {
 	Role        Role   `json:"-"`
 	APITokenID  int    `json:"-"`
 	Username    string `json:"-"`
+	// SessionID is set for a login session (not for API tokens).
+	SessionID string `json:"-"`
 }
 
 // Allows checks if the principal has the specified permission.

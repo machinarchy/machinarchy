@@ -84,7 +84,7 @@ func NewServer(
 	dependencies ...ReadinessChecker,
 ) (*Server, error) {
 	if database == nil || repositories.Users == nil || repositories.Environments == nil || repositories.Access == nil ||
-		authService == nil {
+		repositories.Sessions == nil || repositories.SessionKeys == nil || authService == nil {
 		return nil, errors.New("HTTP server dependencies are required")
 	}
 	tokenService, err := service.NewAPITokenService(repositories.Access)
@@ -145,7 +145,7 @@ func NewServer(
 
 	api := e.Group("/api", limiter.Middleware(), requestDeadline(RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
-		[]byte(cfg.OperatorToken), cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
+		repositories.SessionKeys, repositories.SessionTTL, cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",

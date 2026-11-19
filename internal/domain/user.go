@@ -36,6 +36,8 @@ type JWTCustomClaims struct {
 	UserID      int    `json:"id"`
 	WorkspaceID int    `json:"workspace_id"`
 	Username    string `json:"username"`
+	// SessionID is the server-side session this token belongs to (S-08).
+	SessionID string `json:"sid"`
 	jwt.RegisteredClaims
 }
 

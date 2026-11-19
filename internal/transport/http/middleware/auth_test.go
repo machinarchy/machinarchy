@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
@@ -30,6 +32,35 @@ func (*accessStoreStub) ListAPITokens(context.Context, int, int) ([]domain.APITo
 func (*accessStoreStub) CreateAPIToken(context.Context, *domain.APIToken) error { return nil }
 func (*accessStoreStub) RevokeAPIToken(context.Context, int, int, int) error    { return nil }
 
+// sessionStoreStub refuses every session; embed it to override one method.
+type sessionStoreStub struct{}
+
+func (sessionStoreStub) CreateSession(context.Context, domain.Session) error { return nil }
+func (sessionStoreStub) GetSessionRole(context.Context, string, int, int, time.Time) (domain.Role, error) {
+	return "", domain.ErrSessionNotFound
+}
+func (sessionStoreStub) ListSessions(context.Context, int, time.Time) ([]domain.Session, error) {
+	return nil, nil
+}
+func (sessionStoreStub) RevokeSession(context.Context, string, int, string, time.Time) error {
+	return nil
+}
+func (sessionStoreStub) RevokeUserSessions(context.Context, int, string, time.Time) (int, error) {
+	return 0, nil
+}
+func (sessionStoreStub) ChangePassword(context.Context, int, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func patAuth(t *testing.T, access domain.AccessStore) echo.MiddlewareFunc {
+	t.Helper()
+	keys, err := sessionkey.New("unused-for-pat-0123456789abcdef0123", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return middleware.JWTAuth(keys, time.Hour, access, sessionStoreStub{})
+}
+
 func TestAPITokenAuthenticationUsesScopedPrincipalAndPermissions(t *testing.T) {
 	const rawToken = "mch_pat_example-secret"
 	access := &accessStoreStub{principal: domain.Principal{
@@ -47,15 +78,15 @@ func TestAPITokenAuthenticationUsesScopedPrincipalAndPermissions(t *testing.T) {
 		return c.NoContent(http.StatusNoContent)
 	}
 	e.GET("/read", endpoint,
-		middleware.JWTAuth([]byte("unused-for-pat"), access),
+		patAuth(t, access),
 		middleware.RequirePermission(domain.PermissionOperationsRead),
 	)
 	e.GET("/write", endpoint,
-		middleware.JWTAuth([]byte("unused-for-pat"), access),
+		patAuth(t, access),
 		middleware.RequirePermission(domain.PermissionInventoryWrite),
 	)
 	e.GET("/cookie", endpoint,
-		middleware.JWTAuth([]byte("unused-for-pat"), access),
+		patAuth(t, access),
 	)
 
 	for _, tt := range []struct {
@@ -102,7 +133,7 @@ func TestAPITokenCannotUseHumanOnlyTokenManagement(t *testing.T) {
 	}}
 	e := echo.New()
 	e.POST("/tokens", func(c echo.Context) error { return c.NoContent(http.StatusNoContent) },
-		middleware.JWTAuth([]byte("unused-for-pat"), access),
+		patAuth(t, access),
 		middleware.RequirePermission(domain.PermissionTokenManage),
 		middleware.RequireHuman(),
 	)

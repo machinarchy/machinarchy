@@ -34,11 +34,48 @@ keyring file, and the agent gateway key and enrollment token.
 | `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
 | `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |
 | `MACHINARCHY_API_DOCS_ENABLED` | Serve `/openapi.json` and the `/scalar` reference. Default `true` in development, `false` in production. |
+| `MACHINARCHY_SESSION_TTL` | Login session lifetime, default `24h` (5m–168h). See [sessions](#login-sessions). |
+| `MACHINARCHY_SESSION_PREVIOUS_KEYS` | Secret. Earlier `MACHINARCHY_OPERATOR_TOKEN` values (comma-separated) still accepted to verify existing sessions during a key rotation. |
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | One budget (default 25s) for HTTP drain, worker drain and closing the database. Keep it below the orchestrator grace period. |
 | `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set; the program list is re-checked when each Operation runs. |
 | `MACHINARCHY_SSH_*` | Egress policy: private ranges, loopback and all ports are denied unless allowed. |
 | `MACHINARCHY_SSH_HOST_KEY_POLICY` | Host-key trust for profiles without their own policy: `tofu` (development default), `approve` (production default) or `pinned`. See [SSH host keys](#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | See [agent gateway](#agent-gateway). Off unless `_NATS_URL` is set. |
+
+### Login sessions
+
+Every login creates a session on the server. The session token (cookie or
+bearer) carries the session's ID and is accepted only while that session is
+active, so ending a session takes effect at once:
+
+| Action | API | Effect |
+|---|---|---|
+| Log out | `POST /api/auth/logout` | Ends the session of the token sent and clears the cookie |
+| List my sessions | `GET /api/v1/sessions` | Active sessions with time, client IP and user agent; `current` marks this one |
+| End one session | `DELETE /api/v1/sessions/{id}` | E.g. a lost laptop |
+| Log out everywhere | `DELETE /api/v1/sessions` | Ends every session of the caller, this one included |
+| Change my password | `POST /api/v1/me/password` | Needs the current password; ends every session of the caller |
+
+These need a login session: API tokens are refused, and they are not
+affected by logout or a password change (revoke them with
+`DELETE /api/v1/tokens/{id}`). A user keeps at most 50 active sessions; a new
+login past that ends the oldest. Logout, session ends and password changes
+are audited (`auth.session_revoked`, `auth.sessions_revoked`,
+`user.password_changed`).
+
+**Rotating the signing key.** Sessions are signed with
+`MACHINARCHY_OPERATOR_TOKEN`, and each token names its key (`kid`).
+
+1. Set a new `MACHINARCHY_OPERATOR_TOKEN`.
+2. Set `MACHINARCHY_SESSION_PREVIOUS_KEYS` to the old value, and restart.
+   Existing sessions keep working, and new ones use the new key.
+3. After `MACHINARCHY_SESSION_TTL` has passed, remove the old value and
+   restart.
+
+To end every session at once instead, rotate without listing the old key.
+
+**Upgrading to this release ends existing sessions once:** tokens issued before
+it carry no session ID. Log in again.
 
 ### Agent gateway
 

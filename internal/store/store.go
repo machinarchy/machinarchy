@@ -53,6 +53,7 @@ type Stores struct {
 	engine           string
 	Users            domain.UserStore
 	Access           domain.AccessStore
+	Sessions         domain.SessionStore
 	Environments     domain.EnvironmentStore
 	Audit            domain.AuditStore
 	ResourceHosts    resource.HostRepository
@@ -163,6 +164,7 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		return fail(fmt.Errorf("initialize managed resource repositories: %w", err))
 	}
 	stores.Users, stores.Access, stores.Environments, stores.Audit = accountStore, accountStore, accountStore, accountStore
+	stores.Sessions = accountStore
 	stores.ResourceHosts, stores.ResourceProfiles, stores.Operations = resourceStore, resourceStore, resourceStore
 	stores.Outbox, stores.ResourceLeases = resourceStore, resourceStore
 	if stores.Agents, err = agents.New(db, dialect, accountStore.AppendAudit, slog.Default()); err != nil {

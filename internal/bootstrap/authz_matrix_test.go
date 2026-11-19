@@ -30,6 +30,7 @@ const (
 	writers                     // inventory:write or runs:execute: operators and owners, operator tokens
 	ownerOnly                   // the workspace owner; API tokens can never be owners
 	ownerHuman                  // owner session only (RequireOwner + RequireHuman, or the owner-only services)
+	humans                      // any login session, never an API token (self-service: own sessions and password)
 )
 
 // matrix is the intended authorization of every documented route. A new
@@ -42,6 +43,10 @@ var matrix = map[string]access{
 	"POST /api/auth/login": public, "POST /api/auth/logout": public, "POST /api/auth/signup": public,
 
 	"GET /api/v1/me": authenticated,
+
+	// S-08: a user manages their own sessions and password; API tokens cannot.
+	"GET /api/v1/sessions": humans, "DELETE /api/v1/sessions": humans, "DELETE /api/v1/sessions/{id}": humans,
+	"POST /api/v1/me/password": humans,
 
 	"GET /api/v1/environments": readers, "POST /api/v1/environments": writers,
 	"PUT /api/v1/environments/{id}": writers, "DELETE /api/v1/environments/{id}": writers,
@@ -97,6 +102,8 @@ func (p principal) allowed(a access) bool {
 		return p.role == domain.RoleOwner
 	case ownerHuman:
 		return p.role == domain.RoleOwner && !p.api
+	case humans:
+		return p.token != "" && !p.api
 	}
 	return false
 }
@@ -290,6 +297,8 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		"POST /api/v1/managed/access-profiles":    map[string]any{"name": "matrix-other", "spec": profileSpec},
 		"POST /api/v1/agents/enrollment-tokens":   map[string]any{},
 		"PUT /api/v1/members/{id}/role":           map[string]string{"role": "operator"},
+		// Authorized callers reach validation (400): no password changes.
+		"POST /api/v1/me/password": map[string]string{"currentPassword": "x", "newPassword": "short"},
 	}
 
 	// Every documented route must be in the matrix, and vice versa.
@@ -312,7 +321,12 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 	// Reads first, deletions last, so destructive calls run after everything
 	// that needs the resources.
 	weight := map[string]int{"GET": 0, "POST": 1, "PUT": 1, "PATCH": 1, "DELETE": 2}
+	// "Log out everywhere" ends the caller's own sessions, so it runs last.
+	last := func(route string) bool { return route == "DELETE /api/v1/sessions" }
 	sort.Slice(routes, func(i, j int) bool {
+		if last(routes[i]) != last(routes[j]) {
+			return last(routes[j])
+		}
 		mi, mj := strings.Fields(routes[i])[0], strings.Fields(routes[j])[0]
 		if weight[mi] != weight[mj] {
 			return weight[mi] < weight[mj]

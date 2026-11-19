@@ -12,33 +12,60 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
-var jwtSecret = []byte("jwt-test-secret-0123456789abcdef0123")
+var (
+	jwtSecret      = []byte("jwt-test-secret-0123456789abcdef0123")
+	previousSecret = []byte("jwt-previous-secret-0123456789abcdef")
+	sessionID      = "0123456789abcdef0123456789abcdef"
+)
 
+func keyring(t *testing.T) *sessionkey.Keyring {
+	t.Helper()
+	keys, err := sessionkey.New(string(jwtSecret), []string{string(previousSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+// roleStore is the per-request session check.
 type roleStore struct {
-	accessStoreStub
+	sessionStoreStub
 	role domain.Role
 	err  error
 }
 
-func (s *roleStore) GetWorkspaceRole(context.Context, int, int) (domain.Role, error) {
+func (s *roleStore) GetSessionRole(_ context.Context, id string, _, _ int, _ time.Time) (domain.Role, error) {
+	if id != sessionID {
+		return "", domain.ErrSessionNotFound
+	}
 	return s.role, s.err
 }
 
-func sign(t *testing.T, method jwt.SigningMethod, key any, claims domain.JWTCustomClaims) string {
+// sign signs claims with key and puts kid in the header ("" for none).
+func sign(t *testing.T, method jwt.SigningMethod, key any, claims domain.JWTCustomClaims, kid ...string) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(method, claims).SignedString(key)
+	token := jwt.NewWithClaims(method, claims)
+	id := sessionkey.KeyID(string(jwtSecret))
+	if len(kid) > 0 {
+		id = kid[0]
+	}
+	if id != "" {
+		token.Header["kid"] = id
+	}
+	signed, err := token.SignedString(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return token
+	return signed
 }
 
 func claims(mutate func(*domain.JWTCustomClaims)) domain.JWTCustomClaims {
 	now := time.Now()
-	c := domain.JWTCustomClaims{UserID: 7, WorkspaceID: 1, Username: "alice", RegisteredClaims: jwt.RegisteredClaims{
+	c := domain.JWTCustomClaims{UserID: 7, WorkspaceID: 1, Username: "alice", SessionID: sessionID, RegisteredClaims: jwt.RegisteredClaims{
 		Issuer: "machinarchy", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}}
 	if mutate != nil {
 		mutate(&c)
@@ -78,7 +105,16 @@ func TestJWTValidation(t *testing.T) {
 			c.IssuedAt = jwt.NewNumericDate(time.Now().Add(10 * time.Minute))
 		})), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
 		{"no user", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(func(c *domain.JWTCustomClaims) { c.UserID = 0 })), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
-		{"no longer a member", valid, false, &roleStore{err: domain.ErrMembershipNotFound}, http.StatusUnauthorized},
+		// S-08: sessions and the keyring.
+		{"no session id", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(func(c *domain.JWTCustomClaims) { c.SessionID = "" })), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
+		{"revoked or ended session", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(func(c *domain.JWTCustomClaims) {
+			c.SessionID = "ffffffffffffffffffffffffffffffff"
+		})), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
+		{"no kid", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(nil), ""), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
+		{"unknown kid", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(nil), "0000000000000000"), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
+		{"previous key during rotation", sign(t, jwt.SigningMethodHS256, previousSecret, claims(nil), sessionkey.KeyID(string(previousSecret))), false, &roleStore{role: domain.RoleOperator}, http.StatusOK},
+		{"previous key's kid, current secret", sign(t, jwt.SigningMethodHS256, jwtSecret, claims(nil), sessionkey.KeyID(string(previousSecret))), false, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
+		{"no longer a member", valid, false, &roleStore{err: domain.ErrSessionNotFound}, http.StatusUnauthorized},
 		{"store failure", valid, false, &roleStore{err: errors.New("db down")}, http.StatusInternalServerError},
 		{"API token in a cookie", "mch_pat_abc", true, &roleStore{role: domain.RoleOwner}, http.StatusUnauthorized},
 	}
@@ -86,7 +122,7 @@ func TestJWTValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := echo.New()
 			var principal domain.Principal
-			handler := middleware.JWTAuth(jwtSecret, tc.store)(func(c echo.Context) error {
+			handler := middleware.JWTAuth(keyring(t), 24*time.Hour, &accessStoreStub{}, tc.store)(func(c echo.Context) error {
 				principal, _ = middleware.Principal(c)
 				return c.NoContent(http.StatusOK)
 			})
@@ -105,7 +141,7 @@ func TestJWTValidation(t *testing.T) {
 			if recorder.Code != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", recorder.Code, tc.want, recorder.Body)
 			}
-			if tc.want == http.StatusOK && (principal.UserID != 7 || principal.Role != tc.store.role) {
+			if tc.want == http.StatusOK && (principal.UserID != 7 || principal.Role != tc.store.role || principal.SessionID != sessionID) {
 				t.Fatalf("principal = %+v; the role must come from the store, not the token", principal)
 			}
 		})

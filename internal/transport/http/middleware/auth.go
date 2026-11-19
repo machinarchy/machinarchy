@@ -10,32 +10,19 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
 )
 
-const (
-	maxTokenAge      = 24 * time.Hour
-	maxTokenLifespan = 24 * time.Hour
-	allowedClockSkew = time.Minute
-)
-
-// JWTAuth validates bearer or cookie credentials against the explicitly
-// injected signing key. It never reads package-global configuration.
-func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
-	key := append([]byte(nil), secret...)
-	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
-		jwt.WithIssuer("machinarchy"),
-		jwt.WithLeeway(allowedClockSkew),
-		jwt.WithIssuedAt(),
-		jwt.WithExpirationRequired(),
-	)
-
+// JWTAuth authenticates a request with a login-session token (cookie or
+// bearer) or an API token (bearer "mch_pat_…"). A session token must verify
+// against the keyring (by kid) and name a session that is still active
+// (AUDIT S-08): one query that also returns the user's current role.
+func JWTAuth(keys *sessionkey.Keyring, maxLifetime time.Duration, access domain.AccessStore, sessions domain.SessionStore) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if len(key) == 0 || access == nil {
+			if keys == nil || access == nil || sessions == nil {
 				return httperr.Status(c, http.StatusInternalServerError, "authentication is not configured")
 			}
 			tokenString := tokenFromRequest(c)
@@ -49,29 +36,13 @@ func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
 				return authenticateAPIToken(c, next, access, tokenString)
 			}
 
-			claims := new(domain.JWTCustomClaims)
-			token, err := parser.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
-				if token.Method != jwt.SigningMethodHS256 {
-					return nil, errors.New("unexpected JWT signing method")
-				}
-				return key, nil
-			})
-			if err != nil || token == nil || !token.Valid || claims.IssuedAt == nil || claims.ExpiresAt == nil {
-				return unauthorized(c)
-			}
-
 			now := time.Now()
-			issuedAt := claims.IssuedAt.Time
-			if issuedAt.After(now.Add(allowedClockSkew)) ||
-				now.Sub(issuedAt) > maxTokenAge ||
-				claims.ExpiresAt.Sub(issuedAt) > maxTokenLifespan {
+			claims, err := keys.Parse(tokenString, maxLifetime, now)
+			if err != nil {
 				return unauthorized(c)
 			}
-			if claims.UserID <= 0 || claims.WorkspaceID <= 0 || strings.TrimSpace(claims.Username) == "" {
-				return unauthorized(c)
-			}
-			role, err := access.GetWorkspaceRole(c.Request().Context(), claims.UserID, claims.WorkspaceID)
-			if errors.Is(err, domain.ErrMembershipNotFound) {
+			role, err := sessions.GetSessionRole(c.Request().Context(), claims.SessionID, claims.UserID, claims.WorkspaceID, now)
+			if errors.Is(err, domain.ErrSessionNotFound) {
 				return unauthorized(c)
 			}
 			if err != nil {
@@ -83,7 +54,7 @@ func JWTAuth(secret []byte, access domain.AccessStore) echo.MiddlewareFunc {
 			c.Set("user", claims)
 			c.Set("principal", domain.Principal{
 				UserID: claims.UserID, WorkspaceID: claims.WorkspaceID,
-				Role: role, Username: claims.Username,
+				Role: role, Username: claims.Username, SessionID: claims.SessionID,
 			})
 			return next(c)
 		}

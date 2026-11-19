@@ -74,12 +74,17 @@ type DatabaseConfig struct {
 
 // Config holds the overall application configuration, including server settings, database configuration, and other operational parameters.
 type Config struct {
-	ListenAddr             string
-	MetricsListenAddr      string // when set, /metrics is served only here, not on ListenAddr
-	APIDocsEnabled         bool   // serve /openapi.json and /scalar
-	Environment            Environment
-	SignupEnabled          bool
-	OperatorToken          string
+	ListenAddr        string
+	MetricsListenAddr string // when set, /metrics is served only here, not on ListenAddr
+	APIDocsEnabled    bool   // serve /openapi.json and /scalar
+	Environment       Environment
+	SignupEnabled     bool
+	OperatorToken     string
+	// SessionTTL is a login session's lifetime (MACHINARCHY_SESSION_TTL).
+	SessionTTL time.Duration
+	// SessionPreviousKeys are earlier MACHINARCHY_OPERATOR_TOKEN values,
+	// accepted only to verify sessions signed before a rotation (S-08).
+	SessionPreviousKeys    []string
 	EncryptionSecret       string
 	EncryptionKeyID        string
 	EncryptionPreviousKeys map[string]string
@@ -186,6 +191,7 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--environment":    "MACHINARCHY_ENVIRONMENT",
 		"--log-level":      "MACHINARCHY_LOG_LEVEL",
 		"--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED",
+		"--session-ttl":    "MACHINARCHY_SESSION_TTL",
 
 		"--metrics-listen-addr": "MACHINARCHY_METRICS_LISTEN_ADDR",
 		"--api-docs-enabled":    "MACHINARCHY_API_DOCS_ENABLED",
@@ -332,6 +338,26 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 	}
 	if len(cfg.OperatorToken) < 32 || strings.ContainsAny(cfg.OperatorToken, " \t\r\n") {
 		return Config{}, errors.New("MACHINARCHY_OPERATOR_TOKEN must be at least 32 characters with no whitespace")
+	}
+	sessionTTL, err := parseDurationBounds(get("MACHINARCHY_SESSION_TTL", "24h"), "MACHINARCHY_SESSION_TTL", false)
+	if err != nil {
+		return Config{}, err
+	}
+	if sessionTTL < 5*time.Minute || sessionTTL > 7*24*time.Hour {
+		return Config{}, errors.New("MACHINARCHY_SESSION_TTL must be between 5m and 168h")
+	}
+	cfg.SessionTTL = sessionTTL
+	for _, previous := range strings.Split(GetEnv("MACHINARCHY_SESSION_PREVIOUS_KEYS"), ",") {
+		if previous = strings.TrimSpace(previous); previous == "" {
+			continue
+		}
+		if len(previous) < 32 || strings.ContainsAny(previous, " \t\r\n") {
+			return Config{}, errors.New("MACHINARCHY_SESSION_PREVIOUS_KEYS entries must be at least 32 characters with no whitespace")
+		}
+		if previous == cfg.OperatorToken {
+			continue
+		}
+		cfg.SessionPreviousKeys = append(cfg.SessionPreviousKeys, previous)
 	}
 	cfg.EncryptionSecret = GetEnv("MACHINARCHY_ENCRYPTION_SECRET")
 	if keyFile := strings.TrimSpace(get("MACHINARCHY_ENCRYPTION_SECRET_FILE")); keyFile != "" {

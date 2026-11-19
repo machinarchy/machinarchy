@@ -24,6 +24,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
 	"github.com/machinarchy/machinarchy/internal/store"
 	httpserver "github.com/machinarchy/machinarchy/internal/transport/http"
 	httpv1 "github.com/machinarchy/machinarchy/internal/transport/http/v1"
@@ -349,7 +350,19 @@ func (r *Runtime) NewAPIServer(
 		return nil, errors.New("runtime is not initialized")
 	}
 
-	authService := service.NewAuthService(r.stores.Users, cfg.OperatorToken, 24*time.Hour)
+	sessionKeys, err := sessionkey.New(cfg.OperatorToken, cfg.SessionPreviousKeys)
+	if err != nil {
+		return nil, fmt.Errorf("configure session signing keys: %w", err)
+	}
+	// One effective lifetime for issuing and verifying sessions.
+	sessionTTL := cfg.SessionTTL
+	if sessionTTL <= 0 {
+		sessionTTL = service.DefaultSessionTTL
+	}
+	authService, err := service.NewAuthService(r.stores.Users, r.stores.Sessions, sessionKeys, sessionTTL)
+	if err != nil {
+		return nil, err
+	}
 	if err := r.ensureOwner(ctx, cfg); err != nil {
 		return nil, err
 	}
@@ -362,6 +375,7 @@ func (r *Runtime) NewAPIServer(
 	managedResources.UseEnvironments(r.stores.Environments)
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
+		Sessions: r.stores.Sessions, SessionKeys: sessionKeys, SessionTTL: sessionTTL,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
 		Agents:         r.stores.Agents,
 		AgentPublicKey: r.agentPublicKey,

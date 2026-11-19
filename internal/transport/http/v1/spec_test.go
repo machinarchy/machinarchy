@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/docs"
@@ -34,7 +35,7 @@ func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
 	v1.RegisterRoutes(e.Group("/api"), v1.Repositories{
 		Configuration: &runtimeconfig.Service{}, Secrets: &secrets.Service{}, ManagedResources: &service.ManagedResourceService{},
 		Agents: &agentstore.Store{},
-	}, nil, []byte("x"), false, false, nil, nil, nil)
+	}, nil, nil, time.Hour, false, false, nil, nil, nil)
 
 	param := regexp.MustCompile(`:([A-Za-z]+)`)
 	var missing []string

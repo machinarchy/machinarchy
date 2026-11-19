@@ -85,6 +85,25 @@ definitions:
       message:
         type: string
     type: object
+  auth.PasswordChangeRequest:
+    properties:
+      currentPassword:
+        type: string
+      newPassword:
+        type: string
+    type: object
+  auth.RevokedResponse:
+    properties:
+      revoked:
+        type: integer
+    type: object
+  auth.SessionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/domain.Session'
+        type: array
+    type: object
   auth.SignUpRequest:
     properties:
       email:
@@ -209,6 +228,22 @@ definitions:
     - RoleOwner
     - RoleOperator
     - RoleReader
+  domain.Session:
+    properties:
+      clientIp:
+        type: string
+      createdAt:
+        type: string
+      current:
+        description: Current marks the session the request was made with.
+        type: boolean
+      expiresAt:
+        type: string
+      id:
+        type: string
+      userAgent:
+        type: string
+    type: object
   domain.TargetRule:
     properties:
       all:
@@ -957,6 +992,7 @@ definitions:
     type: object
   resource.TargetState:
     enum:
+    - Lost
     - Pending
     - Running
     - Succeeded
@@ -964,9 +1000,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
-    - Lost
     type: string
     x-enum-varnames:
+    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -974,7 +1010,6 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
-    - TargetLost
   service.AccessProfileView:
     properties:
       createdAt:
@@ -1057,6 +1092,8 @@ paths:
       - Authentication
   /api/auth/logout:
     post:
+      description: Revokes the session of the token sent (cookie or bearer) and clears
+        the cookie. Succeeds even without a valid session.
       produces:
       - application/json
       responses:
@@ -1064,6 +1101,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/auth.MessageResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
       summary: Log out
       tags:
       - Authentication
@@ -2345,6 +2386,44 @@ paths:
       summary: Get current user
       tags:
       - Authentication
+  /api/v1/me/password:
+    post:
+      consumes:
+      - application/json
+      description: 'Checks the current password, stores the new one (12–72 bytes)
+        and revokes every login session of the caller, including this one: log in
+        again. API tokens are not affected.'
+      parameters:
+      - description: Current and new password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.PasswordChangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Change my password
+      tags:
+      - Authentication
   /api/v1/members:
     get:
       description: Requires a human workspace owner session. API tokens are refused.
@@ -2916,6 +2995,85 @@ paths:
       summary: Rewrap stored keys under the active KEK
       tags:
       - Secrets
+  /api/v1/sessions:
+    delete:
+      description: Revokes every login session of the caller, including the current
+        one. API tokens are not affected.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.RevokedResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Log out everywhere
+      tags:
+      - Authentication
+    get:
+      description: The caller's active login sessions, newest first; "current" marks
+        the one used for this request. Needs a login session (API tokens are refused).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.SessionsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List my sessions
+      tags:
+      - Authentication
+  /api/v1/sessions/{id}:
+    delete:
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke one of my sessions
+      tags:
+      - Authentication
   /api/v1/tokens:
     get:
       description: Requires a human workspace owner session. Returns metadata for

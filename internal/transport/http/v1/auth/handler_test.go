@@ -34,6 +34,7 @@ type fakeAuth struct {
 	login     func(domain.AuthLoginRequest) (*domain.AuthTokenResponse, error)
 	verify    func(string) (*domain.UserResponse, error)
 	signedUps int
+	loggedOut []string
 }
 
 func (f *fakeAuth) SignUp(_ context.Context, r domain.AuthSignUpRequest) (*domain.AuthTokenResponse, error) {
@@ -45,6 +46,20 @@ func (f *fakeAuth) Login(_ context.Context, r domain.AuthLoginRequest) (*domain.
 }
 func (f *fakeAuth) VerifySession(_ context.Context, u string) (*domain.UserResponse, error) {
 	return f.verify(u)
+}
+func (f *fakeAuth) Logout(_ context.Context, token string) error {
+	f.loggedOut = append(f.loggedOut, token)
+	return nil
+}
+func (f *fakeAuth) ListSessions(context.Context, domain.Principal) ([]domain.Session, error) {
+	return nil, nil
+}
+func (f *fakeAuth) RevokeSession(context.Context, domain.Principal, string) error { return nil }
+func (f *fakeAuth) RevokeAllSessions(context.Context, domain.Principal) (int, error) {
+	return 0, nil
+}
+func (f *fakeAuth) ChangePassword(context.Context, domain.Principal, string, string) error {
+	return nil
 }
 
 func serve(h *Handler, method, path, body string, username string) *httptest.ResponseRecorder {
@@ -184,6 +199,38 @@ func TestGetMe(t *testing.T) {
 	} {
 		if recorder := serve(handler, http.MethodGet, "/api/v1/me", "", tc.username); recorder.Code != tc.want {
 			t.Errorf("%s: %d, want %d", name, recorder.Code, tc.want)
+		}
+	}
+}
+
+// S-08: logout hands the session token to the service, which revokes the
+// session on the server; an API token is never treated as a session.
+func TestLogoutRevokesTheSessionOfTheTokenSent(t *testing.T) {
+	auth := &fakeAuth{}
+	h := NewHandler(auth, false, false)
+	e := echo.New()
+	RegisterRoutes(e.Group("/api/auth"), h)
+	for _, tc := range []struct {
+		name, bearer, cookie, want string
+	}{
+		{"bearer", "session.jwt.value", "", "session.jwt.value"},
+		{"cookie", "", "cookie.jwt.value", "cookie.jwt.value"},
+		{"bearer wins", "bearer.jwt", "cookie.jwt", "bearer.jwt"},
+		{"API token ignored", "mch_pat_secret", "", ""},
+		{"nothing", "", "", ""},
+	} {
+		auth.loggedOut = nil
+		request := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		if tc.bearer != "" {
+			request.Header.Set("Authorization", "Bearer "+tc.bearer)
+		}
+		if tc.cookie != "" {
+			request.AddCookie(&http.Cookie{Name: "auth_token", Value: tc.cookie})
+		}
+		recorder := httptest.NewRecorder()
+		e.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK || len(auth.loggedOut) != 1 || auth.loggedOut[0] != tc.want {
+			t.Errorf("%s: status %d, service got %q, want %q", tc.name, recorder.Code, auth.loggedOut, tc.want)
 		}
 	}
 }

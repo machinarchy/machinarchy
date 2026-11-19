@@ -26,6 +26,14 @@ const (
 	AuditResourceHostDeleted = "resource_host.deleted"
 	// AuditResourceHostKeyTrusted records pinned SSH host keys and who trusted them.
 	AuditResourceHostKeyTrusted = "resource_host.host_key_trusted"
+	// AuditSessionRevoked records one login session ended before its expiry
+	// (logout, or revoked from the session list).
+	AuditSessionRevoked = "auth.session_revoked"
+	// AuditSessionsRevoked records "log out everywhere".
+	AuditSessionsRevoked = "auth.sessions_revoked"
+	// AuditPasswordChanged records a password change; every session of the
+	// user was revoked with it.
+	AuditPasswordChanged = "user.password_changed"
 	// AuditResourceHostKeyChanged records a host that started presenting
 	// an untrusted key (Ready reason HostKeyChanged), once per transition.
 	AuditResourceHostKeyChanged = "resource_host.host_key_changed"

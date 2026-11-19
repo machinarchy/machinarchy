@@ -3,11 +3,14 @@
 package v1
 
 import (
+	"time"
+
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/runtimeconfig"
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	// Sub-domain packages
@@ -25,9 +28,13 @@ import (
 // Repositories groups the domain ports required by the v1 HTTP transport.
 // Concrete database adapters are assembled at the process composition root.
 type Repositories struct {
-	Users            domain.UserStore
-	Environments     domain.EnvironmentStore
-	Access           domain.AccessStore
+	Users        domain.UserStore
+	Environments domain.EnvironmentStore
+	Access       domain.AccessStore
+	Sessions     domain.SessionStore
+	// SessionKeys signs and verifies login sessions; SessionTTL is their lifetime.
+	SessionKeys      *sessionkey.Keyring
+	SessionTTL       time.Duration
 	Audit            domain.AuditStore
 	Configuration    *runtimeconfig.Service
 	Secrets          *secrets.Service
@@ -45,7 +52,8 @@ func RegisterRoutes(
 	g *echo.Group,
 	repos Repositories,
 	authServ domain.AuthService,
-	jwtSecret []byte,
+	sessionKeys *sessionkey.Keyring,
+	sessionTTL time.Duration,
 	secureCookies bool,
 	signupEnabled bool,
 	tokenService domain.APITokenService,
@@ -71,8 +79,9 @@ func RegisterRoutes(
 	// ==========================================
 	// PROTECTED API ROUTES
 	// ==========================================
-	apiv1 := g.Group("/v1", middleware.JWTAuth(jwtSecret, repos.Access), middleware.AuditActor())
+	apiv1 := g.Group("/v1", middleware.JWTAuth(sessionKeys, sessionTTL, repos.Access, repos.Sessions), middleware.AuditActor())
 	{
+		auth.RegisterSessionRoutes(apiv1, authHandler)
 		// User Profile
 		apiv1.GET("/me", authHandler.GetMe)
 

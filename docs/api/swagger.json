@@ -63,6 +63,7 @@
         },
         "/api/auth/logout": {
             "post": {
+                "description": "Revokes the session of the token sent (cookie or bearer) and clears the cookie. Succeeds even without a valid session.",
                 "produces": [
                     "application/json"
                 ],
@@ -75,6 +76,12 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/auth.MessageResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
                         }
                     }
                 }
@@ -2052,6 +2059,63 @@
                 }
             }
         },
+        "/api/v1/me/password": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Checks the current password, stores the new one (12–72 bytes) and revokes every login session of the caller, including this one: log in again. API tokens are not affected.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Change my password",
+                "parameters": [
+                    {
+                        "description": "Current and new password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/auth.PasswordChangeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/auth.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/members": {
             "get": {
                 "security": [
@@ -2939,6 +3003,129 @@
                 }
             }
         },
+        "/api/v1/sessions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The caller's active login sessions, newest first; \"current\" marks the one used for this request. Needs a login session (API tokens are refused).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "List my sessions",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/auth.SessionsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Revokes every login session of the caller, including the current one. API tokens are not affected.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Log out everywhere",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/auth.RevokedResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/sessions/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Revoke one of my sessions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/auth.MessageResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tokens": {
             "get": {
                 "security": [
@@ -3339,6 +3526,36 @@
                 }
             }
         },
+        "auth.PasswordChangeRequest": {
+            "type": "object",
+            "properties": {
+                "currentPassword": {
+                    "type": "string"
+                },
+                "newPassword": {
+                    "type": "string"
+                }
+            }
+        },
+        "auth.RevokedResponse": {
+            "type": "object",
+            "properties": {
+                "revoked": {
+                    "type": "integer"
+                }
+            }
+        },
+        "auth.SessionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Session"
+                    }
+                }
+            }
+        },
         "auth.SignUpRequest": {
             "type": "object",
             "required": [
@@ -3520,6 +3737,30 @@
                 "RoleOperator",
                 "RoleReader"
             ]
+        },
+        "domain.Session": {
+            "type": "object",
+            "properties": {
+                "clientIp": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "current": {
+                    "description": "Current marks the session the request was made with.",
+                    "type": "boolean"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "userAgent": {
+                    "type": "string"
+                }
+            }
         },
         "domain.TargetRule": {
             "type": "object",
@@ -4572,24 +4813,24 @@
         "resource.TargetState": {
             "type": "string",
             "enum": [
+                "Lost",
                 "Pending",
                 "Running",
                 "Succeeded",
                 "Failed",
                 "TimedOut",
                 "Cancelled",
-                "Interrupted",
-                "Lost"
+                "Interrupted"
             ],
             "x-enum-varnames": [
+                "TargetLost",
                 "TargetPending",
                 "TargetRunning",
                 "TargetSucceeded",
                 "TargetFailed",
                 "TargetTimedOut",
                 "TargetCancelled",
-                "TargetInterrupted",
-                "TargetLost"
+                "TargetInterrupted"
             ]
         },
         "service.AccessProfileView": {

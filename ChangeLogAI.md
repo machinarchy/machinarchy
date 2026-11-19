@@ -1,5 +1,47 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 14: revocable sessions, key rotation, password change (S-08) (branch audit/sessions)
+
+- **Server-side sessions.** Migration `000005_user_sessions` (SQLite and PostgreSQL; times stored as Unix nanoseconds).
+  - Every signup and login records a session; the JWT carries its ID (`sid`).
+  - `JWTAuth` accepts a session token only while its session is active. The check is one query that also returns the user's current role, replacing the membership lookup each request already made.
+  - A user keeps at most 50 active sessions (the oldest is revoked past that), and long-ended rows are pruned on the next login.
+- **Logout really logs out.** `POST /api/auth/logout` revokes the session of the token sent (bearer or cookie), so a copied token stops working at once. Before this, logout only cleared the cookie.
+- **New self-service endpoints** (login sessions only; API tokens get 403; listed in the authorization matrix as `humans`):
+  - `GET /api/v1/sessions`;
+  - `DELETE /api/v1/sessions/{id}`;
+  - `DELETE /api/v1/sessions` (log out everywhere);
+  - `POST /api/v1/me/password`, which checks the current password, enforces 12–72 bytes, requires the new password to differ, and revokes every session atomically with the change.
+  - Audited: `auth.session_revoked`, `auth.sessions_revoked`, `user.password_changed`.
+- **Signing keyring with `kid`** (new `internal/sessionkey`).
+  - Tokens are signed with `MACHINARCHY_OPERATOR_TOKEN` and name it by a derived key ID; `MACHINARCHY_SESSION_PREVIOUS_KEYS` lists earlier values, still accepted during a rotation.
+  - Token validation lives in one place (`Keyring.Parse`) and is shared by the middleware and logout.
+- New `MACHINARCHY_SESSION_TTL` (default 24h, 5m–168h) replaces the hardcoded 24 h in both the service and the middleware. Bootstrap resolves the effective value once for both: a zero-value config used to give the middleware a lifetime of 0, which rejected every token.
+- **Upgrade note:** tokens issued before this release have no session ID, so users log in again once.
+- Docs: `docs/operations.md` "Login sessions" (actions, rotation procedure, upgrade note) and the settings; README; `.env.example`; OpenAPI regenerated.
+
+### Verification
+
+- Unit tests:
+  - `internal/service`: logout, revoke, log out everywhere, the current flag, API tokens refused, and every password-change rule;
+  - `internal/transport/http/middleware`: no `sid`, a revoked session, no `kid`, an unknown `kid`, the previous key accepted, and the previous key's `kid` with the current secret refused;
+  - the auth handler: logout passes the bearer or cookie token, and never an API token.
+- Store contract "login sessions" on **SQLite and PostgreSQL 16**. It covers:
+  - the role from an active session;
+  - another user's, unknown, expired and malformed IDs;
+  - revoking once, audited;
+  - the 50-session cap;
+  - log out everywhere;
+  - password change atomic with revocation;
+  - a multi-byte user agent cut without breaking UTF-8.
+- End to end through the wired server (`internal/bootstrap/sessions_test.go`):
+  - a copied token is refused after logout;
+  - revoke by ID, and log out everywhere;
+  - password change (wrong current gives 403, a short new one 400, every session ends, the old password fails and the new one works);
+  - **key rotation across restarts** (the previous key is accepted while listed and refused once dropped).
+- The authorization matrix covers the 4 new routes.
+- `go test ./...` (cached) passes; golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13C: the guide uses the repository's SSH test servers (branch audit/docs-guide)
 
 - `docs/cli/user-full-guide.md` rewritten on the existing fixtures, at the owner's request: `make ssh-servers-up` and `deployments/testing/ssh-servers.docker-compose.yml`, instead of ad-hoc `docker run` containers.
