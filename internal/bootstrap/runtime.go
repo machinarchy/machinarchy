@@ -79,7 +79,7 @@ func open(ctx context.Context, cfg config.Config, role string) (*Runtime, error)
 		Engine: string(cfg.Database.Engine), SQLitePath: cfg.Database.Path,
 		PostgresURL: cfg.Database.URL, MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns, ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-		ConnectTimeout: cfg.Database.ConnectTimeout, EncryptionSecret: cfg.EncryptionSecret,
+		ConnectTimeout: cfg.Database.ConnectTimeout, MigrationTimeout: cfg.Database.MigrationTimeout, EncryptionSecret: cfg.EncryptionSecret,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open datastore: %w", err)

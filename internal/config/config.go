@@ -67,6 +67,9 @@ type DatabaseConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnectTimeout  time.Duration
+	// MigrationTimeout bounds schema migrations at startup. A migration that
+	// rewrites a table takes time proportional to the data.
+	MigrationTimeout time.Duration
 }
 
 // Config holds the overall application configuration, including server settings, database configuration, and other operational parameters.
@@ -194,6 +197,7 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--database-max-idle-conns":    "MACHINARCHY_DATABASE_MAX_IDLE_CONNS",
 		"--database-conn-max-lifetime": "MACHINARCHY_DATABASE_CONN_MAX_LIFETIME",
 		"--database-connect-timeout":   "MACHINARCHY_DATABASE_CONNECT_TIMEOUT",
+		"--database-migration-timeout": "MACHINARCHY_DATABASE_MIGRATION_TIMEOUT",
 
 		"--encryption-key-id":       "MACHINARCHY_ENCRYPTION_KEY_ID",      // #nosec G101 -- key identifier, not key material
 		"--encryption-secret-file":  "MACHINARCHY_ENCRYPTION_SECRET_FILE", // #nosec G101 -- configuration setting, not secret material
@@ -257,10 +261,11 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		OperatorToken: get("MACHINARCHY_OPERATOR_TOKEN"),
 		LogLevel:      strings.ToLower(get("MACHINARCHY_LOG_LEVEL", "info")),
 		Database: DatabaseConfig{
-			Engine:         DatabaseEngine(strings.ToLower(get("MACHINARCHY_DATABASE_ENGINE", string(SQLite)))),
-			Path:           get("MACHINARCHY_DATABASE_PATH", "./data/machinarchy.db"),
-			URL:            get("MACHINARCHY_DATABASE_URL", ""),
-			ConnectTimeout: 5 * time.Second,
+			Engine:           DatabaseEngine(strings.ToLower(get("MACHINARCHY_DATABASE_ENGINE", string(SQLite)))),
+			Path:             get("MACHINARCHY_DATABASE_PATH", "./data/machinarchy.db"),
+			URL:              get("MACHINARCHY_DATABASE_URL", ""),
+			ConnectTimeout:   5 * time.Second,
+			MigrationTimeout: 10 * time.Minute,
 		},
 	}
 
@@ -519,6 +524,11 @@ func (c *Config) loadDatabaseTuning(get func(string, ...string) string) error {
 	if err != nil {
 		return err
 	}
+	migrationTimeout, err := parseDurationBounds(get("MACHINARCHY_DATABASE_MIGRATION_TIMEOUT", c.Database.MigrationTimeout.String()), "MACHINARCHY_DATABASE_MIGRATION_TIMEOUT", false)
+	if err != nil {
+		return err
+	}
+	c.Database.MigrationTimeout = migrationTimeout
 
 	// Business rule constraint evaluation
 	if maxIdle > maxOpen {

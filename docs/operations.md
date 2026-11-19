@@ -312,3 +312,12 @@ release may squash it again; the process then refuses an older database
 (`ErrIncompatibleSchema`) and it must be recreated. Take a backup before any
 upgrade. After the first production release, schema changes will be additive
 migrations.
+
+Migrations run at startup within `MACHINARCHY_DATABASE_MIGRATION_TIMEOUT`
+(10 minutes by default), separately from `MACHINARCHY_DATABASE_CONNECT_TIMEOUT`.
+
+On SQLite, migration `000004` rewrites `operation_targets` because SQLite
+cannot change a CHECK constraint, so it takes time proportional to the stored
+output. An 834 MB database (100,000 targets) took 3 minutes on a laptop.
+Raise the timeout for larger databases. PostgreSQL changes the constraint in
+place.

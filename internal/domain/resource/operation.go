@@ -394,9 +394,6 @@ func TargetProgress(state TargetState) int {
 // ValidTargetState reports whether state is a known target state.
 func ValidTargetState(state TargetState) bool { return validTargetState(state) }
 
-// SanitizeOutput is sanitizeOutput for callers outside the package.
-func SanitizeOutput(value string, limit int) string { return sanitizeOutput(value, limit) }
-
 // sanitizeOutput bounds command output and removes control characters except
 // newline and tab, so output keeps its lines but cannot carry terminal escape
 // sequences. Invalid UTF-8 is replaced.

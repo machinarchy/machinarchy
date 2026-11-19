@@ -28,6 +28,7 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_DATABASE_MAX_IDLE_CONNS":    "",
 		"MACHINARCHY_DATABASE_CONN_MAX_LIFETIME": "",
 		"MACHINARCHY_DATABASE_CONNECT_TIMEOUT":   "",
+		"MACHINARCHY_DATABASE_MIGRATION_TIMEOUT": "",
 		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                  "",
@@ -602,5 +603,23 @@ func TestLoadSSHHostKeyPolicy(t *testing.T) {
 				t.Fatalf("policy = %q, want %q", cfg.SSHHostKeyPolicy, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadDatabaseMigrationTimeout(t *testing.T) {
+	setCommonEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.Database.MigrationTimeout != 10*time.Minute || cfg.Database.ConnectTimeout != 5*time.Second {
+		t.Fatalf("defaults: migration %v, connect %v, %v", cfg.Database.MigrationTimeout, cfg.Database.ConnectTimeout, err)
+	}
+	t.Setenv("MACHINARCHY_DATABASE_MIGRATION_TIMEOUT", "45m")
+	if cfg, err = Load(); err != nil || cfg.Database.MigrationTimeout != 45*time.Minute {
+		t.Fatalf("override: %v, %v", cfg.Database.MigrationTimeout, err)
+	}
+	for _, bad := range []string{"0s", "-1m", "soon"} {
+		t.Setenv("MACHINARCHY_DATABASE_MIGRATION_TIMEOUT", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("migration timeout %q accepted", bad)
+		}
 	}
 }

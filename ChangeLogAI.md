@@ -1,5 +1,19 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: migrations get their own deadline (branch audit/detached-ssh)
+
+- `store.Open` ran the ping, the SQLite pragmas **and every migration** under the connect timeout (5 s by default). Migration `000004` rewrites `operation_targets` on SQLite, which takes time proportional to the stored output: an 834 MB database with 100,000 targets took **3 minutes** on a laptop. **The first start after an upgrade would have failed.**
+  - It showed up as SQLite stores timing out during migrations in the full shuffled race run.
+  - Fix: migrations now run under `store.Config.MigrationTimeout` (default 10 min), set by the new `MACHINARCHY_DATABASE_MIGRATION_TIMEOUT` (`--database-migration-timeout`). The connect timeout still covers connecting and session setup.
+- `docs/operations.md` (Upgrades): the new setting, and the rewrite and its cost on SQLite. `.env.example`: the setting.
+- Removed the unused `resource.SanitizeOutput` (deadcode).
+
+### Verification
+
+- `TestLoadDatabaseMigrationTimeout`: default, override, and invalid values.
+- Migration 000004 timed by hand with `sqlite3` on an 834 MB version-3 database: 179.5 s, and all 100,000 rows kept.
+- `go test ./internal/config/ ./internal/store/ ./internal/bootstrap/`: pass. golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: benchmark, live run, docs (branch audit/detached-ssh)
 
 - **Benchmark** (`TestBenchmark200TargetsFiveMinutes`, opt-in with `MACHINARCHY_BENCH_DETACHED=1`): 200 targets × a 5-minute command, 4 workers, production poll intervals.

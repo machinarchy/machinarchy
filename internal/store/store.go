@@ -33,13 +33,16 @@ const (
 
 // Config contains the configuration required to initialize the storage layer.
 type Config struct {
-	Engine           string
-	SQLitePath       string
-	PostgresURL      string
-	MaxOpenConns     int
-	MaxIdleConns     int
-	ConnMaxLifetime  time.Duration
-	ConnectTimeout   time.Duration
+	Engine          string
+	SQLitePath      string
+	PostgresURL     string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnectTimeout  time.Duration
+	// MigrationTimeout bounds schema migrations at startup (default 10 min);
+	// ConnectTimeout covers only connecting and session setup.
+	MigrationTimeout time.Duration
 	EncryptionSecret string
 }
 
@@ -116,9 +119,17 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 		}
 	}
 
-	// Run embedded migrations
+	// Run embedded migrations. They get their own deadline: a migration that
+	// rebuilds a table (000004 on SQLite) is proportional to the data and can
+	// take far longer than connecting, and failing it would stop the upgrade.
+	migrationTimeout := cfg.MigrationTimeout
+	if migrationTimeout <= 0 {
+		migrationTimeout = 10 * time.Minute
+	}
+	migrationCtx, cancelMigrations := context.WithTimeout(parent, migrationTimeout)
+	defer cancelMigrations()
 	migrator := NewMigrator(db, engine, slog.Default())
-	if err := migrator.Up(ctx); err != nil {
+	if err := migrator.Up(migrationCtx); err != nil {
 		return fail(fmt.Errorf("migrate %s database: %w", engine, err))
 	}
 
