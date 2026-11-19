@@ -1,5 +1,21 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: consistent Operation reads; full-suite stability (branch audit/detached-ssh)
+
+- **Pre-existing bug, fixed:** `Store.GetOperation` read the Operation row and its target rows with two separate queries. A reader could combine an Operation still `Queued` with a target a worker had already started, and fail validation ("queued Operation targets must be pending"). That is a spurious error for any API reader. Detached runs move targets right after the start, which made it visible in the full suite. It now reads both in one read-only transaction (`REPEATABLE READ` on PostgreSQL; a deferred transaction, a WAL snapshot, on SQLite).
+- **Older test race, fixed:** `TestManagedHostAndOperationEndToEnd` cancelled the `hold` command as soon as its target was `Running`. The attached worker marks it Running before the SSH session opens, so under load the cancel could win and the exec never happened ("remote exec count=2, want 3"). The test now also waits for the exec to reach the server.
+- The contract fixture now keeps idle PostgreSQL connections (`MaxIdleConns: 8`, T-13B-01 for the fixture). The PostgreSQL contract run of the new read test went from 86–299 s to about 30 s.
+- Detached integration tests: at most 4 environments run at once, and the wait limits rise to 90 s. Under the full shuffled race suite, ten parallel tests spawning real shells starved other packages; the authorization matrix's bootstrap hit its deadline.
+
+### Verification
+
+- New contract subtest "operation reads are consistent" (SQLite and PostgreSQL): 4 readers call `GetOperation` while a writer starts 40 Operations and moves their targets.
+  - It **fails on the old code** on SQLite in 2 of 2 runs and on PostgreSQL in 1 of 2 runs;
+  - it passes with the fix on both engines in 2 of 2 runs.
+- `TestManagedHostAndOperationEndToEnd`: `-race -count=3` pass.
+- `go test -timeout 30s ./internal/operationworker/` (the hook's limit): pass twice.
+- golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: migrations get their own deadline (branch audit/detached-ssh)
 
 - `store.Open` ran the ping, the SQLite pragmas **and every migration** under the connect timeout (5 s by default). Migration `000004` rewrites `operation_targets` on SQLite, which takes time proportional to the stored output: an 834 MB database with 100,000 targets took **3 minutes** on a laptop. **The first start after an upgrade would have failed.**

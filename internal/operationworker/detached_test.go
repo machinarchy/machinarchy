@@ -73,8 +73,14 @@ type detachedEnv struct {
 
 func newDetachedEnv(t *testing.T) *detachedEnv { return newDetachedEnvOn(t, store.EngineSQLite) }
 
+// envSlots bounds detached environments running at once: each spawns real
+// shells, and the full race suite runs every package in parallel.
+var envSlots = make(chan struct{}, 4)
+
 func newDetachedEnvOn(t *testing.T, engine string) *detachedEnv {
 	t.Helper()
+	envSlots <- struct{}{}
+	t.Cleanup(func() { <-envSlots })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	dir := t.TempDir()
@@ -270,7 +276,7 @@ func processes(t *testing.T, pattern string) int {
 
 func waitProcesses(t *testing.T, pattern string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for processes(t, pattern) != want {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d processes match %q, want %d", processes(t, pattern), pattern, want)
@@ -285,7 +291,7 @@ func TestDetachedRunReportsOutputAndCleansUp(t *testing.T) {
 	e.start(nil)
 	id := e.submit(e.hosts(2), 600, 2, "sh", "-c", "echo line1; sleep 1; echo line2; echo warn >&2; exit 3")
 	// While it runs, the first line is already visible.
-	e.waitFor("live output", 20*time.Second, func(op *resource.Operation) bool {
+	e.waitFor("live output", 90*time.Second, func(op *resource.Operation) bool {
 		for _, target := range op.Status.Targets {
 			if target.Live != nil && strings.Contains(string(target.Live.Stdout.Head), "line1") {
 				return true
@@ -293,7 +299,7 @@ func TestDetachedRunReportsOutputAndCleansUp(t *testing.T) {
 		}
 		return op.IsTerminal()
 	}, id)
-	op := e.waitTerminal(id, 30*time.Second)
+	op := e.waitTerminal(id, 90*time.Second)
 	if op.Status.State != resource.OperationFailed {
 		t.Fatalf("Operation = %s, want Failed (both exit 3)", op.Status.State)
 	}
@@ -324,7 +330,7 @@ func TestRestartWith50RunningTargetsLosesNone(t *testing.T) {
 	e.start(nil)
 	log := filepath.Join(e.home, "runs.log")
 	id := e.submit(e.hosts(50), 600, 5, "sh", "-c", "echo run >> "+log+"; sleep 4; echo done")
-	e.waitFor("some targets running", 30*time.Second, func(op *resource.Operation) bool {
+	e.waitFor("some targets running", 90*time.Second, func(op *resource.Operation) bool {
 		return targetStates(op)[resource.TargetRunning] >= 10
 	}, id)
 	e.stop() // the worker stops mid-launch
@@ -363,13 +369,13 @@ func TestDetachedCancelStopsTheCommands(t *testing.T) {
 	e.start(nil)
 	first, pattern := sleepFor(t, 1)
 	id := e.submit(e.hosts(3), 600, 3, "sh", "-c", "sleep "+first+" & sleep "+first)
-	e.waitFor("running targets", 20*time.Second, allTargets(resource.TargetRunning), id)
+	e.waitFor("running targets", 90*time.Second, allTargets(resource.TargetRunning), id)
 	// Per target: the `sh -c` and its two sleeps.
 	waitProcesses(t, pattern, 9)
 	if _, err := e.worker.Cancel(e.ctx, 1, id); err != nil {
 		t.Fatal(err)
 	}
-	op := e.waitTerminal(id, 30*time.Second)
+	op := e.waitTerminal(id, 90*time.Second)
 	if op.Status.State != resource.OperationCancelled || !allTargets(resource.TargetCancelled)(op) {
 		t.Fatalf("Operation = %s, targets %v", op.Status.State, targetStates(op))
 	}
@@ -382,7 +388,7 @@ func TestDetachedTimeoutEnforcedOnTheHost(t *testing.T) {
 	e.start(nil)
 	seconds, pattern := sleepFor(t, 2)
 	id := e.submit(e.hosts(1), 2, 1, "sleep", seconds)
-	op := e.waitTerminal(id, 30*time.Second)
+	op := e.waitTerminal(id, 90*time.Second)
 	target := op.Status.Targets[0]
 	if op.Status.State != resource.OperationFailed || target.State != resource.TargetTimedOut || target.Result.ErrorClass != "timeout" {
 		t.Fatalf("Operation = %s, target %s %+v", op.Status.State, target.State, target.Result)
@@ -399,13 +405,13 @@ func TestDetachedTimeoutEnforcedByThePoller(t *testing.T) {
 	host := e.hosts(1)[0]
 	seconds, pattern := sleepFor(t, 3)
 	id := e.submit([]*resource.Host{host}, 600, 1, "sleep", seconds)
-	op := e.waitFor("a running target", 20*time.Second, allTargets(resource.TargetRunning), id)
+	op := e.waitFor("a running target", 90*time.Second, allTargets(resource.TargetRunning), id)
 	handle := *op.Status.Targets[0].Launch
 	handle.Deadline = time.Now().Add(-time.Minute)
 	if err := e.stores.Operations.(resource.DetachedTargetRepository).RecordTargetLaunch(e.ctx, 1, id, host.Metadata.ID, handle); err != nil {
 		t.Fatal(err)
 	}
-	op = e.waitTerminal(id, 30*time.Second)
+	op = e.waitTerminal(id, 90*time.Second)
 	if target := op.Status.Targets[0]; target.State != resource.TargetTimedOut {
 		t.Fatalf("target = %s %+v", target.State, target.Result)
 	}
@@ -418,7 +424,7 @@ func TestDetachedLostWhenTheSupervisorDies(t *testing.T) {
 	e.start(nil)
 	seconds, _ := sleepFor(t, 4)
 	id := e.submit(e.hosts(1), 600, 1, "sleep", seconds)
-	e.waitFor("a running target", 20*time.Second, allTargets(resource.TargetRunning), id)
+	e.waitFor("a running target", 90*time.Second, allTargets(resource.TargetRunning), id)
 	dirs := e.stateDirs()
 	if len(dirs) != 1 {
 		t.Fatalf("state directories = %v", dirs)
@@ -434,7 +440,7 @@ func TestDetachedLostWhenTheSupervisorDies(t *testing.T) {
 		}
 		_ = syscall.Kill(pid, syscall.SIGKILL) // what a reboot or the OOM killer leaves
 	}
-	op := e.waitTerminal(id, 30*time.Second)
+	op := e.waitTerminal(id, 90*time.Second)
 	if target := op.Status.Targets[0]; target.State != resource.TargetLost || target.Result.ErrorClass != "supervisor_lost" {
 		t.Fatalf("target = %s %+v", target.State, target.Result)
 	}
@@ -450,14 +456,14 @@ func TestDetachedUnreachableHostBecomesLost(t *testing.T) {
 	host := e.hosts(1)[0]
 	seconds, _ := sleepFor(t, 5)
 	id := e.submit([]*resource.Host{host}, 600, 1, "sleep", seconds)
-	op := e.waitFor("a running target", 20*time.Second, allTargets(resource.TargetRunning), id)
+	op := e.waitFor("a running target", 90*time.Second, allTargets(resource.TargetRunning), id)
 	e.server.Close()
 	handle := *op.Status.Targets[0].Launch
 	handle.Deadline = time.Now().Add(-time.Minute) // past deadline + grace
 	if err := e.stores.Operations.(resource.DetachedTargetRepository).RecordTargetLaunch(e.ctx, 1, id, host.Metadata.ID, handle); err != nil {
 		t.Fatal(err)
 	}
-	op = e.waitTerminal(id, 30*time.Second)
+	op = e.waitTerminal(id, 90*time.Second)
 	if target := op.Status.Targets[0]; target.State != resource.TargetLost || target.Result.ErrorClass != "unreachable" {
 		t.Fatalf("target = %s %+v", target.State, target.Result)
 	}
@@ -488,7 +494,7 @@ func TestUnconfirmedLaunchIsAdoptedOrFailed(t *testing.T) {
 		e.start(lossyConnector{SSHConnector: e.connector.(*hostaccess.SSHConnector), run: true})
 		log := filepath.Join(e.home, "runs.log")
 		id := e.submit(e.hosts(1), 600, 1, "sh", "-c", "echo run >> "+log)
-		op := e.waitTerminal(id, 30*time.Second)
+		op := e.waitTerminal(id, 90*time.Second)
 		if target := op.Status.Targets[0]; target.State != resource.TargetSucceeded || target.Launch.Mode != "adopted" {
 			t.Fatalf("target = %s, launch %+v, result %+v", target.State, target.Launch, target.Result)
 		}
@@ -501,7 +507,7 @@ func TestUnconfirmedLaunchIsAdoptedOrFailed(t *testing.T) {
 		e := newDetachedEnv(t)
 		e.start(lossyConnector{SSHConnector: e.connector.(*hostaccess.SSHConnector), run: false})
 		id := e.submit(e.hosts(1), 600, 1, "true")
-		op := e.waitTerminal(id, 30*time.Second)
+		op := e.waitTerminal(id, 90*time.Second)
 		if target := op.Status.Targets[0]; target.State != resource.TargetFailed || target.Result.ErrorClass != "launch_failed" {
 			t.Fatalf("target = %s %+v", target.State, target.Result)
 		}
@@ -526,7 +532,7 @@ func TestProfileCanRefuseDetachedRuns(t *testing.T) {
 	}
 	e.start(nil)
 	id := e.submit(e.hosts(1), 600, 1, "true")
-	op := e.waitTerminal(id, 20*time.Second)
+	op := e.waitTerminal(id, 90*time.Second)
 	if target := op.Status.Targets[0]; target.State != resource.TargetFailed || target.Result.ErrorClass != "detached_disabled_by_profile" {
 		t.Fatalf("target = %s %+v", target.State, target.Result)
 	}
@@ -546,7 +552,7 @@ func TestTwoWorkersOnPostgresRunEachCommandOnce(t *testing.T) {
 	e.start(nil)
 	log := filepath.Join(e.home, "runs.log")
 	id := e.submit(e.hosts(50), 600, 5, "sh", "-c", "echo run >> "+log+"; sleep 3; echo done")
-	e.waitFor("some targets running", 30*time.Second, func(op *resource.Operation) bool {
+	e.waitFor("some targets running", 90*time.Second, func(op *resource.Operation) bool {
 		return targetStates(op)[resource.TargetRunning] >= 10
 	}, id)
 	stopFirst()

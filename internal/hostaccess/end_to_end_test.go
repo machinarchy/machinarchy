@@ -178,7 +178,11 @@ func TestManagedHostAndOperationEndToEnd(t *testing.T) {
 	}
 	waitFor(t, func() bool {
 		current, e := stores.Operations.GetOperation(ctx, workspace, cancelled.ID)
-		return e == nil && current.Status.State == resource.OperationRunning && len(current.Status.Targets) == 1 && current.Status.Targets[0].State == resource.TargetRunning
+		// The target is marked Running before the SSH session opens; wait for
+		// the command to reach the host, or the cancel can win the race and
+		// the exec never happens.
+		return e == nil && current.Status.State == resource.OperationRunning && len(current.Status.Targets) == 1 &&
+			current.Status.Targets[0].State == resource.TargetRunning && server.Execs() == 3
 	})
 	if _, err = application.CancelOperation(ctx, owner, cancelled.ID); err != nil {
 		t.Fatal(err)

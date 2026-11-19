@@ -22,6 +22,7 @@ func TestManagedResourceContract(t *testing.T) {
 			t.Run("operation persistence and CAS", func(t *testing.T) { testResourceOperation(t, newFixture(t, engine)) })
 			t.Run("operation target writes", func(t *testing.T) { testOperationTargetWrites(t, newFixture(t, engine)) })
 			t.Run("detached targets", func(t *testing.T) { testDetachedTargets(t, newFixture(t, engine)) })
+			t.Run("operation reads are consistent", func(t *testing.T) { testOperationReadConsistency(t, newFixture(t, engine)) })
 			t.Run("listing and keyset pagination", func(t *testing.T) { testResourceListing(t, newFixture(t, engine)) })
 			t.Run("transaction rollback", func(t *testing.T) { testResourceRollback(t, newFixture(t, engine)) })
 			t.Run("outbox atomicity", func(t *testing.T) { testOutboxAtomicity(t, newFixture(t, engine)) })
@@ -884,5 +885,81 @@ func testDetachedTargets(t *testing.T, f *fixture) {
 	}
 	if err := detached.UpdateTargetLive(ctx, workspaceID, op.ID, first, live); !errors.Is(err, resource.ErrOperationFinished) {
 		t.Fatalf("progress for a terminal target = %v", err)
+	}
+}
+
+// testOperationReadConsistency: GetOperation must never see an Operation row
+// and target rows from different moments. Found in Phase 13B, where it read
+// "Queued" with a target a worker had already started and failed validation.
+func testOperationReadConsistency(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	workspaceID := f.newWorkspace(t, "consistency")
+	now := time.Now().UTC()
+	profile, revision, err := resource.NewAccessProfile(workspaceID, "consistency", "", resource.AccessProfileSpec{Connector: resource.ConnectorSSH,
+		Username: "deploy", Authentication: resource.AuthenticationPassword, Credential: resource.SecretReference{ID: "s", Version: 1}, Enabled: true}, 7, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, revision); err != nil {
+		t.Fatal(err)
+	}
+	var targets []resource.OperationTargetSpec
+	for i := range 3 {
+		host, err := resource.NewHost(workspaceID, 0, fmt.Sprintf("consistency-%d", i), nil, resource.HostSpec{AccessProfileID: profile.ID}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation,
+			DisplayName: host.Metadata.Name, AccessProfileID: profile.ID, AccessProfileRevision: revision.Revision})
+	}
+	for round := range 40 {
+		op, err := resource.NewRunOperation(workspaceID, resource.ActorRef{UserID: 7}, resource.OperationSpec{Targets: targets,
+			Run: &resource.RunSpec{Argv: []string{"true"}, TimeoutSeconds: 30, Concurrency: 3}}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.stores.Operations.CreateOperation(ctx, op); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		const readers = 4
+		readErrs := make(chan error, readers)
+		for range readers {
+			go func() {
+				for {
+					select {
+					case <-done:
+						readErrs <- nil
+						return
+					default:
+					}
+					if _, err := f.stores.Operations.GetOperation(ctx, workspaceID, op.ID); err != nil {
+						readErrs <- fmt.Errorf("round %d: %w", round, err)
+						return
+					}
+				}
+			}()
+		}
+		expected := op.Revision
+		if err := op.Start(time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.stores.Operations.UpdateOperation(ctx, op, expected); err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range targets {
+			if err := f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, target.HostID, resource.TargetRunning, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		close(done)
+		for range readers {
+			if err := <-readErrs; err != nil {
+				t.Fatalf("a concurrent GetOperation failed: %v", err)
+			}
+		}
 	}
 }

@@ -95,7 +95,7 @@ func newFixture(t *testing.T, engine string) *fixture {
 		parsed.RawQuery = query.Encode()
 		f.cfg = store.Config{
 			Engine: engine, PostgresURL: parsed.String(), EncryptionSecret: testEncryptionSecret,
-			MaxOpenConns: 8, ConnectTimeout: 15 * time.Second,
+			MaxOpenConns: 8, MaxIdleConns: 8, ConnectTimeout: 15 * time.Second,
 		}
 	default:
 		t.Fatalf("unknown engine %q", engine)

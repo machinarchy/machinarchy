@@ -723,12 +723,24 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 	if workspaceID <= 0 || id.Validate() != nil {
 		return nil, fmt.Errorf("%w: workspace and Operation ID are required", resource.ErrInvalidResource)
 	}
+	// The Operation row and its target rows are read in one read-only
+	// transaction: separate reads could see the Operation still Queued and a
+	// target a worker has already moved, which fails validation (a torn view).
+	options := &sql.TxOptions{ReadOnly: true}
+	if s.dialect == sqlx.PostgreSQL {
+		options.Isolation = sql.LevelRepeatableRead
+	}
+	tx, err := s.db.BeginTx(ctx, options)
+	if err != nil {
+		return nil, fmt.Errorf("begin Operation read: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Operation read")
 	var operation resource.Operation
 	var kind, state, encrypted, conditionsText string
 	var cancelAsked bool
 	var created string
 	var started, finished sql.NullString
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, kind, state, revision,
+	err = tx.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, kind, state, revision,
 		actor_user_id, actor_token_id, spec_encrypted, cancel_asked, conditions, created_at, started_at, finished_at
 		FROM operations WHERE workspace_id = ? AND id = ?`), workspaceID, string(id)).Scan(
 		&operation.ID, &operation.WorkspaceID, &kind, &state, &operation.Revision,
@@ -760,7 +772,7 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 	if operation.FinishedAt, err = sqlx.ParseNullTime(finished); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT host_id, host_generation, display_name,
+	rows, err := tx.QueryContext(ctx, s.bind(`SELECT host_id, host_generation, display_name,
 		access_profile_id, access_profile_revision, state, exit_code, output, error_class, launch, live
 		FROM operation_targets WHERE operation_id = ? ORDER BY host_id`), string(id))
 	if err != nil {
