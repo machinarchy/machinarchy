@@ -71,6 +71,13 @@ type DetachedTargetRepository interface {
 	ListDetachedTargets(ctx context.Context, limit int) ([]DetachedTarget, error)
 }
 
+// OperationTargetReader reads one target of an Operation and the
+// Operation's state with a single row lookup: no spec decryption, no other
+// targets. Credential authorization uses it on every SSH session.
+type OperationTargetReader interface {
+	GetOperationTarget(ctx context.Context, workspaceID int, operationID, hostID ID) (OperationState, OperationTargetSpec, error)
+}
+
 type OperationKey struct {
 	WorkspaceID int
 	ID          ID

@@ -210,6 +210,16 @@ func (b runtimeProfileBindings) GetOperation(ctx context.Context, workspace int,
 	return b.operations.GetOperation(ctx, workspace, id)
 }
 
+// GetOperationTarget lets the authorizer read one target row
+// (resource.OperationTargetReader); every store engine implements it.
+func (b runtimeProfileBindings) GetOperationTarget(ctx context.Context, workspace int, operationID, hostID resource.ID) (resource.OperationState, resource.OperationTargetSpec, error) {
+	reader, ok := b.operations.(resource.OperationTargetReader)
+	if !ok {
+		return "", resource.OperationTargetSpec{}, resource.ErrOperationNotFound
+	}
+	return reader.GetOperationTarget(ctx, workspace, operationID, hostID)
+}
+
 // Close releases shared infrastructure. Stop servers and workers before calling it.
 func (r *Runtime) Close() error {
 	if r == nil {

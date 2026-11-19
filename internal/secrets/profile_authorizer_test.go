@@ -110,3 +110,68 @@ func newBindingFixture(t *testing.T) *bindingFixture {
 	}
 	return &bindingFixture{profile: profile, revisions: map[uint64]*resource.AccessProfileRevision{1: &revision}, host: host}
 }
+
+// targetFixture adds the single-row target read; GetOperation must then not
+// be used (it loads and decrypts the whole Operation).
+type targetFixture struct {
+	*bindingFixture
+	fullReads int
+}
+
+func (f *targetFixture) GetOperation(ctx context.Context, workspace int, id resource.ID) (*resource.Operation, error) {
+	f.fullReads++
+	return f.bindingFixture.GetOperation(ctx, workspace, id)
+}
+
+func (f *targetFixture) GetOperationTarget(_ context.Context, workspace int, operationID, hostID resource.ID) (resource.OperationState, resource.OperationTargetSpec, error) {
+	op := f.operation
+	if op == nil || workspace != op.WorkspaceID || operationID != op.ID {
+		return "", resource.OperationTargetSpec{}, resource.ErrOperationNotFound
+	}
+	for _, target := range op.Spec.Targets {
+		if target.HostID == hostID {
+			return op.Status.State, target, nil
+		}
+	}
+	return "", resource.OperationTargetSpec{}, resource.ErrOperationNotFound
+}
+
+func TestProfileAuthorizerSingleRowTargetRead(t *testing.T) {
+	fixture := &targetFixture{bindingFixture: newBindingFixture(t)}
+	operation, err := resource.NewRunOperation(fixture.profile.WorkspaceID, resource.ActorRef{UserID: 1}, resource.OperationSpec{
+		Targets: []resource.OperationTargetSpec{{HostID: fixture.host.Metadata.ID, HostGeneration: fixture.host.Metadata.Generation,
+			DisplayName: fixture.host.Metadata.Name, AccessProfileID: fixture.profile.ID, AccessProfileRevision: 1}},
+		Run: &resource.RunSpec{Argv: []string{"true"}, TimeoutSeconds: 30, Concurrency: 1},
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.operation = operation
+	worker, err := NewProfileAuthorizer(fixture, WorkloadOperationWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ResolutionRequest{WorkloadID: WorkloadOperationWorker, Ref: Ref{ID: "ssh-secret", Version: 3}, Purpose: PurposeSSHCredential,
+		WorkspaceID: fixture.profile.WorkspaceID, AccessProfileID: string(fixture.profile.ID), AccessProfileRevision: 1,
+		HostID: string(fixture.host.Metadata.ID), OperationID: string(operation.ID)}
+	if err := worker.AuthorizeSecretResolution(context.Background(), request); err != nil {
+		t.Fatalf("valid target denied: %v", err)
+	}
+	fixture.host.Metadata.Generation++ // the Host changed since the Operation captured it
+	if err := worker.AuthorizeSecretResolution(context.Background(), request); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("a changed Host was not denied: %v", err)
+	}
+	fixture.host.Metadata.Generation--
+	request.AccessProfileRevision = 2
+	if err := worker.AuthorizeSecretResolution(context.Background(), request); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("a revision the Operation did not capture was not denied: %v", err)
+	}
+	request.AccessProfileRevision = 1
+	operation.Status.State = resource.OperationSucceeded
+	if err := worker.AuthorizeSecretResolution(context.Background(), request); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("a finished Operation was not denied: %v", err)
+	}
+	if fixture.fullReads != 0 {
+		t.Fatalf("the full Operation was read %d times", fixture.fullReads)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/service"
 	"github.com/machinarchy/machinarchy/internal/store"
+	"github.com/machinarchy/machinarchy/internal/testutil/pgtest"
 	"github.com/machinarchy/machinarchy/internal/testutil/sshtest"
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 )
@@ -43,6 +45,9 @@ func (b bindings) GetHost(c context.Context, w int, id resource.ID) (*resource.H
 func (b bindings) GetOperation(c context.Context, w int, id resource.ID) (*resource.Operation, error) {
 	return b.stores.Operations.GetOperation(c, w, id)
 }
+func (b bindings) GetOperationTarget(c context.Context, w int, op, host resource.ID) (resource.OperationState, resource.OperationTargetSpec, error) {
+	return b.stores.Operations.(resource.OperationTargetReader).GetOperationTarget(c, w, op, host)
+}
 
 var fastPolls = operationworker.PollConfig{MinInterval: 150 * time.Millisecond, MaxInterval: time.Second, Tick: 50 * time.Millisecond,
 	CallTimeout: 15 * time.Second, LaunchConfirmGrace: 2 * time.Second, TimeoutGrace: time.Second, UnreachableGrace: time.Second}
@@ -63,7 +68,9 @@ type detachedEnv struct {
 	worker    *operationworker.Worker
 }
 
-func newDetachedEnv(t *testing.T) *detachedEnv {
+func newDetachedEnv(t *testing.T) *detachedEnv { return newDetachedEnvOn(t, store.EngineSQLite) }
+
+func newDetachedEnvOn(t *testing.T, engine string) *detachedEnv {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -77,7 +84,12 @@ func newDetachedEnv(t *testing.T) *detachedEnv {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	server := sshtest.Start(t, sshtest.Options{Password: "pw", ExecStreams: sshtest.ShellExec("", home)})
-	stores, err := store.Open(ctx, store.Config{Engine: store.EngineSQLite, SQLitePath: filepath.Join(dir, "d.db"), EncryptionSecret: "detached-test-key-material-long-enough"})
+	config := store.Config{Engine: store.EngineSQLite, SQLitePath: filepath.Join(dir, "d.db"), EncryptionSecret: "detached-test-key-material-long-enough"}
+	if engine == store.EnginePostgres {
+		config = store.Config{Engine: store.EnginePostgres, PostgresURL: pgtest.URL(t), EncryptionSecret: config.EncryptionSecret,
+			MaxOpenConns: 16, MaxIdleConns: 16, ConnectTimeout: 15 * time.Second}
+	}
+	stores, err := store.Open(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,10 +173,14 @@ func (e *detachedEnv) start(connector hostaccess.HostConnector) {
 	}
 	queue := e.stores.Operations.(resource.OperationQueueRepository)
 	recovery := e.stores.Operations.(resource.OperationRecoveryRepository)
+	var leases resource.LeaseStore
+	if e.stores.Engine() == store.EnginePostgres {
+		leases = e.stores.ResourceLeases // as in production: several workers coordinate
+	}
 	worker, err := operationworker.New(operationworker.Dependencies{Operations: e.stores.Operations, Queue: queue, Hosts: e.stores.ResourceHosts,
-		Profiles: e.stores.ResourceProfiles, Outbox: e.stores.Outbox, Connector: connector, Recovery: recovery,
+		Profiles: e.stores.ResourceProfiles, Outbox: e.stores.Outbox, Connector: connector, Recovery: recovery, Leases: leases,
 		ExecutionPolicy: func() domain.ExecutionPolicy { return domain.ExecutionPolicy{Enabled: true, AllowAny: true} },
-		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)), Poll: e.poll}, 4)
+		Logger:          testLogger(), Poll: e.poll}, 4)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -172,7 +188,8 @@ func (e *detachedEnv) start(connector hostaccess.HostConnector) {
 	done := make(chan struct{})
 	go func() { defer close(done); _ = worker.Start(ctx) }()
 	e.worker = worker
-	e.stop = func() { cancel(); <-done }
+	var once sync.Once
+	e.stop = func() { once.Do(func() { cancel(); <-done }) }
 	e.t.Cleanup(e.stop)
 }
 
@@ -510,4 +527,43 @@ func TestProfileCanRefuseDetachedRuns(t *testing.T) {
 	if target := op.Status.Targets[0]; target.State != resource.TargetFailed || target.Result.ErrorClass != "detached_disabled_by_profile" {
 		t.Fatalf("target = %s %+v", target.State, target.Result)
 	}
+}
+
+// PostgreSQL deployments run several workers. Two run at once here, one is
+// stopped mid-way, and the leases (Operation leases for launches, host
+// leases for polls) must still run each of 50 commands exactly once.
+func TestTwoWorkersOnPostgresRunEachCommandOnce(t *testing.T) {
+	t.Parallel()
+	e := newDetachedEnvOn(t, store.EnginePostgres)
+	// Each PostgreSQL poll also takes a host lease and resolves a credential;
+	// poll at a production-like pace rather than the SQLite tests' 150 ms.
+	e.poll.MinInterval, e.poll.MaxInterval = time.Second, 2*time.Second
+	e.start(nil)
+	stopFirst := e.stop
+	e.start(nil)
+	log := filepath.Join(e.home, "runs.log")
+	id := e.submit(e.hosts(50), 600, 5, "sh", "-c", "echo run >> "+log+"; sleep 3; echo done")
+	e.waitFor("some targets running", 30*time.Second, func(op *resource.Operation) bool {
+		return targetStates(op)[resource.TargetRunning] >= 10
+	}, id)
+	stopFirst()
+	op := e.waitTerminal(id, 120*time.Second)
+	if op.Status.State != resource.OperationSucceeded {
+		t.Fatalf("Operation = %s, targets %v", op.Status.State, targetStates(op))
+	}
+	runs, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(runs), "run\n"); n != 50 {
+		t.Fatalf("the command ran %d times on 50 targets", n)
+	}
+}
+
+// testLogger discards worker logs unless MACHINARCHY_TEST_WORKER_LOGS is set.
+func testLogger() *slog.Logger {
+	if os.Getenv("MACHINARCHY_TEST_WORKER_LOGS") != "" {
+		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

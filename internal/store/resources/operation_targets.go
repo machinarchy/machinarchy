@@ -86,3 +86,21 @@ func (s *Store) GetOperationState(ctx context.Context, workspaceID int, operatio
 	}
 	return resource.OperationState(state), nil
 }
+
+// GetOperationTarget implements resource.OperationTargetReader.
+func (s *Store) GetOperationTarget(ctx context.Context, workspaceID int, operationID, hostID resource.ID) (resource.OperationState, resource.OperationTargetSpec, error) {
+	var state, profileID, displayName string
+	spec := resource.OperationTargetSpec{HostID: hostID}
+	err := s.db.QueryRowContext(ctx, s.bind(`SELECT o.state, t.host_generation, t.display_name, t.access_profile_id, t.access_profile_revision
+		FROM operations o JOIN operation_targets t ON t.operation_id = o.id
+		WHERE o.workspace_id = ? AND o.id = ? AND t.host_id = ?`), workspaceID, string(operationID), string(hostID)).
+		Scan(&state, &spec.HostGeneration, &displayName, &profileID, &spec.AccessProfileRevision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", resource.OperationTargetSpec{}, resource.ErrOperationNotFound
+	}
+	if err != nil {
+		return "", resource.OperationTargetSpec{}, fmt.Errorf("read Operation target: %w", err)
+	}
+	spec.DisplayName, spec.AccessProfileID = displayName, resource.ID(profileID)
+	return resource.OperationState(state), spec, nil
+}

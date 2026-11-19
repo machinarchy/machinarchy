@@ -63,17 +63,29 @@ func (a *ProfileAuthorizer) AuthorizeSecretResolution(ctx context.Context, req R
 	if err != nil {
 		return ErrUnauthorized
 	}
-	operation, err := a.reader.GetOperation(ctx, req.WorkspaceID, operationID)
-	if err != nil || operation.IsTerminal() {
-		return ErrUnauthorized
-	}
 	currentRevision, err := a.reader.GetAccessProfileRevision(ctx, req.WorkspaceID, profileID, profile.CurrentRevision)
 	if err != nil || !currentRevision.Spec.Enabled {
 		return ErrUnauthorized
 	}
+	matches := func(target resource.OperationTargetSpec) bool {
+		return target.HostID == hostID && target.HostGeneration == host.Metadata.Generation &&
+			target.AccessProfileID == profileID && target.AccessProfileRevision == req.AccessProfileRevision
+	}
+	// Detached polls resolve a credential per SSH session: read the one
+	// target row instead of the whole Operation when the reader can.
+	if targets, ok := a.reader.(resource.OperationTargetReader); ok {
+		state, target, err := targets.GetOperationTarget(ctx, req.WorkspaceID, operationID, hostID)
+		if err != nil || (&resource.Operation{Status: resource.OperationStatus{State: state}}).IsTerminal() || !matches(target) {
+			return ErrUnauthorized
+		}
+		return nil
+	}
+	operation, err := a.reader.GetOperation(ctx, req.WorkspaceID, operationID)
+	if err != nil || operation.IsTerminal() {
+		return ErrUnauthorized
+	}
 	for _, target := range operation.Spec.Targets {
-		if target.HostID == hostID && target.HostGeneration == host.Metadata.Generation &&
-			target.AccessProfileID == profileID && target.AccessProfileRevision == req.AccessProfileRevision {
+		if matches(target) {
 			return nil
 		}
 	}

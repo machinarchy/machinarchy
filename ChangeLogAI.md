@@ -1,5 +1,23 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: two workers on PostgreSQL; single-row credential authorization (branch audit/detached-ssh)
+
+- New `TestTwoWorkersOnPostgresRunEachCommandOnce`: two workers with production-style leases share 50 detached targets, one is stopped mid-way, and every command still runs exactly once. It exercises the Operation lease for launches and the per-host lease for polls.
+- New `internal/testutil/pgtest`: a fresh schema per test on `MACHINARCHY_TEST_POSTGRES_URL`; the test is skipped without it, or fails when `MACHINARCHY_REQUIRE_POSTGRES_TESTS` is set.
+- `secrets.ProfileAuthorizer`: when the reader implements `resource.OperationTargetReader` (the store and `bootstrap.runtimeProfileBindings` do), operation-worker credential checks read one target row (`GetOperationTarget`) instead of loading and decrypting the whole Operation. Every detached poll resolves a credential, so this matters at scale. The rules are unchanged: active Operation, same Host generation, same captured profile revision.
+- Detached integration tests can show worker logs with `MACHINARCHY_TEST_WORKER_LOGS=1`.
+
+### Found while doing it
+
+- `store.Config` with `MaxIdleConns` 0 keeps no idle PostgreSQL connections, so every query opens and authenticates a new connection: about 56 ms each here, against 8 ms pooled. Production sets 5 idle by default (`MACHINARCHY_DATABASE_MAX_IDLE_CONNS`), but tests that build `store.Config` directly (the contract fixture among them) pay it. This is why the PostgreSQL contract suite takes about 87 s. Recorded in AUDIT/13B; not changed here.
+- Polling cost on PostgreSQL is roughly 10 queries plus one SSH session per host per poll (host lease, credential resolution, progress). Fine at the 5–30 s production intervals; the 150 ms test interval saturated a laptop, so the PostgreSQL test polls at 1–2 s.
+
+### Verification
+
+- `TestTwoWorkersOnPostgresRunEachCommandOnce`: pass in 33 s on PostgreSQL 16, running in a tmpfs container with `fsync=off`. Docker Desktop's disk made checkpoints take 50–74 s.
+- `TestProfileAuthorizerSingleRowTargetRead`: a changed Host, an uncaptured revision and a finished Operation are all refused, and the full Operation is never read.
+- `go test ./internal/secrets/ ./internal/operationworker/`: pass. golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: follow output by offset; CLI run --detach and logs (branch audit/detached-ssh)
 
 - The output endpoint takes `from` (a stream byte offset) and returns `from` and `next`, computed from the capture's real byte positions (`StreamCapture.Slice`). A part of the stream that was not kept is reported as one `[… N bytes omitted …]` line, so a follower never repeats or misses bytes.
