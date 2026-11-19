@@ -1,15 +1,19 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/config"
+	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
 // sessionServer is the fully wired API server on a SQLite database that
@@ -28,16 +32,24 @@ const (
 
 func startSessionServer(t *testing.T, dbPath, operatorToken string, previous ...string) *sessionServer {
 	t.Helper()
+	return startSessionServerWith(t, dbPath, func(cfg *config.Config) {
+		cfg.OperatorToken, cfg.SessionPreviousKeys = operatorToken, previous
+	})
+}
+
+func startSessionServerWith(t *testing.T, dbPath string, mutate func(*config.Config)) *sessionServer {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	cfg := config.Config{
 		ListenAddr: "127.0.0.1:0", Environment: config.Development, SignupEnabled: true,
-		OperatorToken: operatorToken, SessionPreviousKeys: previous, SessionTTL: time.Hour,
+		OperatorToken: sessionKeyA, SessionTTL: time.Hour,
 		EncryptionSecret: "session-encryption-secret-0123456789abcdef",
 		ShutdownTimeout:  10 * time.Second,
 		Database:         config.DatabaseConfig{Engine: config.SQLite, Path: dbPath, ConnectTimeout: time.Second, MaxOpenConns: 1, MaxIdleConns: 1},
 		BootstrapAdmin:   config.BootstrapAdminConfig{Username: "admin", Email: "admin@example.test", Password: "session-admin-password"},
 	}
+	mutate(&cfg)
 	runtime, err := Open(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -201,5 +213,69 @@ func TestSessionKeyRotationEndToEnd(t *testing.T) {
 	}
 	if got := done.me(fresh); got != http.StatusOK {
 		t.Fatalf("a session signed with the current key = %d", got)
+	}
+}
+
+// loginFrom logs in from a fixed client address.
+func (s *sessionServer) loginFrom(remote, username, password string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	request.RemoteAddr = remote
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	s.client.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// S-09 end to end: failures per account and per client network are counted
+// in the database; past the free failures a login waits (429 with
+// Retry-After), the right password included, and the start of backoff is
+// audited.
+func TestLoginThrottlingEndToEnd(t *testing.T) {
+	s := startSessionServerWith(t, newDBPath(t), func(cfg *config.Config) {
+		cfg.LoginThrottle = domain.LoginThrottlePolicy{FreeFailures: 3, BaseDelay: time.Second, MaxDelay: time.Minute,
+			IPMaxFailures: 8, Window: 10 * time.Minute}
+	})
+	const attacker = "192.0.2.10:5000"
+	for i := 1; i <= 4; i++ {
+		if got := s.loginFrom(attacker, "admin", "wrong-password-123").Code; got != http.StatusUnauthorized {
+			t.Fatalf("failure %d = %d, want 401", i, got)
+		}
+	}
+	// The 4th failure started a 1 s backoff: even the right password waits.
+	refused := s.loginFrom("198.51.100.20:5000", "admin", "session-admin-password")
+	if refused.Code != http.StatusTooManyRequests || refused.Header().Get("Retry-After") != "1" {
+		t.Fatalf("login during backoff = %d, Retry-After %q", refused.Code, refused.Header().Get("Retry-After"))
+	}
+	time.Sleep(1100 * time.Millisecond) // the backoff being tested
+	if got := s.loginFrom("198.51.100.20:5000", "admin", "session-admin-password").Code; got != http.StatusOK {
+		t.Fatalf("login after the backoff = %d", got)
+	}
+	// The success reset the account: a new failure is free again.
+	if got := s.loginFrom(attacker, "admin", "wrong-password-123").Code; got != http.StatusUnauthorized {
+		t.Fatalf("failure after a success = %d", got)
+	}
+
+	// The network limit spans accounts, and unknown accounts count the same.
+	for i := range 3 {
+		s.loginFrom(attacker, fmt.Sprintf("nobody-%d", i), "wrong-password-123")
+	}
+	if got := s.loginFrom(attacker, "someone-else", "wrong-password-123").Code; got != http.StatusTooManyRequests {
+		t.Fatalf("after 8 failures from one network = %d, want 429", got)
+	}
+	if got := s.loginFrom("203.0.113.9:5000", "admin", "session-admin-password").Code; got != http.StatusOK {
+		t.Fatalf("another network = %d, want 200", got)
+	}
+
+	token, _ := s.login("session-admin-password")
+	var events []struct {
+		Action  string            `json:"action"`
+		Outcome string            `json:"outcome"`
+		Details map[string]string `json:"details"`
+	}
+	s.client.mustJSON(http.MethodGet, "/api/v1/audit/events?action=auth.login_throttled", token, nil, http.StatusOK, &events)
+	if len(events) != 1 || events[0].Outcome != "denied" || events[0].Details["network"] != "192.0.2.10" {
+		t.Fatalf("backoff audit events = %+v", events)
 	}
 }

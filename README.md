@@ -120,6 +120,7 @@ startup. Secrets are accepted only from the environment or `0600` files.
 |---|---|
 | `MACHINARCHY_OPERATOR_TOKEN` | Login-session signing secret (required, 32+ characters). Rotate with `MACHINARCHY_SESSION_PREVIOUS_KEYS`; see [sessions](docs/operations.md#login-sessions). |
 | `MACHINARCHY_SESSION_TTL` | Login session lifetime, default `24h`. |
+| `MACHINARCHY_LOGIN_FREE_FAILURES`, `_MAX_BACKOFF`, `_IP_MAX_FAILURES`, `_FAILURE_WINDOW` | Failed-login throttling, defaults `5`, `15m`, `20`, `15m`. |
 | `MACHINARCHY_ENCRYPTION_SECRET` / `_FILE` | Root key of the Secret Store. Keep it stable and backed up. |
 | `MACHINARCHY_ENVIRONMENT` | `production` (default: secure cookies, explicit CORS, verified DB TLS, TLS to NATS) or `development`. |
 | `MACHINARCHY_DATABASE_ENGINE`, `_PATH`, `_URL` | `sqlite` (default, `./data/machinarchy.db`) or `postgres`. |

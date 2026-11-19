@@ -84,7 +84,9 @@ type Config struct {
 	SessionTTL time.Duration
 	// SessionPreviousKeys are earlier MACHINARCHY_OPERATOR_TOKEN values,
 	// accepted only to verify sessions signed before a rotation (S-08).
-	SessionPreviousKeys    []string
+	SessionPreviousKeys []string
+	// LoginThrottle limits failed logins (MACHINARCHY_LOGIN_*, AUDIT S-09).
+	LoginThrottle          domain.LoginThrottlePolicy
 	EncryptionSecret       string
 	EncryptionKeyID        string
 	EncryptionPreviousKeys map[string]string
@@ -192,6 +194,11 @@ func LoadCommandLine(args []string) (Config, error) {
 		"--log-level":      "MACHINARCHY_LOG_LEVEL",
 		"--signup-enabled": "MACHINARCHY_SIGNUP_ENABLED",
 		"--session-ttl":    "MACHINARCHY_SESSION_TTL",
+
+		"--login-free-failures":   "MACHINARCHY_LOGIN_FREE_FAILURES",
+		"--login-max-backoff":     "MACHINARCHY_LOGIN_MAX_BACKOFF",
+		"--login-ip-max-failures": "MACHINARCHY_LOGIN_IP_MAX_FAILURES",
+		"--login-failure-window":  "MACHINARCHY_LOGIN_FAILURE_WINDOW",
 
 		"--metrics-listen-addr": "MACHINARCHY_METRICS_LISTEN_ADDR",
 		"--api-docs-enabled":    "MACHINARCHY_API_DOCS_ENABLED",
@@ -347,6 +354,23 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		return Config{}, errors.New("MACHINARCHY_SESSION_TTL must be between 5m and 168h")
 	}
 	cfg.SessionTTL = sessionTTL
+	throttle := domain.DefaultLoginThrottlePolicy()
+	if throttle.FreeFailures, err = strconv.Atoi(get("MACHINARCHY_LOGIN_FREE_FAILURES", strconv.Itoa(throttle.FreeFailures))); err != nil {
+		return Config{}, errors.New("MACHINARCHY_LOGIN_FREE_FAILURES must be a number")
+	}
+	if throttle.IPMaxFailures, err = strconv.Atoi(get("MACHINARCHY_LOGIN_IP_MAX_FAILURES", strconv.Itoa(throttle.IPMaxFailures))); err != nil {
+		return Config{}, errors.New("MACHINARCHY_LOGIN_IP_MAX_FAILURES must be a number")
+	}
+	if throttle.MaxDelay, err = parseDurationBounds(get("MACHINARCHY_LOGIN_MAX_BACKOFF", throttle.MaxDelay.String()), "MACHINARCHY_LOGIN_MAX_BACKOFF", false); err != nil {
+		return Config{}, err
+	}
+	if throttle.Window, err = parseDurationBounds(get("MACHINARCHY_LOGIN_FAILURE_WINDOW", throttle.Window.String()), "MACHINARCHY_LOGIN_FAILURE_WINDOW", false); err != nil {
+		return Config{}, err
+	}
+	if err := throttle.Validate(); err != nil {
+		return Config{}, fmt.Errorf("MACHINARCHY_LOGIN_*: free failures 1-100, max backoff 1s-24h, network failures 1-10000, window 1m-24h: %w", err)
+	}
+	cfg.LoginThrottle = throttle
 	for _, previous := range strings.Split(GetEnv("MACHINARCHY_SESSION_PREVIOUS_KEYS"), ",") {
 		if previous = strings.TrimSpace(previous); previous == "" {
 			continue

@@ -413,3 +413,31 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("%d sessions survived the password change", len(active))
 	}
 }
+
+// S-09: an unknown account costs the same bcrypt work as a wrong password,
+// so response time does not reveal which usernames exist.
+func TestLoginTimingDoesNotRevealAccounts(t *testing.T) {
+	users := &memUsers{}
+	auth, _ := newTestAuth(t, users, time.Hour)
+	ctx := context.Background()
+	if _, err := auth.SignUp(ctx, domain.AuthSignUpRequest{Username: "alice", Password: "correct-horse-battery"}); err != nil {
+		t.Fatal(err)
+	}
+	measure := func(username string) time.Duration {
+		const rounds = 5
+		start := time.Now()
+		for range rounds {
+			if _, err := auth.Login(ctx, domain.AuthLoginRequest{Username: username, Password: "not-the-password"}); !errors.Is(err, domain.ErrInvalidCredentials) {
+				t.Fatalf("login(%s) = %v", username, err)
+			}
+		}
+		return time.Since(start) / rounds
+	}
+	measure("alice") // warm up
+	known, unknown := measure("alice"), measure("mallory")
+	// Both run one bcrypt comparison (about 50 ms at the default cost);
+	// without the dummy hash an unknown user took microseconds.
+	if unknown < known/3 || unknown > known*3 {
+		t.Fatalf("wrong password %s vs unknown user %s: the timing reveals which accounts exist", known, unknown)
+	}
+}

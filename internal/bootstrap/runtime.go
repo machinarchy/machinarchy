@@ -359,7 +359,12 @@ func (r *Runtime) NewAPIServer(
 	if sessionTTL <= 0 {
 		sessionTTL = service.DefaultSessionTTL
 	}
-	authService, err := service.NewAuthService(r.stores.Users, r.stores.Sessions, sessionKeys, sessionTTL)
+	throttle := cfg.LoginThrottle
+	if throttle == (domain.LoginThrottlePolicy{}) {
+		throttle = domain.DefaultLoginThrottlePolicy()
+	}
+	authService, err := service.NewAuthService(r.stores.Users, r.stores.Sessions, sessionKeys, sessionTTL,
+		service.WithLoginThrottle(r.stores.LoginThrottle, throttle))
 	if err != nil {
 		return nil, err
 	}

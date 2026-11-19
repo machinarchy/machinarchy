@@ -35,6 +35,7 @@ keyring file, and the agent gateway key and enrollment token.
 | `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |
 | `MACHINARCHY_API_DOCS_ENABLED` | Serve `/openapi.json` and the `/scalar` reference. Default `true` in development, `false` in production. |
 | `MACHINARCHY_SESSION_TTL` | Login session lifetime, default `24h` (5m–168h). See [sessions](#login-sessions). |
+| `MACHINARCHY_LOGIN_FREE_FAILURES`, `_MAX_BACKOFF`, `_IP_MAX_FAILURES`, `_FAILURE_WINDOW` | Failed-login throttling, defaults `5`, `15m`, `20`, `15m`. See [sessions](#login-sessions). |
 | `MACHINARCHY_SESSION_PREVIOUS_KEYS` | Secret. Earlier `MACHINARCHY_OPERATOR_TOKEN` values (comma-separated) still accepted to verify existing sessions during a key rotation. |
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | One budget (default 25s) for HTTP drain, worker drain and closing the database. Keep it below the orchestrator grace period. |
 | `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set; the program list is re-checked when each Operation runs. |
@@ -62,6 +63,24 @@ affected by logout or a password change (revoke them with
 login past that ends the oldest. Logout, session ends and password changes
 are audited (`auth.session_revoked`, `auth.sessions_revoked`,
 `user.password_changed`).
+
+**Failed logins are throttled**, never locked, so an attacker cannot lock an
+owner out:
+
+- **Per account:** after `MACHINARCHY_LOGIN_FREE_FAILURES` (5) failures within
+  `_FAILURE_WINDOW` (15 min), each attempt must wait 1 s, doubling up to
+  `_MAX_BACKOFF` (15 min). The correct password waits too.
+- **Per client network:** `_IP_MAX_FAILURES` (20) failures across all accounts
+  block that network until the window ends. IPv6 clients count per /64.
+- **Unknown accounts** count exactly like real ones, and cost the same bcrypt
+  time, so neither the timing nor the throttle reveals which usernames exist.
+- A wrong current password on `POST /api/v1/me/password` counts as a failed
+  login.
+
+The client receives 429 with `Retry-After`. Counts are kept in the database,
+so every replica enforces the same limits. An account entering backoff is
+audited once per window (`auth.login_throttled`, outcome `denied`). A
+successful login clears the account's count.
 
 **Rotating the signing key.** Sessions are signed with
 `MACHINARCHY_OPERATOR_TOKEN`, and each token names its key (`kid`).

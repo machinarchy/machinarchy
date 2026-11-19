@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/domain"
+
 	"github.com/nats-io/nkeys"
 )
 
@@ -29,6 +31,12 @@ func setCommonEnv(t *testing.T) {
 		"MACHINARCHY_DATABASE_CONN_MAX_LIFETIME": "",
 		"MACHINARCHY_DATABASE_CONNECT_TIMEOUT":   "",
 		"MACHINARCHY_DATABASE_MIGRATION_TIMEOUT": "",
+		"MACHINARCHY_SESSION_TTL":                "",
+		"MACHINARCHY_SESSION_PREVIOUS_KEYS":      "",
+		"MACHINARCHY_LOGIN_FREE_FAILURES":        "",
+		"MACHINARCHY_LOGIN_MAX_BACKOFF":          "",
+		"MACHINARCHY_LOGIN_IP_MAX_FAILURES":      "",
+		"MACHINARCHY_LOGIN_FAILURE_WINDOW":       "",
 		"MACHINARCHY_OPERATOR_TOKEN":             "0123456789abcdef0123456789abcdef",
 		"MACHINARCHY_ENCRYPTION_SECRET":          "abcdef0123456789abcdef0123456789",
 		"MACHINARCHY_LOG_LEVEL":                  "",
@@ -620,6 +628,44 @@ func TestLoadDatabaseMigrationTimeout(t *testing.T) {
 		t.Setenv("MACHINARCHY_DATABASE_MIGRATION_TIMEOUT", bad)
 		if _, err := Load(); err == nil {
 			t.Errorf("migration timeout %q accepted", bad)
+		}
+	}
+}
+
+func TestLoadSessionAndLoginSettings(t *testing.T) {
+	setCommonEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.SessionTTL != 24*time.Hour || cfg.LoginThrottle != domain.DefaultLoginThrottlePolicy() || len(cfg.SessionPreviousKeys) != 0 {
+		t.Fatalf("defaults: %v %+v %v, %v", cfg.SessionTTL, cfg.LoginThrottle, cfg.SessionPreviousKeys, err)
+	}
+	t.Setenv("MACHINARCHY_SESSION_TTL", "8h")
+	t.Setenv("MACHINARCHY_SESSION_PREVIOUS_KEYS", " previous-key-0123456789abcdef0123456789 , ,0123456789abcdef0123456789abcdef")
+	t.Setenv("MACHINARCHY_LOGIN_FREE_FAILURES", "10")
+	t.Setenv("MACHINARCHY_LOGIN_MAX_BACKOFF", "1h")
+	t.Setenv("MACHINARCHY_LOGIN_IP_MAX_FAILURES", "100")
+	t.Setenv("MACHINARCHY_LOGIN_FAILURE_WINDOW", "30m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The current token is dropped from the previous keys.
+	if cfg.SessionTTL != 8*time.Hour || len(cfg.SessionPreviousKeys) != 1 || cfg.SessionPreviousKeys[0] != "previous-key-0123456789abcdef0123456789" {
+		t.Fatalf("session settings: %v %v", cfg.SessionTTL, cfg.SessionPreviousKeys)
+	}
+	if p := cfg.LoginThrottle; p.FreeFailures != 10 || p.MaxDelay != time.Hour || p.IPMaxFailures != 100 || p.Window != 30*time.Minute {
+		t.Fatalf("login throttle = %+v", p)
+	}
+	for key, bad := range map[string]string{
+		"MACHINARCHY_SESSION_TTL":           "1m",
+		"MACHINARCHY_SESSION_PREVIOUS_KEYS": "short",
+		"MACHINARCHY_LOGIN_FREE_FAILURES":   "0",
+		"MACHINARCHY_LOGIN_MAX_BACKOFF":     "48h",
+		"MACHINARCHY_LOGIN_FAILURE_WINDOW":  "10s",
+	} {
+		setCommonEnv(t)
+		t.Setenv(key, bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("%s=%s accepted", key, bad)
 		}
 	}
 }

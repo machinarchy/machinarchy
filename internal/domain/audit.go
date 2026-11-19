@@ -34,6 +34,9 @@ const (
 	// AuditPasswordChanged records a password change; every session of the
 	// user was revoked with it.
 	AuditPasswordChanged = "user.password_changed"
+	// AuditLoginThrottled records an account entering login backoff after
+	// repeated failures (AUDIT S-09), once per window.
+	AuditLoginThrottled = "auth.login_throttled"
 	// AuditResourceHostKeyChanged records a host that started presenting
 	// an untrusted key (Ready reason HostKeyChanged), once per transition.
 	AuditResourceHostKeyChanged = "resource_host.host_key_changed"
@@ -62,6 +65,9 @@ const (
 	AuditTargetEnrollment   = "agent_enrollment_token"
 
 	AuditOutcomeSuccess = "success"
+	// AuditOutcomeDenied records a refused attempt, such as a login in
+	// backoff (AUDIT S-09).
+	AuditOutcomeDenied = "denied"
 
 	// AuditGenesisHash is the previous hash of a workspace's first event.
 	AuditGenesisHash = "0000000000000000000000000000000000000000000000000000000000000000"

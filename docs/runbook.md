@@ -122,6 +122,18 @@ commands are cancelled and their Operations end `Interrupted`. Make sure the
 orchestrator grace period (`stop_grace_period`,
 `terminationGracePeriodSeconds`) is longer than the shutdown timeout.
 
+## A user cannot log in (429)
+
+`429` with `Retry-After` on `/api/auth/login` means failed-login backoff, not
+an outage. Check the audit trail (`GET /api/v1/audit/events?action=auth.login_throttled`):
+it records which account and network.
+
+- One account: someone (or a stale script) keeps trying a wrong password. It
+  clears by itself, and a successful login resets it.
+- A whole network: more than `MACHINARCHY_LOGIN_IP_MAX_FAILURES` failures from
+  it in the window. Behind a proxy, check that `MACHINARCHY_TRUSTED_PROXIES` is
+  set, or every client shares the proxy's address.
+
 ## Secrets and keys
 
 - `decrypt` errors after a restart: `MACHINARCHY_ENCRYPTION_SECRET` or the key

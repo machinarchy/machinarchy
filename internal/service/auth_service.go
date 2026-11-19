@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,6 +26,21 @@ type authService struct {
 	keys      *sessionkey.Keyring
 	tokenTTL  time.Duration
 	now       func() time.Time
+	// throttle counts failed logins (AUDIT S-09); nil disables it.
+	throttle domain.LoginThrottleStore
+	policy   domain.LoginThrottlePolicy
+	// dummyHash is compared against when the account does not exist, so an
+	// unknown user costs the same bcrypt time as a wrong password (S-09).
+	dummyHash []byte
+	logger    *slog.Logger
+}
+
+// AuthOption configures the auth service.
+type AuthOption func(*authService)
+
+// WithLoginThrottle enables login throttling with store and policy.
+func WithLoginThrottle(store domain.LoginThrottleStore, policy domain.LoginThrottlePolicy) AuthOption {
+	return func(s *authService) { s.throttle, s.policy = store, policy }
 }
 
 // DefaultSessionTTL is a login session's lifetime when none is configured.
@@ -30,14 +48,32 @@ const DefaultSessionTTL = 24 * time.Hour
 
 // NewAuthService creates the authentication service. Every login creates a
 // server-side session in sessions (AUDIT S-08); its token is signed by keys.
-func NewAuthService(userStore domain.UserStore, sessions domain.SessionStore, keys *sessionkey.Keyring, tokenTTL time.Duration) (domain.AuthService, error) {
+func NewAuthService(userStore domain.UserStore, sessions domain.SessionStore, keys *sessionkey.Keyring, tokenTTL time.Duration, options ...AuthOption) (domain.AuthService, error) {
 	if userStore == nil || sessions == nil || keys == nil {
 		return nil, errors.New("auth service requires a user store, a session store and a signing keyring")
 	}
 	if tokenTTL <= 0 {
 		tokenTTL = DefaultSessionTTL
 	}
-	return &authService{userStore: userStore, sessions: sessions, keys: keys, tokenTTL: tokenTTL, now: time.Now}, nil
+	var random [32]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return nil, fmt.Errorf("generate dummy password: %w", err)
+	}
+	dummy, err := bcrypt.GenerateFromPassword([]byte(hex.EncodeToString(random[:])[:40]), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("hash dummy password: %w", err)
+	}
+	s := &authService{userStore: userStore, sessions: sessions, keys: keys, tokenTTL: tokenTTL, now: time.Now,
+		dummyHash: dummy, logger: slog.Default()}
+	for _, option := range options {
+		option(s)
+	}
+	if s.throttle != nil {
+		if err := s.policy.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 func validPassword(password string) bool {
@@ -67,30 +103,80 @@ func (s *authService) SignUp(ctx context.Context, req domain.AuthSignUpRequest) 
 	return s.startSession(ctx, user, req.Client)
 }
 
+// Login checks credentials (AUDIT S-09): an unknown account and a wrong
+// password take the same bcrypt time and give the same error, and repeated
+// failures per account and per client network are throttled.
 func (s *authService) Login(ctx context.Context, req domain.AuthLoginRequest) (*domain.AuthTokenResponse, error) {
 	var user *domain.User
 	var err error
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
+	identifier := req.Username
 	if req.Email != "" {
+		identifier = "email:" + req.Email
 		user, err = s.userStore.GetUserByEmail(ctx, req.Email)
 	} else {
 		user, err = s.userStore.GetUserByUsername(ctx, req.Username)
 	}
-
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.ErrInvalidCredentials
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("look up login account: %w", err)
 		}
-		return nil, fmt.Errorf("look up login account: %w", err)
+		user = nil
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+	failure := domain.LoginFailure{Account: "name:" + identifier, Network: domain.ClientKey(req.Client.IP)}
+	hash := s.dummyHash
+	if user != nil {
+		failure.Account, failure.UserID, failure.WorkspaceID = fmt.Sprintf("user:%d", user.ID), user.ID, user.WorkspaceID
+		hash = []byte(user.PasswordHash)
+	}
+	if err := s.checkThrottle(ctx, failure.Account, failure.Network); err != nil {
+		return nil, err
+	}
+	if bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil || user == nil {
+		s.recordFailure(ctx, failure)
 		return nil, domain.ErrInvalidCredentials
 	}
-
+	s.resetFailures(ctx, failure.Account)
 	return s.startSession(ctx, user, req.Client)
+}
+
+// checkThrottle refuses an attempt while the account or network waits.
+func (s *authService) checkThrottle(ctx context.Context, account, network string) error {
+	if s.throttle == nil {
+		return nil
+	}
+	now := s.now()
+	until, err := s.throttle.LoginBlockedUntil(ctx, account, network, now)
+	if err != nil {
+		return fmt.Errorf("check login throttle: %w", err)
+	}
+	if until.After(now) {
+		return &domain.ThrottledError{RetryAfter: until.Sub(now)}
+	}
+	return nil
+}
+
+// recordFailure counts a failure. A storage error is logged, not returned:
+// the attempt has already failed either way.
+func (s *authService) recordFailure(ctx context.Context, failure domain.LoginFailure) {
+	if s.throttle == nil {
+		return
+	}
+	if _, err := s.throttle.RecordLoginFailure(ctx, failure, s.policy, s.now()); err != nil {
+		s.logger.Warn("record failed login", "error", err)
+	}
+}
+
+func (s *authService) resetFailures(ctx context.Context, account string) {
+	if s.throttle == nil {
+		return
+	}
+	if err := s.throttle.ResetLoginFailures(ctx, account); err != nil {
+		s.logger.Warn("reset failed logins", "error", err)
+	}
 }
 
 func (s *authService) VerifySession(ctx context.Context, username string) (*domain.UserResponse, error) {
@@ -167,7 +253,14 @@ func (s *authService) ChangePassword(ctx context.Context, principal domain.Princ
 	if err != nil || user.ID != principal.UserID {
 		return domain.ErrInvalidCredentials
 	}
+	// A wrong current password is a password guess: it counts like a failed
+	// login (S-09).
+	account := fmt.Sprintf("user:%d", user.ID)
+	if err := s.checkThrottle(ctx, account, ""); err != nil {
+		return err
+	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
+		s.recordFailure(ctx, domain.LoginFailure{Account: account, UserID: user.ID, WorkspaceID: user.WorkspaceID})
 		return domain.ErrInvalidCredentials
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)

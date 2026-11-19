@@ -1,5 +1,24 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 14: failed-login throttling and constant-time login (S-09) (branch audit/sessions)
+
+- **Throttling shared in the database.** Migration `000006_login_failures` (SQLite and PostgreSQL) counts failures per account and per client network with one atomic upsert each, so every replica enforces the same limits and concurrent failures are never lost.
+  - Per account: after `MACHINARCHY_LOGIN_FREE_FAILURES` (5) failures in `MACHINARCHY_LOGIN_FAILURE_WINDOW` (15m), each attempt waits 1 s, doubling up to `MACHINARCHY_LOGIN_MAX_BACKOFF` (15m). No lockout, so an attacker cannot lock an owner out.
+  - Per network: `MACHINARCHY_LOGIN_IP_MAX_FAILURES` (20) failures across accounts block the network until the window ends; IPv6 clients count per /64 (`domain.ClientKey`).
+  - Refused attempts get 429 with `Retry-After`. A success resets the account. The start of backoff is audited once per window (`auth.login_throttled`, outcome `denied`).
+  - A wrong current password on `POST /api/v1/me/password` counts as a failed login.
+- **Login no longer reveals which accounts exist.** An unknown user is compared against a dummy bcrypt hash, so it costs the same time, and is throttled under its name like a real account. Before: an unknown username answered in about 0.5 µs, a real one in about 470 ms.
+- Docs: `docs/operations.md` (Login sessions, settings), `docs/runbook.md` ("A user cannot log in (429)"), README, `.env.example`.
+
+### Verification
+
+- `internal/domain`: policy bounds, the backoff curve, `ClientKey` (IPv4, IPv4-mapped, IPv6 /64, junk).
+- `TestLoginTimingDoesNotRevealAccounts` fails on the previous code and passes now.
+- Store contract "login throttling" on **SQLite and PostgreSQL 16**: counting, the window reset, account and network blocks, the audit once per window, reset, and 20 concurrent failures all counted.
+- End to end (`TestLoginThrottlingEndToEnd`): 429 with `Retry-After: 1` for the right password during backoff, success after it, the network limit across accounts including unknown ones, another network unaffected, one audit event.
+- Config: `TestLoadSessionAndLoginSettings`.
+- `go test ./...` (cached) passes; golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 14: revocable sessions, key rotation, password change (S-08) (branch audit/sessions)
 
 - **Server-side sessions.** Migration `000005_user_sessions` (SQLite and PostgreSQL; times stored as Unix nanoseconds).

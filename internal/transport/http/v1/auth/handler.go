@@ -4,7 +4,9 @@ package auth
 
 import (
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -175,6 +177,9 @@ func (h *Handler) Login(c echo.Context) error {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
 			return httperr.Status(c, http.StatusUnauthorized, "Invalid credentials")
 		}
+		if throttled(c, err) {
+			return httperr.Status(c, http.StatusTooManyRequests, err.Error())
+		}
 		return httperr.Status(c, http.StatusInternalServerError, "Unable to authenticate")
 	}
 
@@ -340,6 +345,9 @@ func (h *Handler) ChangePassword(c echo.Context) error {
 		return httperr.Status(c, http.StatusBadRequest, "currentPassword and newPassword are required")
 	}
 	err := h.authService.ChangePassword(c.Request().Context(), principalOf(c), req.CurrentPassword, req.NewPassword)
+	if throttled(c, err) {
+		return httperr.Status(c, http.StatusTooManyRequests, err.Error())
+	}
 	if errors.Is(err, domain.ErrInvalidCredentials) {
 		return httperr.Status(c, http.StatusForbidden, "the current password is incorrect")
 	}
@@ -348,6 +356,16 @@ func (h *Handler) ChangePassword(c echo.Context) error {
 	}
 	clearAuthCookie(c, h.secureCookie)
 	return c.JSON(http.StatusOK, MessageResponse{Message: "Password changed; every session was ended, log in again"})
+}
+
+// throttled sets Retry-After for a throttled login (AUDIT S-09).
+func throttled(c echo.Context, err error) bool {
+	var limited *domain.ThrottledError
+	if !errors.As(err, &limited) {
+		return false
+	}
+	c.Response().Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(limited.RetryAfter.Seconds()))))
+	return true
 }
 
 func principalOf(c echo.Context) domain.Principal {
