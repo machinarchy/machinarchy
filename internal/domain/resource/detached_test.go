@@ -162,6 +162,10 @@ func TestOutputOfByOffset(t *testing.T) {
 	target := OperationTarget{State: TargetRunning, Launch: &LaunchHandle{Mode: "setsid"}, Live: &LiveOutput{}}
 	target.Live.Stdout.Apply(0, 6, []byte("hello\n"))
 	target.Live.Stderr.Apply(0, 4, []byte("\x1b[1m"))
+	pending := OperationTarget{State: TargetPending}
+	if out := pending.OutputOf(op, StreamStdout, 0); !out.Live || out.Text != "" {
+		t.Fatalf("a target not launched yet must read as live (a follower waits): %+v", out)
+	}
 	out := target.OutputOf(op, StreamStdout, 0)
 	if !out.Live || out.Text != "hello\n" || out.Next != 6 || out.Bytes != 6 || out.Truncated {
 		t.Fatalf("first read = %+v", out)

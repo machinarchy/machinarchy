@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -108,7 +109,10 @@ func ExecuteRemoteCommandDetailed(ctx context.Context, params DialParams, comman
 		return ExecutionResult{}, fmt.Errorf("create SSH session: %w", err)
 	}
 	defer func() {
-		if err := session.Close(); err != nil {
+		// After Run the server has normally closed the channel already, and
+		// Close reports io.EOF: that is not a failure worth a warning (it
+		// would be logged on every detached poll).
+		if err := session.Close(); err != nil && !errors.Is(err, io.EOF) {
 			slog.Warn("failed to close SSH session", "error", err)
 		}
 	}()

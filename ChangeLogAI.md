@@ -1,5 +1,29 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: benchmark, live run, docs (branch audit/detached-ssh)
+
+- **Benchmark** (`TestBenchmark200TargetsFiveMinutes`, opt-in with `MACHINARCHY_BENCH_DETACHED=1`): 200 targets × a 5-minute command, 4 workers, production poll intervals.
+  - All 200 launched in 27 s; the Operation succeeded after **5 min 49 s**. Run attached and one at a time, the same work would take about 16.7 h.
+  - 4,657 polls, 0 unreachable, 0 lost.
+- **Live run** against real OpenSSH (`linuxserver/openssh-server`: setsid available, no systemd), with the make-built monolith and CLI:
+  - `run` detaches and `logs --follow` streams the output as it arrives;
+  - a monolith restart mid-run: the command survived, finished `Succeeded` and ran exactly once;
+  - cancel gives `Cancelled` with exit 143 and no process left;
+  - a host restart gives `Lost` / `supervisor_lost`;
+  - no state directories are left on the host;
+  - the server log has no warnings or errors.
+- Fixes found by the live run:
+  - `logs --follow` returned at once while the target was still Pending: the output endpoint now reports `live` until the target is final;
+  - `sshclient` no longer logs `WARN failed to close SSH session: EOF`. After `Run`, the server has normally closed the channel already, and that warning would have appeared on every detached poll.
+- Docs:
+  - `docs/operations.md`: new "Detached execution" section (how it runs, supervisors, timeouts and cancel, Lost, restarts, output, limitations), the metrics and alerts, and the timeouts table;
+  - `docs/runbook.md`: "A detached target is Lost" and the launch failure classes.
+
+### Verification
+
+- `go test ./pkg/sshclient/ ./internal/domain/resource/`: pass, including a new check that a Pending target reads as live.
+- The live run above.
+
 ## 2026-11-19 — Audit Phase 13B: runner on a real systemd host (branch audit/detached-ssh)
 
 - New `test/systemd/`:

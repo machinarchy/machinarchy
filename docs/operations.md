@@ -161,6 +161,60 @@ controller's address, wait out the penalty. Do not restart the controller in a
 loop. To exempt the controller, use `PerSourcePenaltyExemptList` in
 `sshd_config`.
 
+## Detached execution
+
+A run with `detach: true` (the CLI's default without `--wait`) does not keep an SSH session open.
+
+**How it runs:**
+- One short session per host starts the command under a supervisor and returns at once.
+- The worker's poller then reads the state and output with short sessions: one per host for all of that host's targets, every 5 s for the first minute, then less often, up to every 30 s.
+- A run may last up to 24 hours (`timeoutSeconds` up to 86400; attached runs keep 900 s).
+- Targets launch `concurrency` at a time, so 200 hosts × a 5-minute command take about 5 minutes.
+
+**Nothing is installed on the host.** Each session sends a small POSIX `sh` script, so the login shell must be POSIX (sh, bash, dash, ash). It keeps one directory per target under `$HOME/.local/state/machinarchy/ops/` (owner-only) holding:
+- the command;
+- `stdout` and `stderr`, capped by `ulimit -f` at the profile's `execution.maxOutputFileBytes` (100 MiB by default);
+- the exit status.
+
+A finished target's directory is removed. Leftovers from a crash are swept after 7 days, at the next launch on that host.
+
+**Supervisor**, per Access Profile `execution.supervisor`:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | `systemd-run` when usable, otherwise `setsid` |
+| `systemd` | Always `systemd-run`: as root on the system manager, otherwise the login user's manager, which needs lingering (`loginctl enable-linger USER`) or the unit stops when the session ends |
+| `setsid` | Always `setsid`/`nohup` |
+| `attached` | Detached runs are refused with `detached_disabled_by_profile` |
+
+Prefer `systemd`: cancel and timeout then also kill processes that left the command's process group (a daemon that double-forks), through the unit's cgroup. Under `setsid` such processes survive; this is a known limitation. On hosts with `KillUserProcesses=yes` in logind, non-root runs need lingering in both modes.
+
+**Timeouts and cancel** are enforced twice:
+- on the host, by the supervisor's watchdog (TERM, then KILL after 10 s) and systemd's `RuntimeMaxSec`;
+- by the poller, which sends a cancel if a command is still running 60 s past its deadline.
+
+**Lost.** A target ends `Lost` when its outcome cannot be known. It is never retried:
+
+| Error class | Cause |
+|---|---|
+| `supervisor_lost` | The supervisor died without recording an exit: a reboot, the OOM killer, or the unit stopped |
+| `state_missing` | The target directory disappeared |
+| `unreachable` | The host stayed unreachable past the deadline plus 5 minutes |
+| `unreachable_during_cancel` | The host stayed unreachable for 5 minutes after a cancel |
+
+**Restarts are safe.**
+- Commands keep running on the hosts while workers restart. Nothing is marked `Interrupted`, and the poller picks the targets up again.
+- A launch whose reply was lost is adopted if the command started, and launched again (up to 3 attempts) if it provably did not.
+- A command never starts twice: the runner takes a `mkdir` lock per target.
+
+**Output.**
+- Each stream keeps its first and last 15 KiB plus the total size.
+- `GET …/operations/{id}/targets/{hostId}/output?stream=&from=` serves it by byte offset, live while the command runs. `machinarchy logs operation ID --follow` uses it.
+- New output appears at the poll interval: 5 s for the first minute, then up to 30 s.
+- Only callers allowed to run commands can read output; readers see the `progress` sizes only.
+
+**Avoid changing a Host during a run.** A change to the Host's spec (endpoint, trust) means the credential check no longer matches the Operation, so polls stop and the target ends `Lost`.
+
 ## Containers
 
 ```sh
@@ -226,13 +280,15 @@ Control Manager's operations listener is never public.
 | `machinarchy_controlmanager_outbox_deliveries_total{outcome}` | `claimed`, `quarantined` (invalid events). |
 | `machinarchy_controlmanager_host_key_events_total{event}` | Hosts entering `pending_approval` or `changed` (an untrusted key), and TOFU pins (`tofu_pinned`); once per transition, not per retry. |
 | `machinarchy_operationworker_operations_in_progress`, `_targets_total{state}`, `_target_duration_seconds`, `_panics_total` | Command execution. |
+| `machinarchy_operationworker_running_targets`, `_detached_launches_total{outcome}`, `_polls_total{outcome}`, `_poll_duration_seconds`, `_lost_targets_total` | Detached runs: targets running on hosts; launches `confirmed`, `unconfirmed`, `relaunched` or `failed`; polls `ok` or `unreachable`; targets ended `Lost`. |
 | `machinarchy_agent_gateway_registrations_total{outcome}`, `_lease_renewals_total{outcome}`, `_results_total{status}`, `_commands_total{type,outcome}` | Agent traffic; `invalid` counts unauthenticated messages. |
 
 Suggested alerts: readiness failing for 5 minutes; `queue_depth` above 1000
 for 10 minutes; any increase of `operationworker_panics_total`; a rate of
 `agent_gateway_*_total{outcome="invalid"}` above zero (forged or misconfigured
 agents); `lease_renewals_total{outcome="error"}` above zero; any increase
-of `host_key_events_total{event="changed"}`.
+of `host_key_events_total{event="changed"}`; any increase of
+`lost_targets_total`; a sustained rate of `polls_total{outcome="unreachable"}`.
 
 Traces: HTTP spans through OpenTelemetry when `OTEL_EXPORTER_OTLP_ENDPOINT`
 is set. Logs: JSON (`log/slog`) on stdout; every error log carries the cause
@@ -245,7 +301,7 @@ under `"error"`.
 | HTTP read header / read / write / idle | 5s / 15s / 30s / 60s |
 | API request context (database and gateway calls) | 25s |
 | Synchronous agent call | 15s default, 20s maximum |
-| Per-host command | `timeoutSeconds` of the Operation (max 900s) |
+| Per-host command | `timeoutSeconds` of the Operation: max 900s attached, 86400s detached |
 | Reconcile | runtime configuration `reconciliation.timeoutSeconds` |
 | Shutdown | `MACHINARCHY_SHUTDOWN_TIMEOUT` |
 

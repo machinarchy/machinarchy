@@ -258,7 +258,8 @@ type TargetOutput struct {
 	HostID      ID           `json:"hostId"`
 	Stream      OutputStream `json:"stream"`
 	State       TargetState  `json:"state"`
-	// Live is true while the command runs and more output can follow.
+	// Live is true until the target is final (pending or running): more
+	// output can follow, so a follower keeps asking.
 	Live bool   `json:"live"`
 	Text string `json:"text"`
 	// From and Next are stream byte offsets: Text covers the stream from
@@ -275,7 +276,7 @@ type TargetOutput struct {
 // OutputOf returns one stream of target's output from byte offset from.
 func (target OperationTarget) OutputOf(operationID ID, stream OutputStream, from int64) TargetOutput {
 	out := TargetOutput{OperationID: operationID, HostID: target.Spec.HostID, Stream: stream, State: target.State,
-		Live: target.State == TargetRunning, From: max(from, 0)}
+		Live: target.State == TargetPending || target.State == TargetRunning, From: max(from, 0)}
 	switch {
 	case target.Live != nil:
 		capture := &target.Live.Stdout

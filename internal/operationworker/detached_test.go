@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/hostaccess"
@@ -64,6 +66,7 @@ type detachedEnv struct {
 	profile   resource.ID
 	connector operationworker.RunnerConnector
 	poll      operationworker.PollConfig
+	metrics   prometheus.Registerer
 	stop      func()
 	worker    *operationworker.Worker
 }
@@ -180,7 +183,7 @@ func (e *detachedEnv) start(connector hostaccess.HostConnector) {
 	worker, err := operationworker.New(operationworker.Dependencies{Operations: e.stores.Operations, Queue: queue, Hosts: e.stores.ResourceHosts,
 		Profiles: e.stores.ResourceProfiles, Outbox: e.stores.Outbox, Connector: connector, Recovery: recovery, Leases: leases,
 		ExecutionPolicy: func() domain.ExecutionPolicy { return domain.ExecutionPolicy{Enabled: true, AllowAny: true} },
-		Logger:          testLogger(), Poll: e.poll}, 4)
+		Logger:          testLogger(), Poll: e.poll, Registerer: e.metrics}, 4)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -566,4 +569,53 @@ func testLogger() *slog.Logger {
 		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// AUDIT/10b §1.5 benchmark: 200 targets × a 5-minute command with 4 workers
+// and the production poll intervals finish in about 5 minutes (attached and
+// sequential, the same work took 200 × 5 min ≈ 16.7 h). Opt-in: set
+// MACHINARCHY_BENCH_DETACHED=1 (it takes about 6 minutes).
+func TestBenchmark200TargetsFiveMinutes(t *testing.T) {
+	if os.Getenv("MACHINARCHY_BENCH_DETACHED") == "" {
+		t.Skip("set MACHINARCHY_BENCH_DETACHED=1 to run the 200 × 5 min benchmark")
+	}
+	e := newDetachedEnv(t)
+	e.poll = operationworker.PollConfig{} // production defaults: 5 s, growing to 30 s
+	registry := prometheus.NewRegistry()
+	e.metrics = registry
+	hosts := e.hosts(200)
+	e.start(nil)
+	t.Cleanup(func() { _ = exec.Command("pkill", "-f", "echo start; sleep 300; echo end").Run() })
+	start := time.Now()
+	id := e.submit(hosts, 600, 20, "sh", "-c", "echo start; sleep 300; echo end")
+	launched := e.waitFor("every target launched", 5*time.Minute, func(op *resource.Operation) bool {
+		return targetStates(op)[resource.TargetPending] == 0
+	}, id)
+	launchTime := time.Since(start)
+	op := e.waitTerminal(id, 15*time.Minute)
+	total := time.Since(start)
+	families, _ := registry.Gather()
+	metrics := map[string]float64{}
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			name := family.GetName()
+			for _, label := range metric.GetLabel() {
+				name += "{" + label.GetValue() + "}"
+			}
+			if metric.GetCounter() != nil {
+				metrics[name] = metric.GetCounter().GetValue()
+			}
+		}
+	}
+	t.Logf("200 targets: all launched after %v (%v), Operation %s after %v; targets %v",
+		launchTime.Round(time.Second), targetStates(launched), op.Status.State, total.Round(time.Second), targetStates(op))
+	t.Logf("polls ok=%v unreachable=%v, launches confirmed=%v, lost=%v",
+		metrics["machinarchy_operationworker_polls_total{ok}"], metrics["machinarchy_operationworker_polls_total{unreachable}"],
+		metrics["machinarchy_operationworker_detached_launches_total{confirmed}"], metrics["machinarchy_operationworker_lost_targets_total"])
+	if op.Status.State != resource.OperationSucceeded {
+		t.Fatalf("Operation = %s, targets %v", op.Status.State, targetStates(op))
+	}
+	if total > 7*time.Minute {
+		t.Fatalf("200 × 5 min took %v, want about 5 minutes", total)
+	}
 }

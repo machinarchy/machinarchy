@@ -47,6 +47,23 @@ in [operations](operations.md#metrics).
 - Reason `worker_panic`: a bug. `machinarchy_operationworker_panics_total`
   increased and the log has the stack under `stack`. File it with the log.
 
+## A detached target is Lost
+
+The outcome is unknown, and Machinarchy never retries it. Look at the host
+before running the command again.
+
+| Error class | Meaning |
+|---|---|
+| `supervisor_lost` | The host rebooted, the OOM killer took the supervisor, or someone stopped its unit (`machinarchy-OPERATION-HOST`) |
+| `unreachable` / `unreachable_during_cancel` | The controller could not reach the host past the deadline plus 5 minutes, or for 5 minutes after a cancel. Check `polls_total{outcome="unreachable"}` and the host's `Ready` condition. A Host whose spec changed during the run (endpoint, trusted keys) also ends here |
+| `state_missing` | The target's directory under the state root was removed |
+
+For a detached target that failed to start:
+- `launch_failed`: a launch whose reply was lost was never seen on the host, after 3 attempts.
+- `launch_*`: the session failed before anything could start (host key, authentication, refused, egress policy).
+- `runner_*`: the host's runner refused, for example `systemd_unavailable` when the profile forces `systemd`.
+- `detached_disabled_by_profile`: the profile's supervisor is `attached`.
+
 ## A target is TimedOut or Failed
 
 `GET /api/v1/managed/operations/{id}` (operator or owner) shows each target:
