@@ -1,5 +1,25 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: runner on a real systemd host (branch audit/detached-ssh)
+
+- New `test/systemd/`:
+  - a Debian image with systemd as PID 1 and OpenSSH (`Dockerfile`; the user `deploy` has lingering, `nolinger` does not);
+  - `systemd_test.go` (build tag `systemd`), which drives the runner over real SSH in a privileged container;
+  - `run.sh`, which builds the image and runs it.
+  - It is not part of `go test ./...`.
+- What it proves:
+  - root runs under the system manager: the command's cgroup is `machinarchy-op-1-t-1.service`;
+  - a lingering user runs under `user@1000.service` (`scope=user`);
+  - a user without lingering falls back to setsid;
+  - **cancel under systemd also kills a process that escaped with `setsid`** (KillMode=control-group); in setsid mode that process survives, the documented limitation;
+  - the host-side timeout works under systemd;
+  - a stopped unit (what a reboot does) is reported `lost`;
+  - no unit is left active.
+
+### Verification
+
+- `test/systemd/run.sh`: all 8 subtests pass (Debian bookworm with systemd 252, Docker Desktop, cgroup v2). golangci-lint `--build-tags systemd`: 0 issues. `shellcheck`: clean.
+
 ## 2026-11-19 — Audit Phase 13B: two workers on PostgreSQL; single-row credential authorization (branch audit/detached-ssh)
 
 - New `TestTwoWorkersOnPostgresRunEachCommandOnce`: two workers with production-style leases share 50 detached targets, one is stopped mid-way, and every command still runs exactly once. It exercises the Operation lease for launches and the per-host lease for polls.
