@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-//go:embed swagger.json
+//go:embed api/swagger.json
 var specification []byte
 
 // SpecHandler serves the checked-in API contract without reading files from the

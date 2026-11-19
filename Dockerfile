@@ -25,7 +25,8 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
 COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
-COPY docs/embed.go docs/swagger.json ./docs/
+COPY docs/embed.go ./docs/
+COPY docs/api/swagger.json ./docs/api/
 
 # Reproducible builds: no VCS stamping, trimmed paths, and version metadata
 # only from these arguments (BUILD_TIME should be the commit time).

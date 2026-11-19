@@ -1,5 +1,22 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13C: API reference moved to docs/api (branch audit/docs-guide)
+
+- DOC-API: the generated OpenAPI files moved from `docs/swagger.{json,yaml}` to `docs/api/swagger.{json,yaml}` (with `git mv`). Updated everything that refers to them:
+  - `make api-docs` now writes to `docs/api`;
+  - `docs/embed.go` embeds `api/swagger.json`; the server still serves it at `/openapi.json`, and the reference UI at `/scalar`, when `MACHINARCHY_API_DOCS_ENABLED` is on;
+  - the Dockerfile copies the new path, and `.dockerignore` allows it;
+  - the spec test messages, and `docs/architecture.md`.
+- New `docs/api/README.md`: how the files are generated and served.
+- Regenerating also picked up one comment changed in Phase 13B and not yet in the spec (`TargetOutput.live`).
+
+### Verification
+
+- `make api-docs` writes only to `docs/api/`; no file is left at the old path.
+- `go build ./...`: pass.
+- `go test ./internal/transport/http/v1/` (`TestOpenAPISpecCoversEveryRoute` against the embedded spec) and `./internal/bootstrap/` (the authorization matrix, which reads every route from `/openapi.json`): pass.
+- The container image build was not run (no Docker build in this phase); the changed `COPY` lines were checked by reading them.
+
 ## 2026-11-19 — Audit Phase 13B: detached tests poll at a sane pace (branch audit/detached-ssh)
 
 - Each detached status poll runs the runner script on the "host", which in these tests is the machine itself: about 20 short processes per target. At 150 ms over 50 separate hosts, the restart test launched thousands of processes per second, and under `-race -count=3` it ran 157–199 s instead of about 15 s.

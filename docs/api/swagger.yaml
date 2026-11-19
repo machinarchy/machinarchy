@@ -900,7 +900,9 @@ definitions:
       hostId:
         type: string
       live:
-        description: Live is true while the command runs and more output can follow.
+        description: |-
+          Live is true until the target is final (pending or running): more
+          output can follow, so a follower keeps asking.
         type: boolean
       next:
         type: integer
@@ -955,7 +957,6 @@ definitions:
     type: object
   resource.TargetState:
     enum:
-    - Lost
     - Pending
     - Running
     - Succeeded
@@ -963,9 +964,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
+    - Lost
     type: string
     x-enum-varnames:
-    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -973,6 +974,7 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
+    - TargetLost
   service.AccessProfileView:
     properties:
       createdAt:

@@ -17,7 +17,7 @@ import (
 	v1 "github.com/machinarchy/machinarchy/internal/transport/http/v1"
 )
 
-// TestOpenAPISpecCoversEveryRoute keeps docs/swagger.json in step with the
+// TestOpenAPISpecCoversEveryRoute keeps docs/api/swagger.json in step with the
 // router (AUDIT L-12): every registered API route and method must be
 // documented. Regenerate with `make api-docs` after adding a route.
 func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
@@ -49,6 +49,6 @@ func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Fatalf("docs/swagger.json is missing %d routes; run make api-docs:\n  %s", len(missing), strings.Join(missing, "\n  "))
+		t.Fatalf("docs/api/swagger.json is missing %d routes; run make api-docs:\n  %s", len(missing), strings.Join(missing, "\n  "))
 	}
 }

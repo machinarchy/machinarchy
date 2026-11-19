@@ -4493,7 +4493,7 @@
                     "type": "string"
                 },
                 "live": {
-                    "description": "Live is true while the command runs and more output can follow.",
+                    "description": "Live is true until the target is final (pending or running): more\noutput can follow, so a follower keeps asking.",
                     "type": "boolean"
                 },
                 "next": {
@@ -4572,24 +4572,24 @@
         "resource.TargetState": {
             "type": "string",
             "enum": [
-                "Lost",
                 "Pending",
                 "Running",
                 "Succeeded",
                 "Failed",
                 "TimedOut",
                 "Cancelled",
-                "Interrupted"
+                "Interrupted",
+                "Lost"
             ],
             "x-enum-varnames": [
-                "TargetLost",
                 "TargetPending",
                 "TargetRunning",
                 "TargetSucceeded",
                 "TargetFailed",
                 "TargetTimedOut",
                 "TargetCancelled",
-                "TargetInterrupted"
+                "TargetInterrupted",
+                "TargetLost"
             ]
         },
         "service.AccessProfileView": {

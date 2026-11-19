@@ -8,6 +8,6 @@
 !internal/
 !pkg/
 !docs/embed.go
-!docs/swagger.json
+!docs/api/swagger.json
 **/*_test.go
 **/testdata/
