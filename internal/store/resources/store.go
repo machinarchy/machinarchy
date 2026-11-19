@@ -889,7 +889,7 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 		if err != nil {
 			return fmt.Errorf("encrypt Operation target output: %w", err)
 		}
-		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?, live = ''
+		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?
 			WHERE operation_id = ? AND host_id = ? AND state = ?`), string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
 			output, targetErrorClass(target.Result), string(operation.ID), string(target.Spec.HostID), string(before.State))
 		if err != nil {

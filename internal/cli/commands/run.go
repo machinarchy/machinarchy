@@ -19,18 +19,26 @@ var pollInterval = time.Second
 var terminalOperationStates = map[string]bool{"Succeeded": true, "PartiallySucceeded": true, "Failed": true,
 	"Cancelled": true, "TimedOut": true, "Interrupted": true}
 
+// maxAttachedTimeout is the longest run that keeps its SSH session open.
+const maxAttachedTimeout = 900
+
 // NewRunCommand runs a program on managed hosts. It previews the targets,
 // asks for confirmation, and submits bound to the previewed set, so the
 // operation never runs on hosts the user did not see.
 func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	var rule api.TargetRule
 	var timeout int
-	var wait bool
+	var wait, detach bool
 	command := &cobra.Command{
 		Use:   "run (-l SELECTOR | --host NAME-OR-ID... | --all) [--exclude NAME-OR-ID...] -- PROGRAM [ARG...]",
 		Short: "Run a program (no shell) on selected managed hosts",
+		Long: "Run a program on managed hosts. Without --wait the run is detached: each host's command runs under a\n" +
+			"supervisor (systemd-run or setsid) and the SSH session ends at once, so it may run up to 24 hours;\n" +
+			"follow it with `machinarchy logs operation ID --follow`. With --wait the session stays open (at most\n" +
+			"15 minutes) unless --detach is given or the timeout is longer.",
 		Example: "  machinarchy run -l tier=web -- uptime\n" +
-			"  machinarchy run --host web-01 --host web-02 --wait -- systemctl is-active nginx",
+			"  machinarchy run --host web-01 --host web-02 --wait -- systemctl is-active nginx\n" +
+			"  machinarchy run -l tier=db --timeout 7200 -- /opt/backup/run.sh",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(command *cobra.Command, argv []string) error {
 			if command.ArgsLenAtDash() != 0 {
@@ -66,13 +74,18 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 			if err := factory.RequireConfirmation(prompt); err != nil {
 				return err
 			}
+			detached := detach || !wait || timeout > maxAttachedTimeout
+			concurrency := 1
+			if detached {
+				concurrency = min(len(preview.Hosts), 20) // a launch takes about a second
+			}
 			op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
-				Run: api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: 1}})
+				Run: api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: concurrency, Detach: detached}})
 			if err != nil {
 				return fmt.Errorf("submit operation: %w", err)
 			}
 			if !wait {
-				_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted; follow it with: machinarchy get operation %s\n", op.ID, op.ID)
+				_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted (detached).\nFollow it with:  machinarchy logs operation %s --follow\nStatus:          machinarchy get operation %s\n", op.ID, op.ID, op.ID)
 				return err
 			}
 			if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
@@ -92,8 +105,9 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	flags.StringArrayVar(&rule.Include, "host", nil, "Add a host by name or ID (repeatable)")
 	flags.StringArrayVar(&rule.Exclude, "exclude", nil, "Remove a host by name or ID (repeatable)")
 	flags.BoolVar(&rule.All, "all", false, "Target every managed host")
-	flags.IntVar(&timeout, "timeout", 60, "Per-host timeout in seconds")
+	flags.IntVar(&timeout, "timeout", 60, "Per-host timeout in seconds (up to 86400 when detached, 900 otherwise)")
 	flags.BoolVar(&wait, "wait", false, "Wait for the result and print it; exit non-zero unless every host succeeded")
+	flags.BoolVar(&detach, "detach", false, "Run detached even with --wait (the default without --wait)")
 	return command
 }
 

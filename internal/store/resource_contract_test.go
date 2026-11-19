@@ -859,7 +859,8 @@ func testDetachedTargets(t *testing.T, f *fixture) {
 	if err != nil || got.Status.Targets[0].Launch == nil && got.Status.Targets[1].Launch == nil {
 		t.Fatalf("GetOperation lost the launch handle: %+v, %v", got, err)
 	}
-	// A terminal state stores the result, keeps the handle and drops the progress.
+	// A terminal state stores the result and keeps the handle and the capture
+	// (the output endpoint reads it by offset).
 	code := 0
 	if err := f.stores.Operations.UpdateOperationTarget(ctx, workspaceID, op.ID, first, resource.TargetLost,
 		&resource.TargetResult{ExitCode: &code, Stdout: "partial\n", StdoutBytes: 9000, Truncated: true, ErrorClass: "supervisor_lost"}); err != nil {
@@ -873,7 +874,7 @@ func testDetachedTargets(t *testing.T, f *fixture) {
 		if target.Spec.HostID != first {
 			continue
 		}
-		if target.State != resource.TargetLost || target.Live != nil || target.Launch == nil ||
+		if target.State != resource.TargetLost || target.Live == nil || target.Launch == nil ||
 			target.Result.Stdout != "partial\n" || target.Result.StdoutBytes != 9000 || !target.Result.Truncated {
 			t.Fatalf("lost target = %+v, result %+v", target, target.Result)
 		}

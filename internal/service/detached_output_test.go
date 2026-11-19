@@ -42,19 +42,22 @@ func TestDetachedSubmissionAndOutputAccess(t *testing.T) {
 		t.Fatalf("a detached 2 h run = %v", err)
 	}
 
-	output, err := s.TargetOutput(ctx, f.operator, op.ID, host.Metadata.ID, resource.StreamStdout)
+	output, err := s.TargetOutput(ctx, f.operator, op.ID, host.Metadata.ID, resource.StreamStdout, 0)
 	if err != nil || output.State != resource.TargetPending || output.Text != "" {
 		t.Fatalf("operator output = %+v, %v", output, err)
 	}
 	// Output can carry secrets: readers may see the Operation, not its output.
-	if _, err := s.TargetOutput(ctx, f.reader, op.ID, host.Metadata.ID, resource.StreamStdout); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := s.TargetOutput(ctx, f.reader, op.ID, host.Metadata.ID, resource.StreamStdout, 0); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("reader output = %v", err)
 	}
-	if _, err := s.TargetOutput(ctx, f.operator, op.ID, host.Metadata.ID, "stdin"); !errors.Is(err, domain.ErrInvalidInput) {
+	if _, err := s.TargetOutput(ctx, f.operator, op.ID, host.Metadata.ID, "stdin", 0); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("bad stream = %v", err)
 	}
+	if _, err := s.TargetOutput(ctx, f.operator, op.ID, host.Metadata.ID, resource.StreamStdout, -1); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("negative offset = %v", err)
+	}
 	other, _ := resource.NewResourceID()
-	if _, err := s.TargetOutput(ctx, f.operator, op.ID, other, resource.StreamStderr); !errors.Is(err, resource.ErrOperationNotFound) {
+	if _, err := s.TargetOutput(ctx, f.operator, op.ID, other, resource.StreamStderr, 0); !errors.Is(err, resource.ErrOperationNotFound) {
 		t.Fatalf("unknown target = %v", err)
 	}
 }

@@ -157,25 +157,44 @@ func TestExecutionSettingsValidation(t *testing.T) {
 	}
 }
 
-func TestOutputOfRunningAndFinishedTargets(t *testing.T) {
+func TestOutputOfByOffset(t *testing.T) {
 	op, _ := NewResourceID()
-	running := OperationTarget{State: TargetRunning, Live: &LiveOutput{}}
-	running.Live.Stdout.Apply(0, 6, []byte("hello\n"))
-	running.Live.Stderr.Apply(0, 4, []byte("\x1b[1m"))
-	out := running.OutputOf(op, StreamStdout)
-	if !out.Live || out.Text != "hello\n" || out.Bytes != 6 || out.Truncated {
-		t.Fatalf("running stdout = %+v", out)
+	target := OperationTarget{State: TargetRunning, Launch: &LaunchHandle{Mode: "setsid"}, Live: &LiveOutput{}}
+	target.Live.Stdout.Apply(0, 6, []byte("hello\n"))
+	target.Live.Stderr.Apply(0, 4, []byte("\x1b[1m"))
+	out := target.OutputOf(op, StreamStdout, 0)
+	if !out.Live || out.Text != "hello\n" || out.Next != 6 || out.Bytes != 6 || out.Truncated {
+		t.Fatalf("first read = %+v", out)
 	}
-	if errOut := running.OutputOf(op, StreamStderr); strings.Contains(errOut.Text, "\x1b") {
+	if errOut := target.OutputOf(op, StreamStderr, 0); strings.Contains(errOut.Text, "\x1b") {
 		t.Fatalf("an escape sequence reached the output view: %q", errOut.Text)
 	}
+	// Following: only what is new since the last offset.
+	target.Live.Stdout.Apply(6, 12, []byte("world\n"))
+	if out := target.OutputOf(op, StreamStdout, out.Next); out.Text != "world\n" || out.From != 6 || out.Next != 12 {
+		t.Fatalf("follow read = %+v", out)
+	}
+	// A follower that fell behind a skipped middle part gets one marker line.
+	big := stream(200_000)
+	long := OperationTarget{State: TargetSucceeded, Launch: &LaunchHandle{Mode: "setsid"}, Live: &LiveOutput{}}
+	long.Live.Stdout.Apply(0, int64(len(big)), big[:20_000])
+	long.Live.Stdout.Apply(int64(len(big)-32<<10), int64(len(big)), big[len(big)-32<<10:])
+	out = long.OutputOf(op, StreamStdout, 20_000)
+	tail := string(big[len(big)-CaptureTailBytes:])
+	if out.Live || !strings.HasPrefix(out.Text, "\n[… ") || !strings.HasSuffix(out.Text, tail) || out.Next != int64(len(big)) || !out.Truncated {
+		t.Fatalf("read across the gap: next %d, truncated %v, starts %q", out.Next, out.Truncated, out.Text[:min(40, len(out.Text))])
+	}
+	if out := long.OutputOf(op, StreamStdout, out.Next); out.Text != "" || out.Next != int64(len(big)) {
+		t.Fatalf("read at the end = %+v", out)
+	}
+	// An attached run's result is served by offset into its text.
 	code := 0
-	done := OperationTarget{State: TargetSucceeded, Result: &TargetResult{ExitCode: &code, Stdout: "a\n", Stderr: "b\n", StdoutBytes: 90000, StderrBytes: 2, Truncated: true}}
-	if out := done.OutputOf(op, StreamStdout); out.Live || out.Text != "a\n" || out.Bytes != 90000 || !out.Truncated {
-		t.Fatalf("finished stdout = %+v", out)
+	attached := OperationTarget{State: TargetSucceeded, Result: &TargetResult{ExitCode: &code, Stdout: "abc\n", Stderr: "e\n"}}
+	if out := attached.OutputOf(op, StreamStdout, 2); out.Text != "c\n" || out.Next != 4 || out.Bytes != 4 {
+		t.Fatalf("attached read = %+v", out)
 	}
 	legacy := OperationTarget{State: TargetSucceeded, Result: &TargetResult{Output: "combined"}}
-	if out := legacy.OutputOf(op, StreamStdout); out.Text != "combined" || out.Bytes != 8 {
+	if out := legacy.OutputOf(op, StreamStdout, 0); out.Text != "combined" || out.Bytes != 8 {
 		t.Fatalf("legacy output = %+v", out)
 	}
 }

@@ -98,6 +98,7 @@ type fakeClient struct {
 	pageSize int
 
 	submitted []api.OperationInput
+	outputs   map[string]string // "op/host" -> the full stream, served in 6-byte steps
 	deleted   []string
 	trusted   []string
 	calls     int
@@ -250,6 +251,18 @@ func (f *fakeClient) GetOperation(_ context.Context, id string) (*api.Operation,
 	return &current, nil
 }
 
+// TargetOutput serves the stream 6 bytes per call, live until the end.
+func (f *fakeClient) TargetOutput(_ context.Context, operationID, hostID, stream string, from int64) (*api.TargetOutput, error) {
+	f.calls++
+	text, ok := f.outputs[operationID+"/"+hostID+"/"+stream]
+	if !ok {
+		return nil, &api.APIError{Status: 404, Message: "resource not found"}
+	}
+	end := min(int(from)+6, len(text))
+	return &api.TargetOutput{OperationID: operationID, HostID: hostID, Stream: stream, Text: text[from:end],
+		From: from, Next: int64(end), Bytes: int64(len(text)), Live: end < len(text), State: "Running"}, nil
+}
+
 func (f *fakeClient) CancelOperation(_ context.Context, id string) (*api.Operation, error) {
 	return &api.Operation{ID: id, Status: api.OperationStatus{State: "CancelRequested"}}, nil
 }
@@ -315,6 +328,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"trust":          {"host"},
 		"run":            nil,
 		"cancel":         {"operation"},
+		"logs":           {"operation"},
 		"config":         {"current-context", "get-contexts", "set-cluster", "set-context", "set-credentials", "use-context"},
 		"runtime-config": {"get", "history", "publish", "rollback", "status", "validate"},
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
@@ -1256,6 +1270,65 @@ func TestManagedCommands(t *testing.T) {
 		got := run(t, fixtures(), "run", "--host", "web-01", "--yes", "--wait", "--", "uptime")
 		if got.code != 0 || !strings.Contains(got.stdout, "web-01") || !strings.Contains(got.stdout, "up 3 days") {
 			t.Fatalf("result = %+v", got)
+		}
+	})
+
+	t.Run("run detaches unless it waits for a short command", func(t *testing.T) {
+		client := fixtures()
+		got := run(t, client, "run", "-l", "tier=web", "--yes", "--", "backup.sh")
+		if got.code != 0 || !strings.Contains(got.stdout, "logs operation op-1 --follow") {
+			t.Fatalf("detached run = %+v", got)
+		}
+		if spec := client.submitted[0].Run; !spec.Detach || spec.Concurrency < 1 {
+			t.Fatalf("run without --wait submitted %+v, want detached", spec)
+		}
+		client = fixtures()
+		run(t, client, "run", "--host", "web-01", "--yes", "--wait", "--", "uptime")
+		if spec := client.submitted[0].Run; spec.Detach || spec.Concurrency != 1 {
+			t.Fatalf("run --wait submitted %+v, want attached", spec)
+		}
+		for _, args := range [][]string{
+			{"run", "--host", "web-01", "--yes", "--wait", "--timeout", "3600", "--", "uptime"},
+			{"run", "--host", "web-01", "--yes", "--wait", "--detach", "--", "uptime"},
+		} {
+			client = fixtures()
+			run(t, client, args...)
+			if !client.submitted[0].Run.Detach {
+				t.Fatalf("%v submitted an attached run", args)
+			}
+		}
+	})
+
+	t.Run("logs follows a target's output", func(t *testing.T) {
+		client := fixtures()
+		zero := 0
+		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "PartiallySucceeded", Targets: []api.OperationTarget{
+			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: "web-01"}, State: "Running"},
+			{Spec: api.OperationTargetSpec{HostID: "h2", DisplayName: "web-02"}, State: "Succeeded", Result: &api.TargetResult{ExitCode: &zero}},
+		}}}}
+		client.outputs = map[string]string{"op-7/h1/stdout": "line1\nline2\nline3\n", "op-7/h2/stdout": "ok\n", "op-7/h1/stderr": "warn\n"}
+		got := run(t, client, "logs", "operation", "op-7", "--host", "web-01", "--follow")
+		if got.code != 0 || got.stdout != "line1\nline2\nline3\n" {
+			t.Fatalf("follow = %+v", got)
+		}
+		if got := run(t, client, "logs", "operation", "op-7", "--host", "h1", "--stream", "stderr"); got.stdout != "warn\n" {
+			t.Fatalf("stderr by host ID = %+v", got)
+		}
+		// Without --host every target is printed with a header.
+		if got := run(t, client, "logs", "operation", "op-7"); !strings.Contains(got.stdout, "==> web-01 (Running) <==\nline1\n") ||
+			!strings.Contains(got.stdout, "==> web-02 (Succeeded) <==\nok\n") {
+			t.Fatalf("all targets = %q", got.stdout)
+		}
+		for _, args := range [][]string{
+			{"logs", "operation", "op-7", "--follow"},          // several targets need --host
+			{"logs", "operation", "op-7", "--stream", "stdin"}, // bad stream
+		} {
+			if got := run(t, client, args...); got.code != clierr.ExitUsage {
+				t.Errorf("%v = %+v, want a usage error", args, got)
+			}
+		}
+		if got := run(t, client, "logs", "operation", "op-7", "--host", "db-01"); got.code != clierr.ExitNotFound {
+			t.Errorf("unknown host = %+v", got)
 		}
 	})
 

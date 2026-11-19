@@ -19,6 +19,7 @@ func DefaultGroups() []cli.CommandGroup {
 				NewTrustCommand,
 				NewRunCommand,
 				NewCancelCommand,
+				NewLogsCommand,
 			},
 		},
 		{

@@ -1974,6 +1974,12 @@
                         "description": "stdout (default) or stderr",
                         "name": "stream",
                         "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Stream byte offset to start from (the previous response's next)",
+                        "name": "from",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4341,7 +4347,7 @@
             "type": "object",
             "properties": {
                 "launch": {
-                    "description": "Launch and Live are set for detached runs: how to reach the command,\nand its progress while it runs. Live holds captured output; it is\nstored encrypted on its own and never serialized with the target (the\noutput endpoint serves it to callers allowed to see output).",
+                    "description": "Launch and Live are set for detached runs: how to reach the command,\nand its captured output (kept after it ends, so output can be read by\nbyte offset). Live is stored encrypted on its own and never serialized\nwith the target; the output endpoint serves it to callers allowed to\nsee output.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/resource.LaunchHandle"
@@ -4476,15 +4482,22 @@
             "type": "object",
             "properties": {
                 "bytes": {
-                    "description": "Bytes is the stream's full size; Truncated means Text omits part of it\n(a head and a tail are kept).",
+                    "description": "Bytes is the stream's full size; Truncated means part of it is gone.",
+                    "type": "integer"
+                },
+                "from": {
+                    "description": "From and Next are stream byte offsets: Text covers the stream from\nFrom on, and the next request should ask for Next. A detached target\nkeeps its first and last 15 KiB; a part of the stream that was not\nkept appears in Text as one \"[… N bytes omitted …]\" line.",
                     "type": "integer"
                 },
                 "hostId": {
                     "type": "string"
                 },
                 "live": {
-                    "description": "Live is true while the command runs and Text can still grow.",
+                    "description": "Live is true while the command runs and more output can follow.",
                     "type": "boolean"
+                },
+                "next": {
+                    "type": "integer"
                 },
                 "operationId": {
                     "type": "string"

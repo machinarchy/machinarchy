@@ -52,6 +52,7 @@ type Client interface {
 	SubmitOperation(context.Context, OperationInput) (*Operation, error)
 	GetOperation(context.Context, string) (*Operation, error)
 	CancelOperation(context.Context, string) (*Operation, error)
+	TargetOutput(ctx context.Context, operationID, hostID, stream string, from int64) (*TargetOutput, error)
 	ListOperations(context.Context, OperationQuery) (Page[OperationSummary], error)
 }
 

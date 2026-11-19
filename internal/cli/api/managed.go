@@ -91,6 +91,9 @@ type RunSpec struct {
 	Argv           []string `json:"argv" yaml:"argv"`
 	TimeoutSeconds int      `json:"timeoutSeconds" yaml:"timeoutSeconds"`
 	Concurrency    int      `json:"concurrency" yaml:"concurrency"`
+	// Detach runs the command under a supervisor on each host; the SSH
+	// session ends after the launch (timeouts up to 24 h).
+	Detach bool `json:"detach,omitempty" yaml:"detach,omitempty"`
 }
 
 // OperationInput submits a run on a rule, bound to a previewed target set.
@@ -118,9 +121,33 @@ type OperationStatus struct {
 }
 
 type OperationTarget struct {
-	Spec   OperationTargetSpec `json:"spec" yaml:"spec"`
-	State  string              `json:"state" yaml:"state"`
-	Result *TargetResult       `json:"result,omitempty" yaml:"result,omitempty"`
+	Spec     OperationTargetSpec `json:"spec" yaml:"spec"`
+	State    string              `json:"state" yaml:"state"`
+	Result   *TargetResult       `json:"result,omitempty" yaml:"result,omitempty"`
+	Progress *TargetProgress     `json:"progress,omitempty" yaml:"progress,omitempty"`
+}
+
+// TargetProgress is a running detached target's progress (no output).
+type TargetProgress struct {
+	StdoutBytes   int64      `json:"stdoutBytes" yaml:"stdoutBytes"`
+	StderrBytes   int64      `json:"stderrBytes" yaml:"stderrBytes"`
+	LastContactAt *time.Time `json:"lastContactAt,omitempty" yaml:"lastContactAt,omitempty"`
+	Polls         int        `json:"polls" yaml:"polls"`
+	CancelReason  string     `json:"cancelReason,omitempty" yaml:"cancelReason,omitempty"`
+}
+
+// TargetOutput is one stream of one target's output from an offset.
+type TargetOutput struct {
+	OperationID string `json:"operationId" yaml:"operationId"`
+	HostID      string `json:"hostId" yaml:"hostId"`
+	Stream      string `json:"stream" yaml:"stream"`
+	State       string `json:"state" yaml:"state"`
+	Live        bool   `json:"live" yaml:"live"`
+	Text        string `json:"text" yaml:"text"`
+	From        int64  `json:"from" yaml:"from"`
+	Next        int64  `json:"next" yaml:"next"`
+	Bytes       int64  `json:"bytes" yaml:"bytes"`
+	Truncated   bool   `json:"truncated" yaml:"truncated"`
 }
 
 type OperationTargetSpec struct {
@@ -129,9 +156,14 @@ type OperationTargetSpec struct {
 }
 
 type TargetResult struct {
-	ExitCode   *int   `json:"exitCode,omitempty" yaml:"exitCode,omitempty"`
-	Output     string `json:"output,omitempty" yaml:"output,omitempty"`
-	ErrorClass string `json:"errorClass,omitempty" yaml:"errorClass,omitempty"`
+	ExitCode    *int   `json:"exitCode,omitempty" yaml:"exitCode,omitempty"`
+	Output      string `json:"output,omitempty" yaml:"output,omitempty"`
+	Stdout      string `json:"stdout,omitempty" yaml:"stdout,omitempty"`
+	Stderr      string `json:"stderr,omitempty" yaml:"stderr,omitempty"`
+	StdoutBytes int64  `json:"stdoutBytes,omitempty" yaml:"stdoutBytes,omitempty"`
+	StderrBytes int64  `json:"stderrBytes,omitempty" yaml:"stderrBytes,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty" yaml:"truncated,omitempty"`
+	ErrorClass  string `json:"errorClass,omitempty" yaml:"errorClass,omitempty"`
 }
 
 // OperationSummary is the list view of an Operation (no argv or output).
@@ -278,6 +310,18 @@ func (c *HTTPClient) GetOperation(ctx context.Context, id string) (*Operation, e
 		return nil, err
 	}
 	return &op, nil
+}
+
+// TargetOutput reads one stream of one target's output from byte offset
+// from; follow it by asking again from the reply's Next while Live.
+func (c *HTTPClient) TargetOutput(ctx context.Context, operationID, hostID, stream string, from int64) (*TargetOutput, error) {
+	var out TargetOutput
+	path := withQuery(managedPath("operations", operationID, "targets", hostID, "output"),
+		url.Values{"stream": {stream}, "from": {strconv.FormatInt(from, 10)}})
+	if err := c.get(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *HTTPClient) CancelOperation(ctx context.Context, id string) (*Operation, error) {

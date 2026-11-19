@@ -518,6 +518,7 @@ func (h *Handler) getOperation(c echo.Context) error {
 // @Param id path string true "Operation ID"
 // @Param hostId path string true "Target Host ID"
 // @Param stream query string false "stdout (default) or stderr"
+// @Param from query int false "Stream byte offset to start from (the previous response's next)"
 // @Success 200 {object} resource.TargetOutput
 // @Failure 400 {object} httperr.Body
 // @Failure 401 {object} httperr.Body
@@ -530,12 +531,18 @@ func (h *Handler) targetOutput(c echo.Context) error {
 	if stream == "" {
 		stream = resource.StreamStdout
 	}
+	var from int64
 	parse := all(pathID(c, &id), func() (err error) {
 		hostID, err = resource.ParseResourceID(c.Param("hostId"))
 		return err
+	}, func() (err error) {
+		if raw := c.QueryParam("from"); raw != "" {
+			from, err = strconv.ParseInt(raw, 10, 64)
+		}
+		return err
 	})
 	return call(c, http.StatusOK, parse, func(ctx context.Context, p domain.Principal) (*resource.TargetOutput, error) {
-		return h.service.TargetOutput(ctx, p, id, hostID, stream)
+		return h.service.TargetOutput(ctx, p, id, hostID, stream, from)
 	})
 }
 

@@ -283,8 +283,12 @@ func TestDetachedRunReportsOutputAndCleansUp(t *testing.T) {
 			result.Stdout != "line1\nline2\n" || result.Stderr != "warn\n" || result.StdoutBytes != 12 || result.Truncated {
 			t.Fatalf("target = %s %+v", target.State, result)
 		}
-		if target.Launch == nil || target.Launch.Mode != "setsid" || target.Live != nil {
+		if target.Launch == nil || target.Launch.Mode != "setsid" || target.Live == nil {
 			t.Fatalf("target launch %+v, live %+v", target.Launch, target.Live)
+		}
+		// The final capture is kept: the output endpoint reads it by offset.
+		if out := target.OutputOf(op.ID, resource.StreamStdout, 6); out.Text != "line2\n" || out.Next != 12 || out.Live {
+			t.Fatalf("output from offset 6 = %+v", out)
 		}
 	}
 	if dirs := e.stateDirs(); len(dirs) != 0 {

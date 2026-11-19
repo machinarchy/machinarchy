@@ -139,6 +139,7 @@ func TestEveryRequestCarriesAuthenticationAndStandardHeaders(t *testing.T) {
 		{"GetOperation", func() error { _, err := client.GetOperation(ctx, "o1"); return err }},
 		{"ListOperations", func() error { _, err := client.ListOperations(ctx, OperationQuery{}); return err }},
 		{"CancelOperation", func() error { _, err := client.CancelOperation(ctx, "o1"); return err }},
+		{"TargetOutput", func() error { _, err := client.TargetOutput(ctx, "o1", "h1", "stderr", 42); return err }},
 		{"ListEnvironments", func() error { _, err := client.ListEnvironments(ctx); return err }},
 		{"RuntimeConfig", func() error { _, err := client.RuntimeConfig(ctx); return err }},
 		{"ConfigHistory", func() error { _, err := client.ConfigHistory(ctx, 0); return err }},
@@ -898,5 +899,24 @@ func TestAPIErrorExitCodes(t *testing.T) {
 		if got := (&APIError{Status: status}).ExitCode(); got != want {
 			t.Errorf("status %d: exit code = %d, want %d", status, got, want)
 		}
+	}
+}
+
+func TestTargetOutputRequest(t *testing.T) {
+	var got *http.Request
+	client := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r
+		_, _ = w.Write([]byte(`{"text":"tail\n","from":42,"next":47,"live":true}`))
+	}))
+	out, err := client.TargetOutput(context.Background(), "o 1", "h1", "stderr", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL.EscapedPath() != "/api/v1/managed/operations/o%201/targets/h1/output" ||
+		got.URL.Query().Get("stream") != "stderr" || got.URL.Query().Get("from") != "42" {
+		t.Fatalf("request = %s", got.URL)
+	}
+	if out.Text != "tail\n" || out.Next != 47 || !out.Live {
+		t.Fatalf("decoded = %+v", out)
 	}
 }

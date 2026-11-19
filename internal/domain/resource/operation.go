@@ -94,9 +94,10 @@ type OperationTarget struct {
 	State  TargetState         `json:"state"`
 	Result *TargetResult       `json:"result,omitempty"`
 	// Launch and Live are set for detached runs: how to reach the command,
-	// and its progress while it runs. Live holds captured output; it is
-	// stored encrypted on its own and never serialized with the target (the
-	// output endpoint serves it to callers allowed to see output).
+	// and its captured output (kept after it ends, so output can be read by
+	// byte offset). Live is stored encrypted on its own and never serialized
+	// with the target; the output endpoint serves it to callers allowed to
+	// see output.
 	Launch *LaunchHandle `json:"launch,omitempty"`
 	Live   *LiveOutput   `json:"-"`
 	// Progress summarizes Live for API readers: sizes and timing, no output.
@@ -206,8 +207,8 @@ func (o *Operation) Validate() error {
 		if (target.State == TargetRunning) && o.Status.State != OperationRunning && o.Status.State != OperationCancelRequested {
 			return fmt.Errorf("%w: running target requires an active Operation", ErrInvalidResource)
 		}
-		if target.Live != nil && target.State != TargetRunning {
-			return fmt.Errorf("%w: only a running target has live output", ErrInvalidResource)
+		if target.Live != nil && (target.Launch == nil || target.State == TargetPending) {
+			return fmt.Errorf("%w: only a launched detached target has captured output", ErrInvalidResource)
 		}
 		if target.Launch != nil && target.State == TargetPending {
 			return fmt.Errorf("%w: a pending target has no launch", ErrInvalidResource)

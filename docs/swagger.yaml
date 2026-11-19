@@ -795,9 +795,10 @@ definitions:
         - $ref: '#/definitions/resource.LaunchHandle'
         description: |-
           Launch and Live are set for detached runs: how to reach the command,
-          and its progress while it runs. Live holds captured output; it is
-          stored encrypted on its own and never serialized with the target (the
-          output endpoint serves it to callers allowed to see output).
+          and its captured output (kept after it ends, so output can be read by
+          byte offset). Live is stored encrypted on its own and never serialized
+          with the target; the output endpoint serves it to callers allowed to
+          see output.
       progress:
         allOf:
         - $ref: '#/definitions/resource.TargetProgressSummary'
@@ -886,15 +887,23 @@ definitions:
   resource.TargetOutput:
     properties:
       bytes:
+        description: Bytes is the stream's full size; Truncated means part of it is
+          gone.
+        type: integer
+      from:
         description: |-
-          Bytes is the stream's full size; Truncated means Text omits part of it
-          (a head and a tail are kept).
+          From and Next are stream byte offsets: Text covers the stream from
+          From on, and the next request should ask for Next. A detached target
+          keeps its first and last 15 KiB; a part of the stream that was not
+          kept appears in Text as one "[… N bytes omitted …]" line.
         type: integer
       hostId:
         type: string
       live:
-        description: Live is true while the command runs and Text can still grow.
+        description: Live is true while the command runs and more output can follow.
         type: boolean
+      next:
+        type: integer
       operationId:
         type: string
       state:
@@ -2245,6 +2254,10 @@ paths:
         in: query
         name: stream
         type: string
+      - description: Stream byte offset to start from (the previous response's next)
+        in: query
+        name: from
+        type: integer
       produces:
       - application/json
       responses:

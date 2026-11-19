@@ -156,8 +156,10 @@ func printOperation(printer *output.Printer, op *api.Operation) error {
 				exit = strconv.Itoa(*target.Result.ExitCode)
 			}
 			detail = target.Result.ErrorClass
-			if detail == "" {
-				detail = firstLine(target.Result.Output)
+			for _, text := range []string{target.Result.Stdout, target.Result.Stderr, target.Result.Output} {
+				if detail == "" {
+					detail = firstLine(text)
+				}
 			}
 		}
 		rows = append(rows, []string{target.Spec.DisplayName, target.State, exit, detail})

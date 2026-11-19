@@ -160,6 +160,30 @@ func (c *StreamCapture) Render() (text string, omitted int64) {
 	return string(c.Head) + fmt.Sprintf("\n[… %d bytes omitted …]\n", omitted) + string(c.Tail) + c.unread(), omitted + max(c.Size-c.Next, 0)
 }
 
+// Slice returns the captured bytes of the stream from offset from: the rest
+// of the head, then the tail, with one omission line for a part that was
+// not kept. omitted counts the bytes of that part.
+func (c *StreamCapture) Slice(from int64) (text string, omitted int64) {
+	from = max(from, 0)
+	var b strings.Builder
+	head := int64(len(c.Head))
+	cursor := from
+	if cursor < head {
+		b.Write(c.Head[cursor:])
+		cursor = head
+	}
+	tailStart := c.Next - int64(len(c.Tail))
+	if cursor < tailStart {
+		omitted = tailStart - cursor
+		fmt.Fprintf(&b, "\n[… %d bytes omitted …]\n", omitted)
+		cursor = tailStart
+	}
+	if cursor < c.Next {
+		b.Write(c.Tail[cursor-tailStart:])
+	}
+	return b.String(), omitted
+}
+
 func (c *StreamCapture) unread() string {
 	if c.Size > c.Next {
 		return fmt.Sprintf("\n[… %d bytes not read …]", c.Size-c.Next)
@@ -234,39 +258,54 @@ type TargetOutput struct {
 	HostID      ID           `json:"hostId"`
 	Stream      OutputStream `json:"stream"`
 	State       TargetState  `json:"state"`
-	// Live is true while the command runs and Text can still grow.
+	// Live is true while the command runs and more output can follow.
 	Live bool   `json:"live"`
 	Text string `json:"text"`
-	// Bytes is the stream's full size; Truncated means Text omits part of it
-	// (a head and a tail are kept).
+	// From and Next are stream byte offsets: Text covers the stream from
+	// From on, and the next request should ask for Next. A detached target
+	// keeps its first and last 15 KiB; a part of the stream that was not
+	// kept appears in Text as one "[… N bytes omitted …]" line.
+	From int64 `json:"from"`
+	Next int64 `json:"next"`
+	// Bytes is the stream's full size; Truncated means part of it is gone.
 	Bytes     int64 `json:"bytes"`
 	Truncated bool  `json:"truncated"`
 }
 
-// OutputOf returns one stream of target's output.
-func (target OperationTarget) OutputOf(operationID ID, stream OutputStream) TargetOutput {
-	out := TargetOutput{OperationID: operationID, HostID: target.Spec.HostID, Stream: stream, State: target.State}
+// OutputOf returns one stream of target's output from byte offset from.
+func (target OperationTarget) OutputOf(operationID ID, stream OutputStream, from int64) TargetOutput {
+	out := TargetOutput{OperationID: operationID, HostID: target.Spec.HostID, Stream: stream, State: target.State,
+		Live: target.State == TargetRunning, From: max(from, 0)}
 	switch {
-	case target.Live != nil && target.State == TargetRunning:
+	case target.Live != nil:
 		capture := &target.Live.Stdout
 		if stream == StreamStderr {
 			capture = &target.Live.Stderr
 		}
-		text, omitted := capture.Render()
-		out.Live, out.Text, out.Bytes, out.Truncated = true, sanitizeOutput(text, MaxTargetOutputBytes), capture.Size, omitted > 0
+		text, omitted := capture.Slice(out.From)
+		_, totalOmitted := capture.Render()
+		out.Text, out.Next, out.Bytes, out.Truncated = sanitizeOutput(text, MaxTargetOutputBytes), capture.Next, capture.Size, omitted > 0 || totalOmitted > 0
+		if out.From > capture.Next {
+			out.From = capture.Next
+		}
 	case target.Result != nil:
+		// An attached run: the stored text is the whole output we have.
 		result := target.Result
-		out.Text, out.Bytes, out.Truncated = result.Stdout, result.StdoutBytes, result.Truncated
+		text, size := result.Stdout, result.StdoutBytes
 		if stream == StreamStderr {
-			out.Text, out.Bytes = result.Stderr, result.StderrBytes
+			text, size = result.Stderr, result.StderrBytes
 		} else if result.Stdout == "" && result.Output != "" {
-			out.Text = result.Output // an older combined result
+			text = result.Output // an older combined result
 		}
-		if out.Bytes == 0 {
-			out.Bytes = int64(len(out.Text))
+		if size == 0 {
+			size = int64(len(text))
 		}
-	case target.State == TargetRunning:
-		out.Live = true // attached, or not polled yet
+		out.Bytes, out.Truncated, out.Next = size, result.Truncated, int64(len(text))
+		if out.From < int64(len(text)) {
+			out.Text = text[out.From:]
+		} else {
+			out.From = out.Next
+		}
 	}
 	return out
 }

@@ -1,5 +1,27 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13B: follow output by offset; CLI run --detach and logs (branch audit/detached-ssh)
+
+- The output endpoint takes `from` (a stream byte offset) and returns `from` and `next`, computed from the capture's real byte positions (`StreamCapture.Slice`). A part of the stream that was not kept is reported as one `[… N bytes omitted …]` line, so a follower never repeats or misses bytes.
+- A detached target now keeps its final capture after it ends (encrypted, at most 15 KiB head plus 15 KiB tail per stream), so output stays readable by offset afterwards; the poller stores the last chunk before recording the result. Domain validation allows a capture on any launched target.
+- CLI:
+  - `run` without `--wait` is detached, with launch concurrency up to 20; `--wait` stays attached unless `--timeout` is over 900 s or `--detach` is given;
+  - new `logs operation ID [--host] [--stream stdout|stderr] [--follow]`, which prints every target with a header when no host is given;
+  - `api.TargetResult` gains `stdout`, `stderr`, byte counts and `truncated`, and `get operation` shows the first line of stdout, stderr or output. Before this, every result stored with separate streams showed an empty OUTPUT column.
+- Docs: `docs/cli/README.md`. OpenAPI regenerated.
+
+### Verification
+
+- `TestOutputOfByOffset`: follow reads, a read across the omitted part, a read at the end, attached and legacy results.
+- `TestDetachedRunReportsOutputAndCleansUp` now also reads the final output from an offset.
+- CLI tests:
+  - `run` detaches without `--wait`, stays attached with `--wait`, and detaches with `--timeout 3600` or `--detach`;
+  - `logs --follow` prints the whole stream exactly once;
+  - stderr by host ID, all-target headers, and usage and not-found errors;
+  - `TestTargetOutputRequest` (path escaping and query);
+  - the command-tree test lists `logs operation`.
+- `go test ./internal/cli/... ./internal/domain/... ./internal/service/ ./internal/operationworker/ ./internal/store/`: pass. golangci-lint `--new-from-rev`: 0 issues.
+
 ## 2026-11-19 — Audit Phase 13B: target output endpoint (branch audit/detached-ssh)
 
 - `GET /api/v1/managed/operations/{id}/targets/{hostId}/output?stream=stdout|stderr` returns `resource.TargetOutput`:

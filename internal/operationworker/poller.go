@@ -315,6 +315,11 @@ func (p *poller) pollBatch(ctx context.Context, hk hostKey, profileID resource.I
 			p.schedule(o.target, now, o.soon)
 			continue
 		}
+		// Keep the final capture: the output endpoint serves it by offset.
+		if err := p.w.detached.UpdateTargetLive(persist, o.target.WorkspaceID, o.target.OperationID, o.target.HostID, o.target.Live); err != nil &&
+			!errors.Is(err, resource.ErrOperationFinished) {
+			p.w.deps.Logger.Warn("store final detached output failed", "operation_id", o.target.OperationID, "error", err)
+		}
 		p.w.completeTarget(persist, resource.OperationKey{WorkspaceID: o.target.WorkspaceID, ID: o.target.OperationID}, o.target.HostID, o.state, o.result)
 		if o.state == resource.TargetLost {
 			p.w.metrics.lost.Inc()

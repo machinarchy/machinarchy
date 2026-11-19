@@ -45,7 +45,18 @@ machinarchy config set-credentials NAME --token-stdin
 machinarchy config set-context NAME --cluster CLUSTER --user USER [--env ENVIRONMENT]
 machinarchy trust host NAME-OR-ID [--replace] [--fingerprint SHA256:...]
 machinarchy trust host --all-pending [--selector SELECTOR]
+machinarchy run (-l SELECTOR | --host NAME... | --all) [--timeout SECONDS] [--wait] [--detach] -- PROGRAM [ARG...]
+machinarchy logs operation ID [--host NAME-OR-ID] [--stream stdout|stderr] [--follow]
 ```
+
+`run` without `--wait` is **detached**:
+
+- each host's command starts under a supervisor (`systemd-run` when usable, otherwise `setsid`) and the SSH session ends at once, so a command may run up to 24 hours (`--timeout`);
+- the controller polls the hosts, and a controller restart loses nothing;
+- `logs operation ID --follow` prints the output as it arrives;
+- a stream keeps its first and last 15 KiB, and a skipped middle part shows as one `[… N bytes omitted …]` line.
+
+With `--wait` the session stays open (at most 15 minutes) unless the timeout is longer or `--detach` is given. Reading output needs the right to run commands: readers see states and exit codes, not output.
 
 `trust host` (owner only) shows the SSH host keys the controller observed for a
 host and, after confirmation, trusts exactly those keys. `--all-pending`
