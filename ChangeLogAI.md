@@ -1,5 +1,35 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13C: full CLI user guide (branch audit/docs-guide)
+
+- DOC-GUIDE: new `docs/cli/user-full-guide.md`, a step-by-step lab with three SSH servers (OpenSSH containers `web-1`, `web-2`, `db-1` on ports 2221–2223). It covers:
+  1. prerequisites and a lab-only CLI config;
+  2. the SSH lab;
+  3. server settings, each explained;
+  4. login;
+  5. CLI contexts;
+  6. a write-only secret;
+  7. Access Profiles with `tofu` and `approve`;
+  8. hosts with labels;
+  9. host-key trust (automatic, and `trust host`);
+  10. attached runs;
+  11. detached runs with `logs --follow` and `--stream stderr`;
+  12. labels and selectors;
+  13. cancel;
+  14. long runs and `Lost`;
+  15. a reinstalled host (`HostKeyChanged`, `trust host --replace`);
+  16. history;
+  17. an operator API token and a second context;
+  18. troubleshooting, cleanup, and a cheat sheet.
+- **Every command was run for real** on 2026-11-19 against that lab, with the make-built monolith and CLI (`ff666e1`), and the outputs are pasted from the run. The run surfaced three product problems; the guide documents them as known problems and AUDIT/13C records them.
+- Linked from `docs/cli/README.md`, the main README (which also points at `docs/api`) and `docs/api/README.md`.
+
+### Verification
+
+- The lab script ran every step twice end to end (the second run is the guide's source); the server log had no warnings or errors.
+- The API-token step ran against a separate fresh server.
+- Link targets in the guide checked: `operations.md` and `runbook.md` anchors, `commands.md`, `docs/api/README.md`.
+
 ## 2026-11-19 — Audit Phase 13C: API reference moved to docs/api (branch audit/docs-guide)
 
 - DOC-API: the generated OpenAPI files moved from `docs/swagger.{json,yaml}` to `docs/api/swagger.{json,yaml}` (with `git mv`). Updated everything that refers to them:

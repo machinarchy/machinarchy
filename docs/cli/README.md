@@ -73,6 +73,8 @@ For a trusted lab network, opt in per cluster with `--insecure-http`. The
 opt-in does not cover a server given with `--server` or
 `MACHINARCHY_CLI_SERVER`.
 
+**New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login and CLI context to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
+
 See [commands and flags](commands.md) for details and [example-cli.md](example-cli.md) for end-to-end recipes.
 
 ## Security notes
@@ -90,6 +92,7 @@ For example, a future `apply` command can be registered in the core group withou
 
 ## Further reading
 
+- [Full user guide: a three-host SSH lab](user-full-guide.md)
 - [Configuration and contexts](configuration.md)
 - [Commands and flags](commands.md)
 - [Troubleshooting](troubleshooting.md)

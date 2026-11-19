@@ -78,8 +78,10 @@ go run ./cmd/machinarchy config use-context local
 go run ./cmd/machinarchy get hosts
 ```
 
-The [CLI guide](docs/cli/README.md) and [use cases](docs/examples/example-usecases.md)
-walk through Access Profiles, hosts, `run` and secrets.
+The [full user guide](docs/cli/user-full-guide.md) is a step-by-step lab with
+three SSH servers, from login to detached runs. The [CLI guide](docs/cli/README.md)
+and [use cases](docs/examples/example-usecases.md) cover Access Profiles, hosts,
+`run` and secrets. The HTTP API reference is in [docs/api](docs/api/README.md).
 
 With Docker: `docker compose up` (`docker-compose.yml`, PostgreSQL from
 `deployments/infra.docker-compose.yml`), or run an image directly:
