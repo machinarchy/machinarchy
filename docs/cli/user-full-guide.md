@@ -1,23 +1,26 @@
 # Machinarchy CLI: full user guide (a lab with three SSH servers)
 
-This guide takes you from nothing to running commands on three managed hosts.
-You will:
+This guide takes you from nothing to running commands on three managed hosts,
+using the repository's own SSH test servers
+([`deployments/testing`](../../deployments/testing/README.md)). You will:
 
-1. start three SSH servers in Docker (`web-1`, `web-2`, `db-1`);
+1. start the three SSH servers with `make ssh-servers-up`;
 2. start Machinarchy and log in;
 3. point the `machinarchy` CLI at it (a *context*);
-4. store an SSH key, create Access Profiles and register the hosts;
+4. store the lab's SSH key and password, create Access Profiles, register the hosts;
 5. trust the hosts' SSH keys, automatically and by approval;
 6. run commands: waiting for the result, and detached with live output;
-7. cancel a run, see what happens when a host reboots or is reinstalled;
+7. cancel a run, and see what happens when a host restarts or presents other keys;
 8. switch to a day-to-day API token, and clean up.
 
 Every command below was run for real on 2026-11-19 (build `ff666e1`), and the
-output shown is what it printed. IDs, fingerprints, times and uptimes will
-differ on your machine. It takes about 30 minutes.
+output shown is what it printed. Absolute paths were shortened to
+repository-relative ones, and a few long outputs are cut where a line reads `…`. IDs, fingerprints, times and uptimes will differ on
+your machine. It takes about 30 minutes.
 
 **Conventions.** Lines starting with `$` are what you type; the rest is
-output. Keep one terminal for the server (step 2) and one for everything else.
+output. Run everything from the repository root. Keep one terminal for the
+server (step 2) and one for everything else.
 
 ---
 
@@ -25,20 +28,20 @@ output. Keep one terminal for the server (step 2) and one for everything else.
 
 | Tool | Why |
 |---|---|
-| Docker | the three SSH servers |
+| Docker with Compose | the three SSH servers |
 | Go 1.27 and `make` | builds `machinarchy` (CLI) and `machinarchy-monolit` (server) |
 | `curl`, `jq` | two steps use the HTTP API directly |
-| `ssh`, `ssh-keygen` | the lab's deploy key and a sanity check |
+| `ssh` | a sanity check of the lab |
 
-Build both binaries from the repository root and put them on your `PATH`:
+Build both binaries and put them on your `PATH`:
 
 ```sh
 make build
 export PATH="$PWD/bin:$PATH"
 ```
 
-Use a lab directory and a **lab-only CLI config**, so nothing touches your
-real CLI configuration:
+Keep the server's database and a **lab-only CLI config** in a lab directory,
+so nothing touches your real CLI configuration:
 
 ```sh
 export LAB="$HOME/machinarchy-lab"
@@ -48,45 +51,72 @@ export MACHINARCHY_CONFIG="$LAB/cli.yaml"
 
 ---
 
-## 1. Start three SSH servers
+## 1. Start the three SSH servers
 
-Create the key Machinarchy will log in with:
+The lab has three OpenSSH servers on your loopback interface, all with the
+user `testuser`:
+
+| Service | Endpoint | Login |
+|---|---|---|
+| `ssh-password` | `127.0.0.1:2221` | password only |
+| `ssh-key` | `127.0.0.1:2222` | Ed25519 key only |
+| `ssh-hostcheck` | `127.0.0.1:2223` | password only; its host keys survive recreation |
+
+`make ssh-servers-up` generates the lab's credentials under `data/.ssh/`
+(gitignored) the first time, and asks for a test password (or reads
+`SSH_TEST_PASSWORD`). Later runs reuse them:
 
 ```console
-$ ssh-keygen -q -t ed25519 -N "" -C machinarchy-lab -f "$LAB/deploy_key" && ls "$LAB"
-data
-deploy_key
-deploy_key.pub
+$ make ssh-servers-up
+→ Machinarchy local SSH fixture preparation
+→ Repository: …/machinarchy
+✓ data/.ssh/ is ignored by Git.
+→ Preparing local SSH fixture directories...
+✓ Local SSH directories prepared.
+→ Preparing Ed25519 test client key...
+✓ Existing test key preserved.
+→ Writing SSH authentication policy snippets...
+✓ Password-only, key-only, and host-check policies prepared.
+→ Preparing local SSH test password...
+→ Reusing existing local password file.
+✓ Local password file prepared with permissions 600.
+
+Machinarchy SSH test fixtures are ready.
+
+Compose services (managed through Makefile):
+  ssh-password   Password-only authentication: localhost:2221
+  ssh-key        Ed25519-only authentication:   localhost:2222
+  ssh-hostcheck  Persistent host key testing:   localhost:2223
+
+Generated files:
+  Client private key: data/.ssh/test_id_ed25519
+  Client public key:  data/.ssh/test_id_ed25519.pub
+  Test password:      data/.ssh/testuser.password
+  Container configs:  data/.ssh/config/{password,key,hostcheck}
+…
+✓ SSH fixture preparation completed. Docker was not started.
+docker compose --project-name "machinarchy-ssh-test" -f "deployments/testing/ssh-servers.docker-compose.yml" config --quiet
+…
+ Network machinarchy-ssh-test_testing-net  Created
+…
+ Container machinarchy-ssh-test-ssh-hostcheck-1  Started
+ Container machinarchy-ssh-test-ssh-password-1  Started
+ Container machinarchy-ssh-test-ssh-key-1  Started
+
+$ make ssh-servers-ps
+docker compose --project-name "machinarchy-ssh-test" -f "deployments/testing/ssh-servers.docker-compose.yml" ps
+NAME                                   IMAGE                                       COMMAND   SERVICE         CREATED          STATUS                    PORTS
+machinarchy-ssh-test-ssh-hostcheck-1   lscr.io/linuxserver/openssh-server:latest   "/init"   ssh-hostcheck   18 seconds ago   Up 15 seconds (healthy)   127.0.0.1:2223->2222/tcp
+machinarchy-ssh-test-ssh-key-1         lscr.io/linuxserver/openssh-server:latest   "/init"   ssh-key         18 seconds ago   Up 15 seconds (healthy)   127.0.0.1:2222->2222/tcp
+machinarchy-ssh-test-ssh-password-1    lscr.io/linuxserver/openssh-server:latest   "/init"   ssh-password    18 seconds ago   Up 15 seconds (healthy)   127.0.0.1:2221->2222/tcp
 ```
 
-Start three OpenSSH containers. Each accepts that key for the user `deploy`,
-on ports 2221–2223 of your loopback interface only:
+Check the key works (the lab keeps its own `known_hosts`, so your `~/.ssh` is
+not touched):
 
 ```console
-$ docker run -d --name lab-web-1 --hostname web-1 -p 127.0.0.1:2221:2222 -e PUID=1000 -e PGID=1000 -e USER_NAME=deploy -e PASSWORD_ACCESS=false -e PUBLIC_KEY="$(cat $LAB/deploy_key.pub)" lscr.io/linuxserver/openssh-server:latest >/dev/null && echo started lab-web-1 on port 2221
-started lab-web-1 on port 2221
-
-$ docker run -d --name lab-web-2 --hostname web-2 -p 127.0.0.1:2222:2222 -e PUID=1000 -e PGID=1000 -e USER_NAME=deploy -e PASSWORD_ACCESS=false -e PUBLIC_KEY="$(cat $LAB/deploy_key.pub)" lscr.io/linuxserver/openssh-server:latest >/dev/null && echo started lab-web-2 on port 2222
-started lab-web-2 on port 2222
-
-$ docker run -d --name lab-db-1 --hostname db-1 -p 127.0.0.1:2223:2222 -e PUID=1000 -e PGID=1000 -e USER_NAME=deploy -e PASSWORD_ACCESS=false -e PUBLIC_KEY="$(cat $LAB/deploy_key.pub)" lscr.io/linuxserver/openssh-server:latest >/dev/null && echo started lab-db-1 on port 2223
-started lab-db-1 on port 2223
-
-$ docker ps --filter name=lab- --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}"
-NAMES       PORTS                      STATUS
-lab-db-1    127.0.0.1:2223->2222/tcp   Up 10 seconds
-lab-web-2   127.0.0.1:2222->2222/tcp   Up 13 seconds
-lab-web-1   127.0.0.1:2221->2222/tcp   Up 16 seconds
-```
-
-Give them a few seconds to generate their host keys, then check that the key
-works. The lab keeps its own `known_hosts`, so your `~/.ssh` is not touched:
-
-```console
-$ for p in 2221 2222 2223; do ssh -i "$LAB/deploy_key" -p $p -o UserKnownHostsFile="$LAB/known_hosts" -o StrictHostKeyChecking=accept-new deploy@127.0.0.1 "echo \$(hostname) ok" 2>/dev/null; done
-web-1 ok
-web-2 ok
-db-1 ok
+$ ssh -i data/.ssh/test_id_ed25519 -p 2222 -o UserKnownHostsFile="$LAB/known_hosts" -o StrictHostKeyChecking=accept-new testuser@127.0.0.1 hostname 2>/dev/null
+machinarchy-ssh-key
 ```
 
 ---
@@ -115,7 +145,7 @@ chmod 600 "$LAB/server.env"
 
 | Setting | Why the lab needs it |
 |---|---|
-| `MACHINARCHY_ENVIRONMENT=development` | Development defaults; among them, host keys are trusted on first contact unless a profile says otherwise |
+| `MACHINARCHY_ENVIRONMENT=development` | Development defaults; among them, hosts with key login trust their SSH keys on first contact unless a profile says otherwise |
 | `MACHINARCHY_ENCRYPTION_SECRET` | Encrypts secrets and command output at rest. **Keep it**: a new one makes the stored data unreadable |
 | `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` | Creates the first owner, `admin`, on an empty database |
 | `MACHINARCHY_SSH_ALLOW_LOOPBACK`, `MACHINARCHY_SSH_ALLOWED_PORTS` | The egress policy refuses loopback and non-22 ports by default; the lab's hosts are both |
@@ -134,9 +164,6 @@ Back in your main terminal:
 ```console
 $ curl -s http://127.0.0.1:8080/healthz/ready
 {"checks":{"control-manager":"ready","database":"ready"},"status":"ready"}
-
-$ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:8080/openapi.json
-200 application/json; charset=utf-8
 ```
 
 ---
@@ -147,16 +174,10 @@ The CLI has no `login` command: you log in over HTTP and give the CLI the
 session token. Keep it in a shell variable, never in a file:
 
 ```console
-$ curl -s http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"lab-admin-password-123\"}" | jq "{token: (.token[0:12] + \"…\"), user}"
-{
-  "token": "eyJhbGciOiJI…",
-  "user": {
-    "id": 1,
-    "username": "admin"
-  }
-}
-
 $ TOKEN=$(curl -s http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"lab-admin-password-123\"}" | jq -r .token)
+
+$ echo "${TOKEN:0:12}…"
+eyJhbGciOiJI…
 ```
 
 A session lasts 24 hours. For day-to-day use, create an API token instead
@@ -182,19 +203,9 @@ Context "lab" configured.
 $ machinarchy config use-context lab
 Switched to context "lab".
 
-$ machinarchy config current-context
-lab
-
 $ machinarchy config get-contexts
 CURRENT  NAME  CLUSTER  USER       ENVIRONMENT
 *        lab   lab      lab-admin  
-
-$ machinarchy version
-machinarchy ff666e1
-commit:     ff666e1
-built:      2026-11-19T13:12:52Z
-go:         go1.27.4
-platform:   darwin/amd64
 ```
 
 `--token-stdin` keeps the token out of your shell history and the process
@@ -203,82 +214,77 @@ loopback; use `https://` for a real server.
 
 ---
 
-## 5. Store the SSH key as a secret
+## 5. Store the lab's key and password as secrets
 
 Secrets are write-only: you can create, rotate and delete them, never read
-them back.
+them back. The lab needs two: the client key for `ssh-key`, and the password
+for the other two (`tr -d "\n"` drops the file's trailing newline):
 
 ```console
-$ machinarchy secret create deploy-key --value-stdin --description "lab deploy key" < "$LAB/deploy_key"
+$ machinarchy secret create lab-key --value-stdin --description "data/.ssh/test_id_ed25519" < data/.ssh/test_id_ed25519 | jq "{id, name, purpose, currentVersion}"
 {
-  "createdAt": "2026-11-19T13:21:05.738189Z",
-  "currentVersion": 1,
-  "description": "lab deploy key",
-  "id": "cfd8a8bd-f3b6-4d9d-9ac8-8b887f9c9d4b",
-  "name": "deploy-key",
+  "id": "ccf383fb-e59d-4ba3-8901-41b56200a018",
+  "name": "lab-key",
   "purpose": "ssh-credential",
-  "updatedAt": "2026-11-19T13:21:05.738189Z"
+  "currentVersion": 1
 }
 
-$ machinarchy secret list
-[
-  {
-    "createdAt": "2026-11-19T13:21:05.738189Z",
-    "currentVersion": 1,
-    "description": "lab deploy key",
-    "id": "cfd8a8bd-f3b6-4d9d-9ac8-8b887f9c9d4b",
-    "name": "deploy-key",
-    "purpose": "ssh-credential",
-    "updatedAt": "2026-11-19T13:21:05.738189Z"
-  }
-]
+$ tr -d "\n" < data/.ssh/testuser.password | machinarchy secret create lab-password --value-stdin --description "data/.ssh/testuser.password" | jq "{id, name, purpose, currentVersion}"
+{
+  "id": "ef1fadb4-6891-410d-95e8-45b8e6398aa7",
+  "name": "lab-password",
+  "purpose": "ssh-credential",
+  "currentVersion": 1
+}
+
+$ machinarchy secret list | jq -r ".[] | [.name, .id, .currentVersion] | @tsv"
+lab-key	ccf383fb-e59d-4ba3-8901-41b56200a018	1
+lab-password	ef1fadb4-6891-410d-95e8-45b8e6398aa7	1
 ```
 
-Secret commands need an owner's login session; an API token is refused
-(step 16).
+The secret commands print JSON. They need an owner's login session; an API
+token is refused (step 16).
 
 ---
 
 ## 6. Create Access Profiles
 
 An **Access Profile** says how to log in to a host: the user, the
-authentication method, which secret, and how to trust the host's SSH key.
-Hosts point at a profile, so one key rotation updates them all.
+authentication method, which secret, and how to trust the host's SSH keys.
+Hosts point at a profile, so one secret rotation updates them all.
 
-Profiles are owner-only and are created through the API (the CLI can list
-them). The lab uses two, to show both ways of trusting host keys:
+Profiles are owner-only and are created through the API (the CLI lists them):
 
-| Profile | `hostKeyPolicy` | Meaning |
-|---|---|---|
-| `deploy` | `tofu` | Keys seen on first contact are pinned automatically (trust on first use) |
-| `deploy-approve` | `approve` | Keys are observed, and an owner approves them with one command |
+| Profile | Login | `hostKeyPolicy` | Effect |
+|---|---|---|---|
+| `lab-key` | private key | `tofu` | Keys seen on first contact are pinned automatically |
+| `lab-password` | password | not set | Needs an owner's approval: Machinarchy never trusts keys on first contact for a password login, because an impostor would receive the password |
 
 ```console
-$ SECRET=$(machinarchy secret list -o json | jq -r ".[] | select(.name==\"deploy-key\") | .id"); echo "$SECRET"
-cfd8a8bd-f3b6-4d9d-9ac8-8b887f9c9d4b
+$ KEY_SECRET=$(machinarchy secret list | jq -r ".[] | select(.name==\"lab-key\") | .id"); PASSWORD_SECRET=$(machinarchy secret list | jq -r ".[] | select(.name==\"lab-password\") | .id")
 
-$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"deploy\",\"description\":\"lab hosts, keys pinned on first contact\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"private-key\",\"username\":\"deploy\",\"enabled\":true,\"hostKeyPolicy\":\"tofu\",\"credential\":{\"id\":\"$SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
+$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-key\",\"description\":\"key login, keys pinned on first contact\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"private-key\",\"username\":\"testuser\",\"enabled\":true,\"hostKeyPolicy\":\"tofu\",\"credential\":{\"id\":\"$KEY_SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
 {
-  "id": "b54e1b5b-2220-460f-8ba1-d9c752109c9e",
-  "name": "deploy",
+  "id": "933390bb-6c27-406e-bd6d-e7633309ae77",
+  "name": "lab-key",
   "currentRevision": 1
 }
 
-$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"deploy-approve\",\"description\":\"keys need an owner approval\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"private-key\",\"username\":\"deploy\",\"enabled\":true,\"hostKeyPolicy\":\"approve\",\"credential\":{\"id\":\"$SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
+$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-password\",\"description\":\"password login; keys need approval\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"password\",\"username\":\"testuser\",\"enabled\":true,\"credential\":{\"id\":\"$PASSWORD_SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
 {
-  "id": "c801d469-01fe-43f8-b0ae-d3eab878162b",
-  "name": "deploy-approve",
+  "id": "3bc2e785-f244-4a20-91a6-f07fcee56293",
+  "name": "lab-password",
   "currentRevision": 1
 }
 
 $ machinarchy get profiles
-NAME            ID                                    REVISION  DESCRIPTION
-deploy          b54e1b5b-2220-460f-8ba1-d9c752109c9e  1         lab hosts, keys pinned on first contact
-deploy-approve  c801d469-01fe-43f8-b0ae-d3eab878162b  1         keys need an owner approval
+NAME          ID                                    REVISION  DESCRIPTION
+lab-password  3bc2e785-f244-4a20-91a6-f07fcee56293  1         password login; keys need approval
+lab-key       933390bb-6c27-406e-bd6d-e7633309ae77  1         key login, keys pinned on first contact
 ```
 
-Other profile options (`ca` with host certificates, `execution.supervisor`,
-`execution.maxOutputFileBytes`) are described in
+Other profile options (`hostKeyPolicy: ca` with host certificates,
+`execution.supervisor`, `execution.maxOutputFileBytes`) are described in
 [operations](../operations.md#ssh-host-keys) and
 [detached execution](../operations.md#detached-execution).
 
@@ -286,110 +292,120 @@ Other profile options (`ca` with host certificates, `execution.supervisor`,
 
 ## 7. Register the hosts
 
-Labels (`--label KEY=VALUE`) let you select hosts later. No fingerprint is
-needed:
+Labels (`--label KEY=VALUE`, repeatable) let you select hosts later. No
+fingerprint is needed:
 
 ```console
-$ machinarchy create host web-1 --endpoint 127.0.0.1:2221 --profile deploy --label tier=web
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-web-1  238069aa-d964-48c4-a077-2e0336d6b7a2  -            127.0.0.1:2221  Pending  Unknown
+$ machinarchy create host ssh-key --endpoint 127.0.0.1:2222 --profile lab-key --label tier=web --label auth=key
+NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
+ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Pending  Unknown
 
-$ machinarchy create host web-2 --endpoint 127.0.0.1:2222 --profile deploy --label tier=web
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Pending  Unknown
+$ machinarchy create host ssh-password --endpoint 127.0.0.1:2221 --profile lab-password --label tier=web --label auth=password
+NAME          ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
+ssh-password  f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Pending  Unknown
 
-$ machinarchy create host db-1 --endpoint 127.0.0.1:2223 --profile deploy-approve --label tier=db
-NAME  ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-db-1  9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Pending  Unknown
+$ machinarchy create host ssh-hostcheck --endpoint 127.0.0.1:2223 --profile lab-password --label tier=db --label auth=password
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Pending  Unknown
 ```
 
 A second later the controller has checked them:
 
 ```console
 $ machinarchy get hosts
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  True
-web-1  238069aa-d964-48c4-a077-2e0336d6b7a2  -            127.0.0.1:2221  Active  True
-db-1   9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active  False
-
-$ machinarchy get hosts -l tier=web
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  True
-web-1  238069aa-d964-48c4-a077-2e0336d6b7a2  -            127.0.0.1:2221  Active  True
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+ssh-key        55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True
+ssh-password   f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Active  False
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  False
 ```
 
-`web-1` and `web-2` (profile `deploy`, `tofu`) pinned their keys and logged
-in. `db-1` (profile `deploy-approve`) is waiting for you.
+The table shows only `READY True/False`. The reason is in the JSON (or YAML)
+view:
+
+```console
+$ machinarchy get hosts -o json | jq -r '.[] | [.metadata.name, (.status.conditions[] | select(.type=="Ready") | .reason)] | @tsv'
+ssh-key	SSHVerified
+ssh-password	HostKeyPendingApproval
+ssh-hostcheck	HostKeyPendingApproval
+```
+
+`ssh-key` pinned its keys and logged in. The two password hosts are waiting
+for you.
 
 ---
 
 ## 8. Trust host keys
 
-The table shows only `READY True/False`; the reason and the keys the
-controller saw are in the YAML view:
+See the keys the controller observed for a waiting host:
 
 ```console
-$ machinarchy get hosts db-1 -o yaml | sed -n "/observedHostKeys/,/^[a-z]/p"
+$ machinarchy get hosts ssh-password -o yaml | sed -n "/observedHostKeys/,/^[a-z]/p"
   observedHostKeys:
     - algorithm: ssh-ed25519
-      fingerprint: SHA256:403pYCFSmX5C4WmUnR1EvYU0Y8kYKcQPZvYGe/RnVLg
-      firstSeenAt: 2026-11-19T13:21:06.699866Z
-      lastSeenAt: 2026-11-19T13:21:06.699866Z
+      fingerprint: SHA256:Tq2Qo6CW1E0cHKD6o2Qb0ekZhnk3Q3/z6o09d+VoXKk
+      firstSeenAt: 2026-11-19T13:32:44.780712Z
+      lastSeenAt: 2026-11-19T13:32:44.780712Z
     - algorithm: ecdsa-sha2-nistp256
-      fingerprint: SHA256:kDMrqfbmER2AcCfKVaNZhscyKdP9Xfn1OtZ9zEBtvdY
-      firstSeenAt: 2026-11-19T13:21:06.699866Z
-      lastSeenAt: 2026-11-19T13:21:06.699866Z
+      fingerprint: SHA256:D1Je05PeWOkVrP/z9nMu+Sf98+KjzGn1mkIq8eB+Lc4
+      firstSeenAt: 2026-11-19T13:32:44.780712Z
+      lastSeenAt: 2026-11-19T13:32:44.780712Z
     - algorithm: ssh-rsa
-      fingerprint: SHA256:Lbp/AxhSExc+G/eFucDANk98TK84MmMkI5HYMKRN6tY
-      firstSeenAt: 2026-11-19T13:21:06.699866Z
-      lastSeenAt: 2026-11-19T13:21:06.699866Z
+      fingerprint: SHA256:gISGmJRc/K/ExVEK6rzJm4EYyP2w5tuWuut7vaBCbAM
+      firstSeenAt: 2026-11-19T13:32:44.780712Z
+      lastSeenAt: 2026-11-19T13:32:44.780712Z
 ```
 
 On a real network, compare these with the host's own keys (`ssh-keygen -lf
-/etc/ssh/ssh_host_*_key.pub` on its console) before approving. Then:
+/etc/ssh/ssh_host_*_key.pub` on its console) before approving. Then approve
+one host (`machinarchy trust host ssh-password`) or every waiting host at
+once:
 
 ```console
-$ machinarchy trust host db-1 --yes
+$ machinarchy trust host --all-pending --yes
 SSH host keys to trust:
-  db-1 (127.0.0.1:2223):
-    SHA256:403pYCFSmX5C4WmUnR1EvYU0Y8kYKcQPZvYGe/RnVLg
-    SHA256:kDMrqfbmER2AcCfKVaNZhscyKdP9Xfn1OtZ9zEBtvdY
-    SHA256:Lbp/AxhSExc+G/eFucDANk98TK84MmMkI5HYMKRN6tY
-Host "db-1" now trusts 3 host key(s).
+  ssh-password (127.0.0.1:2221):
+    SHA256:Tq2Qo6CW1E0cHKD6o2Qb0ekZhnk3Q3/z6o09d+VoXKk
+    SHA256:D1Je05PeWOkVrP/z9nMu+Sf98+KjzGn1mkIq8eB+Lc4
+    SHA256:gISGmJRc/K/ExVEK6rzJm4EYyP2w5tuWuut7vaBCbAM
+  ssh-hostcheck (127.0.0.1:2223):
+    SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
+    SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
+    SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
+Host "ssh-password" now trusts 3 host key(s).
+Host "ssh-hostcheck" now trusts 3 host key(s).
 
-$ machinarchy get hosts
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  True
-web-1  238069aa-d964-48c4-a077-2e0336d6b7a2  -            127.0.0.1:2221  Active  True
-db-1   9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active  True
+$ machinarchy get hosts -o json | jq -r '.[] | [.metadata.name, (.status.conditions[] | select(.type=="Ready") | .reason)] | @tsv'
+ssh-key	SSHVerified
+ssh-password	SSHVerified
+ssh-hostcheck	SSHVerified
 ```
 
-Without `--yes` the CLI shows the same list and asks before trusting. With
-many hosts waiting, `machinarchy trust host --all-pending --selector tier=db`
-approves them in one go.
+Without `--yes` the CLI shows the same list and asks first.
+`--all-pending --selector tier=db` narrows it to matching hosts.
 
 A full host record:
 
 ```console
-$ machinarchy get hosts web-1 -o yaml
+$ machinarchy get hosts ssh-key -o yaml
 metadata:
-  id: 238069aa-d964-48c4-a077-2e0336d6b7a2
-  name: web-1
+  id: 55ad1e17-d9b1-4dd8-8d9f-1d31b3751560
+  name: ssh-key
   labels:
+    auth: key
     tier: web
   generation: 2
   revision: 4
-  createdAt: 2026-11-19T13:21:05.996028Z
-  updatedAt: 2026-11-19T13:21:07.158134Z
+  createdAt: 2026-11-19T13:32:43.644469Z
+  updatedAt: 2026-11-19T13:32:45.833374Z
 spec:
   presence: Managed
-  accessProfileId: b54e1b5b-2220-460f-8ba1-d9c752109c9e
+  accessProfileId: 933390bb-6c27-406e-bd6d-e7633309ae77
   accessTarget:
-    endpoint: 127.0.0.1:2221
+    endpoint: 127.0.0.1:2222
     trust:
-      - SHA256:d+bxO0LYe/+T0hm8iCmrmODqfBlR9fLLgS2Yhpx+Ons
-      - SHA256:EKt15bKdfUzXJLoaQLKCylXbGciQAe+9OqEvUj3FmN8
-      - SHA256:ZFzZKU9faVfGYyNaKZxI7yTPDKGd9wqvxSI7gtvw9jc
+      - SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4
+      - SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc
+      - SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA
 status:
   phase: Active
   conditions:
@@ -415,26 +431,30 @@ result (at most 15 minutes):
 
 ```console
 $ machinarchy run -l tier=web --wait --yes -- uptime
-HOST   STATE      EXIT  OUTPUT
-web-1  Succeeded  0     13:21:08 up 14:03,  0 users,  load average: 0.95, 0.58, 0.31
-web-2  Succeeded  0     13:21:08 up 14:03,  0 users,  load average: 0.95, 0.58, 0.31
+HOST          STATE      EXIT  OUTPUT
+ssh-key       Succeeded  0     13:32:47 up 14:14,  0 users,  load average: 1.34, 0.41, 0.27
+ssh-password  Succeeded  0     13:32:47 up 14:14,  0 users,  load average: 1.34, 0.41, 0.27
 OPERATION                             STATE
-4503230e-e667-4aa4-bc07-6de038bb2612  Succeeded
-
-$ machinarchy run --host db-1 --wait --yes -- df -h /
-HOST  STATE      EXIT  OUTPUT
-db-1  Succeeded  0     Filesystem      Size  Used Avail Use% Mounted on
-OPERATION                             STATE
-827c161b-ca9b-44be-82c9-86dd020e0000  Succeeded
+506ef18e-d7e7-4d27-8d4c-fa1d36ef9a62  Succeeded
 ```
 
-The table shows only the **first line** of output. For all of it, use
-`machinarchy logs operation ID` (next step) or `get operation ID -o yaml`.
+The table shows only the **first line** of output; `logs` shows all of it:
+
+```console
+$ machinarchy run --host ssh-hostcheck --wait --yes -- df -h /
+HOST           STATE      EXIT  OUTPUT
+ssh-hostcheck  Succeeded  0     Filesystem      Size  Used Avail Use% Mounted on
+OPERATION                             STATE
+fb5f6266-e37c-40c3-ae33-dc140d85343e  Succeeded
+
+$ machinarchy logs operation fb5f6266-e37c-40c3-ae33-dc140d85343e
+Filesystem      Size  Used Avail Use% Mounted on
+overlay          59G   11G   45G  20% /
+```
 
 Without `--yes`, `run` lists the hosts it selected and asks first; it then runs
 on exactly the hosts it showed you, even if labels change in between.
-
-Selecting hosts: `-l SELECTOR` (`tier=web`, `tier=web,region in (eu,us)`),
+Selecting hosts: `-l SELECTOR` (`tier=web`, `tier=web,auth in (key,password)`),
 `--host NAME` (repeatable), `--all`, and `--exclude NAME`.
 
 ---
@@ -447,9 +467,9 @@ Machinarchy restarts, and may last up to 24 hours (`--timeout`, in seconds).
 
 ```console
 $ machinarchy run --all --yes -- sh -c "for i in 1 2 3; do echo step \$i on \$(hostname); sleep 2; done; echo done >&2"
-Operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5 submitted (detached).
-Follow it with:  machinarchy logs operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5 --follow
-Status:          machinarchy get operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5
+Operation f48d85da-7461-41ba-a730-d87ad3d1d71d submitted (detached).
+Follow it with:  machinarchy logs operation f48d85da-7461-41ba-a730-d87ad3d1d71d --follow
+Status:          machinarchy get operation f48d85da-7461-41ba-a730-d87ad3d1d71d
 ```
 
 Follow one host's output while it runs. `--follow` ends when the command does;
@@ -457,67 +477,67 @@ new lines appear every few seconds (the controller polls each host every 5 s,
 less often for long runs):
 
 ```console
-$ machinarchy logs operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5 --host web-1 --follow
-step 1 on web-1
-step 2 on web-1
-step 3 on web-1
+$ machinarchy logs operation f48d85da-7461-41ba-a730-d87ad3d1d71d --host ssh-key --follow
+step 1 on machinarchy-ssh-key
+step 2 on machinarchy-ssh-key
+step 3 on machinarchy-ssh-key
 ```
 
 Without `--host`, `logs` prints every host in turn (without `--follow`):
 
 ```console
-$ machinarchy logs operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5
-==> db-1 (Succeeded) <==
-step 1 on db-1
-step 2 on db-1
-step 3 on db-1
+$ machinarchy logs operation f48d85da-7461-41ba-a730-d87ad3d1d71d
+==> ssh-hostcheck (Succeeded) <==
+step 1 on machinarchy-ssh-hostcheck
+step 2 on machinarchy-ssh-hostcheck
+step 3 on machinarchy-ssh-hostcheck
 
-==> web-1 (Succeeded) <==
-step 1 on web-1
-step 2 on web-1
-step 3 on web-1
+==> ssh-key (Succeeded) <==
+step 1 on machinarchy-ssh-key
+step 2 on machinarchy-ssh-key
+step 3 on machinarchy-ssh-key
 
-==> web-2 (Succeeded) <==
-step 1 on web-2
-step 2 on web-2
-step 3 on web-2
+==> ssh-password (Succeeded) <==
+step 1 on machinarchy-ssh-password
+step 2 on machinarchy-ssh-password
+step 3 on machinarchy-ssh-password
 
-$ machinarchy logs operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5 --host db-1 --stream stderr
+$ machinarchy logs operation f48d85da-7461-41ba-a730-d87ad3d1d71d --host ssh-hostcheck --stream stderr
 done
 ```
 
 The summary, and the full record:
 
 ```console
-$ machinarchy get operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5
-HOST   STATE      EXIT  OUTPUT
-db-1   Succeeded  0     step 1 on db-1
-web-1  Succeeded  0     step 1 on web-1
-web-2  Succeeded  0     step 1 on web-2
+$ machinarchy get operation f48d85da-7461-41ba-a730-d87ad3d1d71d
+HOST           STATE      EXIT  OUTPUT
+ssh-hostcheck  Succeeded  0     step 1 on machinarchy-ssh-hostcheck
+ssh-key        Succeeded  0     step 1 on machinarchy-ssh-key
+ssh-password   Succeeded  0     step 1 on machinarchy-ssh-password
 OPERATION                             STATE
-e37a8e10-7dcb-4068-bfce-ca1ab73597e5  Succeeded
+f48d85da-7461-41ba-a730-d87ad3d1d71d  Succeeded
 
-$ machinarchy get operation e37a8e10-7dcb-4068-bfce-ca1ab73597e5 -o yaml | sed -n '/targets:/,$p' | head -20
+$ machinarchy get operation f48d85da-7461-41ba-a730-d87ad3d1d71d -o yaml | sed -n '/targets:/,$p' | head -20
   targets:
     - spec:
-        hostId: 9315694a-95a0-4bab-90b3-51900f7fe031
-        displayName: db-1
+        hostId: fcf37d66-7774-4848-9c2a-6d9aef2c9c5b
+        displayName: ssh-hostcheck
       state: Succeeded
       result:
         exitCode: 0
         stdout: |
-          step 1 on db-1
-          step 2 on db-1
-          step 3 on db-1
+          step 1 on machinarchy-ssh-hostcheck
+          step 2 on machinarchy-ssh-hostcheck
+          step 3 on machinarchy-ssh-hostcheck
         stderr: |
           done
-        stdoutBytes: 45
+        stdoutBytes: 108
         stderrBytes: 5
       progress:
-        stdoutBytes: 45
+        stdoutBytes: 108
         stderrBytes: 5
-        lastContactAt: 2026-11-19T13:21:21.632149Z
-        polls: 3
+        lastContactAt: 2026-11-19T13:32:57.272415Z
+        polls: 2
 ```
 
 A long output keeps its first and last 15 KiB per stream; `stdoutBytes` is the
@@ -529,17 +549,21 @@ allowed to run commands; readers see states and exit codes.
 ## 11. Labels and selectors
 
 ```console
-$ machinarchy label host db-1 role=primary
-NAME  ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-db-1  9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active  True
+$ machinarchy label host ssh-hostcheck role=primary
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
 
 $ machinarchy get hosts -l role=primary
-NAME  ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-db-1  9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active  True
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
 
-$ machinarchy label host db-1 role-
-NAME  ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-db-1  9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active  True
+$ machinarchy get hosts -l "auth in (key)"
+NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True
+
+$ machinarchy label host ssh-hostcheck role-
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
 ```
 
 `KEY=VALUE` sets a label and `KEY-` removes it. The table does not show labels;
@@ -551,27 +575,27 @@ db-1  9315694a-95a0-4bab-90b3-51900f7fe031  -            127.0.0.1:2223  Active 
 
 ```console
 $ machinarchy run -l tier=web --yes -- sleep 300
-Operation c2f72e21-a449-408c-b5e5-17ad8b311b6a submitted (detached).
-Follow it with:  machinarchy logs operation c2f72e21-a449-408c-b5e5-17ad8b311b6a --follow
-Status:          machinarchy get operation c2f72e21-a449-408c-b5e5-17ad8b311b6a
+Operation 62409861-bbd0-45b5-a903-255668dad428 submitted (detached).
+Follow it with:  machinarchy logs operation 62409861-bbd0-45b5-a903-255668dad428 --follow
+Status:          machinarchy get operation 62409861-bbd0-45b5-a903-255668dad428
 
-$ machinarchy cancel operation c2f72e21-a449-408c-b5e5-17ad8b311b6a
-Cancellation requested for operation c2f72e21-a449-408c-b5e5-17ad8b311b6a (CancelRequested).
+$ machinarchy cancel operation 62409861-bbd0-45b5-a903-255668dad428
+Cancellation requested for operation 62409861-bbd0-45b5-a903-255668dad428 (CancelRequested).
 
-$ machinarchy get operation c2f72e21-a449-408c-b5e5-17ad8b311b6a
-HOST   STATE      EXIT  OUTPUT
-web-1  Cancelled  143   cancelled
-web-2  Cancelled  143   cancelled
+$ machinarchy get operation 62409861-bbd0-45b5-a903-255668dad428
+HOST          STATE      EXIT  OUTPUT
+ssh-key       Cancelled  143   cancelled
+ssh-password  Cancelled  143   cancelled
 OPERATION                             STATE
-c2f72e21-a449-408c-b5e5-17ad8b311b6a  Cancelled
+62409861-bbd0-45b5-a903-255668dad428  Cancelled
 ```
 
 Cancel sends SIGTERM to the command's whole process group, then SIGKILL after
 10 seconds; exit 143 is 128 + SIGTERM. Nothing is left on the host:
 
 ```console
-$ docker exec lab-web-1 pgrep -fx "sleep 300" || echo "no sleep 300 left on web-1"
-no sleep 300 left on web-1
+$ docker exec machinarchy-ssh-test-ssh-key-1 pgrep -fx "sleep 300" || echo "no sleep 300 left on ssh-key"
+no sleep 300 left on ssh-key
 ```
 
 ---
@@ -582,23 +606,25 @@ no sleep 300 left on web-1
 900 with `--wait`. A command still running at its timeout is stopped on the
 host and ends `TimedOut`.
 
-If a host reboots during a run, nobody can know whether the command
+If a host restarts during a run, nobody can know whether the command
 finished, so Machinarchy says so instead of guessing:
 
 ```console
-$ machinarchy run --host web-2 --timeout 3600 --yes -- sleep 600
-Operation 735dc57a-34dc-4454-9b17-cd6ec0729422 submitted (detached).
-Follow it with:  machinarchy logs operation 735dc57a-34dc-4454-9b17-cd6ec0729422 --follow
-Status:          machinarchy get operation 735dc57a-34dc-4454-9b17-cd6ec0729422
+$ machinarchy run --host ssh-key --timeout 3600 --yes -- sleep 600
+Operation 401c6402-6d2a-441c-a0e4-1e657f3b825a submitted (detached).
+Follow it with:  machinarchy logs operation 401c6402-6d2a-441c-a0e4-1e657f3b825a --follow
+Status:          machinarchy get operation 401c6402-6d2a-441c-a0e4-1e657f3b825a
 
-$ docker restart lab-web-2
-lab-web-2
+$ make ssh-servers-restart SSH_SERVICE=ssh-key
+docker compose --project-name "machinarchy-ssh-test" -f "deployments/testing/ssh-servers.docker-compose.yml" restart ssh-key
+ Container machinarchy-ssh-test-ssh-key-1  Restarting
+ Container machinarchy-ssh-test-ssh-key-1  Started
 
-$ machinarchy get operation 735dc57a-34dc-4454-9b17-cd6ec0729422
-HOST   STATE  EXIT  OUTPUT
-web-2  Lost   -     supervisor_lost
+$ machinarchy get operation 401c6402-6d2a-441c-a0e4-1e657f3b825a
+HOST     STATE  EXIT  OUTPUT
+ssh-key  Lost   -     supervisor_lost
 OPERATION                             STATE
-735dc57a-34dc-4454-9b17-cd6ec0729422  Failed
+401c6402-6d2a-441c-a0e4-1e657f3b825a  Failed
 ```
 
 `Lost` is never retried automatically: check the host, then run again if
@@ -607,91 +633,83 @@ needed. Other causes are listed in the
 
 ---
 
-## 14. When a host's SSH key changes
+## 14. When a host presents other keys
 
-Reinstall `web-2`, which gives it new host keys:
+A host whose SSH keys differ from the trusted ones has been reinstalled, or
+someone is in the middle. The lab's servers keep their host keys, so simulate
+it: register a host at `ssh-hostcheck`'s address, but trust `ssh-key`'s keys:
 
 ```console
-$ docker rm -f lab-web-2 >/dev/null && docker run -d --name lab-web-2 --hostname web-2 -p 127.0.0.1:2222:2222 -e PUID=1000 -e PGID=1000 -e USER_NAME=deploy -e PASSWORD_ACCESS=false -e PUBLIC_KEY="$(cat $LAB/deploy_key.pub)" lscr.io/linuxserver/openssh-server:latest >/dev/null && echo web-2 reinstalled
-web-2 reinstalled
+$ KEYS=$(machinarchy get hosts ssh-key -o json | jq -r '.spec.accessTarget.trust | map("--trust " + .) | join(" ")'); echo "$KEYS" | cut -c1-80
+--trust SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4 --trust SHA256:N+XdeA
+
+$ machinarchy create host moved --endpoint 127.0.0.1:2223 --profile lab-password $KEYS
+NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
+moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Pending  Unknown
+
+$ machinarchy get hosts moved
+NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
+moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Active  False
+
+$ machinarchy get hosts moved -o json | jq -r '.status.conditions[] | select(.type=="Ready") | .reason + ": " + .message'
+HostKeyChanged: the host presents SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA, SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM, SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM; trusted: SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA. Nothing was sent to it. If the change is expected: machinarchy trust host moved --replace
 ```
 
-Machinarchy refuses to log in to a host whose key it does not trust, so
-commands to it fail at once. The host still shows `READY True` until the
-controller's next periodic check, every 5 minutes by default (a known gap, see
-"Troubleshooting"):
+Machinarchy did not log in: the password was never sent. Commands are refused
+too:
 
 ```console
-$ machinarchy run --host web-2 --wait --yes -- hostname
+$ machinarchy run --host moved --wait --yes -- hostname
 HOST   STATE   EXIT  OUTPUT
-web-2  Failed  -     remote_execution_failed
+moved  Failed  -     remote_execution_failed
 OPERATION                             STATE
-b3c54423-c178-4690-9ec9-14c451b901b5  Failed
-Error: operation b3c54423-c178-4690-9ec9-14c451b901b5 finished Failed
-
-$ machinarchy get hosts web-2
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  True
+66b5b097-08a9-4cfd-808c-c3671aeffc3a  Failed
+Error: operation 66b5b097-08a9-4cfd-808c-c3671aeffc3a finished Failed
 ```
 
-To check every host now, restart the server (Ctrl-C in its terminal, then
-start it again as in step 2; your token stays valid). After startup:
+A changed key is never accepted automatically. Once you have checked the new
+keys out of band, replace the old ones:
 
 ```console
-$ machinarchy get hosts web-2
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  False
-
-$ machinarchy get hosts web-2 -o json | jq -r '.status.conditions[] | select(.type=="Ready") | .reason + ": " + .message'
-HostKeyChanged: the host presents SHA256:WXa2zgfGKJdjaT5cggrQUAOyiW4J0ZBdtZUjyqHwSDE, SHA256:2RJ1wAJ6J3Gl7gkMI5Bt8HTYrz/ugVRCzA3zOANHlcQ, SHA256:Mt+tJTSmyX8DnCcXYdoctLGMpUn5EgNP/vt0ug4dan4; trusted: SHA256:gAMOJkZfvtFQXbmtQDauNlLDXklQMaygmwJhkGVXbgI, SHA256:h9iy6ns736l6LedpvT5VoycW6UYl1/fqlG5qW4g1HnM, SHA256:rIFaABi6eP3nQZVVSOw8zBzK85g5f438NxSGQlKaz18. Nothing was sent to it. If the change is expected: machinarchy trust host web-2 --replace
-```
-
-A changed key is never accepted automatically: it may be a reinstall, or
-someone in the middle. Once you have checked the new keys out of band, replace
-the old ones:
-
-```console
-$ machinarchy trust host web-2 --replace --yes
+$ machinarchy trust host moved --replace --yes
 SSH host keys to trust:
-  web-2 (127.0.0.1:2222):
-    SHA256:WXa2zgfGKJdjaT5cggrQUAOyiW4J0ZBdtZUjyqHwSDE
-    SHA256:2RJ1wAJ6J3Gl7gkMI5Bt8HTYrz/ugVRCzA3zOANHlcQ
-    SHA256:Mt+tJTSmyX8DnCcXYdoctLGMpUn5EgNP/vt0ug4dan4
-    replacing SHA256:gAMOJkZfvtFQXbmtQDauNlLDXklQMaygmwJhkGVXbgI, SHA256:h9iy6ns736l6LedpvT5VoycW6UYl1/fqlG5qW4g1HnM, SHA256:rIFaABi6eP3nQZVVSOw8zBzK85g5f438NxSGQlKaz18
-Host "web-2" now trusts 3 host key(s).
+  moved (127.0.0.1:2223):
+    SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
+    SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
+    SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
+    replacing SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA
+Host "moved" now trusts 3 host key(s).
 
-$ machinarchy get hosts web-2
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-web-2  214b49d5-7e5d-4460-8149-62e4afbc44ae  -            127.0.0.1:2222  Active  True
-
-$ machinarchy run --host web-2 --wait --yes -- hostname
+$ machinarchy run --host moved --wait --yes -- hostname
 HOST   STATE      EXIT  OUTPUT
-web-2  Succeeded  0     web-2
+moved  Succeeded  0     machinarchy-ssh-hostcheck
 OPERATION                             STATE
-f1b6c979-0174-439d-9f6a-ea25683439e8  Succeeded
+33d4edba-c698-4978-82e1-c7e94539ac69  Succeeded
+
+$ machinarchy delete host moved --yes
+Host "moved" deleted.
 ```
+
+A host that was already trusted is re-checked every 5 minutes, so a real
+reinstall shows `HostKeyChanged` within that time (see "Known problems").
 
 ---
 
 ## 15. History
 
 ```console
-$ machinarchy get operations
+$ machinarchy get operations --limit 8
 ID                                    STATE      TARGETS      CREATED
-f1b6c979-0174-439d-9f6a-ea25683439e8  Succeeded  Succeeded=1  2026-11-19 15:21:51
-b3c54423-c178-4690-9ec9-14c451b901b5  Failed     Failed=1     2026-11-19 15:21:49
-735dc57a-34dc-4454-9b17-cd6ec0729422  Failed     Lost=1       2026-11-19 15:21:35
-c2f72e21-a449-408c-b5e5-17ad8b311b6a  Cancelled  Cancelled=2  2026-11-19 15:21:22
-e37a8e10-7dcb-4068-bfce-ca1ab73597e5  Succeeded  Succeeded=3  2026-11-19 15:21:10
-52c499a9-6297-405e-bb02-7778f89e3ffe  Succeeded  Succeeded=1  2026-11-19 15:21:09
-4503230e-e667-4aa4-bc07-6de038bb2612  Succeeded  Succeeded=2  2026-11-19 15:21:08
-
-$ machinarchy get operations --state Succeeded --limit 3
-ID                                    STATE      TARGETS      CREATED
-f1b6c979-0174-439d-9f6a-ea25683439e8  Succeeded  Succeeded=1  2026-11-19 15:21:51
-e37a8e10-7dcb-4068-bfce-ca1ab73597e5  Succeeded  Succeeded=3  2026-11-19 15:21:10
-52c499a9-6297-405e-bb02-7778f89e3ffe  Succeeded  Succeeded=1  2026-11-19 15:21:09
+33d4edba-c698-4978-82e1-c7e94539ac69  Succeeded  Succeeded=1  2026-11-19 15:33:26
+66b5b097-08a9-4cfd-808c-c3671aeffc3a  Failed     Failed=1     2026-11-19 15:33:24
+401c6402-6d2a-441c-a0e4-1e657f3b825a  Failed     Lost=1       2026-11-19 15:33:10
+62409861-bbd0-45b5-a903-255668dad428  Cancelled  Cancelled=2  2026-11-19 15:33:01
+f48d85da-7461-41ba-a730-d87ad3d1d71d  Succeeded  Succeeded=3  2026-11-19 15:32:49
+fb5f6266-e37c-40c3-ae33-dc140d85343e  Succeeded  Succeeded=1  2026-11-19 15:32:48
+506ef18e-d7e7-4d27-8d4c-fa1d36ef9a62  Succeeded  Succeeded=2  2026-11-19 15:32:47
 ```
+
+`--state Succeeded` (or `Failed`, `Running`, …) filters the list.
 
 ---
 
@@ -746,8 +764,8 @@ $ machinarchy --context lab secret list
 ```
 
 `--context NAME` runs one command with another context without switching.
-(This step ran against a fresh lab server, which is why the secret list is
-empty.)
+(This step ran against a separate, fresh lab server, which is why the secret
+list is empty.)
 
 ---
 
@@ -758,11 +776,11 @@ Real errors from this lab and what they mean:
 | You see | Meaning | Fix |
 |---|---|---|
 | `Error: unknown hosts: nope` | No host by that name or ID | `machinarchy get hosts` |
-| `Run "uptime" on 2 host(s): web-1, web-2? [y/N]: Error: confirmation required` | No terminal to ask in (a script) | Add `--yes` |
-| `Error: this operation has 3 targets; pick one with --host (db-1, web-1, web-2)` | `logs --follow` follows one host | Add `--host NAME` |
+| `… [y/N]: Error: confirmation required` | No terminal to ask in (a script) | Add `--yes` |
+| `Error: this operation has 3 targets; pick one with --host (ssh-hostcheck, ssh-key, ssh-password)` | `logs --follow` follows one host | Add `--host NAME` |
 | `HTTP 403 … API tokens (mch_pat_...) are refused for them` | Owner-only command with an API token | `--context` with the owner's login |
-| `READY False` in `get hosts` | See the reason: `get hosts NAME -o yaml` | `HostKeyPendingApproval`: step 8. `HostKeyChanged`: step 14. Others: [runbook](../runbook.md#hosts-never-become-ready) |
-| `Failed` / `remote_execution_failed` or `launch_host_key_rejected` | SSH failed (host key, login, network) | Check the host as in step 14 |
+| `READY False` | See the reason: `get hosts NAME -o yaml` | `HostKeyPendingApproval`: step 8. `HostKeyChanged`: step 14. Others: [runbook](../runbook.md#hosts-never-become-ready) |
+| `Failed` / `remote_execution_failed` or `launch_host_key_rejected` | SSH failed (host key, login, network) | Check the host's `READY` reason |
 | `Lost` / `supervisor_lost` | The host restarted during a detached run | Step 13 |
 
 **Known problems** (recorded in AUDIT/13C, to be fixed in a later phase):
@@ -770,48 +788,46 @@ Real errors from this lab and what they mean:
 - **A program that is not on the allowed list gives HTTP 500:**
 
   ```console
-  $ machinarchy run --host web-1 --wait --yes -- whoami
-  Error: submit operation: API returned HTTP 500: request failed (request ID eOMPxLrcDdSLtRLOFMZaqWxAiPNOedtB)
+  $ machinarchy run --host ssh-key --wait --yes -- whoami
+  Error: submit operation: API returned HTTP 500: request failed (request ID lUyUSMOatNWsQfMuZniSUpKGumhzoYAJ)
   Hint: The server reported an internal error. Retry later. Include the request ID when reporting the problem.
   ```
 
   The cause is the server's `MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS`, not an
-  internal failure; add the program there and restart the server.
-- **A host with a changed key keeps `READY True` for up to 5 minutes**
-  (step 14), until the controller's next periodic check. Commands to it fail
-  safely meanwhile; a server restart checks every host at once.
+  internal failure: add the program there and restart the server.
+- **A trusted host whose keys change keeps `READY True` for up to 5 minutes**,
+  until the controller's next periodic check. Commands to it fail safely
+  meanwhile (`remote_execution_failed`), and `trust host --replace` reports
+  that no new keys were observed yet. Restarting the server checks every host
+  at once.
 
 ---
 
 ## 18. Clean up
 
 ```console
-$ machinarchy delete host web-1 --yes && machinarchy delete host web-2 --yes && machinarchy delete host db-1 --yes
-Host "web-1" deleted.
-Host "web-2" deleted.
-Host "db-1" deleted.
-
-$ machinarchy get hosts
-NAME                 ID  ENVIRONMENT  ENDPOINT  PHASE  READY
-No resources found.                                    
+$ machinarchy delete host ssh-key --yes && machinarchy delete host ssh-password --yes && machinarchy delete host ssh-hostcheck --yes
+Host "ssh-key" deleted.
+Host "ssh-password" deleted.
+Host "ssh-hostcheck" deleted.
 ```
 
-Stop the server with Ctrl-C in its terminal, then remove the containers and,
-if you are done, the lab directory:
+Stop the server with Ctrl-C in its terminal, then stop the SSH servers. Their
+keys and host identities under `data/.ssh/` are kept for next time:
 
 ```console
-$ docker rm -f lab-web-1 lab-web-2 lab-db-1
-lab-web-1
-lab-web-2
-lab-db-1
+$ make ssh-servers-down
+docker compose --project-name "machinarchy-ssh-test" -f "deployments/testing/ssh-servers.docker-compose.yml" down
+…
+ Container machinarchy-ssh-test-ssh-key-1  Removed
+ Container machinarchy-ssh-test-ssh-hostcheck-1  Removed
+ Container machinarchy-ssh-test-ssh-password-1  Removed
+ Network machinarchy-ssh-test_testing-net  Removed
 ```
 
-```sh
-rm -rf "$LAB"   # deletes the lab's database, key and CLI config
-```
-
-`delete host` is refused while an operation still targets the host; cancel it
-first.
+When you are done with the lab, `rm -rf "$LAB"` removes its database and CLI
+config. `delete host` is refused while an operation still targets the host;
+cancel it first.
 
 ---
 
@@ -819,6 +835,7 @@ first.
 
 | Task | Command |
 |---|---|
+| Lab SSH servers | `make ssh-servers-up` / `ssh-servers-ps` / `ssh-servers-down` |
 | Switch context | `machinarchy config use-context NAME` |
 | List hosts / one host in full | `machinarchy get hosts [-l SELECTOR]` / `get hosts NAME -o yaml` |
 | Register a host | `machinarchy create host NAME --endpoint HOST:PORT --profile PROFILE --label K=V` |
@@ -831,4 +848,5 @@ first.
 | Labels | `machinarchy label host NAME K=V K2-` |
 
 More: [command reference](commands.md), [operations](../operations.md),
-[runbook](../runbook.md), [API reference](../api/README.md).
+[runbook](../runbook.md), [API reference](../api/README.md),
+[SSH test servers](../../deployments/testing/README.md).

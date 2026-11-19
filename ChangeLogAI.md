@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-19 — Audit Phase 13C: the guide uses the repository's SSH test servers (branch audit/docs-guide)
+
+- `docs/cli/user-full-guide.md` rewritten on the existing fixtures, at the owner's request: `make ssh-servers-up` and `deployments/testing/ssh-servers.docker-compose.yml`, instead of ad-hoc `docker run` containers.
+  - Hosts `ssh-key` (2222, key login, `tofu`), `ssh-password` (2221) and `ssh-hostcheck` (2223), both password login.
+  - The password hosts show that Machinarchy never trusts keys on first contact for a password login: they wait for `trust host --all-pending`.
+  - `Lost` is shown with `make ssh-servers-restart SSH_SERVICE=ssh-key`.
+  - The changed-key case is a host pinned to another server's keys, so the fixtures' persisted host keys in `data/.ssh/` are never touched.
+  - Cleanup is `make ssh-servers-down`, which keeps the lab's keys.
+- Every command was run again for real against the fixtures, and the outputs were replaced. Absolute paths are shortened and cut lines are marked `…`. The lab's credentials are piped from `data/.ssh/` into write-only secrets, never printed.
+- The run left only empty runner directories (`.local/state/machinarchy/ops`) in the fixtures' bind-mounted homes; those were removed with `rmdir`.
+
+### Verification
+
+- The full lab script ran end to end on the fixtures with no timeouts; the server log had no warnings or errors.
+
 ## 2026-11-19 — Audit Phase 13C: full CLI user guide (branch audit/docs-guide)
 
 - DOC-GUIDE: new `docs/cli/user-full-guide.md`, a step-by-step lab with three SSH servers (OpenSSH containers `web-1`, `web-2`, `db-1` on ports 2221–2223). It covers:
