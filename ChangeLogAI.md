@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-24 — CLI guide step 16 shows the owner's secrets (owner report; branch audit/capability-ops)
+
+- `docs/cli/user-full-guide.md` step 16: `machinarchy --context lab secret list` printed `[]`, which came from a separate fresh lab. A reader following the guide sees `lab-key` and `lab-password` from step 5. The example now prints their names through `jq`.
+- Docs only; no checks run.
+
 ## 2026-11-24 — Audit Phase 17: ADR-057, agent capabilities as Operations (branch audit/capability-ops)
 
 - `docs/adr/ADR-057-capability-operations.md` records the design and the owner's three decisions:

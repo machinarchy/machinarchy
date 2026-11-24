@@ -774,13 +774,14 @@ Error: API returned HTTP 403: permission denied (request ID IssupaPSPGpSdQQHnNwQ
 Hint: The credential is valid but is not permitted to do this.
 Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them.
 
-$ machinarchy --context lab secret list
-[]
+$ machinarchy --context lab secret list | jq -r ".[].name"
+lab-key
+lab-password
 ```
 
-`--context NAME` runs one command with another context without switching.
-(This step ran against a separate, fresh lab server, which is why the secret
-list is empty.)
+`--context NAME` runs one command with another context without switching: the
+owner context `lab` lists the two secrets from step 5 (without `jq` you get the
+full JSON for each, with no secret values).
 
 ---
 
