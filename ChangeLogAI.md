@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-24 — API replicas serve the agent signing keys (Phase 20: F20-02; branch audit/ha)
+
+- **Found by the HA harness:** in a split deployment (API replicas plus Control Managers), `GET /api/v1/agents/controller-key` and every signing-key rotation endpoint (Phase 16) returned 503 from the API replicas. Only processes that run the agent gateway had a key manager, so agents could not be set up and keys could not be rotated through the API. It worked only in the monolith.
+- **Fix:**
+  - `agentkeys.NewPublicOnly` reads the key list, follows changes (5 s refresh), and stages, activates and discards keys. It never resolves a private seed.
+  - Bootstrap builds one in every process without a gateway.
+  - Until a gateway has created a key, the endpoints answer 503 and the refresh loop logs nothing.
+- **Test:** `TestPublicOnlyManagerServesTheAPI`: an API-side manager stages and activates; the Control Manager follows; the API side made zero seed reads.
+- **Checks run:** `go test ./internal/agentkeys/ ./internal/bootstrap/`: pass. Lint: 0 issues.
+
 ## 2026-11-24 — Replicas starting together migrate in turn (Phase 20: F20-01; branch audit/ha)
 
 - **Found by the HA harness:** with two API replicas and two Control Managers starting at once on an empty PostgreSQL database, one replica crashed. The error was `migrate postgres database: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`: two processes created the same table at the same moment. Deployments start replicas together on every rollout.

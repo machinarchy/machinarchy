@@ -173,6 +173,17 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	if err != nil {
 		return nil, errors.Join(err, wrapCloseError("close datastore after agent gateway failure", stores.Close()))
 	}
+	if agentKeys == nil {
+		// No gateway here (an API replica): serve the keys agents pin and the
+		// rotation endpoints from the shared store, without the private key
+		// (AUDIT/20 F20-02). Keys appear once a gateway has created them.
+		if agentKeys, err = agentkeys.NewPublicOnly(stores.Agents, secretService, slog.Default()); err != nil {
+			return nil, errors.Join(err, wrapCloseError("close datastore after agent key failure", stores.Close()))
+		}
+		if err := agentKeys.Refresh(ctx); err != nil && !errors.Is(err, agentgateway.ErrNoActiveSigningKey) {
+			slog.Warn("agent signing keys not loaded yet", "error", err)
+		}
+	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	runtime := &Runtime{hostKeyPolicy: cfg.SSHHostKeyPolicy, stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
 		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout,

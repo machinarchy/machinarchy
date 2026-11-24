@@ -71,8 +71,9 @@ func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores 
 	return gateway, keys, nil
 }
 
-// agentKeyAPI adapts the manager for the HTTP API; nil when the gateway is
-// off, so the endpoints answer 503.
+// agentKeyAPI adapts the manager for the HTTP API. Processes without a
+// gateway pass a public-only manager; the endpoints answer 503 until a
+// gateway has created a key.
 func agentKeyAPI(keys *agentkeys.Manager) agents.SigningKeys {
 	if keys == nil {
 		return nil

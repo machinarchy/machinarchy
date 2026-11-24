@@ -45,6 +45,9 @@ type Manager struct {
 	logger  *slog.Logger
 	now     func() time.Time
 
+	// publicOnly managers never load a private key (API replicas).
+	publicOnly bool
+
 	mu       sync.Mutex // serializes Refresh
 	activeID string
 	current  atomic.Pointer[ed25519.PrivateKey]
@@ -60,6 +63,19 @@ func New(store agentgateway.SigningKeyStore, secretStore SecretStore, logger *sl
 		logger = slog.Default()
 	}
 	return &Manager{store: store, secrets: secretStore, logger: logger, now: time.Now}, nil
+}
+
+// NewPublicOnly creates a Manager for a process that runs no gateway (an API
+// replica, AUDIT/20 F20-02): it serves the public keys agents pin and stages,
+// activates and discards keys, but never loads a private key. Its Signer
+// must not be used.
+func NewPublicOnly(store agentgateway.SigningKeyStore, secretStore SecretStore, logger *slog.Logger) (*Manager, error) {
+	m, err := New(store, secretStore, logger)
+	if err != nil {
+		return nil, err
+	}
+	m.publicOnly = true
+	return m, nil
 }
 
 // Ensure makes sure an active key exists and loads it. On the first start
@@ -108,7 +124,7 @@ func (m *Manager) Refresh(ctx context.Context) error {
 	if active == nil {
 		return agentgateway.ErrNoActiveSigningKey
 	}
-	if active.ID != m.activeID {
+	if active.ID != m.activeID && !m.publicOnly {
 		seed, err := m.secrets.ResolveSystem(ctx, secrets.Ref{ID: active.SecretID, Version: active.SecretVersion}, secrets.PurposeAgentSigning)
 		if err != nil {
 			return fmt.Errorf("load agent signing key %s: %w", active.ID, err)
@@ -149,7 +165,11 @@ func (m *Manager) Run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := m.Refresh(ctx); err != nil && ctx.Err() == nil {
+			err := m.Refresh(ctx)
+			if m.publicOnly && errors.Is(err, agentgateway.ErrNoActiveSigningKey) {
+				continue // no gateway has created a key yet: agents are not in use
+			}
+			if err != nil && ctx.Err() == nil {
 				m.logger.Warn("agent signing keys not refreshed; keeping the current ones", "error", err)
 			}
 		}

@@ -86,8 +86,9 @@ func (s *memStore) DiscardSigningKey(_ context.Context, _ domain.Principal, now 
 
 // memSecrets is an in-memory SecretStore.
 type memSecrets struct {
-	mu     sync.Mutex
-	values map[string][]byte
+	mu       sync.Mutex
+	values   map[string][]byte
+	resolves int
 }
 
 func (s *memSecrets) CreateSystem(_ context.Context, name string, purpose secrets.Purpose, value []byte) (secrets.Ref, error) {
@@ -106,6 +107,7 @@ func (s *memSecrets) CreateSystem(_ context.Context, name string, purpose secret
 func (s *memSecrets) ResolveSystem(_ context.Context, ref secrets.Ref, _ secrets.Purpose) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.resolves++
 	value, ok := s.values[ref.ID]
 	if !ok {
 		return nil, secrets.ErrNotFound
@@ -253,5 +255,52 @@ func TestRefreshRefusesAMismatchedSeed(t *testing.T) {
 	}
 	if err := newManager(t, store, sec).Refresh(ctx); err == nil {
 		t.Fatal("a tampered seed was loaded")
+	}
+}
+
+// TestPublicOnlyManagerServesTheAPI (AUDIT/20 F20-02): an API replica runs no
+// gateway but serves /controller-key and the rotation endpoints. It reads
+// and changes the key list without ever loading a private key; the
+// Control Manager follows its changes.
+func TestPublicOnlyManagerServesTheAPI(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{}
+	cmSecrets, apiSecrets := &memSecrets{}, &memSecrets{}
+	controlManager := newManager(t, store, cmSecrets)
+	if err := controlManager.Ensure(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The two share the Secret Store; the API side counts its own reads.
+	apiSecrets.values = cmSecrets.values
+	api, err := NewPublicOnly(store, apiSecrets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pins := api.PublicKeys(); len(pins) != 1 || pins[0] != signerPublic(controlManager.Signer()) {
+		t.Fatalf("API pins %v, Control Manager signs with %s", pins, signerPublic(controlManager.Signer()))
+	}
+	owner := domain.Principal{UserID: 7, Role: domain.RoleOwner}
+	if _, err := api.Stage(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.PublicKeys()) != 2 {
+		t.Fatalf("after staging through the API: pins %v", api.PublicKeys())
+	}
+	if _, err := api.Activate(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlManager.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pins := api.PublicKeys(); len(pins) != 1 || pins[0] != signerPublic(controlManager.Signer()) {
+		t.Fatalf("after activation: API pins %v, Control Manager signs with %s", pins, signerPublic(controlManager.Signer()))
+	}
+	apiSecrets.mu.Lock()
+	defer apiSecrets.mu.Unlock()
+	if apiSecrets.resolves != 0 {
+		t.Fatalf("the API replica loaded a private key %d times", apiSecrets.resolves)
 	}
 }
