@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
-	// Register the PostgreSQL driver with database/sql.
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // Config holds the configuration for connecting to a PostgreSQL database.
@@ -18,6 +19,9 @@ type Config struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnectTimeout  time.Duration
+	// StatementTimeout, when positive, is set as statement_timeout on every
+	// connection (AUDIT Q-20).
+	StatementTimeout time.Duration
 }
 
 // OpenDB opens a PostgreSQL database connection using the provided configuration.
@@ -26,10 +30,16 @@ func OpenDB(cfg Config) (*sql.DB, error) {
 	if dsn == "" {
 		return nil, errors.New("PostgreSQL URL is required")
 	}
-	db, err := sql.Open("pgx", dsn)
+	connConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open PostgreSQL database: %w", err)
+		return nil, fmt.Errorf("parse PostgreSQL URL: %w", err)
 	}
+	if cfg.StatementTimeout > 0 {
+		// A runtime parameter of the startup message: it holds for every
+		// connection the pool opens, unlike a SET on one of them.
+		connConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
+	}
+	db := stdlib.OpenDB(*connConfig)
 	maxOpen := cfg.MaxOpenConns
 	if maxOpen <= 0 {
 		maxOpen = 20

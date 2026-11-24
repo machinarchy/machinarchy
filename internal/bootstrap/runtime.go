@@ -92,7 +92,8 @@ func open(ctx context.Context, cfg config.Config, role string) (*Runtime, error)
 		PostgresURL: cfg.Database.URL, MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns, ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
 		ConnectTimeout: cfg.Database.ConnectTimeout, MigrationTimeout: cfg.Database.MigrationTimeout, EncryptionSecret: cfg.EncryptionSecret,
-		Keys: keys, PreviousSecrets: previousSecrets,
+		StatementTimeout: cfg.HTTP.StatementTimeout(),
+		Keys:             keys, PreviousSecrets: previousSecrets,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open datastore: %w", err)

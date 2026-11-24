@@ -775,3 +775,17 @@ func TestKMSProvider(t *testing.T) {
 		t.Errorf("a 122-character key ID: %v", err)
 	}
 }
+
+func TestStatementTimeoutStaysBelowTheRequestDeadline(t *testing.T) {
+	for _, c := range []struct{ request, want time.Duration }{
+		{0, 20 * time.Second}, // default 25 s deadline
+		{25 * time.Second, 20 * time.Second},
+		{5 * time.Minute, 5*time.Minute - 5*time.Second},
+		{6 * time.Second, 3 * time.Second},
+		{time.Second, 500 * time.Millisecond},
+	} {
+		if got := (HTTPConfig{RequestTimeout: c.request}).StatementTimeout(); got != c.want {
+			t.Errorf("request deadline %s: statement timeout %s, want %s", c.request, got, c.want)
+		}
+	}
+}

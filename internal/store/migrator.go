@@ -111,6 +111,13 @@ func (m *Migrator) Up(ctx context.Context) error {
 			return fmt.Errorf("failed to begin migration tx: %w", err)
 		}
 		defer sqlx.Rollback(tx, m.logger, "migration")
+		if m.engine == "postgres" {
+			// Migrations are bounded by MigrationTimeout, not by the
+			// per-statement limit for requests (AUDIT Q-20).
+			if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = 0"); err != nil {
+				return fmt.Errorf("lift statement timeout for migration %d: %w", ver, err)
+			}
+		}
 
 		if _, err := tx.ExecContext(ctx, string(content)); err != nil {
 			return fmt.Errorf("failed to execute migration %d: %w", ver, err)

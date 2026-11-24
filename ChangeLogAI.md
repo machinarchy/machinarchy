@@ -1,5 +1,22 @@
 # ChangeLogAI
 
+## 2026-11-24 — Database statement timeout below the request deadline (Phase 19: Q-20; branch audit/data-path)
+
+- **`store.Config.StatementTimeout`:**
+  - PostgreSQL: set as the `statement_timeout` runtime parameter of every connection. The DSN is now parsed with `pgx.ParseConfig` and opened with `stdlib.OpenDB`.
+  - SQLite: the value becomes the busy timeout.
+  - Migrations run `SET LOCAL statement_timeout = 0`; `MACHINARCHY_DATABASE_MIGRATION_TIMEOUT` still bounds them.
+- **Bootstrap:** derives the value with `HTTPConfig.StatementTimeout()`: the request deadline minus 5 s, and at least half of it. That is 20 s for the default 25 s, so a slow statement ends in the database before the response is abandoned.
+- **Tests:**
+  - `TestPostgresStatementTimeout`: every new connection reports `300ms`, and `pg_sleep(3)` fails with SQLSTATE 57014 within 2 s.
+  - `TestSQLiteBusyTimeoutFollowsStatementTimeout`.
+  - `TestStatementTimeoutStaysBelowTheRequestDeadline`.
+  - Before the fix: `statement_timeout = "0"` and busy timeout 5000.
+- **Docs:** the `docs/operations.md` Timeouts table gains the statement row. It also replaces the stale "Synchronous agent call" row (`invoke` was removed in Phase 17) with the capability timeout.
+- **Checks run:**
+  - `go test` with PostgreSQL required for store, bootstrap, config, operationworker and e2e: pass;
+  - lint: 0 issues.
+
 ## 2026-11-24 — Outbox claims are released within a bound on stop (Phase 19: Q-18; branch audit/data-path)
 
 - **`controlmanager.Engine.dispatchBatch`:** when the dispatcher stops with deliveries claimed, it hands them back through one shared context. That context is detached from the cancelled stop context and cancelled `stopReleaseTimeout` (2 s) after the first release.

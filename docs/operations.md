@@ -559,7 +559,8 @@ under `"error"`.
 |---|---|
 | HTTP read header / read / write / idle | 5s / 15s / request timeout + 5s / 60s |
 | API request context (database and gateway calls) | `MACHINARCHY_HTTP_REQUEST_TIMEOUT`, default 25s |
-| Synchronous agent call | 15s default, 20s maximum |
+| One database statement | Request timeout − 5s (at least half of it): 20s by default. PostgreSQL `statement_timeout` on every connection; the SQLite busy timeout. Migrations are exempt and bounded by `MACHINARCHY_DATABASE_MIGRATION_TIMEOUT` |
+| Agent capability call | `timeoutSeconds` of the Operation (default 60s, max 3600s); no result by command lifetime + timeout + 2 min makes the target `Lost` |
 | Per-host command | `timeoutSeconds` of the Operation: max 900s attached, 86400s detached |
 | Reconcile | runtime configuration `reconciliation.timeoutSeconds` |
 | Shutdown | `MACHINARCHY_SHUTDOWN_TIMEOUT` |

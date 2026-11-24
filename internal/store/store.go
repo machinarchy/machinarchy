@@ -44,6 +44,11 @@ type Config struct {
 	// MigrationTimeout bounds schema migrations at startup (default 10 min);
 	// ConnectTimeout covers only connecting and session setup.
 	MigrationTimeout time.Duration
+	// StatementTimeout ends any single statement that runs longer, in the
+	// database (PostgreSQL statement_timeout; the SQLite busy timeout). Keep
+	// it below the request deadline (AUDIT Q-20). Zero: no limit, and the
+	// SQLite default busy timeout.
+	StatementTimeout time.Duration
 	EncryptionSecret string
 	// Keys is the root of trust for Operation data (AUDIT S-07). Nil builds
 	// the built-in local provider from EncryptionSecret, as bootstrap does.
@@ -87,15 +92,16 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 
 	switch engine {
 	case "sqlite":
-		db, err = sqlite.OpenDB(sqlite.Config{DatabasePath: cfg.SQLitePath})
+		db, err = sqlite.OpenDB(sqlite.Config{DatabasePath: cfg.SQLitePath, BusyTimeout: cfg.StatementTimeout})
 
 	case "postgres":
 		db, err = postgres.OpenDB(postgres.Config{
-			PostgresURL:     cfg.PostgresURL,
-			MaxOpenConns:    cfg.MaxOpenConns,
-			MaxIdleConns:    cfg.MaxIdleConns,
-			ConnMaxLifetime: cfg.ConnMaxLifetime,
-			ConnectTimeout:  cfg.ConnectTimeout,
+			PostgresURL:      cfg.PostgresURL,
+			MaxOpenConns:     cfg.MaxOpenConns,
+			MaxIdleConns:     cfg.MaxIdleConns,
+			ConnMaxLifetime:  cfg.ConnMaxLifetime,
+			ConnectTimeout:   cfg.ConnectTimeout,
+			StatementTimeout: cfg.StatementTimeout,
 		})
 	default:
 		return nil, fmt.Errorf("unsupported database engine %q: expected sqlite or postgres", cfg.Engine)

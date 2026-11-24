@@ -150,6 +150,14 @@ const (
 var DevelopmentCORSOrigins = []string{"http://localhost:5173", "http://127.0.0.1:5173"}
 
 // WithDefaults fills unset fields with the defaults.
+// StatementTimeout is the database statement limit for this request
+// deadline: 5 s less, so the database gives up before the response is
+// abandoned, and never below half the deadline (AUDIT Q-20).
+func (h HTTPConfig) StatementTimeout() time.Duration {
+	deadline := h.WithDefaults().RequestTimeout
+	return max(deadline-5*time.Second, deadline/2)
+}
+
 func (h HTTPConfig) WithDefaults() HTTPConfig {
 	if h.RateLimitRPS == 0 {
 		h.RateLimitRPS = DefaultRateLimitRPS
