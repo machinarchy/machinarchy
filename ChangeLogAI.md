@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — The first owner is created in one transaction (Phase 20: F20-03; branch audit/ha)
+
+- **Found by the HA harness (intermittent):** replicas starting together on an empty database all run `BootstrapOwner`. The winner created the user as a reader and promoted it to owner in a second transaction. A replica that checked in between saw an existing account that was not an owner, and stopped with `bootstrap username "admin" already exists but is not a workspace owner`. A winner crashing in that window would have left every later start failing the same way.
+- **Fix:**
+  - `accounts.Store.CreateOwner` writes the user, the owner membership and the audit event in one transaction.
+  - `BootstrapOwner` uses it when the store provides it, and otherwise keeps the two-step path (test fakes).
+  - `CreateUser` shares the code.
+- **Test:** `TestConcurrentBootstrapOwner`: 8 concurrent bootstraps per round, 3 rounds, on PostgreSQL. Before the fix every run had failing replicas; after it, 3 runs (9 rounds) produced exactly one owner and no errors.
+- **Checks run:**
+  - `go test ./internal/service/` and the store test with PostgreSQL: pass;
+  - lint: 0 issues on the changed packages.
+
 ## 2026-11-24 — API replicas serve the agent signing keys (Phase 20: F20-02; branch audit/ha)
 
 - **Found by the HA harness:** in a split deployment (API replicas plus Control Managers), `GET /api/v1/agents/controller-key` and every signing-key rotation endpoint (Phase 16) returned 503 from the API replicas. Only processes that run the agent gateway had a key manager, so agents could not be set up and keys could not be rotated through the API. It worked only in the monolith.

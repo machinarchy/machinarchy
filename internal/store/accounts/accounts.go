@@ -108,6 +108,17 @@ func (s *Store) getUser(ctx context.Context, predicate string, args ...any) (*do
 // CreateUser creates an account in the shared workspace with the reader role.
 // Owners come from the bootstrap flow or UpdateWorkspaceMemberRole.
 func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
+	return s.createUser(ctx, username, email, passwordHash, domain.RoleReader)
+}
+
+// CreateOwner creates the account and its owner membership in one
+// transaction, so no other process can see it as a plain user (the first
+// owner, AUDIT/20 F20-03).
+func (s *Store) CreateOwner(ctx context.Context, username, email, passwordHash string) (*domain.User, error) {
+	return s.createUser(ctx, username, email, passwordHash, domain.RoleOwner)
+}
+
+func (s *Store) createUser(ctx context.Context, username, email, passwordHash string, role domain.Role) (*domain.User, error) {
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -124,7 +135,7 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 		return nil, fmt.Errorf("insert user: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO workspace_memberships (workspace_id, user_id, role, created_at)
-		VALUES (?, ?, ?, ?)`), domain.DefaultWorkspaceID, id, string(domain.RoleReader), sqlx.Time(now)); err != nil {
+		VALUES (?, ?, ?, ?)`), domain.DefaultWorkspaceID, id, string(role), sqlx.Time(now)); err != nil {
 		return nil, fmt.Errorf("insert workspace membership: %w", err)
 	}
 	auditCtx := ctx
@@ -134,14 +145,14 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 	if err := s.appendAudit(auditCtx, tx, domain.AuditEvent{
 		WorkspaceID: domain.DefaultWorkspaceID, Action: domain.AuditUserCreated,
 		TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(id),
-		Details: map[string]string{"username": username, "role": string(domain.RoleReader)},
+		Details: map[string]string{"username": username, "role": string(role)},
 	}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create user transaction: %w", err)
 	}
-	return &domain.User{ID: id, WorkspaceID: domain.DefaultWorkspaceID, Role: domain.RoleReader,
+	return &domain.User{ID: id, WorkspaceID: domain.DefaultWorkspaceID, Role: role,
 		Username: username, Email: email, PasswordHash: passwordHash, CreatedAt: now}, nil
 }
 
