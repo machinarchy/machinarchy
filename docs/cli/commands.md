@@ -74,7 +74,7 @@ go run ./cmd/machinarchy get operation 01JABCDEF123
 go run ./cmd/machinarchy cancel operation 01JABCDEF123
 ```
 
-`--wait` polls until the operation finishes, prints each host's state, exit code and first output line, and exits non-zero unless every host succeeded. Readers can list operations but never see their arguments or output.
+`--wait` polls until the operation finishes, prints each host's state, exit code and first output line, and exits non-zero unless every host succeeded. `--concurrency N` (1–20) sets how many hosts run at once: 5 by default with `--wait`, 20 for detached launches. N hosts take about N ÷ concurrency times one host. Readers can list operations but never see their arguments or output.
 
 On agent hosts, `run --capability NAME` calls one of the agent's capabilities instead of a program. `--input` takes a JSON object and `--timeout` defaults to 60 seconds. It previews, confirms and supports `--wait` the same way; `--detach` and a program after `--` are refused:
 

@@ -307,6 +307,8 @@ targets, whose final state then comes from the agent.
 | `unknown` | `Interrupted` (`outcome_unknown`): the agent cannot tell whether it ran; never retried |
 | no result by lifetime + timeout + 2 min | `Lost` (`no_result`) |
 
+All targets of a capability Operation are dispatched at once, since each agent runs on its own host. The number of targets per Operation bounds the load.
+
 Targets that cannot be dispatched fail with these error classes:
 - `agent_not_bound`: no agent is enrolled for the host.
 - `not_an_agent_host`: the host's profile is not an agent profile.

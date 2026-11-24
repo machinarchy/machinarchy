@@ -449,102 +449,144 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		w.markSettled(key)
 		return
 	}
+	w.runAttached(ctx, key, op)
+}
+
+// attachedStop is why an attached Operation stops launching targets.
+type attachedStop struct {
+	state  resource.OperationState // "" when the Operation is left as it is
+	reason string
+}
+
+// runAttached runs an attached Operation's targets, RunSpec.Concurrency at a
+// time (D-10). Before each launch it checks the deadline, cancellation and
+// the worker's context; once one of them stops the Operation, no new target
+// starts, running ones finish (cancellation closes their sessions), and the
+// Operation is finished only after all of them returned.
+func (w *Worker) runAttached(ctx context.Context, key resource.OperationKey, op *resource.Operation) {
+	slots := make(chan struct{}, max(1, op.Spec.Run.Concurrency))
+	var wg sync.WaitGroup
+	var stop *attachedStop
 	for _, targetSpec := range op.Spec.Targets {
-		if op.Spec.Deadline != nil && !time.Now().Before(*op.Spec.Deadline) {
-			latest, loadErr := w.deps.Operations.GetOperation(context.WithoutCancel(ctx), key.WorkspaceID, key.ID)
-			if loadErr == nil {
-				if err := w.finishWithoutExecution(context.WithoutCancel(ctx), latest, resource.OperationTimedOut, "operation_deadline_exceeded"); err != nil {
-					slog.Error("failed to finish timeout operation", "error", err)
-				}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if stop = w.attachedStopReason(ctx, key, op); stop != nil {
+			if ctx.Err() == nil {
+				<-slots
 			}
-			return
+			break
 		}
-		if ctx.Err() != nil {
-			latest, loadErr := w.deps.Operations.GetOperation(context.WithoutCancel(ctx), key.WorkspaceID, key.ID)
-			if loadErr == nil {
-				if err := w.finishWithoutExecution(context.WithoutCancel(ctx), latest, resource.OperationInterrupted, "worker_stopped"); err != nil {
-					slog.Error("failed to finish interrupted operation", "error", err)
-				}
-			}
-			return
-		}
-		current, stateErr := w.deps.Operations.GetOperationState(ctx, key.WorkspaceID, key.ID)
-		if stateErr != nil {
-			w.deps.Logger.Warn("read Operation state failed", "operation_id", key.ID, "error", stateErr)
-			return
-		}
-		if current == resource.OperationCancelRequested {
-			if err := w.finishWithoutExecution(ctx, op, resource.OperationCancelled, "cancelled"); err != nil {
-				w.deps.Logger.Error("failed to finish cancelled operation", "operation_id", key.ID, "error", err)
-			}
-			return
-		}
-		if current != resource.OperationRunning {
-			return
-		}
-		host, hostErr := w.deps.Hosts.GetHost(ctx, key.WorkspaceID, targetSpec.HostID)
-		if hostErr != nil || host.Metadata.Generation != targetSpec.HostGeneration || host.Spec.Presence != resource.PresenceManaged {
-			w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "host_snapshot_stale"})
-			continue
-		}
-		profile, profileErr := w.deps.Profiles.GetAccessProfile(ctx, key.WorkspaceID, targetSpec.AccessProfileID)
-		if profileErr != nil || profile.DeletedAt != nil {
-			w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "access_profile_unavailable"})
-			continue
-		}
-		revision, revisionErr := w.deps.Profiles.GetAccessProfileRevision(ctx, key.WorkspaceID, targetSpec.AccessProfileID, targetSpec.AccessProfileRevision)
-		if revisionErr != nil || !revision.Spec.Enabled {
-			w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "access_profile_unavailable"})
-			continue
-		}
-		if err = w.deps.Operations.UpdateOperationTarget(ctx, key.WorkspaceID, key.ID, targetSpec.HostID, resource.TargetRunning, nil); err != nil {
-			if !errors.Is(err, resource.ErrOperationFinished) {
-				w.deps.Logger.Warn("start Operation target failed", "operation_id", key.ID, "host_id", targetSpec.HostID, "error", err)
-			}
-			return
-		}
-		commandCtx, commandCancel := context.WithTimeout(ctx, time.Duration(op.Spec.Run.TimeoutSeconds)*time.Second)
-		watchCtx, stopWatching := context.WithCancel(context.Background())
-		go w.watchCancellation(watchCtx, key, commandCancel)
-		started := time.Now()
-		result, runErr := w.deps.Connector.Execute(commandCtx, host, revision, string(op.ID), op.Spec.Run.Argv)
-		w.metrics.duration.Observe(time.Since(started).Seconds())
-		timedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
-		commandCancel()
-		stopWatching()
-		if ctx.Err() != nil {
-			latest, loadErr := w.deps.Operations.GetOperation(context.WithoutCancel(ctx), key.WorkspaceID, key.ID)
-			if loadErr == nil {
-				if err := w.finishWithoutExecution(context.WithoutCancel(ctx), latest, resource.OperationInterrupted, "worker_stopped"); err != nil {
-					slog.Error("failed to finish interrupted operation", "error", err)
-				}
-			}
-			return
-		}
-		state := resource.TargetSucceeded
-		stored := &resource.TargetResult{Stdout: result.Stdout, Stderr: result.Stderr}
-		code := result.ExitCode
-		stored.ExitCode = &code
-		switch {
-		case runErr != nil && timedOut:
-			state = resource.TargetTimedOut
-			stored = &resource.TargetResult{ErrorClass: "timeout"}
-		case runErr != nil:
-			state = resource.TargetFailed
-			stored = &resource.TargetResult{ErrorClass: "remote_execution_failed"}
-		}
-		if runErr == nil && result.ExitCode != 0 {
-			state = resource.TargetFailed
-		}
-		if current, err := w.deps.Operations.GetOperationState(context.WithoutCancel(ctx), key.WorkspaceID, key.ID); err == nil && current == resource.OperationCancelRequested {
-			state = resource.TargetCancelled
-			stored = &resource.TargetResult{ErrorClass: "cancelled"}
-		}
-		w.completeTarget(context.WithoutCancel(ctx), key, targetSpec.HostID, state, stored)
+		wg.Add(1)
+		go func(targetSpec resource.OperationTargetSpec) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			w.runAttachedTarget(ctx, key, op, targetSpec)
+		}(targetSpec)
 	}
-	if err := w.finishResults(context.WithoutCancel(ctx), key); err != nil {
+	wg.Wait()
+	finishCtx := context.WithoutCancel(ctx)
+	if stop == nil && ctx.Err() != nil {
+		stop = &attachedStop{state: resource.OperationInterrupted, reason: "worker_stopped"}
+	}
+	if stop != nil {
+		if stop.state == "" {
+			return
+		}
+		latest, err := w.deps.Operations.GetOperation(finishCtx, key.WorkspaceID, key.ID)
+		if err == nil {
+			if err := w.finishWithoutExecution(finishCtx, latest, stop.state, stop.reason); err != nil {
+				w.deps.Logger.Error("finish stopped Operation failed", "operation_id", key.ID, "reason", stop.reason, "error", err)
+			}
+		}
+		return
+	}
+	if err := w.finishResults(finishCtx, key); err != nil {
 		w.deps.Logger.Warn("persist Operation completion failed", "error", err)
 	}
+}
+
+// attachedStopReason reports whether the next target must not start.
+func (w *Worker) attachedStopReason(ctx context.Context, key resource.OperationKey, op *resource.Operation) *attachedStop {
+	if ctx.Err() != nil {
+		return &attachedStop{state: resource.OperationInterrupted, reason: "worker_stopped"}
+	}
+	if op.Spec.Deadline != nil && !time.Now().Before(*op.Spec.Deadline) {
+		return &attachedStop{state: resource.OperationTimedOut, reason: "operation_deadline_exceeded"}
+	}
+	current, err := w.deps.Operations.GetOperationState(ctx, key.WorkspaceID, key.ID)
+	if err != nil {
+		w.deps.Logger.Warn("read Operation state failed", "operation_id", key.ID, "error", err)
+		return &attachedStop{}
+	}
+	switch current {
+	case resource.OperationCancelRequested:
+		return &attachedStop{state: resource.OperationCancelled, reason: "cancelled"}
+	case resource.OperationRunning:
+		return nil
+	default:
+		return &attachedStop{}
+	}
+}
+
+// runAttachedTarget runs the command on one host and records the outcome.
+// When the worker stops mid-command, the target is left for runAttached to
+// finish as Interrupted.
+func (w *Worker) runAttachedTarget(ctx context.Context, key resource.OperationKey, op *resource.Operation, targetSpec resource.OperationTargetSpec) {
+	host, hostErr := w.deps.Hosts.GetHost(ctx, key.WorkspaceID, targetSpec.HostID)
+	if hostErr != nil || host.Metadata.Generation != targetSpec.HostGeneration || host.Spec.Presence != resource.PresenceManaged {
+		w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "host_snapshot_stale"})
+		return
+	}
+	profile, profileErr := w.deps.Profiles.GetAccessProfile(ctx, key.WorkspaceID, targetSpec.AccessProfileID)
+	if profileErr != nil || profile.DeletedAt != nil {
+		w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "access_profile_unavailable"})
+		return
+	}
+	revision, revisionErr := w.deps.Profiles.GetAccessProfileRevision(ctx, key.WorkspaceID, targetSpec.AccessProfileID, targetSpec.AccessProfileRevision)
+	if revisionErr != nil || !revision.Spec.Enabled {
+		w.completeTarget(ctx, key, targetSpec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "access_profile_unavailable"})
+		return
+	}
+	if err := w.deps.Operations.UpdateOperationTarget(ctx, key.WorkspaceID, key.ID, targetSpec.HostID, resource.TargetRunning, nil); err != nil {
+		if !errors.Is(err, resource.ErrOperationFinished) {
+			w.deps.Logger.Warn("start Operation target failed", "operation_id", key.ID, "host_id", targetSpec.HostID, "error", err)
+		}
+		return
+	}
+	commandCtx, commandCancel := context.WithTimeout(ctx, time.Duration(op.Spec.Run.TimeoutSeconds)*time.Second)
+	watchCtx, stopWatching := context.WithCancel(context.Background())
+	go w.watchCancellation(watchCtx, key, commandCancel)
+	started := time.Now()
+	result, runErr := w.deps.Connector.Execute(commandCtx, host, revision, string(op.ID), op.Spec.Run.Argv)
+	w.metrics.duration.Observe(time.Since(started).Seconds())
+	timedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
+	commandCancel()
+	stopWatching()
+	if ctx.Err() != nil {
+		return
+	}
+	state := resource.TargetSucceeded
+	stored := &resource.TargetResult{Stdout: result.Stdout, Stderr: result.Stderr}
+	code := result.ExitCode
+	stored.ExitCode = &code
+	switch {
+	case runErr != nil && timedOut:
+		state = resource.TargetTimedOut
+		stored = &resource.TargetResult{ErrorClass: "timeout"}
+	case runErr != nil:
+		state = resource.TargetFailed
+		stored = &resource.TargetResult{ErrorClass: "remote_execution_failed"}
+	}
+	if runErr == nil && result.ExitCode != 0 {
+		state = resource.TargetFailed
+	}
+	if current, err := w.deps.Operations.GetOperationState(context.WithoutCancel(ctx), key.WorkspaceID, key.ID); err == nil && current == resource.OperationCancelRequested {
+		state = resource.TargetCancelled
+		stored = &resource.TargetResult{ErrorClass: "cancelled"}
+	}
+	w.completeTarget(context.WithoutCancel(ctx), key, targetSpec.HostID, state, stored)
 }
 
 // markSettled records that a detached Operation has no target left to

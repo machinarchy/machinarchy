@@ -1,5 +1,26 @@
 # ChangeLogAI
 
+## 2026-11-24 — Attached runs fan out to RunSpec.Concurrency (Phase 18: D-10; branch audit/scale)
+
+- **Operation worker:** attached (non-detached) runs used to execute their targets one after another, whatever `RunSpec.Concurrency` said. They now run `Concurrency` targets at a time (1–20); the SSH capacity limiter still caps the total.
+  - Before each launch, the worker checks the deadline, cancellation and its own shutdown.
+  - After a stop, no new target starts. Running targets finish (cancel closes their sessions), and the Operation is finished only after all of them have returned (`Cancelled`, `TimedOut` or `Interrupted`, as before).
+  - The per-target body moved into `runAttachedTarget`, unchanged.
+- **Capability targets:** already dispatched all at once (each agent runs on its own host); documented.
+- **CLI:**
+  - `run --concurrency N` (1–20);
+  - the default is 5 with `--wait` (was 1, so attached CLI runs never fanned out) and 20 for detached launches;
+  - both are capped by the host count.
+- **Tests:**
+  - with a fake connector at 300 ms per target: 12 targets at 4 took 930 ms (ideal 900 ms, sequential 3.6 s); 5 at 1 took 1.53 s; 3 at 20 took 310 ms; peak concurrency equalled the limit;
+  - cancel mid-run starts no further target and ends `Cancelled`;
+  - a worker stop leaves no target `Running` and ends `Interrupted`;
+  - CLI `--concurrency` defaults and limits.
+- **Checks run:**
+  - `go test -race -count=3` for the fan-out and capability worker tests: pass;
+  - `go test` for operationworker, hostaccess (real SSH), service, bootstrap, cli and e2e: pass;
+  - `golangci-lint run --new-from-rev=HEAD ./...`: 0 issues.
+
 ## 2026-11-24 — Execution policy checks arguments (Phase 18: D-11/S-12; branch audit/scale)
 
 - **Policy model (owner decision):** argument templates. Each policy entry is a program followed by one pattern per argument:

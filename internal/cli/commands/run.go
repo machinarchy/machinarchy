@@ -26,9 +26,15 @@ const maxAttachedTimeout = 900
 // NewRunCommand runs a program on managed hosts. It previews the targets,
 // asks for confirmation, and submits bound to the previewed set, so the
 // operation never runs on hosts the user did not see.
+// Fan-out of a run: hosts at once (the server allows 1 to 20).
+const (
+	maxConcurrency             = 20
+	defaultAttachedConcurrency = 5
+)
+
 func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	var rule api.TargetRule
-	var timeout int
+	var timeout, concurrency int
 	var wait, detach bool
 	var capability, input string
 	command := &cobra.Command{
@@ -59,6 +65,9 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 			if rule.Selector == "" && len(rule.Include) == 0 && !rule.All {
 				return clierr.Usagef("select hosts with -l SELECTOR, --host or --all")
 			}
+			if command.Flags().Changed("concurrency") && (concurrency < 1 || concurrency > maxConcurrency) {
+				return clierr.Usagef("--concurrency must be 1 to %d", maxConcurrency)
+			}
 			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
 			if err != nil {
 				return err
@@ -87,12 +96,16 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 				return err
 			}
 			detached := detach || !wait || timeout > maxAttachedTimeout
-			concurrency := 1
-			if detached {
-				concurrency = min(len(preview.Hosts), 20) // a launch takes about a second
+			fanOut := concurrency
+			if !command.Flags().Changed("concurrency") {
+				fanOut = defaultAttachedConcurrency
+				if detached {
+					fanOut = maxConcurrency // a launch takes about a second
+				}
 			}
+			fanOut = min(fanOut, len(preview.Hosts))
 			op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
-				Run: &api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: concurrency, Detach: detached}})
+				Run: &api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: fanOut, Detach: detached}})
 			if err != nil {
 				return fmt.Errorf("submit operation: %w", err)
 			}
@@ -118,6 +131,7 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	flags.StringArrayVar(&rule.Exclude, "exclude", nil, "Remove a host by name or ID (repeatable)")
 	flags.BoolVar(&rule.All, "all", false, "Target every managed host")
 	flags.IntVar(&timeout, "timeout", 60, "Per-host timeout in seconds (up to 86400 when detached, 900 otherwise)")
+	flags.IntVar(&concurrency, "concurrency", 0, fmt.Sprintf("Hosts to run on at once, 1 to %d (default %d with --wait, %d detached)", maxConcurrency, defaultAttachedConcurrency, maxConcurrency))
 	flags.BoolVar(&wait, "wait", false, "Wait for the result and print it; exit non-zero unless every host succeeded")
 	flags.BoolVar(&detach, "detach", false, "Run detached even with --wait (the default without --wait)")
 	flags.StringVar(&capability, "capability", "", "Run this agent capability instead of a program (hosts with an agent Access Profile)")

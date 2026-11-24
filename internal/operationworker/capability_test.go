@@ -88,6 +88,8 @@ type capabilityEnv struct {
 	revision resource.AccessProfileRevision
 	worker   *operationworker.Worker
 	stop     func()
+	// connector runs SSH commands; nil fails any use (capability tests).
+	connector hostaccess.HostConnector
 }
 
 func newCapabilityEnv(t *testing.T) *capabilityEnv {
@@ -159,7 +161,7 @@ func (e *capabilityEnv) start() {
 	e.t.Helper()
 	worker, err := operationworker.New(operationworker.Dependencies{Operations: e.stores.Operations,
 		Queue: e.stores.Operations.(resource.OperationQueueRepository), Hosts: e.stores.ResourceHosts, Profiles: e.stores.ResourceProfiles,
-		Outbox: e.stores.Outbox, Connector: noSSH{}, Recovery: e.stores.Operations.(resource.OperationRecoveryRepository),
+		Outbox: e.stores.Outbox, Connector: e.sshConnector(), Recovery: e.stores.Operations.(resource.OperationRecoveryRepository),
 		ExecutionPolicy: func() domain.ExecutionPolicy { return domain.ExecutionPolicy{Enabled: true, AllowAny: true} },
 		Logger:          testLogger(), Agents: e.agents, AgentBindings: e.bindings, CapabilityResultGrace: e.grace}, 2)
 	if err != nil {
@@ -172,6 +174,13 @@ func (e *capabilityEnv) start() {
 	var once sync.Once
 	e.stop = func() { once.Do(func() { cancel(); <-done }) }
 	e.t.Cleanup(e.stop)
+}
+
+func (e *capabilityEnv) sshConnector() hostaccess.HostConnector {
+	if e.connector == nil {
+		return noSSH{}
+	}
+	return e.connector
 }
 
 func (e *capabilityEnv) op(id resource.ID) *resource.Operation {

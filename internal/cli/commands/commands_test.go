@@ -1307,6 +1307,25 @@ func TestManagedCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("run fans out to --concurrency hosts", func(t *testing.T) {
+		client := fixtures()
+		run(t, client, "run", "-l", "tier=web", "--yes", "--wait", "--", "uptime")
+		if got := client.submitted[0].Run.Concurrency; got != 2 { // two web hosts, default 5
+			t.Fatalf("default attached concurrency = %d, want 2 (capped by the hosts)", got)
+		}
+		client = fixtures()
+		run(t, client, "run", "-l", "tier=web", "--yes", "--wait", "--concurrency", "1", "--", "uptime")
+		if got := client.submitted[0].Run.Concurrency; got != 1 {
+			t.Fatalf("--concurrency 1 submitted %d", got)
+		}
+		for _, value := range []string{"0", "21", "-3"} {
+			client := fixtures()
+			if got := run(t, client, "run", "-l", "tier=web", "--yes", "--concurrency", value, "--", "uptime"); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
+				t.Errorf("--concurrency %s = %+v, want a usage error", value, got)
+			}
+		}
+	})
+
 	t.Run("run --capability submits a capability Operation", func(t *testing.T) {
 		client := fixtures()
 		got := run(t, client, "run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", `{"service":"nginx.service"}`, "--timeout", "45")
