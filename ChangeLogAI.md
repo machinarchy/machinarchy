@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-24 — Audit Phase 16.7: ADR-056 and the root-key rotation drill (branch audit/keys)
+
+- `docs/adr/ADR-056-key-providers-built-in-default.md` and its README row: one root of trust behind the provider interface; `local` by default; KMS providers optional (AUDIT/10 K1–K4); signing key and Operation data in the same envelope.
+- **Drill run once**, real binaries and the repository's SSH lab:
+  - **v1:** secret, profile and host created (the host verified over SSH); a command ran; everything stored as `local:v1`.
+  - **v2 with v1 in the keyring:** old output read; a new command ran; one rewrap round answered `done: true` with 1 secret and 2 Operation values moved.
+  - **v2 only:** old output read and a new command ran (the SSH key decrypted).
+  - 0 server ERROR lines. Details in AUDIT/16 §3.
+
 ## 2026-11-24 — Audit Phase 16.5: Operation data carries key IDs and AAD; one rewrap covers secrets and Operation data (S-07) (branch audit/keys)
 
 - **Gap closed:** Operation specs, per-host output and detached live progress were `pkg/crypto.Encrypt` under one key derived from the encryption secret, with no key ID and no AAD. Rotating the secret made every old Operation unreadable, and a value could be copied between rows.
