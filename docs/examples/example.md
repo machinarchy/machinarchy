@@ -45,10 +45,10 @@ make run-monolit
 
 This target loads .env, then starts cmd/monolit. It serves the API on MACHINARCHY_LISTEN_ADDR, defaulting to :8080. Settings exported in your shell are overridden by .env; to use another file, run make run-monolit ENV_FILE=path/to/file.env.
 
-Run the CLI the same way, with its arguments after --:
+Run the CLI the same way, with its arguments in ARGS:
 
 ~~~sh
-make run-cli -- get hosts
+make run-cli ARGS="get hosts"
 ~~~
 
 Open the Scalar API reference at <http://localhost:8080/scalar>. The raw API document is at <http://localhost:8080/openapi.json>.

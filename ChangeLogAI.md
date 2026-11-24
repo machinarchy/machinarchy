@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-24 — Back to `make run-cli ARGS="…"` only (owner decision; branch audit/keys)
+
+- `mk/build.mk`: removed the `make run-cli -- …` support (`2b0050f`, `2f10e27`). `run-cli` is again `$(call run_with_env,./cmd/machinarchy)` with `ARGS`, byte-identical to before. Why: the `--` form relied on reading make's own command line through `ps`, lost quoting, ran make targets named like CLI words, and let `NAME=…` words change make's own settings. `ARGS` has none of these problems.
+- Docs (`README.md`, `docs/cli/README.md`, `docs/cli/user-full-guide.md`, `docs/development/getting-started.md`, `docs/development/local-environment.md`, `docs/examples/example.md`) use `ARGS="…"` again. The notes on `.env`/`ENV_FILE` (the cause of the earlier lab login failure) and the troubleshooting entry stay.
+
+### Verification
+
+- `git diff 2b0050f~1 -- mk/build.mk` is empty: the Makefile is as before the `--` change.
+- Make 3.81, scratch CLI context on a closed port: `ARGS="create host … --label tier=web --label auth=key"` and `ARGS='run --host ssh-key --yes -- sh -c "echo hi"'` both parsed and reached the API (connection refused); `make help` shows the `ARGS` usage.
+
 ## 2026-11-24 — `make run-cli -- …` passes arguments containing `=` (owner report; branch audit/keys)
 
 - **Bug:** `make run-cli -- create host … --label tier=web --label auth=key` failed with `label "--label" must be KEY=VALUE`. Make takes any word containing `=` as a make variable, so those words never reached the CLI.

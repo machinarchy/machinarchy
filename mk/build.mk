@@ -59,39 +59,8 @@ run-controlmanager: ## Run the control manager
 run-monolit: ## Run the monolith (API + control manager)
 	$(call run_with_env,./cmd/monolit)
 
-run-cli: ## Run the CLI: make run-cli -- get hosts (or ARGS="get hosts")
-	@test -f "$(ENV_FILE)" || { echo "$(ENV_FILE) not found. Run 'make setup-local' first." >&2; exit 1; }
-	@set -a && . "$(abspath $(ENV_FILE))" && set +a && \
-	if [ -n "$(RUN_CLI_FROM_ARGV)" ] && \
-	   args=$$(ps -o command= -p $$PPID 2>/dev/null | awk '{ i = index($$0, " -- "); if (i) print substr($$0, i + 4) }') && \
-	   [ -n "$$args" ]; then \
-		set -f; exec $(GO) run ./cmd/machinarchy $$args; \
-	else \
-		exec $(GO) run ./cmd/machinarchy $(ARGS); \
-	fi
-
-# `make run-cli -- <arguments>` passes the words after `--` to the CLI.
-# Make itself would take a word containing '=' (--label tier=web) as a make
-# variable, so the recipe reads the words back from make's own command line
-# (its parent process): everything after the first " -- ", in order, so a
-# later `--` (run --host x -- uptime) is kept. The extra words are also make
-# goals; .DEFAULT makes them do nothing. Remaining limits, for which
-# ARGS="..." works:
-#   - quoting is lost: sh -c "echo hi" arrives as three words;
-#   - a word that is also a make target (help, build, ...) runs it too.
-# Without `ps` the recipe falls back to the goals, which lack '=' words.
-ifeq (run-cli,$(firstword $(MAKECMDGOALS)))
-  ifneq ($(origin ARGS),command line)
-    RUN_CLI_FROM_ARGV := 1
-    ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
-  else ifneq ($(words $(MAKECMDGOALS)),1)
-    $(error use either ARGS="..." or arguments after --, not both)
-  endif
-  # Extra goals that are existing files would print "is up to date".
-  MAKEFLAGS += --silent
-.DEFAULT:
-	@:
-endif
+run-cli: ## Run the CLI, e.g. make run-cli ARGS="get hosts"
+	$(call run_with_env,./cmd/machinarchy)
 
 ##@ API documentation
 api-docs: ## Regenerate docs/api/swagger.{json,yaml} with swag

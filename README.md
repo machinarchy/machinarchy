@@ -78,10 +78,9 @@ go run ./cmd/machinarchy config use-context local
 go run ./cmd/machinarchy get hosts
 ```
 
-The same through `make`: `make run-monolit` and `make run-cli -- get hosts`.
+The same through `make`: `make run-monolit` and `make run-cli ARGS="get hosts"`.
 These targets load `.env` (or `ENV_FILE=…`) themselves and ignore settings
-exported in your shell; `make run-cli` takes the CLI's arguments after `--`
-(`ARGS="…"` for arguments that need quotes).
+exported in your shell.
 
 The [full user guide](docs/cli/user-full-guide.md) is a step-by-step lab with
 three SSH servers, from login to detached runs. The [CLI guide](docs/cli/README.md)

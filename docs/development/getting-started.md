@@ -109,7 +109,7 @@ Then, in a separate terminal, run the component you are working on. For example:
 make run-api
 ```
 
-Other available local run targets are `make run-controlmanager`, `make run-monolit` and `make run-cli`. These targets load `.env` (override with `ENV_FILE=...`) and execute the corresponding Go package; pass extra arguments with `ARGS`, for example `make run-cli ARGS="get hosts"`. `make run-cli` also takes the CLI's arguments after `--`: `make run-cli -- config set-cluster lab --server http://127.0.0.1:8080`. Quoting is lost after `--`, so use `ARGS` for arguments that need quotes. They do not start PostgreSQL or NATS automatically.
+Other available local run targets are `make run-controlmanager`, `make run-monolit` and `make run-cli`. These targets load `.env` (override with `ENV_FILE=...`) and execute the corresponding Go package; pass extra arguments with `ARGS`, for example `make run-cli ARGS="get hosts"`. They do not start PostgreSQL or NATS automatically.
 
 Because these targets load `.env`, they ignore settings you exported in your shell (for example the CLI guide's `$LAB/server.env`): use `ENV_FILE="$LAB/server.env"`, or run the built binaries from `bin/` directly.
 

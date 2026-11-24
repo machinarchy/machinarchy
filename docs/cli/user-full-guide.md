@@ -41,10 +41,9 @@ export PATH="$PWD/bin:$PATH"
 ```
 
 > **Prefer `make`?** Every `machinarchy …` command in this guide can also be
-> run from the repository root as `make run-cli -- …`, for example
-> `make run-cli -- get hosts`. Quotes are lost after `--`, so a command such
-> as `run … -- sh -c "…"` needs `make run-cli ARGS='…'` or the binary. The
-> guide uses the binaries.
+> run from the repository root as `make run-cli ARGS="…"`, for example
+> `make run-cli ARGS="get hosts"`. Put all the CLI's arguments in `ARGS`;
+> quotes inside it are kept. The guide uses the binaries.
 
 Keep the server's database and a **lab-only CLI config** in a lab directory,
 so nothing touches your real CLI configuration:
