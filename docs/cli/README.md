@@ -17,6 +17,18 @@ make build
 ./bin/machinarchy --help
 ```
 
+Or through `make` (it loads `.env` first; exported variables such as
+`MACHINARCHY_CONFIG` still apply):
+
+```sh
+make run-cli -- get hosts
+make run-cli -- config set-cluster local --server http://localhost:8080
+make run-cli ARGS='create host web-01 --label tier=web'   # arguments with "=" or quotes
+```
+
+Make cannot pass an argument containing `=` or keep quoting; use `ARGS` for
+those, or the binary.
+
 The CLI does not start the API. Start the API or monolith separately; the project [README](../../README.md#quick-start) describes local server setup.
 
 ## Quick setup

@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — Docs: `make run-cli -- …` and the `.env` behaviour of `make run-*` (owner request; branch audit/keys)
+
+- `docs/cli/user-full-guide.md`:
+  - step 1 note: every `machinarchy …` command also runs as `make run-cli -- …`, with the `=`/quoting limits;
+  - step 2 note: use `make run-monolit ENV_FILE="$LAB/server.env"`, because plain `make run-monolit` loads the repository's `.env`, and step 3's login then fails with `Invalid credentials`.
+- `docs/cli/troubleshooting.md`: new "Login fails with `Invalid credentials`": the wrong `.env`; the bootstrap password applying only to an empty database; 429 backoff.
+- `docs/cli/README.md`, `README.md`, `docs/development/local-environment.md`, `docs/examples/example.md`: the `--` form, `ARGS` for arguments with `=` or quotes, and that the `run-*` targets override exported settings (variables `.env` does not set, such as `MACHINARCHY_CONFIG`, are inherited).
+
+### Verification
+
+- With `MACHINARCHY_CONFIG` exported, `make run-cli -- config set-cluster lab --server http://127.0.0.1:8080` wrote to that file, so the guide's lab-only CLI config works through make. Neither `.env` nor `.env.example` sets `MACHINARCHY_CONFIG`.
+
 ## 2026-11-24 — `make run-cli -- <arguments>` (owner request; branch audit/keys)
 
 - `mk/build.mk`: when `run-cli` is the first goal, the words after it become `ARGS`, and make treats them as goals that do nothing (`.DEFAULT`, silent, so an argument that is an existing file prints nothing). Giving both `ARGS=` and words is refused.

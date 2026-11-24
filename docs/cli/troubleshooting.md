@@ -15,6 +15,23 @@ go run ./cmd/machinarchy config use-context local
 
 To use a separate file, pass the same `--config PATH` to each command or set `MACHINARCHY_CONFIG`.
 
+## Login fails with `Invalid credentials`
+
+The admin password from `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` applies only
+when the server creates the first owner, on an empty database. If the login is
+refused:
+
+- **Started with `make run-monolit`?** It loads the repository's `.env`, not
+  the variables you exported, so it may use another database whose `admin`
+  has another password. Start it with
+  `make run-monolit ENV_FILE=path/to/your.env`, or run `bin/machinarchy-monolit`
+  after exporting your settings.
+- **The database already existed** when you set the password: the setting is
+  ignored. Use the password the owner was created with, or start from an empty
+  database.
+- After several failures the server slows logins down (HTTP 429 with
+  `Retry-After`); wait and retry.
+
 ## Unauthorized response
 
 An HTTP 401 (exit code 3) usually means the token is missing, expired, or belongs to a different API deployment. Session tokens expire; API tokens can be revoked. Log in to the intended deployment, update the matching named credentials, and confirm that the context selects that user and cluster:

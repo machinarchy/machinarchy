@@ -40,6 +40,12 @@ make build
 export PATH="$PWD/bin:$PATH"
 ```
 
+> **Prefer `make`?** Every `machinarchy …` command in this guide can also be
+> run from the repository root as `make run-cli -- …`, for example
+> `make run-cli -- get hosts`. Make cannot pass an argument that contains `=`
+> (such as `--label tier=web`) or keep quotes (`sh -c "…"`); for those use
+> `make run-cli ARGS="…"`, or the binary. The guide uses the binaries.
+
 Keep the server's database and a **lab-only CLI config** in a lab directory,
 so nothing touches your real CLI configuration:
 
@@ -158,6 +164,12 @@ Start the server in **its own terminal** and leave it running (Ctrl-C stops it):
 set -a; . "$LAB/server.env"; set +a
 machinarchy-monolit
 ```
+
+> **With `make`, pass the lab settings explicitly:**
+> `make run-monolit ENV_FILE="$LAB/server.env"`. A plain `make run-monolit`
+> loads the repository's `.env` instead and ignores what you exported, so the
+> server uses another database and another admin password, and the login in
+> step 3 fails with `Invalid credentials`.
 
 Back in your main terminal:
 
