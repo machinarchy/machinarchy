@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-24 — Audit Phase 17: ADR-057, agent capabilities as Operations (branch audit/capability-ops)
+
+- `docs/adr/ADR-057-capability-operations.md` records the design and the owner's three decisions:
+  - capability work extends `/api/v1/managed/operations` (`OperationKind=Capability`);
+  - `POST /api/v1/agents/{id}/invoke` is removed;
+  - hosts are bound to agents through a per-host enrolment token.
+- The ADR also covers the `agent` Access Profile connector, the PubAck-gated command relay with `Nats-Msg-Id` (M-7), persist-then-ack results with a status mapping where `unknown` is never retried (M-8), `Lost` targets on no result, and restart behaviour.
+- Docs only; implementation follows in later commits.
+
 ## 2026-11-24 — CLI guide step 15 works in zsh (owner report; branch audit/keys)
 
 - **Bug:** `docs/cli/user-full-guide.md` built `KEYS` as one space-separated string and passed it unquoted (`… $KEYS`). zsh, the macOS default shell, does not split unquoted parameters, so the CLI received a single argument and failed with `unknown flag: --trust SHA256:… --trust …`.
