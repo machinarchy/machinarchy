@@ -77,6 +77,9 @@ func (e *APIError) ErrorHint() string {
 	case e.Status == http.StatusUnauthorized:
 		return "The server did not accept the stored credential; it may be expired or revoked.\n" +
 			"Store a new token with: printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin"
+	case e.Status == http.StatusForbidden && e.Fields["code"] == "execution_not_allowed":
+		return "The server's execution policy does not allow this command. An owner can add a matching entry,\n" +
+			"such as \"systemctl is-active {unit}\", to operations.allowedPrograms with PUT /api/v1/runtime-config."
 	case e.Status == http.StatusForbidden:
 		return "The credential is valid but is not permitted to do this.\n" +
 			"Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them."

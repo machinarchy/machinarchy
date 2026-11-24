@@ -178,6 +178,9 @@ func TestManagedResourceFlow(t *testing.T) {
 	if _, err := s.SubmitOperationForRule(ctx, f.operator, rule, "", resource.RunSpec{Argv: []string{"rm", "-rf", "/"}, TimeoutSeconds: 30, Concurrency: 1}); !errors.Is(err, domain.ErrExecutionNotAllowed) {
 		t.Fatalf("submit of a program outside the allowlist = %v", err)
 	}
+	if _, err := s.SubmitOperationForRule(ctx, f.operator, rule, "", resource.RunSpec{Argv: []string{"uptime", "--since"}, TimeoutSeconds: 30, Concurrency: 1}); !errors.Is(err, domain.ErrExecutionNotAllowed) {
+		t.Fatalf("submit of an allowed program with arguments its entry does not allow = %v", err)
+	}
 	operation, err := s.SubmitOperationForRule(ctx, f.operator, rule, preview.TargetsHash, run)
 	if err != nil || len(operation.Spec.Targets) != 2 {
 		t.Fatalf("submit = %+v, %v", operation, err)

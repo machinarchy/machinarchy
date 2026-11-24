@@ -33,6 +33,9 @@ func TestOneErrorShape(t *testing.T) {
 	e.GET("/input", func(c echo.Context) error {
 		return FromError(c, fmt.Errorf("%w: name is too long", domain.ErrInvalidInput))
 	})
+	e.GET("/policy", func(c echo.Context) error {
+		return FromError(c, fmt.Errorf("%w: program \"rm\" is not on the allowed list", domain.ErrExecutionNotAllowed))
+	})
 	e.GET("/unknown", func(c echo.Context) error { return FromError(c, errors.New("db password=hunter2")) })
 	e.GET("/escaped", func(echo.Context) error { return errors.New("boom") })
 
@@ -42,6 +45,7 @@ func TestOneErrorShape(t *testing.T) {
 	}{
 		{"/mapped", CodeConflict, "resource revision conflict", http.StatusConflict},
 		{"/input", CodeInvalidRequest, "invalid input: name is too long", http.StatusBadRequest},
+		{"/policy", CodeExecutionNotAllowed, `command execution is not permitted: program "rm" is not on the allowed list`, http.StatusForbidden},
 		{"/unknown", CodeInternal, "request failed", http.StatusInternalServerError}, // never leaks detail
 		{"/escaped", CodeInternal, "request failed", http.StatusInternalServerError},
 		{"/no-such-route", CodeNotFound, "Not Found", http.StatusNotFound},

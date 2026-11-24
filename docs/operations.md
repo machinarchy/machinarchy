@@ -44,10 +44,44 @@ keyring file, and the agent gateway key and enrollment token.
 | `MACHINARCHY_LOGIN_FREE_FAILURES`, `_MAX_BACKOFF`, `_IP_MAX_FAILURES`, `_FAILURE_WINDOW` | Failed-login throttling, defaults `5`, `15m`, `20`, `15m`. See [sessions](#login-sessions). |
 | `MACHINARCHY_SESSION_PREVIOUS_KEYS` | Secret. Earlier `MACHINARCHY_OPERATOR_TOKEN` values (comma-separated) still accepted to verify existing sessions during a key rotation. |
 | `MACHINARCHY_SHUTDOWN_TIMEOUT` | One budget (default 25s) for HTTP drain, worker drain and closing the database. Keep it below the orchestrator grace period. |
-| `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set; the program list is re-checked when each Operation runs. |
+| `MACHINARCHY_EXECUTION_ENABLED` / `_ALLOWED_PROGRAMS` | Operations stay disabled until both are set. The list holds [argument templates](#execution-policy), comma-separated. It seeds the runtime configuration of a new database only; afterwards the policy is changed in the runtime configuration. It is re-checked when each Operation runs. |
 | `MACHINARCHY_SSH_*` | Egress policy: private ranges, loopback and all ports are denied unless allowed. |
 | `MACHINARCHY_SSH_HOST_KEY_POLICY` | Host-key trust for profiles without their own policy: `tofu` (development default), `approve` (production default) or `pinned`. See [SSH host keys](#ssh-host-keys). |
 | `MACHINARCHY_AGENT_GATEWAY_*` | See [agent gateway](#agent-gateway). Off unless `_NATS_URL` is set. |
+
+### Execution policy
+
+The execution policy allows commands, not just programs (D-11). Each entry is a template: the program, then one pattern per argument.
+
+| Entry | Allows |
+|---|---|
+| `uptime` | `uptime` with no arguments |
+| `systemctl is-active {unit}` | exactly `systemctl is-active` and one unit name |
+| `df -h {path}` | `df -h` and one absolute path without `..` |
+| `journalctl -u {unit} -n {int}` | those words, a unit name and a number |
+| `backup.sh *` | `backup.sh` with any arguments |
+| `*` | any program with any arguments |
+
+- A literal must equal the argument.
+- Placeholders are `{unit}` (letters, digits, `@ _ . : -`), `{word}` (letters, digits, `_ . -`), `{int}` (digits), `{path}` (absolute, no `..`) and `{any}` (any one argument).
+- No placeholder matches an argument that starts with `-`, so an option cannot be slipped in where a value is expected.
+- A final `*` allows any further arguments: an explicit choice for scripts you trust.
+- A program can have several entries; a command must match one of them.
+- A literal can't contain spaces, and an entry for one path (`/usr/bin/df`) doesn't cover another (`df`).
+
+A refused command gets HTTP 403 with code `execution_not_allowed`. The message names the program and its allowed entries, never the arguments.
+
+To change the policy on a running deployment, an owner publishes a new runtime configuration revision. Restarting with a different `MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS` does nothing once the database has a configuration:
+
+```sh
+curl -s https://machinarchy.example/api/v1/runtime-config -H "Authorization: Bearer $OWNER_SESSION" |
+  jq '{expectedRevision: .revision, changeNote: "allow systemctl is-active",
+       config: (.config | .operations.allowedPrograms += ["systemctl is-active {unit}"])}' |
+  curl -s -X PUT https://machinarchy.example/api/v1/runtime-config -H "Authorization: Bearer $OWNER_SESSION" \
+    -H 'Content-Type: application/json' --data-binary @- | jq '{revision, allowed: .config.operations.allowedPrograms}'
+```
+
+**Upgrading from a version before Phase 18:** a bare program name used to allow any arguments. It now allows none. If your commands pass arguments, add templates for them, or `PROGRAM *` to keep the old behaviour for that program. Do this before upgrading, or with the command above afterwards.
 
 ### Behind a reverse proxy
 

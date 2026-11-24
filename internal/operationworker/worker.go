@@ -399,7 +399,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		return
 	}
 	if (op.Status.State == resource.OperationRunning || op.Status.State == resource.OperationCancelRequested) && detachedResumeNeeded(op) {
-		if err := w.deps.ExecutionPolicy().Check(op.Spec.Run.Argv[0]); err != nil && op.Status.State == resource.OperationRunning {
+		if err := w.deps.ExecutionPolicy().Check(op.Spec.Run.Argv); err != nil && op.Status.State == resource.OperationRunning {
 			for _, target := range op.Status.Targets {
 				if target.State == resource.TargetPending {
 					w.completeTarget(ctx, key, target.Spec.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "execution_denied"})
@@ -432,7 +432,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 		return
 	}
 	policy := w.deps.ExecutionPolicy()
-	if err = policy.Check(op.Spec.Run.Argv[0]); err != nil {
+	if err = policy.Check(op.Spec.Run.Argv); err != nil {
 		for _, target := range op.Spec.Targets {
 			w.completeTarget(ctx, key, target.HostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "execution_denied"})
 		}

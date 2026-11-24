@@ -162,13 +162,13 @@ func (c Config) Validate() error {
 		}
 		seenPorts[port] = struct{}{}
 	}
-	for _, program := range c.Operations.AllowedPrograms {
-		if strings.TrimSpace(program) == "" || strings.ContainsAny(program, " \t\r\n") {
-			return fmt.Errorf("%w: operation program entries must be executable names", ErrInvalid)
+	for _, entry := range c.Operations.AllowedPrograms {
+		if strings.TrimSpace(entry) == "" || strings.ContainsAny(entry, "\t\r\n") {
+			return fmt.Errorf("%w: operation policy entries must be one line: a program and its argument patterns", ErrInvalid)
 		}
 	}
 	if _, err := domain.NewExecutionPolicy(c.Operations.Enabled, c.Operations.AllowedPrograms); err != nil {
-		return fmt.Errorf("%w: operation policy is invalid", ErrInvalid)
+		return fmt.Errorf("%w: operation policy: %w", ErrInvalid, err)
 	}
 	return nil
 }

@@ -150,7 +150,7 @@ func (s *ManagedResourceService) SubmitOperation(ctx context.Context, principal 
 	if err := domain.ValidateArgv(run.Argv); err != nil {
 		return nil, err
 	}
-	if err := s.policy().Check(run.Argv[0]); err != nil {
+	if err := s.policy().Check(run.Argv); err != nil {
 		return nil, err
 	}
 	targets, err := s.operationTargets(ctx, principal.WorkspaceID, hostIDs, resource.ConnectorSSH)

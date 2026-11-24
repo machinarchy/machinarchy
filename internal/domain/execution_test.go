@@ -103,17 +103,17 @@ func TestExecutionPolicy(t *testing.T) {
 	if _, err := NewExecutionPolicy(true, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("enabling with no programs error = %v, want ErrInvalidInput", err)
 	}
-	if _, err := NewExecutionPolicy(true, []string{"ok", "bad program"}); !errors.Is(err, ErrInvalidInput) {
+	if _, err := NewExecutionPolicy(true, []string{"ok", "bad;program"}); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("an invalid program name error = %v, want ErrInvalidInput", err)
 	}
 	disabled, err := NewExecutionPolicy(false, nil)
 	if err != nil {
 		t.Fatalf("a disabled policy needs no programs: %v", err)
 	}
-	if err := disabled.Check("uptime"); !errors.Is(err, ErrExecutionNotAllowed) {
+	if err := disabled.Check([]string{"uptime"}); !errors.Is(err, ErrExecutionNotAllowed) {
 		t.Errorf("disabled policy error = %v, want ErrExecutionNotAllowed", err)
 	}
-	if err := (ExecutionPolicy{}).Check("uptime"); !errors.Is(err, ErrExecutionNotAllowed) {
+	if err := (ExecutionPolicy{}).Check([]string{"uptime"}); !errors.Is(err, ErrExecutionNotAllowed) {
 		t.Errorf("the zero policy must allow nothing, got %v", err)
 	}
 
@@ -122,17 +122,17 @@ func TestExecutionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, program := range []string{"uptime", "/usr/bin/df"} {
-		if err := listed.Check(program); err != nil {
+		if err := listed.Check([]string{program}); err != nil {
 			t.Errorf("Check(%q) = %v", program, err)
 		}
 	}
 	for _, program := range []string{"df", "rm", "UPTIME", "uptime2"} {
-		if err := listed.Check(program); !errors.Is(err, ErrExecutionNotAllowed) {
+		if err := listed.Check([]string{program}); !errors.Is(err, ErrExecutionNotAllowed) {
 			t.Errorf("Check(%q) = %v, want ErrExecutionNotAllowed (matching is exact)", program, err)
 		}
 	}
 	wildcard, err := NewExecutionPolicy(true, []string{"*"})
-	if err != nil || wildcard.Check("whatever") != nil {
+	if err != nil || wildcard.Check([]string{"whatever"}) != nil {
 		t.Errorf("* must allow any program explicitly: %v", err)
 	}
 }

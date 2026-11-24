@@ -142,7 +142,7 @@ MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD=lab-admin-password-123
 MACHINARCHY_SSH_ALLOW_LOOPBACK=true
 MACHINARCHY_SSH_ALLOWED_PORTS=2221,2222,2223
 MACHINARCHY_EXECUTION_ENABLED=true
-MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS=uptime,hostname,sh,sleep,df
+MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS='uptime,hostname,sh -c *,sleep {int},df -h {path}'
 MACHINARCHY_API_DOCS_ENABLED=true
 EOF
 chmod 600 "$LAB/server.env"
@@ -154,7 +154,7 @@ chmod 600 "$LAB/server.env"
 | `MACHINARCHY_ENCRYPTION_SECRET` | Encrypts secrets and command output at rest. **Keep it**: a new one makes the stored data unreadable |
 | `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` | Creates the first owner, `admin`, on an empty database |
 | `MACHINARCHY_SSH_ALLOW_LOOPBACK`, `MACHINARCHY_SSH_ALLOWED_PORTS` | The egress policy refuses loopback and non-22 ports by default; the lab's hosts are both |
-| `MACHINARCHY_EXECUTION_ENABLED`, `…_ALLOWED_PROGRAMS` | Running commands is off by default, and only listed programs may run |
+| `MACHINARCHY_EXECUTION_ENABLED`, `…_ALLOWED_PROGRAMS` | Running commands is off by default, and only listed commands may run. Each entry is a program and its allowed arguments: `uptime` takes none, `sleep {int}` one number, `df -h {path}` one absolute path, and `sh -c *` lets step 11 run a script (an interpreter runs anything, so a real deployment lists narrow commands; see [execution policy](../operations.md#execution-policy)). The quotes keep the spaces when the file is sourced |
 | `MACHINARCHY_API_DOCS_ENABLED` | Serves the API reference at `/scalar` and `/openapi.json` (see [docs/api](../api/README.md)) |
 
 Start the server in **its own terminal** and leave it running (Ctrl-C stops it):
@@ -801,16 +801,17 @@ Real errors from this lab and what they mean:
 
 **Known problems** (recorded in AUDIT/13C, to be fixed in a later phase):
 
-- **A program that is not on the allowed list gives HTTP 500:**
+- **The allowed list is read from `server.env` only when the database is
+  new.** Afterwards an owner changes it in the runtime configuration; see
+  [execution policy](../operations.md#execution-policy). A refused command
+  explains itself:
 
   ```console
   $ machinarchy run --host ssh-key --wait --yes -- whoami
-  Error: submit operation: API returned HTTP 500: request failed (request ID lUyUSMOatNWsQfMuZniSUpKGumhzoYAJ)
-  Hint: The server reported an internal error. Retry later. Include the request ID when reporting the problem.
+  Error: submit operation: API returned HTTP 403: command execution is not permitted: program "whoami" is not on the allowed list (request ID …)
+  Hint: The server's execution policy does not allow this command. An owner can add a matching entry,
+  such as "systemctl is-active {unit}", to operations.allowedPrograms with PUT /api/v1/runtime-config.
   ```
-
-  The cause is the server's `MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS`, not an
-  internal failure: add the program there and restart the server.
 - **A trusted host whose keys change keeps `READY True` for up to 5 minutes**,
   until the controller's next periodic check. Commands to it fail safely
   meanwhile (`remote_execution_failed`), and `trust host --replace` reports

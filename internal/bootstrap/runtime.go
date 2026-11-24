@@ -142,9 +142,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 		defaults.SSH.AllowedPorts = append(defaults.SSH.AllowedPorts, int(port))
 	}
 	defaults.Operations.Enabled = cfg.Execution.Enabled
-	for program := range cfg.Execution.Programs {
-		defaults.Operations.AllowedPrograms = append(defaults.Operations.AllowedPrograms, program)
-	}
+	defaults.Operations.AllowedPrograms = append(defaults.Operations.AllowedPrograms, cfg.Execution.Entries...)
 	if cfg.Execution.AllowAny {
 		defaults.Operations.AllowedPrograms = []string{"*"}
 	}

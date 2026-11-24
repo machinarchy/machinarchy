@@ -1,5 +1,36 @@
 # ChangeLogAI
 
+## 2026-11-24 — Execution policy checks arguments (Phase 18: D-11/S-12; branch audit/scale)
+
+- **Policy model (owner decision):** argument templates. Each policy entry is a program followed by one pattern per argument:
+  - literals;
+  - placeholders `{unit}`, `{word}`, `{int}`, `{path}` and `{any}`, none of which matches an argument starting with `-`;
+  - an optional final `*` for any remaining arguments.
+
+  A command must match one of its program's entries. `ExecutionPolicy.Check` takes the whole argv, and the service and the worker (at submit and at run time) call it that way.
+- **Breaking:** a bare program name used to allow any arguments; it now allows none. `PROGRAM *` restores the old behaviour for one program. `docs/operations.md` "Execution policy" has the upgrade note and the runtime-config command to change the policy.
+- **Refusals:** a refused command now gets HTTP 403 `execution_not_allowed` instead of 500 (guide known problem, G-13C). The message names the program and its allowed entries, never the arguments. The CLI hint explains how an owner adds an entry.
+- **Runtime configuration:** entries may contain spaces, and validation errors say what is wrong with an entry.
+- **Bootstrap:** seeds the runtime configuration from the normalized entries.
+- **Quoting:** `domain.QuoteArgv` remains the only quoting implementation (unified in Phase 5). A new test sends hostile arguments through a real `/bin/sh`.
+- **Tests:**
+  - template matching with 20 argument-abuse cases (AUDIT/02 S-12);
+  - parsing errors;
+  - a new fuzz target, `FuzzArgumentTemplates`: about 950k runs in 20 s, no failures;
+  - `FuzzQuoteArgv`: 10 s, no failures;
+  - service refusal of allowed-program-but-wrong-arguments;
+  - the HTTP mapping and the CLI hint.
+- **Docs:**
+  - operations guide "Execution policy";
+  - SECURITY.md;
+  - `.env.example`;
+  - the guide's lab policy, now quoted because entries contain spaces, plus its known-problem note.
+  - The guide's lab policy was checked by sourcing it and matching every command the guide runs.
+- **Checks run:**
+  - `go build ./...` and `go vet ./...`: clean;
+  - `golangci-lint run --new-from-rev=HEAD ./...`: 0 issues;
+  - `go test ./internal/... ./cmd/...`: pass.
+
 ## 2026-11-24 — Docs for capability Operations (Phase 17; branch audit/capability-ops)
 
 - `docs/operations.md`:

@@ -24,9 +24,11 @@ const (
 	CodeNotFound         = "not_found"
 	CodeConflict         = "conflict"
 	CodeTargetsChanged   = "targets_changed"
-	CodeTooManyRequests  = "too_many_requests"
-	CodeUnavailable      = "unavailable"
-	CodeInternal         = "internal"
+	// CodeExecutionNotAllowed: the execution policy refuses the command.
+	CodeExecutionNotAllowed = "execution_not_allowed"
+	CodeTooManyRequests     = "too_many_requests"
+	CodeUnavailable         = "unavailable"
+	CodeInternal            = "internal"
 )
 
 // Body is the error response document.
@@ -122,6 +124,9 @@ type Mapping struct {
 // so internal details never leak.
 var common = []Mapping{
 	{domain.ErrPermissionDenied, http.StatusForbidden, CodePermissionDenied, "permission denied"},
+	// The message names the program and the allowed patterns, never the
+	// arguments (domain.ExecutionPolicy.Check).
+	{domain.ErrExecutionNotAllowed, http.StatusForbidden, CodeExecutionNotAllowed, ""},
 	{resource.ErrTargetsChanged, http.StatusConflict, CodeTargetsChanged, resource.ErrTargetsChanged.Error()},
 	{resource.ErrConflict, http.StatusConflict, CodeConflict, "resource revision conflict"},
 	{resource.ErrAlreadyExists, http.StatusConflict, CodeConflict, resource.ErrAlreadyExists.Error()},

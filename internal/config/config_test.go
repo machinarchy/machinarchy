@@ -365,12 +365,13 @@ func TestLoadExecutionPolicy(t *testing.T) {
 	t.Run("enabled with an explicit program list", func(t *testing.T) {
 		setCommonEnv(t)
 		t.Setenv("MACHINARCHY_EXECUTION_ENABLED", "true")
-		t.Setenv("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS", "uptime, /usr/bin/df")
+		t.Setenv("MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS", "uptime, /usr/bin/df -h {path}, systemctl is-active {unit}")
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
-		if cfg.Execution.Check("uptime") != nil || cfg.Execution.Check("/usr/bin/df") != nil || cfg.Execution.Check("rm") == nil {
+		if cfg.Execution.Check([]string{"uptime"}) != nil || cfg.Execution.Check([]string{"/usr/bin/df", "-h", "/"}) != nil || cfg.Execution.Check([]string{"systemctl", "is-active", "nginx"}) != nil ||
+			cfg.Execution.Check([]string{"systemctl", "stop", "sshd"}) == nil || cfg.Execution.Check([]string{"uptime", "-p"}) == nil || cfg.Execution.Check([]string{"rm"}) == nil {
 			t.Errorf("unexpected policy: %+v", cfg.Execution)
 		}
 	})
