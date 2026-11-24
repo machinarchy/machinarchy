@@ -59,8 +59,28 @@ run-controlmanager: ## Run the control manager
 run-monolit: ## Run the monolith (API + control manager)
 	$(call run_with_env,./cmd/monolit)
 
-run-cli: ## Run the CLI, e.g. make run-cli ARGS="get hosts"
+run-cli: ## Run the CLI: make run-cli -- get hosts (or ARGS="get hosts")
 	$(call run_with_env,./cmd/machinarchy)
+
+# `make run-cli -- <arguments>`: the words after run-cli are passed to the
+# CLI, and make treats them as goals that do nothing. Make imposes three
+# limits; use ARGS="..." when one applies:
+#   - a word containing '=' (e.g. --label tier=web) is taken as a variable;
+#   - quoting is lost (sh -c "echo hi" arrives as three words);
+#   - a word that is also a make target (help, build, ...) runs it too.
+ifeq (run-cli,$(firstword $(MAKECMDGOALS)))
+  RUN_CLI_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  ifneq ($(strip $(RUN_CLI_ARGS)),)
+    ifeq ($(origin ARGS),command line)
+      $(error use either ARGS="..." or arguments after --, not both)
+    endif
+    ARGS := $(RUN_CLI_ARGS)
+  endif
+  # Extra goals that are existing files would print "is up to date".
+  MAKEFLAGS += --silent
+.DEFAULT:
+	@:
+endif
 
 ##@ API documentation
 api-docs: ## Regenerate docs/api/swagger.{json,yaml} with swag

@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-24 — `make run-cli -- <arguments>` (owner request; branch audit/keys)
+
+- `mk/build.mk`: when `run-cli` is the first goal, the words after it become `ARGS`, and make treats them as goals that do nothing (`.DEFAULT`, silent, so an argument that is an existing file prints nothing). Giving both `ARGS=` and words is refused.
+- Make limits, documented in `mk/build.mk` and `docs/development/getting-started.md`: a word containing `=` becomes a make variable, quoting is lost, and a word that is also a make target runs it. `ARGS="..."` still works for those.
+- `docs/development/getting-started.md` also notes that the `run-*` targets load `.env` and ignore exported shell settings (use `ENV_FILE=` or `bin/`). This is what caused a failed lab login: `make run-monolit` used the repo's `.env` database instead of `$LAB/server.env`.
+
+### Verification
+
+- Make 3.81 (macOS):
+  - `make run-cli -- --config <scratch> config set-cluster lab --server http://127.0.0.1:8080` → `Cluster "lab" configured.`, and `config get-contexts` lists it;
+  - the `ARGS="…"` form works;
+  - both forms together is refused with a clear error;
+  - a CLI error passes through (exit status 2);
+  - `make -n build-cli` is unchanged, and `make help` shows the new usage.
+
 ## 2026-11-24 — Audit Phase 16.7: ADR-056 and the root-key rotation drill (branch audit/keys)
 
 - `docs/adr/ADR-056-key-providers-built-in-default.md` and its README row: one root of trust behind the provider interface; `local` by default; KMS providers optional (AUDIT/10 K1–K4); signing key and Operation data in the same envelope.
