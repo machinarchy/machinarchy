@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-25 — A stopping Control Manager waits for its components (Phase 20: F20-04; branch audit/ha)
+
+- **Found by the HA harness:** after a graceful `SIGTERM` to one of two Control Managers during a burst of 120 host creations, 5–8 hosts were never reconciled, not even after 7 minutes.
+  - Their outbox events were acknowledged, some still had host leases from the stopped replica, and the stopped replica still held the cluster-wide resync lease (10-minute TTL). The surviving replica therefore skipped its periodic resync.
+  - The stopped replica's log showed no drain and no lease release.
+- **Root cause:** `bootstrap.combinedWorkers.Start` (the engine, the Operation worker and the agent gateway) returned as soon as the context ended. `ctx.Done()` was ready on every pass of its wait loop, so it counted out the components without waiting for any of them.
+  - The process then closed the database and exited while the engine was still draining its queue and before it released its leases.
+  - Every graceful stop of a Control Manager or monolith was affected.
+- **Fix:** the loop waits for every component's result; the end of the context only triggers the cancellation, once. `runComponents` still bounds the whole wait with the shutdown budget and leaves the database open if a component overruns it.
+- **Test:** `TestCombinedWorkersWaitForEveryComponent`, with a component that takes 300 ms to stop. Before the fix, `Start` returned with that component still running.
+- **Checks run:** `go test ./internal/bootstrap/`: pass. Lint: 0 issues.
+
 ## 2026-11-24 — The first owner is created in one transaction (Phase 20: F20-03; branch audit/ha)
 
 - **Found by the HA harness (intermittent):** replicas starting together on an empty database all run `BootstrapOwner`. The winner created the user as a reader and promoted it to owner in a second transaction. A replica that checked in between saw an existing account that was not an owner, and stopped with `bootstrap username "admin" already exists but is not a workspace owner`. A winner crashing in that window would have left every later start failing the same way.

@@ -103,16 +103,23 @@ func (workers combinedWorkers) Start(ctx context.Context) error {
 	for _, worker := range workers {
 		go func(component workerLifecycle) { errorsChannel <- component.Start(childCtx) }(worker)
 	}
+	// Wait for every component, also after the context ends: each one drains
+	// and releases its leases before returning, and the caller bounds the
+	// wait with the shutdown budget (AUDIT/20 F20-04). The context only
+	// triggers the cancellation, once.
 	var firstErr error
-	for range workers {
+	done := ctx.Done()
+	for remaining := len(workers); remaining > 0; {
 		select {
 		case err := <-errorsChannel:
+			remaining--
 			if err != nil && firstErr == nil {
 				firstErr = err
 				cancel()
 			}
-		case <-ctx.Done():
+		case <-done:
 			cancel()
+			done = nil
 		}
 	}
 

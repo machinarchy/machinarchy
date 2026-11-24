@@ -288,3 +288,42 @@ func TestEngineDrainFitsInsideShutdownBudget(t *testing.T) {
 		t.Fatalf("engine drain %s leaves no room for post-cancel grace and runtime close", got)
 	}
 }
+
+// slowStopWorker takes a while to stop after its context ends, like the
+// engine draining its queue and releasing its leases.
+type slowStopWorker struct {
+	delay   time.Duration
+	stopped atomic.Bool
+}
+
+func (w *slowStopWorker) Start(ctx context.Context) error {
+	<-ctx.Done()
+	time.Sleep(w.delay)
+	w.stopped.Store(true)
+	return nil
+}
+
+// TestCombinedWorkersWaitForEveryComponent (AUDIT/20 F20-04): on shutdown the
+// combined Start returns only after every component has stopped. Before, it
+// returned as soon as the context ended, so the process closed the database
+// and exited while the engine was still draining: queued hosts were lost
+// after their events were acknowledged, and leases were never released.
+func TestCombinedWorkersWaitForEveryComponent(t *testing.T) {
+	fast, slow := &slowStopWorker{}, &slowStopWorker{delay: 300 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- combinedWorkers{fast, slow}.Start(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return")
+	}
+	if !fast.stopped.Load() || !slow.stopped.Load() {
+		t.Fatalf("Start returned before every component stopped (fast %v, slow %v)", fast.stopped.Load(), slow.stopped.Load())
+	}
+}
