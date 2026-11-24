@@ -18,6 +18,16 @@ const MaxTargetHosts = 10000
 // set the caller previewed and approved.
 var ErrTargetsChanged = errors.New("the targeted hosts changed since they were previewed")
 
+// IsHostBuiltinField reports whether key is a built-in Host selector field
+// rather than a label (see SelectorField).
+func IsHostBuiltinField(key string) bool {
+	switch key {
+	case "id", "name", "environment", "phase", "presence", "profile":
+		return true
+	}
+	return false
+}
+
 // SelectorField exposes a managed Host to the shared selector syntax.
 // Built-in fields: id, name, environment, phase, presence and profile (the
 // Access Profile ID); name, environment, phase and presence ignore case. Any

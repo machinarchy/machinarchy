@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,6 +113,9 @@ func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
 			return fmt.Errorf("%w: %w", resource.ErrAlreadyExists, err)
 		}
 		return fmt.Errorf("insert managed Host: %w", err)
+	}
+	if err := s.writeHostLabels(ctx, tx, host.Metadata.WorkspaceID, host.Metadata.ID, host.Metadata.Labels); err != nil {
+		return err
 	}
 	if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, domain.AuditResourceHostCreated,
 		domain.AuditTargetResourceHost, string(host.Metadata.ID), map[string]string{"name": host.Metadata.Name}); err != nil {
@@ -223,6 +227,20 @@ func (s *Store) ListHosts(ctx context.Context, filter resource.HostListFilter) (
 		query += ` AND id > ?`
 		args = append(args, string(filter.After))
 	}
+	labelSQL, labelArgs := labelConditions(filter.WorkspaceID, filter.Labels)
+	query += labelSQL
+	args = append(args, labelArgs...)
+	if len(filter.Lookup) > 0 {
+		ids := make([]any, 0, len(filter.Lookup))
+		names := make([]any, 0, len(filter.Lookup))
+		for _, entry := range filter.Lookup {
+			entry = strings.TrimSpace(entry)
+			ids = append(ids, entry)
+			names = append(names, strings.ToLower(entry))
+		}
+		query += ` AND (id IN (` + placeholders(len(ids)) + `) OR LOWER(name) IN (` + placeholders(len(names)) + `))`
+		args = append(append(args, ids...), names...)
+	}
 	query += ` ORDER BY id LIMIT ?`
 	args = append(args, resource.PageLimit(filter.Limit))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
@@ -268,7 +286,7 @@ func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource
 	if host.Spec.Presence == resource.PresenceAbsent {
 		eventType, change = eventing.HostDeletionRequested, "deletion-requested"
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, nil, eventType, change, nil)
+	return s.writeHost(ctx, host, expectedRevision, false, domain.AuditResourceHostUpdated, nil, eventType, change, nil)
 }
 
 // TrustHostKeys pins host key fingerprints (resource.Host.TrustHostKeys).
@@ -293,7 +311,7 @@ func (s *Store) TrustHostKeys(ctx context.Context, workspaceID int, id resource.
 	if value, ok := resource.LeaseFenceFromContext(ctx); ok {
 		fence = &value
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostKeyTrusted, details, eventing.HostSpecChanged, "host-keys-trusted", fence)
+	return s.writeHost(ctx, host, expectedRevision, false, domain.AuditResourceHostKeyTrusted, details, eventing.HostSpecChanged, "host-keys-trusted", fence)
 }
 
 func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ID,
@@ -308,7 +326,7 @@ func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id reso
 	if err := host.UpdateMetadata(expectedRevision, name, environmentID, labels, now); err != nil {
 		return err
 	}
-	return s.writeHost(ctx, host, expectedRevision, domain.AuditResourceHostUpdated, nil, "", "", nil)
+	return s.writeHost(ctx, host, expectedRevision, true, domain.AuditResourceHostUpdated, nil, "", "", nil)
 }
 
 func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID,
@@ -337,10 +355,10 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID
 		action = domain.AuditResourceHostKeyChanged
 		details = map[string]string{"presented": strings.Join(presented, " "), "trusted": strings.Join(host.Spec.AccessTarget.Trust, " ")}
 	}
-	return s.writeHost(ctx, host, host.Metadata.Revision-1, action, details, "", "", fence)
+	return s.writeHost(ctx, host, host.Metadata.Revision-1, false, action, details, "", "", fence)
 }
 
-func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, auditAction string, auditDetails map[string]string,
+func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, labelsChanged bool, auditAction string, auditDetails map[string]string,
 	eventType, eventChange string, fence *resource.LeaseFence) error {
 	labels, err := encodeJSON(host.Metadata.Labels)
 	if err != nil {
@@ -382,6 +400,11 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 	}
 	if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
 		return err
+	}
+	if labelsChanged {
+		if err := s.writeHostLabels(ctx, tx, host.Metadata.WorkspaceID, host.Metadata.ID, host.Metadata.Labels); err != nil {
+			return err
+		}
 	}
 	if auditDetails == nil {
 		auditDetails = map[string]string{}
@@ -980,3 +1003,62 @@ func nullablePositiveID(value int) any {
 
 var _ resource.HostRepository = (*Store)(nil)
 var _ resource.OperationRepository = (*Store)(nil)
+
+// labelConditions renders label constraints as SQL over managed_host_labels
+// (AUDIT A-12). Positive conditions select host IDs through the lookup index;
+// negative ones exclude hosts that have a matching row.
+func labelConditions(workspaceID int, constraints []domain.LabelConstraint) (string, []any) {
+	var sql strings.Builder
+	var args []any
+	for _, c := range constraints {
+		sub := `SELECT host_id FROM managed_host_labels WHERE workspace_id = ? AND label_key = ?`
+		subArgs := []any{workspaceID, c.Key}
+		if c.Op == domain.LabelIn || c.Op == domain.LabelNotIn {
+			sub += ` AND label_value IN (` + placeholders(len(c.Values)) + `)`
+			for _, value := range c.Values {
+				subArgs = append(subArgs, value)
+			}
+		}
+		switch c.Op {
+		case domain.LabelExists, domain.LabelIn:
+			sql.WriteString(` AND id IN (` + sub + `)`)
+		case domain.LabelNotExists, domain.LabelNotIn:
+			sql.WriteString(` AND id NOT IN (` + sub + `)`)
+		default:
+			continue
+		}
+		args = append(args, subArgs...)
+	}
+	return sql.String(), args
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// writeHostLabels mirrors a Host's labels into managed_host_labels in the
+// transaction that writes the Host.
+func (s *Store) writeHostLabels(ctx context.Context, tx *sql.Tx, workspaceID int, id resource.ID, labels map[string]string) error {
+	if _, err := tx.ExecContext(ctx, s.bind(`DELETE FROM managed_host_labels WHERE host_id = ?`), string(id)); err != nil {
+		return fmt.Errorf("clear Host labels: %w", err)
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	values := make([]string, 0, len(keys))
+	args := make([]any, 0, 4*len(keys))
+	for _, key := range keys {
+		values = append(values, "(?, ?, ?, ?)")
+		args = append(args, string(id), workspaceID, key, labels[key])
+	}
+	if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO managed_host_labels (host_id, workspace_id, label_key, label_value) VALUES `+
+		strings.Join(values, ", ")), args...); err != nil {
+		return fmt.Errorf("index Host labels: %w", err)
+	}
+	return nil
+}

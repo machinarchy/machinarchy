@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
 // Paging bounds for list queries. Lists use keyset pagination: a page holds at
@@ -33,6 +35,12 @@ type HostListFilter struct {
 	Phase         HostPhase
 	After         ID
 	Limit         int
+	// Labels narrows the page to Hosts that satisfy every constraint,
+	// evaluated in the database (see domain.Selector.LabelConstraints).
+	Labels []domain.LabelConstraint
+	// Lookup, when not empty, keeps only Hosts whose ID or name (ignoring
+	// case) is in it.
+	Lookup []string
 }
 
 // OperationListFilter selects Operations in one workspace, newest first.

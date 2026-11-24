@@ -1,5 +1,37 @@
 # ChangeLogAI
 
+## 2026-11-24 — Label selectors run in the database (Phase 18: A-12; branch audit/scale)
+
+- **Migration 000009 (SQLite and PostgreSQL):** `managed_host_labels(host_id → managed_hosts ON DELETE CASCADE, workspace_id, label_key, label_value)`.
+  - Primary key `(host_id, label_key)`; lookup index `(workspace_id, label_key, label_value, host_id)`.
+  - Backfilled from `managed_hosts.labels` (`json_each` / `jsonb_each_text`).
+  - The store rewrites the rows only in the transaction of a label change (`UpdateHostMetadata`) or a host insert; status updates don't touch them.
+- **Domain:**
+  - `Selector.LabelConstraints` turns label requirements into conditions every match satisfies: `=`/`in` become `LabelIn` (`LabelExists` with wildcards), `!=`/`notin` become `LabelNotIn` (nothing with wildcards), plus existence and non-existence.
+  - `resource.IsHostBuiltinField`.
+  - `HostListFilter` gains `Labels` and `Lookup` (ID or name, ignoring case).
+- **Store:** positive conditions use `id IN (SELECT host_id …)` through the lookup index; negative ones use `id NOT IN (…)`.
+- **Service:**
+  - Host listings with a selector page through the database's candidates and apply the selector exactly. The 5,000-row scan cap is gone.
+  - Previews and submissions load only the candidates: every host for `all`, label-filtered hosts that match the selector, and the hosts named in include and exclude. The 10,000-host limit now counts matched hosts, not the whole inventory.
+- **Tests:**
+  - store contract on both engines: 14 selector shapes produce the same result through SQL candidates as the selector alone; label changes and deletes update the index; workspace isolation; ID or name lookup; paging;
+  - migration 9 backfill test (SQLite).
+- **Benchmark** `BenchmarkHostSelectors`, laptop (i7-9750H), 10 iterations each:
+
+  | Engine, hosts | Selective list page | Selective preview | `canary,tier!=batch` preview | No label requirement (full scan) |
+  |---|---|---|---|---|
+  | SQLite, 10k | 16 ms | 13 ms | 10 ms | 0.30 s |
+  | SQLite, 50k | 81 ms | 135 ms | 55 ms | 1.31 s |
+  | PostgreSQL, 10k | 14 ms | 9 ms | 38 ms | 0.38 s |
+  | PostgreSQL, 50k | 54 ms | 57 ms | 150 ms | 1.89 s |
+
+  The selective selector is `tier=db,zone=z9`, 1 % of hosts. Every case finishes well within the 25 s request deadline. Before this change, a preview over an inventory larger than 10,000 hosts failed.
+- **Docs:** `docs/operations.md` "Upgrades and schema" (migration 9, selectors at scale).
+- **Checks run:**
+  - `go test` with PostgreSQL required for store, service, transport, domain, hostaccess and bootstrap: pass;
+  - `golangci-lint run --new-from-rev=HEAD ./...`: 0 issues.
+
 ## 2026-11-24 — Attached runs fan out to RunSpec.Concurrency (Phase 18: D-10; branch audit/scale)
 
 - **Operation worker:** attached (non-detached) runs used to execute their targets one after another, whatever `RunSpec.Concurrency` said. They now run `Concurrency` targets at a time (1–20); the SSH capacity limiter still caps the total.

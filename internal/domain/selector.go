@@ -346,3 +346,63 @@ func (r TargetRule) parse() (*Selector, error) {
 	}
 	return ParseSelector(r.Selector)
 }
+
+// LabelOp is a label condition a store can evaluate with an index.
+type LabelOp int
+
+// Label conditions (see LabelConstraints).
+const (
+	LabelExists LabelOp = iota
+	LabelNotExists
+	LabelIn
+	LabelNotIn
+)
+
+// LabelConstraint is one indexable condition on a label.
+type LabelConstraint struct {
+	Key    string
+	Op     LabelOp
+	Values []string // for LabelIn and LabelNotIn; never wildcards
+}
+
+// LabelConstraints translates the requirements on labels (keys for which
+// builtin is false) into conditions a store can evaluate with an index
+// (AUDIT A-12). Every subject the selector matches satisfies them all, so a
+// store may use them to narrow candidates; the selector itself must still be
+// applied to the result, which keeps wildcards and built-in fields exact.
+//
+// Equality and "in" become LabelIn (LabelExists with wildcards); inequality
+// and "notin" become LabelNotIn (nothing with wildcards); existence maps
+// directly. Label comparisons are case-sensitive, like the selector's.
+func (s *Selector) LabelConstraints(builtin func(key string) bool) []LabelConstraint {
+	if s == nil {
+		return nil
+	}
+	var out []LabelConstraint
+	for _, req := range s.reqs {
+		if builtin(req.key) {
+			continue
+		}
+		wild := false
+		for _, value := range req.values {
+			wild = wild || strings.ContainsAny(value, "*?")
+		}
+		switch req.op {
+		case opExists:
+			out = append(out, LabelConstraint{Key: req.key, Op: LabelExists})
+		case opNotExists:
+			out = append(out, LabelConstraint{Key: req.key, Op: LabelNotExists})
+		case opEquals, opIn:
+			if wild {
+				out = append(out, LabelConstraint{Key: req.key, Op: LabelExists})
+			} else {
+				out = append(out, LabelConstraint{Key: req.key, Op: LabelIn, Values: append([]string(nil), req.values...)})
+			}
+		case opNotEquals, opNotIn:
+			if !wild {
+				out = append(out, LabelConstraint{Key: req.key, Op: LabelNotIn, Values: append([]string(nil), req.values...)})
+			}
+		}
+	}
+	return out
+}

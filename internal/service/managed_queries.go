@@ -31,10 +31,6 @@ type HostQuery struct {
 	Limit         int
 }
 
-// maxSelectorScan bounds how many rows one selector-filtered page reads; the
-// page then ends early with a cursor so the caller can continue.
-const maxSelectorScan = 5000
-
 func (s *ManagedResourceService) ListHosts(ctx context.Context, principal domain.Principal, query HostQuery) (*resource.Page[resource.Host], error) {
 	if err := authorizeRead(principal, domain.PermissionInventoryRead); err != nil {
 		return nil, err
@@ -62,15 +58,19 @@ func (s *ManagedResourceService) ListHosts(ctx context.Context, principal domain
 	if err != nil {
 		return nil, err
 	}
-	page := &resource.Page[resource.Host]{Items: []resource.Host{}}
+	// Label requirements run in the database (A-12); the selector is still
+	// applied to every candidate, which keeps built-in fields and wildcards
+	// exact. Without label requirements this reads the inventory in pages
+	// until the page is full, bounded by the request's deadline.
+	filter.Labels = selector.LabelConstraints(resource.IsHostBuiltinField)
 	filter.Limit = resource.MaxPageSize
-	for scanned := 0; scanned < maxSelectorScan; {
+	page := &resource.Page[resource.Host]{Items: []resource.Host{}}
+	for {
 		batch, err := s.hosts.ListHosts(ctx, filter)
 		if err != nil {
 			return nil, err
 		}
 		for i := range batch {
-			scanned++
 			filter.After = batch[i].Metadata.ID
 			if selector.MatchesFields(batch[i].SelectorField(environments[batch[i].Metadata.EnvironmentID])) {
 				page.Items = append(page.Items, batch[i])
@@ -84,8 +84,6 @@ func (s *ManagedResourceService) ListHosts(ctx context.Context, principal domain
 			return page, nil // end of inventory
 		}
 	}
-	page.NextCursor = string(filter.After) // scan budget used; resume from here
-	return page, nil
 }
 
 func (s *ManagedResourceService) DeleteHost(ctx context.Context, principal domain.Principal, id resource.ID, revision uint64) error {
@@ -195,25 +193,60 @@ func (s *ManagedResourceService) resolveTargets(ctx context.Context, workspaceID
 	if err := rule.Validate(); err != nil {
 		return nil, err
 	}
-	hosts := make([]resource.Host, 0)
-	filter := resource.HostListFilter{WorkspaceID: workspaceID, Limit: resource.MaxPageSize}
-	for {
-		batch, err := s.hosts.ListHosts(ctx, filter)
-		if err != nil {
-			return nil, err
-		}
-		hosts = append(hosts, batch...)
-		if len(hosts) > resource.MaxTargetHosts {
-			return nil, fmt.Errorf("%w: the inventory has more than %d hosts; narrow the selection", domain.ErrInvalidInput, resource.MaxTargetHosts)
-		}
-		if len(batch) < filter.Limit {
-			break
-		}
-		filter.After = batch[len(batch)-1].Metadata.ID
+	selector, err := rule.ParsedSelector()
+	if err != nil {
+		return nil, err
 	}
+	// Load only the candidates: every Host for an explicit "all", Hosts that
+	// pass the selector's label constraints (A-12), and the Hosts named in
+	// include and exclude. ResolveHostTargets then applies the rule exactly.
 	environments, err := s.environmentNames(ctx, workspaceID)
 	if err != nil {
 		return nil, err
+	}
+	seen := map[resource.ID]bool{}
+	hosts := make([]resource.Host, 0)
+	// collect adds the Hosts of filter for which keep is true (nil: all).
+	collect := func(filter resource.HostListFilter, keep func(*resource.Host) bool) error {
+		filter.WorkspaceID, filter.Limit = workspaceID, resource.MaxPageSize
+		for {
+			batch, err := s.hosts.ListHosts(ctx, filter)
+			if err != nil {
+				return err
+			}
+			for i := range batch {
+				if keep != nil && !keep(&batch[i]) {
+					continue
+				}
+				if !seen[batch[i].Metadata.ID] {
+					seen[batch[i].Metadata.ID] = true
+					hosts = append(hosts, batch[i])
+				}
+			}
+			if len(hosts) > resource.MaxTargetHosts {
+				return fmt.Errorf("%w: the selection covers more than %d hosts; narrow it", domain.ErrInvalidInput, resource.MaxTargetHosts)
+			}
+			if len(batch) < filter.Limit {
+				return nil
+			}
+			filter.After = batch[len(batch)-1].Metadata.ID
+		}
+	}
+	switch {
+	case rule.All:
+		err = collect(resource.HostListFilter{}, nil)
+	case selector != nil:
+		err = collect(resource.HostListFilter{Labels: selector.LabelConstraints(resource.IsHostBuiltinField)}, func(host *resource.Host) bool {
+			return selector.MatchesFields(host.SelectorField(environments[host.Metadata.EnvironmentID]))
+		})
+	}
+	if err != nil {
+		return nil, err
+	}
+	if named := append(append([]string(nil), rule.Include...), rule.Exclude...); len(named) > 0 && !rule.All {
+		if err := collect(resource.HostListFilter{Lookup: named}, nil); err != nil {
+			return nil, err
+		}
 	}
 	return resource.ResolveHostTargets(rule, hosts, environments)
 }

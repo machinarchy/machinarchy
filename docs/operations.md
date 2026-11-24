@@ -580,3 +580,17 @@ cannot change a CHECK constraint, so it takes time proportional to the stored
 output. An 834 MB database (100,000 targets) took 3 minutes on a laptop.
 Raise the timeout for larger databases. PostgreSQL changes the constraint in
 place.
+
+Migration `000009` adds `managed_host_labels`, an indexed copy of every host's
+labels that label selectors query, and fills it from the existing hosts. It
+takes time proportional to the number of labels. The API still returns labels
+from `managed_hosts`; both are written in one transaction.
+
+**Selectors at scale.** Label requirements (`tier=web`, `role in (a,b)`,
+`tier!=legacy`, `canary`, `!canary`) run in the database, so neither a host
+listing nor a preview scans the inventory, and an inventory over 10,000 hosts
+no longer makes previews fail. Built-in fields and wildcards are checked on
+the candidates. A selector with no label requirement (`name=web-*`) still
+reads the whole inventory: 1.3 s on SQLite and 1.9 s on PostgreSQL for 50,000
+hosts on a laptop, within the 25 s request deadline. A preview may match at
+most 10,000 hosts.
