@@ -1,5 +1,16 @@
 # ChangeLogAI
 
+## 2026-11-24 — Docs for capability Operations (Phase 17; branch audit/capability-ops)
+
+- `docs/operations.md`:
+  - "Enrolling a host" covers agent Access Profiles, agent hosts without an endpoint, and `hostId` tokens.
+  - New "Capability Operations" section: submission, status mapping, `Lost`, the dispatch error classes, and agent-host `Ready` reasons.
+  - The `invoke` note is gone.
+- `docs/cli/commands.md`: `create host` without `--endpoint` for agent hosts; `run --capability`.
+- `README.md`: the API table drops `/{id}/invoke`.
+- Known limitation (documented): an agent host's `Ready` condition updates at the next host resync (5 minutes by default) after its agent enrols. Dispatch does not depend on it.
+- Docs only; no checks run for this entry.
+
 ## 2026-11-24 — E2E tests run capability Operations (Phase 17; branch audit/capability-ops)
 
 - `test/e2e`: both tests use capability Operations instead of the removed `POST /api/v1/agents/{id}/invoke`. New helpers are in `test/e2e/capability_test.go`.

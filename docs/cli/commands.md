@@ -55,11 +55,12 @@ go run ./cmd/machinarchy get hosts -o json | jq '.[].metadata.name'
 ```sh
 go run ./cmd/machinarchy get profiles
 go run ./cmd/machinarchy create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web --trust SHA256:...
+go run ./cmd/machinarchy create host web-02 --profile agents   # an agent host: no endpoint
 go run ./cmd/machinarchy label host web-01 canary=yes tier-
 go run ./cmd/machinarchy delete host web-01
 ```
 
-Binding a host to an Access Profile, or changing its endpoint or trusted keys, needs the workspace owner. `delete host` asks for confirmation (`--yes` skips it) and is refused while an operation targets the host.
+Binding a host to an Access Profile, or changing its endpoint or trusted keys, needs the workspace owner. `--endpoint` is needed for hosts on an SSH profile. Hosts on an `agent` profile are reached through their enrolled agent instead (see [enrolling a host](../operations.md#enrolling-a-host)). `delete host` asks for confirmation (`--yes` skips it) and is refused while an operation targets the host.
 
 ## Running programs
 
@@ -74,6 +75,12 @@ go run ./cmd/machinarchy cancel operation 01JABCDEF123
 ```
 
 `--wait` polls until the operation finishes, prints each host's state, exit code and first output line, and exits non-zero unless every host succeeded. Readers can list operations but never see their arguments or output.
+
+On agent hosts, `run --capability NAME` calls one of the agent's capabilities instead of a program. `--input` takes a JSON object and `--timeout` defaults to 60 seconds. It previews, confirms and supports `--wait` the same way; `--detach` and a program after `--` are refused:
+
+```sh
+go run ./cmd/machinarchy run -l tier=web --capability service.status --input '{"service":"nginx.service"}' --wait
+```
 
 Errors and verbose structured logs go to stderr. Resource output goes to stdout, so it can be piped without log lines mixed into the data.
 

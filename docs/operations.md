@@ -13,9 +13,9 @@ see the [runbook](runbook.md).
 
 Run several API replicas behind a load balancer against PostgreSQL. Run the
 Control Manager once per database for SQLite, and one or more for PostgreSQL
-(fenced leases make replicas safe). `POST /api/v1/agents/{id}/invoke` works
-only in a process that runs the agent gateway (Control Manager role or the
-monolith); the standalone API answers 503.
+(fenced leases make replicas safe). Capability Operations on agent hosts are
+carried out by a process that runs the agent gateway (Control Manager role or
+the monolith); the standalone API only records them.
 
 ## Configuration
 
@@ -209,14 +209,31 @@ The lists come from `agentgateway.ControllerPermissions` and
 
 #### Enrolling a host
 
-An owner issues one token per host. It is single-use, expires after 1 hour
-by default (at most 24 hours), and can be bound to the host's name:
+A host reached through its agent is a managed host on an Access Profile with
+the `agent` connector. Such a profile takes no username, credential, host-key
+or execution settings, and its hosts need no endpoint:
+
+```sh
+curl -s -X POST https://machinarchy.example/api/v1/managed/access-profiles \
+  -H "Authorization: Bearer $OWNER_SESSION" -H 'Content-Type: application/json' \
+  -d '{"name":"agents","spec":{"connectorKind":"agent","enabled":true}}' | jq -r .id
+machinarchy create host web-01 --profile agents --label tier=web
+```
+
+An owner then issues one token per host. It is single-use, expires after 1
+hour by default (at most 24 hours), can be bound to the host's name, and with
+`hostId` binds the agent that enrols with it to that managed host:
 
 ```sh
 curl -s -X POST https://machinarchy.example/api/v1/agents/enrollment-tokens \
   -H "Authorization: Bearer $OWNER_SESSION" -H 'Content-Type: application/json' \
-  -d '{"hostname":"web-01.example","ttlSeconds":3600}' | jq -r .token
+  -d '{"hostname":"web-01.example","hostId":"<host id>","ttlSeconds":3600}' | jq -r .token
 ```
+
+Enrolling with a host-bound token replaces any earlier binding of that host
+(a replaced machine takes over its host) and is audited as
+`agent.host_bound`. A revoked agent no longer serves its host. A token for a
+host that does not exist is refused.
 
 The secret (`mae_...`) is shown only in that response; only its SHA-256 is
 stored. Put it on the host as `MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE`
@@ -229,6 +246,46 @@ revokes an unused one. Issuing and revoking are audited, and an agent's
 The gateway provisions the `MACHINARCHY_AGENT_COMMANDS` JetStream stream (file
 storage, 24h max age, 15 min duplicate window) and one durable consumer per
 agent. JetStream must be enabled on the NATS server.
+
+#### Capability Operations
+
+Agent work is an Operation like an SSH run ([ADR-057](adr/ADR-057-capability-operations.md)):
+`POST /api/v1/managed/operations` with `capability` instead of `run`, or
+
+```sh
+machinarchy run -l tier=web --capability service.status --input '{"service":"nginx.service"}' --wait
+```
+
+It needs the same permission as a run, every target must be on an `agent`
+profile (and a run's targets on an `ssh` profile), and the capability input
+is hidden from readers like a run's argv. Each target gets one durable
+command. A relay publishes it with `Nats-Msg-Id` set to the command ID and
+records it as sent only after JetStream confirms. Results are stored before
+the agent's result is acknowledged, so a controller restart in the middle of
+an Operation loses nothing. Cancelling sends `operation.cancel` to running
+targets, whose final state then comes from the agent.
+
+| Agent result | Target |
+|---|---|
+| `succeeded` | `Succeeded`, with the agent's output |
+| `failed`, `rejected` | `Failed`; the error class is the agent's code |
+| `timed_out` / `cancelled` | `TimedOut` / `Cancelled` |
+| `unknown` | `Interrupted` (`outcome_unknown`): the agent cannot tell whether it ran; never retried |
+| no result by lifetime + timeout + 2 min | `Lost` (`no_result`) |
+
+Targets that cannot be dispatched fail with these error classes:
+- `agent_not_bound`: no agent is enrolled for the host.
+- `not_an_agent_host`: the host's profile is not an agent profile.
+- `access_profile_unavailable`: the profile is missing or disabled.
+- `host_snapshot_stale`: the host changed after submission.
+- `agent_gateway_unavailable`: this process does not run the gateway.
+- `agent_command_undelivered`: the command could not be published before it expired.
+
+An agent host's `Ready` condition reports `AgentConnected`,
+`AgentDisconnected`, `AgentNotEnrolled` or `AgentGatewayDisabled`.
+Machinarchy never contacts such a host over SSH. After an agent enrols,
+`Ready` updates at the next host resync (5 minutes by default). Dispatch does
+not wait for it.
 
 ## Key management
 
