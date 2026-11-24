@@ -651,10 +651,10 @@ someone is in the middle. The lab's servers keep their host keys, so simulate
 it: register a host at `ssh-hostcheck`'s address, but trust `ssh-key`'s keys:
 
 ```console
-$ KEYS=$(machinarchy get hosts ssh-key -o json | jq -r '.spec.accessTarget.trust | map("--trust " + .) | join(" ")'); echo "$KEYS" | cut -c1-80
+$ KEYS=($(machinarchy get hosts ssh-key -o json | jq -r '.spec.accessTarget.trust[] | "--trust", .')); echo "${KEYS[@]}" | cut -c1-80
 --trust SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4 --trust SHA256:N+XdeA
 
-$ machinarchy create host moved --endpoint 127.0.0.1:2223 --profile lab-password $KEYS
+$ machinarchy create host moved --endpoint 127.0.0.1:2223 --profile lab-password "${KEYS[@]}"
 NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
 moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Pending  Unknown
 
@@ -665,6 +665,10 @@ moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Active
 $ machinarchy get hosts moved -o json | jq -r '.status.conditions[] | select(.type=="Ready") | .reason + ": " + .message'
 HostKeyChanged: the host presents SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA, SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM, SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM; trusted: SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA. Nothing was sent to it. If the change is expected: machinarchy trust host moved --replace
 ```
+
+`KEYS` is an array so that each `--trust` and fingerprint is its own argument
+in both bash and zsh (zsh, the macOS default, does not split an unquoted
+`$KEYS` on spaces, and the CLI would get one long unknown flag).
 
 Machinarchy did not log in: the password was never sent. Commands are refused
 too:

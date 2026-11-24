@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-24 — CLI guide step 15 works in zsh (owner report; branch audit/keys)
+
+- **Bug:** `docs/cli/user-full-guide.md` built `KEYS` as one space-separated string and passed it unquoted (`… $KEYS`). zsh, the macOS default shell, does not split unquoted parameters, so the CLI received a single argument and failed with `unknown flag: --trust SHA256:… --trust …`.
+- **Fix:** an array, `KEYS=($(… | jq -r '.spec.accessTarget.trust[] | "--trust", .'))`, passed as `"${KEYS[@]}"`, plus a short note on why. The printed output in the guide is unchanged.
+
+### Verification
+
+- With sample host JSON, bash 3.2 and zsh both pass 4 separate arguments (`--trust`, fingerprint, `--trust`, fingerprint), and `echo "${KEYS[@]}" | cut -c1-80` prints the line the guide shows.
+
 ## 2026-11-24 — Docs check after Phases 14–16 (owner request; branch audit/keys)
 
 - **Links:** a script resolved every relative link and `#anchor` in `README.md`, `CONTRIBUTING.md` and `docs/` (77 files, `docs/archive` excluded). Two links pointed at a removed `#quick-start` heading; one was also relative to the wrong README. Both now point at the project README's "Run locally" (`docs/cli/README.md`, `docs/cli/example-cli.md`).
