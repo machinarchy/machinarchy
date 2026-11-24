@@ -252,8 +252,9 @@ type agentList struct {
 }
 
 // TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy is the end-to-end path
-// of AUDIT/04 M-1 to M-8: enrolment, lease renewal, a signed capability call,
-// a verified result, revocation and graceful shutdown of both processes.
+// of AUDIT/04 M-1 to M-8 and ADR-057: per-host enrolment, lease renewal, a
+// capability Operation over two agents with signed commands and verified
+// results, revocation and graceful shutdown of every process.
 func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end test")
@@ -316,22 +317,19 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		t.Fatalf("controller key: %d %+v", status, key)
 	}
 
-	// An owner issues a single-use token bound to this host's name (M-4).
+	// Two managed hosts reached through their agents. An owner issues one
+	// single-use token per host, bound to the host and this machine's name
+	// (M-4, ADR-057).
 	hostname, err := os.Hostname()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var issued struct {
-		ID    string `json:"id"`
-		Token string `json:"token"`
-	}
-	if status := client.do(t, http.MethodPost, "/api/v1/agents/enrollment-tokens",
-		map[string]any{"hostname": hostname, "ttlSeconds": 600}, &issued); status != http.StatusCreated || issued.Token == "" {
-		t.Fatalf("issue enrolment token: %d %+v", status, issued)
-	}
-	tokenFile := secretFile(t, work, "agent.token", issued.Token)
+	profileID := agentProfile(t, client)
+	hostA, hostB := agentHost(t, client, profileID, "agent-a"), agentHost(t, client, profileID, "agent-b")
+	tokenA := hostToken(t, client, hostA, hostname)
+	tokenFile := secretFile(t, work, "agent.token", tokenA)
 	bootstrapCreds := ns.BootstrapCredentials(t)
-	agentEnv := func(name, state string) []string {
+	agentEnv := func(name, state, tokenFile string) []string {
 		return []string{
 			"MACHINARCHY_ENVIRONMENT=development",
 			"MACHINARCHY_AGENT_NAME=" + name,
@@ -343,7 +341,7 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		}
 	}
 	agentState := filepath.Join(work, "agent", "state.json")
-	agent := start(t, agentBinary, agentEnv("e2e-agent", agentState), filepath.Join(work, "agent.log"))
+	agent := start(t, agentBinary, agentEnv("e2e-agent", agentState, tokenFile), filepath.Join(work, "agent.log"))
 	defer func() {
 		if t.Failed() {
 			agent.dump(t)
@@ -360,7 +358,7 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 
 	// The token is now used up: a second host with the same token is refused
 	// and exits 78, and the token records who used it.
-	second := start(t, agentBinary, agentEnv("e2e-second", filepath.Join(work, "second", "state.json")), filepath.Join(work, "second.log"))
+	second := start(t, agentBinary, agentEnv("e2e-second", filepath.Join(work, "second", "state.json"), tokenFile), filepath.Join(work, "second.log"))
 	select {
 	case <-second.exited:
 	case <-time.After(30 * time.Second):
@@ -373,14 +371,15 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 	var tokens struct {
 		Items []struct {
 			ID          string `json:"id"`
+			HostID      string `json:"hostId"`
 			UsedByAgent string `json:"usedByAgent"`
 		} `json:"items"`
 	}
 	if status := client.do(t, http.MethodGet, "/api/v1/agents/enrollment-tokens", nil, &tokens); status != http.StatusOK ||
-		len(tokens.Items) != 1 || tokens.Items[0].UsedByAgent != agentID {
+		len(tokens.Items) != 1 || tokens.Items[0].UsedByAgent != agentID || tokens.Items[0].HostID != hostA {
 		t.Fatalf("enrolment tokens after use: %d %+v", status, tokens)
 	}
-	if strings.Contains(fmt.Sprint(tokens), issued.Token) {
+	if strings.Contains(fmt.Sprint(tokens), tokenA) {
 		t.Fatal("the token list exposes the secret")
 	}
 
@@ -390,46 +389,65 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 		t.Fatalf("the agent did not store its NATS user JWT (%v)", err)
 	}
 
-	// 2. A capability call round-trips through JetStream, signed both ways.
-	var result struct {
-		Status string          `json:"status"`
-		Output json.RawMessage `json:"output"`
+	// A second agent enrols for the second host.
+	agentB := start(t, agentBinary, agentEnv("e2e-agent-b", filepath.Join(work, "agent-b", "state.json"),
+		secretFile(t, work, "agent-b.token", hostToken(t, client, hostB, hostname))), filepath.Join(work, "agent-b.log"))
+	defer func() {
+		if t.Failed() {
+			agentB.dump(t)
+		}
+	}()
+	waitFor(t, 30*time.Second, "second agent enrolment", func() bool {
+		agents = agentList{}
+		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && len(agents.Items) == 2 &&
+			agents.Items[0].Connected && agents.Items[1].Connected
+	})
+
+	// 2. A capability Operation over both hosts: one signed command per
+	// target through JetStream, one verified result each.
+	op := runCapability(t, client, "runtime.info", hostA, hostB)
+	if op.Status.State != "Succeeded" {
+		t.Fatalf("runtime.info Operation = %+v", op)
 	}
-	if status := client.do(t, http.MethodPost, "/api/v1/agents/"+agentID+"/invoke",
-		map[string]any{"capability": "runtime.info", "timeoutSeconds": 20}, &result); status != http.StatusOK || result.Status != "succeeded" {
-		t.Fatalf("invoke runtime.info: %d %+v", status, result)
-	}
-	var info struct {
-		OS           string   `json:"os"`
-		Capabilities []string `json:"capabilities"`
-	}
-	if err := json.Unmarshal(result.Output, &info); err != nil || info.OS == "" || !strings.Contains(strings.Join(info.Capabilities, ","), "runtime.info") {
-		t.Fatalf("runtime.info output = %s (%v)", result.Output, err)
+	for _, host := range []string{hostA, hostB} {
+		state, output, _ := op.target(host)
+		var info struct {
+			OS           string   `json:"os"`
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.Unmarshal([]byte(output), &info); state != "Succeeded" || err != nil || info.OS == "" ||
+			!strings.Contains(strings.Join(info.Capabilities, ","), "runtime.info") {
+			t.Fatalf("host %s: %s, runtime.info output = %s (%v)", host, state, output, err)
+		}
 	}
 	// The agent itself refuses capabilities it does not offer: no generic exec.
-	var refused struct {
-		Status string `json:"status"`
-		Code   string `json:"code"`
+	refused := runCapability(t, client, "shell.exec", hostA)
+	if state, _, class := refused.target(hostA); state != "Failed" || class == "" {
+		t.Fatalf("shell.exec target: %s/%s, want Failed with the agent's code (%+v)", state, class, refused)
 	}
-	if status := client.do(t, http.MethodPost, "/api/v1/agents/"+agentID+"/invoke",
-		map[string]any{"capability": "shell.exec", "timeoutSeconds": 10}, &refused); status != http.StatusOK || refused.Status != "rejected" {
-		t.Fatalf("shell.exec: %d %+v, want a rejected result", status, refused)
-	}
-	var bad map[string]string
 
 	// 3. Lease renewal moves last-seen forward (heartbeat 5s).
 	waitFor(t, 20*time.Second, "a lease renewal", func() bool {
-		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK &&
-			agents.Items[0].LastSeenAt.After(firstSeen)
+		agents = agentList{}
+		if client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) != http.StatusOK {
+			return false
+		}
+		for _, a := range agents.Items {
+			if a.ID == agentID && a.LastSeenAt.After(firstSeen) {
+				return true
+			}
+		}
+		return false
 	})
 
 	// 4. Revocation: the next renewal is refused and the agent is disconnected.
 	if status := client.do(t, http.MethodPost, "/api/v1/agents/"+agentID+"/revoke", nil, nil); status != http.StatusNoContent {
 		t.Fatalf("revoke status %d", status)
 	}
-	if status := client.do(t, http.MethodPost, "/api/v1/agents/"+agentID+"/invoke",
-		map[string]any{"capability": "runtime.info"}, &bad); status != http.StatusServiceUnavailable {
-		t.Fatalf("invoke on a revoked agent status = %d %v", status, bad)
+	// Its host is no longer served: the target fails without a command sent.
+	revoked := runCapability(t, client, "runtime.info", hostA)
+	if state, _, class := revoked.target(hostA); state != "Failed" || class != "agent_not_bound" {
+		t.Fatalf("Operation on the revoked agent's host: %s/%s", state, class)
 	}
 	// The agent learns of the revocation at its next renewal (heartbeat 5s)
 	// and exits 78 by itself, which tells supervisors not to restart it.
@@ -451,14 +469,18 @@ func TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy(t *testing.T) {
 	metrics, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	for _, name := range []string{"machinarchy_http_requests_total", "machinarchy_controlmanager_queue_depth",
-		"machinarchy_operationworker_operations_in_progress", `machinarchy_agent_gateway_registrations_total{outcome="registered"} 1`,
+		"machinarchy_operationworker_operations_in_progress", `machinarchy_agent_gateway_registrations_total{outcome="registered"} 2`,
 		`machinarchy_agent_gateway_results_total{status="succeeded"}`} {
 		if !strings.Contains(string(metrics), name) {
 			t.Errorf("/metrics lacks %s", name)
 		}
 	}
 
-	// 6. machinarchy stops cleanly on SIGTERM (the agent already exited).
+	// 6. The second agent and machinarchy stop cleanly on SIGTERM (the
+	// revoked agent already exited).
+	if err := agentB.stop(t); err != nil {
+		t.Fatalf("agent did not stop cleanly: %v", err)
+	}
 	if err := server.stop(t); err != nil {
 		t.Fatalf("machinarchy did not stop cleanly: %v", err)
 	}

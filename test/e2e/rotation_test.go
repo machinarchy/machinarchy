@@ -105,21 +105,18 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 		t.Fatalf("announced keys: %+v", announced)
 	}
 
-	// 3. The agent pins both, exactly as the endpoint lists them.
+	// 3. The agent pins both, exactly as the endpoint lists them. It serves
+	// one managed host, through a token bound to that host.
 	hostname, _ := os.Hostname()
-	var issued struct {
-		Token string `json:"token"`
-	}
-	if status := client.do(t, http.MethodPost, "/api/v1/agents/enrollment-tokens", map[string]any{"hostname": hostname, "ttlSeconds": 600}, &issued); status != http.StatusCreated {
-		t.Fatalf("issue token: %d", status)
-	}
+	hostID := agentHost(t, client, agentProfile(t, client), "rotation")
+	token := hostToken(t, client, hostID, hostname)
 	agent := start(t, agentBinary, []string{
 		"MACHINARCHY_ENVIRONMENT=development",
 		"MACHINARCHY_AGENT_NAME=e2e-rotation",
 		"MACHINARCHY_AGENT_NATS_URL=" + ns.URL,
 		"MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE=" + ns.BootstrapCredentials(t),
 		"MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=" + strings.Join(announced.PublicKeys, ","),
-		"MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE=" + secretFile(t, work, "agent.token", issued.Token),
+		"MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE=" + secretFile(t, work, "agent.token", token),
 		"MACHINARCHY_AGENT_STATE_FILE=" + filepath.Join(work, "agent", "state.json"),
 	}, filepath.Join(work, "agent.log"))
 	defer func() {
@@ -132,15 +129,10 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 	waitFor(t, 30*time.Second, "agent enrolment", func() bool {
 		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && len(agents.Items) == 1 && agents.Items[0].Connected
 	})
-	agentID := agents.Items[0].ID
 	invoke := func(when string) {
 		t.Helper()
-		var result struct {
-			Status string `json:"status"`
-		}
-		if status := client.do(t, http.MethodPost, "/api/v1/agents/"+agentID+"/invoke",
-			map[string]any{"capability": "runtime.info", "timeoutSeconds": 20}, &result); status != http.StatusOK || result.Status != "succeeded" {
-			t.Fatalf("invoke %s: %d %+v", when, status, result)
+		if op := runCapability(t, client, "runtime.info", hostID); op.Status.State != "Succeeded" {
+			t.Fatalf("runtime.info %s: %+v", when, op)
 		}
 	}
 	for i := range 3 {
@@ -165,7 +157,10 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].LastSeenAt.After(firstRenewal)
 	})
 
-	// 5. A restart without the key file keeps the active key (Secret Store).
+	// 5. A restart without the key file keeps the active key (Secret Store),
+	// and an Operation submitted just before the restart still finishes: its
+	// command and result are durable (ADR-057).
+	inFlight := submitCapability(t, client, "runtime.info", hostID)
 	if err := server.stop(t); err != nil {
 		t.Fatalf("controller did not stop cleanly: %v", err)
 	}
@@ -176,6 +171,9 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 	waitFor(t, 30*time.Second, "agent reconnected", func() bool {
 		return client.do(t, http.MethodGet, "/api/v1/agents", nil, &agents) == http.StatusOK && agents.Items[0].Connected
 	})
+	if op := waitOperation(t, client, inFlight); op.Status.State != "Succeeded" {
+		t.Fatalf("Operation across the restart: %+v", op)
+	}
 	invoke("after a restart without the key file")
 
 	var list struct {

@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — E2E tests run capability Operations (Phase 17; branch audit/capability-ops)
+
+- `test/e2e`: both tests use capability Operations instead of the removed `POST /api/v1/agents/{id}/invoke`. New helpers are in `test/e2e/capability_test.go`.
+- `TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy`:
+  - two agent hosts, each enrolled with its own host-bound token;
+  - `runtime.info` over both, with per-target output checked;
+  - `shell.exec` fails with the agent's code;
+  - after revocation, the host's target fails `agent_not_bound`;
+  - the second agent stops cleanly.
+- `TestControllerSigningKeyRotation`: an Operation submitted just before a controller restart finishes `Succeeded` after it.
+- Checks run: `go test -count=1 ./test/e2e/` passes in 15.7 s when run alone. It took 40–80 s when other packages ran at the same time, which is why it is committed separately from the code.
+
 ## 2026-11-24 — Agent capabilities run as Operations (Phase 17: A-05, M-7, M-8, M-9; branch audit/capability-ops)
 
 Implements ADR-057.
