@@ -160,7 +160,8 @@ func TestApplyIsAllOrNothing(t *testing.T) {
 	if snapshot, _ := snapshots.Current(); snapshot.Revision.Revision != 1 || snapshot.Revision.Config.Logging.Level == "debug" {
 		t.Fatal("a refused revision became the current snapshot")
 	}
-	if willing.rolled.Load() != 1 || willing.committed.Load() != 1 {
+	// Nothing was committed, so nothing is rolled back (Q-16).
+	if willing.rolled.Load() != 0 || willing.committed.Load() != 1 {
 		t.Fatalf("the willing participant: %d rollbacks, committed revision %d", willing.rolled.Load(), willing.committed.Load())
 	}
 	statuses, _ := service.Status(ctx)

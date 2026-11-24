@@ -1,5 +1,19 @@
 # ChangeLogAI
 
+## 2026-11-24 — Runtime-config apply rolls back only what it applied (Phase 19: Q-16; branch audit/data-path)
+
+- `runtimeconfig.PreparedApply` documents its contract and gains an optional `Abort`:
+  - `Rollback` undoes a `Commit`;
+  - `Abort` releases a prepared change that will never be committed.
+- **`SnapshotManager.Reload`:**
+  - A failed Commit at participant i rolls back i down to 0, newest first, and aborts the participants after i. Before, it rolled back every prepared participant, including ones never committed.
+  - A failed Prepare aborts the prepared participants. Before, it rolled them back.
+  - The leftover `_ = i` is gone.
+- **Tests:**
+  - `TestCommitFailureRollsBackOnlyWhatWasApplied` and `TestPrepareFailureAbortsWithoutRollback` check the exact call order. Both failed before the fix (`c.rollback` on a never-committed change; rollbacks after a failed Prepare).
+  - `TestApplyIsAllOrNothing` now expects no rollback when nothing was committed.
+- **Checks run:** `go test ./internal/runtimeconfig/ ./internal/bootstrap/`: pass. Lint: 0 issues.
+
 ## 2026-11-24 — Host resync pages through an index (Phase 19: Q-08; branch audit/data-path)
 
 - **Migration 000010 (both engines):** `idx_managed_hosts_keyset ON managed_hosts(workspace_id, id)`.

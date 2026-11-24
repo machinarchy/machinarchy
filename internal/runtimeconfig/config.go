@@ -202,9 +202,21 @@ type Snapshot struct {
 	Revision  Revision
 	AppliedAt time.Time
 }
+
+// PreparedApply is one participant's prepared change (AUDIT Q-16):
+//   - Commit applies it.
+//   - Rollback undoes a Commit. It is called, newest first, for every
+//     participant that committed and for the one whose Commit failed (it may
+//     be half-applied) when a later Commit fails.
+//   - Abort releases a change that was prepared but will never be committed:
+//     every prepared one when a later Prepare fails, and the ones after a
+//     failed Commit. It is never followed by Rollback.
+//
+// Any of them may be nil.
 type PreparedApply struct {
 	Commit   func() error
 	Rollback func()
+	Abort    func()
 }
 type Applier interface {
 	Prepare(context.Context, Snapshot) (PreparedApply, error)
@@ -261,34 +273,44 @@ func (m *SnapshotManager) Reload(ctx context.Context) error {
 	for _, a := range m.appliers {
 		change, e := a.Prepare(ctx, cloneSnapshot(candidate))
 		if e != nil {
-			for i := len(prepared) - 1; i >= 0; i-- {
-				if prepared[i].Rollback != nil {
-					prepared[i].Rollback()
-				}
-			}
+			abortAll(prepared)
 			m.record(ctx, r.Revision, "apply_failed")
 			return e
 		}
 		prepared = append(prepared, change)
 	}
 	for i, change := range prepared {
-		if change.Commit != nil {
-			if e := change.Commit(); e != nil {
-				for j := len(prepared) - 1; j >= 0; j-- {
-					if prepared[j].Rollback != nil {
-						prepared[j].Rollback()
-					}
-				}
-				m.record(ctx, r.Revision, "apply_failed")
-				return e
-			}
+		if change.Commit == nil {
+			continue
 		}
-		_ = i
+		if e := change.Commit(); e != nil {
+			// Undo what was applied (this one may be half-applied), newest
+			// first; release the rest, which was never committed (Q-16).
+			for j := i; j >= 0; j-- {
+				if prepared[j].Rollback != nil {
+					prepared[j].Rollback()
+				}
+			}
+			abortAll(prepared[i+1:])
+			m.record(ctx, r.Revision, "apply_failed")
+			return e
+		}
 	}
 	m.current.Store(&candidate)
 	now := candidate.AppliedAt
 	return m.repo.RecordProcessStatus(ctx, ProcessStatus{ProcessID: m.processID, Role: m.role, AppliedRevision: r.Revision, AttemptedRevision: r.Revision, LastSuccess: &now, Heartbeat: now})
 }
+
+// abortAll releases prepared changes that will never be committed, newest
+// first.
+func abortAll(prepared []PreparedApply) {
+	for i := len(prepared) - 1; i >= 0; i-- {
+		if prepared[i].Abort != nil {
+			prepared[i].Abort()
+		}
+	}
+}
+
 func (m *SnapshotManager) Run(ctx context.Context, interval time.Duration) error {
 	if ctx == nil {
 		return errors.New("configuration watcher context is required")
