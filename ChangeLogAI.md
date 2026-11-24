@@ -1,5 +1,16 @@
 # ChangeLogAI
 
+## 2026-11-24 — Outbox claims are released within a bound on stop (Phase 19: Q-18; branch audit/data-path)
+
+- **`controlmanager.Engine.dispatchBatch`:** when the dispatcher stops with deliveries claimed, it hands them back through one shared context. That context is detached from the cancelled stop context and cancelled `stopReleaseTimeout` (2 s) after the first release.
+  - Before, one path used `context.Background()` with no timeout, so a hung database blocked shutdown forever. The `QueueShuttingDown` path passed the cancelled context, so its release always failed at once.
+  - A failed release is logged; the delivery is reclaimed after its lease.
+- **Test:** `TestStoppingDispatcherReleasesClaimsWithinABound`, with an outbox whose `Retry` hangs.
+  - Before the fix: `dispatchBatch` never returned (test timeout after 3 s).
+  - After: 3 claims released within the shared bound, and the first release didn't start cancelled.
+  - Also run with `-race -count=3`.
+- **Checks run:** `go test ./internal/controlmanager/`: pass. Lint: 0 issues.
+
 ## 2026-11-24 — Runtime-config apply rolls back only what it applied (Phase 19: Q-16; branch audit/data-path)
 
 - `runtimeconfig.PreparedApply` documents its contract and gains an optional `Abort`:

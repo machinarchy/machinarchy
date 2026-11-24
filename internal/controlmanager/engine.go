@@ -282,16 +282,33 @@ func (e *Engine) dispatchLoop(ctx context.Context) {
 	}
 }
 
+// stopReleaseTimeout bounds handing claimed deliveries back when the
+// dispatcher stops (AUDIT Q-18); a delivery not released in time is reclaimed
+// after its lease expires.
+var stopReleaseTimeout = 2 * time.Second
+
 func (e *Engine) dispatchBatch(ctx context.Context) error {
 	claimed, err := e.deps.Outbox.Claim(ctx, eventing.ConsumerControlManager, e.ownerID, time.Now().UTC(), e.cfg.OutboxLeaseDuration, 32)
 	if err != nil {
 		return err
 	}
 	e.metrics.deliveries.WithLabelValues("claimed").Add(float64(len(claimed)))
+	// Claims are handed back on stop with one shared, bounded context: not
+	// the cancelled ctx (the release would fail at once) and not an unbounded
+	// one (a hung database would block shutdown). AUDIT Q-18.
+	releaseCtx, cancelRelease := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRelease()
+	var releaseDeadline sync.Once
+	release := func(id resource.ID) error {
+		// The bound starts at the first release, not when the batch began.
+		releaseDeadline.Do(func() { time.AfterFunc(stopReleaseTimeout, cancelRelease) })
+		return e.deps.Outbox.Retry(releaseCtx, eventing.ConsumerControlManager, e.ownerID, id, time.Now().Add(time.Second), "dispatcher_stopping")
+	}
 	for _, delivery := range claimed {
 		if err := ctx.Err(); err != nil {
-			//nolint:errcheck // Best-effort shutdown retry; the delivery can be reclaimed after its lease expires.
-			_ = e.deps.Outbox.Retry(context.Background(), eventing.ConsumerControlManager, e.ownerID, delivery.Envelope.ID, time.Now().Add(time.Second), "dispatcher_stopping")
+			if releaseErr := release(delivery.Envelope.ID); releaseErr != nil {
+				e.deps.Logger.Warn("release outbox delivery on stop failed; it is reclaimed after its lease", "event_id", delivery.Envelope.ID, "error", releaseErr)
+			}
 			continue
 		}
 		envelope := delivery.Envelope
@@ -354,7 +371,7 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 				return err
 			}
 		case QueueShuttingDown:
-			if err := e.deps.Outbox.Retry(ctx, eventing.ConsumerControlManager, e.ownerID, envelope.ID, time.Now().Add(time.Second), "dispatcher_stopping"); err != nil {
+			if err := release(envelope.ID); err != nil {
 				return err
 			}
 		}
