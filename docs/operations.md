@@ -230,6 +230,56 @@ The gateway provisions the `MACHINARCHY_AGENT_COMMANDS` JetStream stream (file
 storage, 24h max age, 15 min duplicate window) and one durable consumer per
 agent. JetStream must be enabled on the NATS server.
 
+## Key management
+
+Everything sensitive at rest is sealed the same way: each value has its own
+data key, and the **key provider** (`MACHINARCHY_KMS_PROVIDER`, the root of
+trust) wraps that data key under a named root key. Covered:
+
+| Data | Where |
+|---|---|
+| Secrets (SSH keys, passwords) | Secret Store |
+| The agent-gateway signing key | Secret Store (system secret) |
+| Operation specs, per-host output, live progress of detached runs | `operations`, `operation_targets` |
+
+Every value records its key ID (`local:<id>`) and is bound to its row
+(AAD), so a value copied to another row does not decrypt. Operation data
+written before key IDs existed is still read, and the rewrap reseals it.
+
+**Built-in provider (`local`, default).** Root keys are derived from
+`MACHINARCHY_ENCRYPTION_SECRET[_FILE]` under `MACHINARCHY_ENCRYPTION_KEY_ID`.
+Earlier secrets go in the keyring file (`MACHINARCHY_ENCRYPTION_KEYRING_FILE`,
+JSON `{"<old key ID>": "<old secret>"}`, `0600`). Prefer the `_FILE` form:
+environment variables are visible in `docker inspect` and process listings.
+
+### Rotating the root key (drill)
+
+Only data keys are rewrapped; the data itself is not re-encrypted.
+
+1. Write the current secret into the keyring under its key ID, e.g.
+   `{"bootstrap-v1": "<current secret>"}`.
+2. Set a new `MACHINARCHY_ENCRYPTION_SECRET[_FILE]` and a new
+   `MACHINARCHY_ENCRYPTION_KEY_ID` (e.g. `v2`); restart every replica.
+   New values use `local:v2`; old ones still open through the keyring.
+3. Rewrap until done (owner session):
+   `machinarchy secret rewrap --old-key-id bootstrap-v1` and repeat while the
+   result has `"done": false`. It covers secrets and Operation data
+   (`operationData.remaining`).
+4. Remove the old entry from the keyring and restart.
+5. Keep the old secret until your **database backup retention** has passed:
+   older backups hold data keys wrapped by it.
+
+If step 3 answers 503, a value did not open with any configured key: keep the
+keyring entry and check that the secrets in it are the ones that were in use.
+
+### Switching to an external KMS (future)
+
+Optional providers (Vault, AWS, GCP, Azure) plug into the same interface and
+pass the same contract suite (`internal/secrets/providertest`). Switching is
+the same drill with two providers configured at once: the new one current,
+the old one previous; rewrap until done; then remove the old one. Their key
+IDs name the provider (`vault:…`), so both can be configured together.
+
 ## SSH host keys
 
 A Host does not need a hand-entered fingerprint. The Host controller scans its

@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -12,9 +13,42 @@ import (
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
 
-type Handler struct{ service *secrets.Service }
+// OperationDataRewrapper moves Operation data (specs, output, progress) off
+// an old key (AUDIT S-07); the resources store implements it.
+type OperationDataRewrapper interface {
+	RewrapOperationData(ctx context.Context, oldKeyID string, batchSize int) (rewrapped int, remaining int64, err error)
+}
 
-func NewHandler(s *secrets.Service) *Handler { return &Handler{service: s} }
+type Handler struct {
+	service    *secrets.Service
+	operations OperationDataRewrapper
+}
+
+// NewHandler creates the handler; operations may be nil (secrets only).
+func NewHandler(s *secrets.Service, operations OperationDataRewrapper) *Handler {
+	return &Handler{service: s, operations: operations}
+}
+
+// RewrapResponse reports one rewrap batch. Repeat until Done.
+type RewrapResponse struct {
+	// KeyID is the key secrets now use.
+	KeyID string `json:"keyId"`
+	// Rewrapped and Remaining count secret versions.
+	Rewrapped int   `json:"rewrapped"`
+	Remaining int64 `json:"remaining"`
+	// OperationData covers Operation specs, output and progress, including
+	// values written before key IDs existed (resealed by any rewrap).
+	OperationData *RewrapCounts `json:"operationData,omitempty"`
+	// Done is true when nothing remains under the old key; it can then be
+	// removed from the keyring.
+	Done bool `json:"done"`
+}
+
+// RewrapCounts is one batch's progress.
+type RewrapCounts struct {
+	Rewrapped int   `json:"rewrapped"`
+	Remaining int64 `json:"remaining"`
+}
 
 // @Summary List secret metadata (never values)
 // @Description Workspace owner, human session only.
@@ -153,12 +187,12 @@ func (h *Handler) Delete(c echo.Context) error {
 }
 
 // @Summary Rewrap stored keys under the active KEK
-// @Description Workspace owner, human session only.
+// @Description Moves secrets and Operation data off oldKeyId to the current key, batchSize at a time per kind; repeat until done. Workspace owner, human session only.
 // @Tags Secrets
 // @Produce json
 // @Security BearerAuth
 // @Param request body object true "{\"oldKeyId\", \"batchSize\"}"
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} RewrapResponse
 // @Failure 400 {object} httperr.Body
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
@@ -177,7 +211,16 @@ func (h *Handler) Rewrap(c echo.Context) error {
 	if err != nil {
 		return secretError(c, err)
 	}
-	return c.JSON(http.StatusOK, result)
+	response := RewrapResponse{KeyID: result.KeyID, Rewrapped: result.Rewrapped, Remaining: result.Remaining, Done: result.Remaining == 0}
+	if h.operations != nil {
+		rewrapped, remaining, err := h.operations.RewrapOperationData(c.Request().Context(), in.OldKeyID, in.BatchSize)
+		if err != nil {
+			return httperr.Status(c, http.StatusServiceUnavailable, "operation data could not be rewrapped; keep the old key configured and retry")
+		}
+		response.OperationData = &RewrapCounts{Rewrapped: rewrapped, Remaining: remaining}
+		response.Done = response.Done && remaining == 0
+	}
+	return c.JSON(http.StatusOK, response)
 }
 func secretError(c echo.Context, err error) error {
 	switch {

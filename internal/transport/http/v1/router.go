@@ -33,11 +33,13 @@ type Repositories struct {
 	Access       domain.AccessStore
 	Sessions     domain.SessionStore
 	// SessionKeys signs and verifies login sessions; SessionTTL is their lifetime.
-	SessionKeys      *sessionkey.Keyring
-	SessionTTL       time.Duration
-	Audit            domain.AuditStore
-	Configuration    *runtimeconfig.Service
-	Secrets          *secrets.Service
+	SessionKeys   *sessionkey.Keyring
+	SessionTTL    time.Duration
+	Audit         domain.AuditStore
+	Configuration *runtimeconfig.Service
+	Secrets       *secrets.Service
+	// OperationData is rewrapped together with secrets (AUDIT S-07).
+	OperationData    secretapi.OperationDataRewrapper
 	ManagedResources *service.ManagedResourceService
 	// Agents lists enrolled agents; AgentGateway is nil where the gateway
 	// does not run; AgentKeys is nil when it is not configured.
@@ -111,7 +113,7 @@ func RegisterRoutes(
 			configuration.RegisterRoutes(apiv1.Group("/runtime-config", middleware.RequireOwner(), middleware.RequireHuman()), configuration.NewHandler(repos.Configuration))
 		}
 		if repos.Secrets != nil {
-			secretapi.RegisterRoutes(apiv1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman()), secretapi.NewHandler(repos.Secrets))
+			secretapi.RegisterRoutes(apiv1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman()), secretapi.NewHandler(repos.Secrets, repos.OperationData))
 		}
 		if repos.Agents != nil {
 			agents.RegisterRoutes(

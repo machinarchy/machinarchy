@@ -15,6 +15,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/secrets"
 	"github.com/machinarchy/machinarchy/internal/store/accounts"
 	"github.com/machinarchy/machinarchy/internal/store/agents"
 	"github.com/machinarchy/machinarchy/internal/store/management"
@@ -44,13 +45,21 @@ type Config struct {
 	// ConnectTimeout covers only connecting and session setup.
 	MigrationTimeout time.Duration
 	EncryptionSecret string
+	// Keys is the root of trust for Operation data (AUDIT S-07). Nil builds
+	// the built-in local provider from EncryptionSecret, as bootstrap does.
+	Keys secrets.KeyProvider
+	// PreviousSecrets are earlier encryption secrets, to read Operation data
+	// written before Phase 16 under a secret that has since been rotated.
+	PreviousSecrets []string
 }
 
 // Stores provides access to the configured persistence backends and manages
 // their lifecycle.
 type Stores struct {
-	DB               *sql.DB
-	engine           string
+	DB     *sql.DB
+	engine string
+	// Keys is the key provider shared by the Secret Store and Operation data.
+	Keys             secrets.KeyProvider
 	Users            domain.UserStore
 	Access           domain.AccessStore
 	Sessions         domain.SessionStore
@@ -156,11 +165,30 @@ func Open(parent context.Context, cfg Config) (*Stores, error) {
 	if err != nil {
 		return fail(err)
 	}
-	operationKey, err := crypto.DeriveKey(cfg.EncryptionSecret, "machinarchy-operation-spec-v1")
-	if err != nil {
-		return fail(fmt.Errorf("derive Operation spec encryption key: %w", err))
+	keys := cfg.Keys
+	if keys == nil {
+		local, err := secrets.NewLocalProvider("", cfg.EncryptionSecret, nil)
+		if err != nil {
+			return fail(fmt.Errorf("initialize key provider: %w", err))
+		}
+		keys = local
 	}
-	resourceStore, err := resources.New(db, dialect, operationKey, slog.Default(), accountStore.AppendAudit)
+	stores.Keys = keys
+	// Operation data written before Phase 16 used one key derived from the
+	// secret, without a key ID; keep every such key to read and rewrap it.
+	var legacy [][]byte
+	for _, secret := range append([]string{cfg.EncryptionSecret}, cfg.PreviousSecrets...) {
+		key, err := crypto.DeriveKey(secret, "machinarchy-operation-spec-v1")
+		if err != nil {
+			return fail(fmt.Errorf("derive legacy Operation data key: %w", err))
+		}
+		legacy = append(legacy, key)
+	}
+	cipher, err := resources.NewDataCipher(keys, legacy)
+	if err != nil {
+		return fail(err)
+	}
+	resourceStore, err := resources.New(db, dialect, cipher, slog.Default(), accountStore.AppendAudit)
 	if err != nil {
 		return fail(fmt.Errorf("initialize managed resource repositories: %w", err))
 	}

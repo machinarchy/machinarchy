@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,7 +48,7 @@ func newRouter(t *testing.T, principal domain.Principal) (*echo.Echo, *secrets.S
 			return next(c)
 		}
 	})
-	RegisterRoutes(group, NewHandler(service))
+	RegisterRoutes(group, NewHandler(service, nil))
 	return e, service
 }
 
@@ -145,4 +146,59 @@ func TestSecretAPIRefusesNonOwners(t *testing.T) {
 func mustJSON(s string) string {
 	data, _ := json.Marshal(s)
 	return string(data)
+}
+
+type fakeOperationData struct {
+	remaining []int64
+	calls     int
+	fail      bool
+}
+
+func (f *fakeOperationData) RewrapOperationData(context.Context, string, int) (int, int64, error) {
+	if f.fail {
+		return 0, 0, errors.New("boom")
+	}
+	f.calls++
+	r := f.remaining[0]
+	f.remaining = f.remaining[1:]
+	return 1, r, nil
+}
+
+// S-07: one rewrap call also moves Operation data; done only when both are
+// finished; a failure keeps the old key (503).
+func TestRewrapCoversOperationData(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stores, err := store.Open(context.Background(), store.Config{Engine: store.EngineSQLite, SQLitePath: filepath.Join(dir, "r.db"),
+		EncryptionSecret: "rewrap-test-secret-0123456789abcdef0123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stores.Close() })
+	service, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "k2", Key: bytes.Repeat([]byte{2}, 32),
+		Previous: map[string][]byte{"k1": bytes.Repeat([]byte{1}, 32)}}, denyAll{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := &fakeOperationData{remaining: []int64{3, 0}}
+	e := echo.New()
+	group := e.Group("/api/v1/secrets", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("principal", domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner})
+			return next(c)
+		}
+	})
+	RegisterRoutes(group, NewHandler(service, data))
+	for i, want := range []string{`"done":false`, `"done":true`} {
+		got := (do(e, http.MethodPost, "/api/v1/secrets/rewrap", `{"oldKeyId":"k1","batchSize":10}`))
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) || !strings.Contains(got.Body.String(), `"operationData":{"rewrapped":1`) {
+			t.Fatalf("round %d: %d %s", i+1, got.Code, got.Body)
+		}
+	}
+	data.fail = true
+	if got := (do(e, http.MethodPost, "/api/v1/secrets/rewrap", `{"oldKeyId":"k1","batchSize":10}`)); got.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed Operation data rewrap = %d", got.Code)
+	}
 }

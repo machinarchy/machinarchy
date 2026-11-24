@@ -19,7 +19,6 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/eventing"
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
-	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
 type auditAppender func(context.Context, *sql.Tx, domain.AuditEvent) error
@@ -27,21 +26,20 @@ type auditAppender func(context.Context, *sql.Tx, domain.AuditEvent) error
 type Store struct {
 	db          *sql.DB
 	dialect     sqlx.Dialect
-	key         []byte
+	cipher      *DataCipher
 	appendAudit auditAppender
 	logger      *slog.Logger
 }
 
-func New(db *sql.DB, dialect sqlx.Dialect, encryptionKey []byte, logger *slog.Logger,
+func New(db *sql.DB, dialect sqlx.Dialect, cipher *DataCipher, logger *slog.Logger,
 	appendAuditFn func(context.Context, *sql.Tx, domain.AuditEvent) error) (*Store, error) {
-	if db == nil || !dialect.Valid() || len(encryptionKey) != 32 || appendAuditFn == nil {
-		return nil, errors.New("resource store requires a database, supported dialect, 32-byte key, and audit appender")
+	if db == nil || !dialect.Valid() || cipher == nil || appendAuditFn == nil {
+		return nil, errors.New("resource store requires a database, supported dialect, Operation data cipher, and audit appender")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{db: db, dialect: dialect, key: append([]byte(nil), encryptionKey...),
-		appendAudit: appendAuditFn, logger: logger}, nil
+	return &Store{db: db, dialect: dialect, cipher: cipher, appendAudit: appendAuditFn, logger: logger}, nil
 }
 
 func (s *Store) bind(query string) string { return s.dialect.Bind(query) }
@@ -518,7 +516,7 @@ func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operati
 	if err != nil {
 		return fmt.Errorf("encode Operation spec: %w", err)
 	}
-	encrypted, err := crypto.Encrypt(string(specJSON), s.key)
+	encrypted, err := s.cipher.Seal(ctx, specJSON, dataAAD(columnSpec, operation.WorkspaceID, string(operation.ID), ""))
 	if err != nil {
 		return fmt.Errorf("encrypt Operation spec: %w", err)
 	}
@@ -548,7 +546,7 @@ func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operati
 		return fmt.Errorf("insert Operation: %w", err)
 	}
 	for _, target := range operation.Status.Targets {
-		output, err := s.encryptTargetOutput(target.Result)
+		output, err := s.encryptTargetOutput(ctx, operation.WorkspaceID, operation.ID, target.Spec.HostID, target.Result)
 		if err != nil {
 			return fmt.Errorf("encrypt Operation target output: %w", err)
 		}
@@ -752,11 +750,11 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 	if err != nil {
 		return nil, fmt.Errorf("read Operation: %w", err)
 	}
-	plain, err := crypto.Decrypt(encrypted, s.key)
+	plain, err := s.cipher.Open(ctx, encrypted, dataAAD(columnSpec, workspaceID, string(id), ""))
 	if err != nil {
 		return nil, fmt.Errorf("decrypt Operation spec: %w", err)
 	}
-	if err := json.Unmarshal([]byte(plain), &operation.Spec); err != nil {
+	if err := json.Unmarshal(plain, &operation.Spec); err != nil {
 		return nil, fmt.Errorf("decode Operation spec: %w", err)
 	}
 	if err := decodeJSON(conditionsText, &operation.Status.Conditions); err != nil {
@@ -791,15 +789,16 @@ func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.I
 		if err := rows.Scan(&hostID, &generation, &displayName, &profileID, &profileRevision, &targetState, &exitCode, &output, &errorClass, &launchText, &liveText); err != nil {
 			return nil, fmt.Errorf("scan Operation target: %w", err)
 		}
-		launch, live, err := s.decodeDetached(launchText, liveText)
+		launch, live, err := s.decodeDetached(ctx, workspaceID, string(id), hostID, launchText, liveText)
 		if err != nil {
 			return nil, err
 		}
 		if output != "" {
-			output, err = crypto.Decrypt(output, s.key)
+			plainOutput, err := s.cipher.Open(ctx, output, dataAAD(columnOutput, workspaceID, string(id), hostID))
 			if err != nil {
 				return nil, fmt.Errorf("decrypt Operation target output: %w", err)
 			}
+			output = string(plainOutput)
 		}
 		spec, ok := byHost[resource.ID(hostID)]
 		if !ok || spec.HostGeneration != generation || spec.DisplayName != displayName || spec.AccessProfileID != resource.ID(profileID) || spec.AccessProfileRevision != profileRevision {
@@ -897,7 +896,7 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 		if resource.TargetProgress(target.State) <= resource.TargetProgress(before.State) {
 			return resource.ErrConflict
 		}
-		output, err := s.encryptTargetOutput(target.Result)
+		output, err := s.encryptTargetOutput(ctx, operation.WorkspaceID, operation.ID, target.Spec.HostID, target.Result)
 		if err != nil {
 			return fmt.Errorf("encrypt Operation target output: %w", err)
 		}
@@ -933,7 +932,7 @@ func nullableInt(result *resource.TargetResult, value func(*resource.TargetResul
 	}
 	return *value(result)
 }
-func (s *Store) encryptTargetOutput(result *resource.TargetResult) (string, error) {
+func (s *Store) encryptTargetOutput(ctx context.Context, workspaceID int, operationID, hostID resource.ID, result *resource.TargetResult) (string, error) {
 	if result == nil || (result.Output == "" && result.Stdout == "" && result.Stderr == "") {
 		return "", nil
 	}
@@ -946,7 +945,7 @@ func (s *Store) encryptTargetOutput(result *resource.TargetResult) (string, erro
 		}
 		value = string(data)
 	}
-	return crypto.Encrypt(value, s.key)
+	return s.cipher.Seal(ctx, []byte(value), dataAAD(columnOutput, workspaceID, string(operationID), string(hostID)))
 }
 
 // storedStreams is the encrypted form of a target's output streams.
@@ -981,4 +980,3 @@ func nullablePositiveID(value int) any {
 
 var _ resource.HostRepository = (*Store)(nil)
 var _ resource.OperationRepository = (*Store)(nil)
-var _ = crypto.Encrypt

@@ -22,7 +22,7 @@ func (s *Store) UpdateOperationTarget(ctx context.Context, workspaceID int, oper
 		return fmt.Errorf("%w: workspace, Operation, host and a forward target state are required", resource.ErrInvalidResource)
 	}
 	result = resource.NormalizeTargetResult(result)
-	output, err := s.encryptTargetOutput(result)
+	output, err := s.encryptTargetOutput(ctx, workspaceID, operationID, hostID, result)
 	if err != nil {
 		return fmt.Errorf("encrypt Operation target output: %w", err)
 	}

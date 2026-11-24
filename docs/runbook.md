@@ -136,9 +136,10 @@ it records which account and network.
 
 ## Secrets and keys
 
-- `decrypt` errors after a restart: `MACHINARCHY_ENCRYPTION_SECRET` or the key
-  ID changed. Restore the previous key, or list it in the keyring file, then
-  `machinarchy secret rewrap --old-key-id OLD` until `remaining` is 0.
+- `decrypt` errors after a restart (secrets or Operations): `MACHINARCHY_ENCRYPTION_SECRET`
+  or the key ID changed. Restore the previous secret, or list it in the
+  keyring file, then `machinarchy secret rewrap --old-key-id OLD` until the
+  result says `"done": true` (`docs/operations.md`, "Rotating the root key").
 - Losing the encryption key makes stored credentials unrecoverable; keep it
   backed up with the database backups that need it.
 - Rotating the agent gateway signing key: stage the next key, let agents pin

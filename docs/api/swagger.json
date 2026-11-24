@@ -2906,7 +2906,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Workspace owner, human session only.",
+                "description": "Moves secrets and Operation data off oldKeyId to the current key, batchSize at a time per kind; repeat until done. Workspace owner, human session only.",
                 "produces": [
                     "application/json"
                 ],
@@ -2929,8 +2929,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/secret.RewrapResponse"
                         }
                     },
                     "400": {
@@ -5085,6 +5084,45 @@
                 "TargetCancelled",
                 "TargetInterrupted"
             ]
+        },
+        "secret.RewrapCounts": {
+            "type": "object",
+            "properties": {
+                "remaining": {
+                    "type": "integer"
+                },
+                "rewrapped": {
+                    "type": "integer"
+                }
+            }
+        },
+        "secret.RewrapResponse": {
+            "type": "object",
+            "properties": {
+                "done": {
+                    "description": "Done is true when nothing remains under the old key; it can then be\nremoved from the keyring.",
+                    "type": "boolean"
+                },
+                "keyId": {
+                    "description": "KeyID is the key secrets now use.",
+                    "type": "string"
+                },
+                "operationData": {
+                    "description": "OperationData covers Operation specs, output and progress, including\nvalues written before key IDs existed (resealed by any rewrap).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/secret.RewrapCounts"
+                        }
+                    ]
+                },
+                "remaining": {
+                    "type": "integer"
+                },
+                "rewrapped": {
+                    "description": "Rewrapped and Remaining count secret versions.",
+                    "type": "integer"
+                }
+            }
         },
         "service.AccessProfileView": {
             "type": "object",

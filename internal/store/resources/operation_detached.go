@@ -10,14 +10,13 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
-	"github.com/machinarchy/machinarchy/pkg/crypto"
 )
 
 // Detached execution (AUDIT/10b §1.3). The launch handle is plain JSON (it
 // names a mode, unit, pid, state root and endpoint, nothing secret); the
 // live progress holds command output and is encrypted like target output.
 
-func (s *Store) decodeDetached(launchText, liveText string) (*resource.LaunchHandle, *resource.LiveOutput, error) {
+func (s *Store) decodeDetached(ctx context.Context, workspaceID int, operationID, hostID, launchText, liveText string) (*resource.LaunchHandle, *resource.LiveOutput, error) {
 	var launch *resource.LaunchHandle
 	if launchText != "" {
 		launch = &resource.LaunchHandle{}
@@ -27,12 +26,12 @@ func (s *Store) decodeDetached(launchText, liveText string) (*resource.LaunchHan
 	}
 	var live *resource.LiveOutput
 	if liveText != "" {
-		plain, err := crypto.Decrypt(liveText, s.key)
+		plain, err := s.cipher.Open(ctx, liveText, dataAAD(columnLive, workspaceID, operationID, hostID))
 		if err != nil {
 			return nil, nil, fmt.Errorf("decrypt Operation target progress: %w", err)
 		}
 		live = &resource.LiveOutput{}
-		if err := json.Unmarshal([]byte(plain), live); err != nil {
+		if err := json.Unmarshal(plain, live); err != nil {
 			return nil, nil, fmt.Errorf("decode Operation target progress: %w", err)
 		}
 	}
@@ -99,7 +98,7 @@ func (s *Store) UpdateTargetLive(ctx context.Context, workspaceID int, operation
 	if err != nil {
 		return fmt.Errorf("encode Operation target progress: %w", err)
 	}
-	encrypted, err := crypto.Encrypt(string(plain), s.key)
+	encrypted, err := s.cipher.Seal(ctx, plain, dataAAD(columnLive, workspaceID, string(operationID), string(hostID)))
 	if err != nil {
 		return fmt.Errorf("encrypt Operation target progress: %w", err)
 	}
@@ -144,7 +143,7 @@ func (s *Store) ListDetachedTargets(ctx context.Context, limit int) ([]resource.
 			&target.AccessProfileRevision, &state, &launchText, &liveText); err != nil {
 			return nil, fmt.Errorf("scan detached Operation target: %w", err)
 		}
-		launch, live, err := s.decodeDetached(launchText, liveText)
+		launch, live, err := s.decodeDetached(ctx, target.WorkspaceID, operationID, hostID, launchText, liveText)
 		if err != nil {
 			return nil, err
 		}

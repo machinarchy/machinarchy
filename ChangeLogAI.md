@@ -1,5 +1,25 @@
 # ChangeLogAI
 
+## 2026-11-24 — Audit Phase 16.5: Operation data carries key IDs and AAD; one rewrap covers secrets and Operation data (S-07) (branch audit/keys)
+
+- **Gap closed:** Operation specs, per-host output and detached live progress were `pkg/crypto.Encrypt` under one key derived from the encryption secret, with no key ID and no AAD. Rotating the secret made every old Operation unreadable, and a value could be copied between rows.
+- **`internal/store/resources/sealed.go` (`DataCipher`):** each value gets a fresh data key, wrapped by the key provider; stored as `{"v":2,"k":"<key ID>","w":…,"c":…}`. The AAD binds column, workspace, Operation and host. Values written before keep opening through legacy keys derived from the current secret and every keyring secret.
+- **The store and the Secret Store share one provider:** bootstrap builds it with `secrets.NewLocalProvider` (new helper) before `store.Open`; `store.Config` gains `Keys` and `PreviousSecrets`; tests that pass only `EncryptionSecret` get the same local provider.
+- **`RewrapOperationData`:** batches per column; updates only if the value is unchanged since read; also reseals legacy values; counts what remains. `POST /api/v1/secrets/rewrap` (and the CLI) now returns `operationData {rewrapped, remaining}` and `done` (all kinds finished); a failure answers 503 and the old key must stay. OpenAPI regenerated.
+- Docs: `docs/operations.md` "Key management" (what is sealed, the root-key rotation drill, backups, the future KMS switch), runbook.
+
+### Verification
+
+- Store contract "operation data keys" on **SQLite and PostgreSQL 16**:
+  - spec, output and progress are stored with `local:bootstrap-v1` and no plaintext;
+  - a spec copied to another Operation does not open;
+  - a legacy spec and output (old format) read;
+  - after a root-key rotation, rewrap in batches of 1 moves all 6 values (including the legacy ones) to `local:v2`;
+  - with only the new secret, the Operation, the legacy output and the live progress all read.
+- `TestRewrapCoversOperationData`: `done` stays false until Operation data is finished; a failure is 503.
+- `TestKeyPrefixesMatchSealedText`: the rewrap's prefix match equals the stored text for key IDs JSON escapes (`<`, `>`, `&`, quotes, `%`, `_`). A lint fix had briefly switched to `strconv.Quote`, which escapes differently and would have reported "done" with values left on the old key; caught before commit.
+- Existing store, worker, host-access, control-manager, service and bootstrap tests pass on both engines with the new format.
+
 ## 2026-11-19 — Audit Phase 16.3/16.4: controller signing key in the Secret Store; rotation as owner actions (branch audit/keys)
 
 - **Migration `000007_agent_signing_keys`** (SQLite and PostgreSQL): public key, state (`next`/`active`/`retired`), origin (`generated`/`imported`), who and when; the private seed is referenced by Secret Store ID and version. Partial unique indexes allow one active and one next key, also across replicas.

@@ -187,3 +187,29 @@ func (k *Keyring) owner(keyID string) KeyProvider {
 	}
 	return nil
 }
+
+// DefaultLocalKeyID is the key ID when MACHINARCHY_ENCRYPTION_KEY_ID is unset.
+const DefaultLocalKeyID = "bootstrap-v1"
+
+// NewLocalProvider derives the built-in provider's root keys from the
+// operator's bootstrap secret (MACHINARCHY_ENCRYPTION_SECRET[_FILE]) and the
+// keyring of earlier secrets by key ID. Every user of the root of trust
+// (Secret Store, Operation data) must build it this way so they agree.
+func NewLocalProvider(keyID, secret string, previous map[string]string) (*LocalProvider, error) {
+	if keyID == "" {
+		keyID = DefaultLocalKeyID
+	}
+	root, err := crypto.DeriveKey(secret, "machinarchy/secret-kek/"+keyID)
+	if err != nil {
+		return nil, fmt.Errorf("derive root key %s: %w", keyID, err)
+	}
+	p := &LocalProvider{KeyID: keyID, Key: root, Previous: map[string][]byte{}}
+	for oldID, oldSecret := range previous {
+		old, err := crypto.DeriveKey(oldSecret, "machinarchy/secret-kek/"+oldID)
+		if err != nil {
+			return nil, fmt.Errorf("derive previous root key %s: %w", oldID, err)
+		}
+		p.Previous[oldID] = old
+	}
+	return p, nil
+}

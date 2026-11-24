@@ -29,7 +29,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/store"
 	httpserver "github.com/machinarchy/machinarchy/internal/transport/http"
 	httpv1 "github.com/machinarchy/machinarchy/internal/transport/http/v1"
-	"github.com/machinarchy/machinarchy/pkg/crypto"
+	secretapi "github.com/machinarchy/machinarchy/internal/transport/http/v1/secret"
 	"github.com/machinarchy/machinarchy/pkg/netpolicy"
 	"golang.org/x/time/rate"
 )
@@ -77,11 +77,22 @@ func open(ctx context.Context, cfg config.Config, role string) (*Runtime, error)
 		return nil, fmt.Errorf("runtime startup canceled: %w", err)
 	}
 
+	// The root of trust (MACHINARCHY_KMS_PROVIDER=local): the Secret Store and
+	// the Operation data store share it, so one rewrap covers both.
+	keys, err := secrets.NewLocalProvider(cfg.EncryptionKeyID, cfg.EncryptionSecret, cfg.EncryptionPreviousKeys)
+	if err != nil {
+		return nil, fmt.Errorf("initialize key provider: %w", err)
+	}
+	var previousSecrets []string
+	for _, secret := range cfg.EncryptionPreviousKeys {
+		previousSecrets = append(previousSecrets, secret)
+	}
 	stores, err := store.Open(ctx, store.Config{
 		Engine: string(cfg.Database.Engine), SQLitePath: cfg.Database.Path,
 		PostgresURL: cfg.Database.URL, MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns, ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
 		ConnectTimeout: cfg.Database.ConnectTimeout, MigrationTimeout: cfg.Database.MigrationTimeout, EncryptionSecret: cfg.EncryptionSecret,
+		Keys: keys, PreviousSecrets: previousSecrets,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open datastore: %w", err)
@@ -140,22 +151,6 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	if err = configuration.Bootstrap(ctx, defaults); err != nil {
 		return nil, fmt.Errorf("initialize runtime configuration: %w", err)
 	}
-	keyID := cfg.EncryptionKeyID
-	if keyID == "" {
-		keyID = "bootstrap-v1"
-	}
-	root, err := crypto.DeriveKey(cfg.EncryptionSecret, "machinarchy/secret-kek/"+keyID)
-	if err != nil {
-		return nil, fmt.Errorf("initialize Secret Store key provider: %w", err)
-	}
-	previousKeys := map[string][]byte{}
-	for oldID, oldSecret := range cfg.EncryptionPreviousKeys {
-		oldKey, e := crypto.DeriveKey(oldSecret, "machinarchy/secret-kek/"+oldID)
-		if e != nil {
-			return nil, fmt.Errorf("initialize previous Secret Store key %s: %w", oldID, e)
-		}
-		previousKeys[oldID] = oldKey
-	}
 	bindings := runtimeProfileBindings{profiles: stores.ResourceProfiles, hosts: stores.ResourceHosts, operations: stores.Operations}
 	cmAuthorizer, err := secrets.NewProfileAuthorizer(bindings, secrets.WorkloadControlManager)
 	if err != nil {
@@ -165,7 +160,7 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 	if err != nil {
 		return nil, fmt.Errorf("initialize Operation worker Secret Store authorization: %w", err)
 	}
-	keyProvider := &secrets.LocalProvider{KeyID: keyID, Key: root, Previous: previousKeys} // MACHINARCHY_KMS_PROVIDER=local
+	keyProvider := stores.Keys // shared with the Operation data store
 	secretService, err := secrets.New(stores.Management, keyProvider, cmAuthorizer)
 	if err != nil {
 		return nil, err
@@ -394,7 +389,7 @@ func (r *Runtime) NewAPIServer(
 	repositories := httpv1.Repositories{
 		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Sessions: r.stores.Sessions, SessionKeys: sessionKeys, SessionTTL: sessionTTL,
-		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, ManagedResources: managedResources,
+		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, OperationData: operationData(r.stores), ManagedResources: managedResources,
 		Agents:    r.stores.Agents,
 		AgentKeys: agentKeyAPI(r.agentKeys),
 		SignupEnabled: func() bool {
@@ -552,3 +547,11 @@ func (r *Runtime) ensureOwner(parent context.Context, cfg config.Config) error {
 
 // AgentGateway returns the configured gateway, or nil.
 func (r *Runtime) AgentGateway() *agentgateway.Gateway { return r.agentGateway }
+
+// operationData returns the Operation data store for the rewrap endpoint.
+func operationData(stores *store.Stores) secretapi.OperationDataRewrapper {
+	if r, ok := stores.Operations.(secretapi.OperationDataRewrapper); ok {
+		return r
+	}
+	return nil
+}
