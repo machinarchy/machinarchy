@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — Replicas starting together migrate in turn (Phase 20: F20-01; branch audit/ha)
+
+- **Found by the HA harness:** with two API replicas and two Control Managers starting at once on an empty PostgreSQL database, one replica crashed. The error was `migrate postgres database: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`: two processes created the same table at the same moment. Deployments start replicas together on every rollout.
+- **Fix:** `store.Migrator.Up` takes the session advisory lock `pg_advisory_lock` on a dedicated connection on PostgreSQL before it reads anything.
+  - Each replica waits its turn, then finds the migrations already applied.
+  - The lock is released explicitly; the database also releases it if the process crashes and its connection closes.
+  - SQLite is unchanged: one process per database.
+- **Test:** `TestConcurrentPostgresStartup` starts 4 stores at once on a fresh schema. It failed on every run before the fix; it passed 5 of 5 after.
+- **Checks run:**
+  - `go test ./internal/store/` with PostgreSQL required: pass;
+  - lint: 0 issues.
+
 ## 2026-11-24 — Egress policy checks IPv4 inside NAT64, 6to4 and Teredo (Phase 19: S-19; branch audit/data-path)
 
 - `pkg/netpolicy`: `CheckAddr` now decodes the IPv4 address that an IPv6 address carries and checks it under the same policy (metadata addresses, Deny ranges, loopback, link-local, private). The IPv6 address is refused if that IPv4 address would be.

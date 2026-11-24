@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
@@ -28,6 +29,10 @@ type Migrator struct {
 	logger *slog.Logger
 }
 
+// migrationLockKey is the PostgreSQL advisory lock held while migrating
+// ("machinarchy migrations").
+const migrationLockKey int64 = 0x6d61636869_6d67
+
 // NewMigrator creates a new Migrator for the given database connection and engine type.
 func NewMigrator(db *sql.DB, engine string, logger *slog.Logger) *Migrator {
 	if logger == nil {
@@ -38,6 +43,27 @@ func NewMigrator(db *sql.DB, engine string, logger *slog.Logger) *Migrator {
 
 // Up applies all pending migrations for the configured database engine.
 func (m *Migrator) Up(ctx context.Context) error {
+	if m.engine == "postgres" {
+		// Replicas start together on one database: they take turns, and each
+		// reads what is applied only after the previous one finished
+		// (AUDIT/20 F20-01). The session lock lives on one dedicated
+		// connection and is released when it closes, even on a crash.
+		conn, err := m.db.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("reserve migration lock connection: %w", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+			return fmt.Errorf("wait for the migration lock: %w", err)
+		}
+		defer func() {
+			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+				m.logger.Warn("release migration lock failed; it is released when the connection closes", "error", err)
+			}
+		}()
+	}
 	// 1. Ensure schema_migrations tracking table exists
 	if err := m.ensureMigrationTable(ctx); err != nil {
 		return err
