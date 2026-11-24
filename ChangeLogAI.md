@@ -1,5 +1,30 @@
 # ChangeLogAI
 
+## 2026-11-25 — The audit trail records intents and outcomes, not system progress (Phase 20: F20-05; branch audit/ha)
+
+- **Found by the HA load profile:** at about one Operation per second plus the periodic host resync, both Control Managers timed out on `lock audit chain`. Statements hit the statement timeout, agent results were "not stored; redelivered" (adding load), and submissions failed with 500. Each audited write takes the workspace's audit-chain lock until it commits, and system-driven progress was audited:
+  - every host reconcile (`resource_host.updated`, every 5 minutes for every host, contrary to SECURITY.md);
+  - an Operation starting;
+  - every target transition;
+  - every detached launch;
+  - every capability dispatch.
+  
+  A larger connection pool made it worse.
+- **Owner decision:** audit intents and outcomes only.
+- **No longer audited:** a reconcile's status update (`ObserveHost`), Operation start, `UpdateOperationTarget`, `RecordTargetLaunch`, `DispatchCapabilityTarget`. Their state is in the rows.
+- **Still audited:**
+  - every API or human action;
+  - an Operation's creation, cancel request and final outcome;
+  - a host presenting a changed key (`resource_host.host_key_changed`);
+  - TOFU and owner key trust;
+  - host creation, update and deletion.
+- **Docs:** `docs/SECURITY.md` audit section now matches the code.
+- **Test:** store contract "audit records intents and outcomes" (both engines). Before the change it failed with `[resource_host.created resource_host.updated]` after one reconcile.
+- **Checks run:**
+  - `go test` with PostgreSQL required for store, service, operationworker, controlmanager and hostaccess: pass;
+  - lint: 0 issues.
+- **Not yet re-measured:** the load profile after this change is recorded in AUDIT/20.
+
 ## 2026-11-25 — A stopping Control Manager waits for its components (Phase 20: F20-04; branch audit/ha)
 
 - **Found by the HA harness:** after a graceful `SIGTERM` to one of two Control Managers during a burst of 120 host creations, 5–8 hosts were never reconciled, not even after 7 minutes.

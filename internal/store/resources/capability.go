@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
@@ -88,10 +87,10 @@ func (s *Store) DispatchCapabilityTarget(ctx context.Context, c resource.AgentCo
 	if err := s.insertAgentCommand(ctx, tx, c); err != nil {
 		return err
 	}
-	if err := s.audit(ctx, tx, c.WorkspaceID, domain.AuditOperationUpdated, domain.AuditTargetOperation, string(c.OperationID),
-		map[string]string{"host_id": string(c.HostID), "target_state": string(resource.TargetRunning), "agent_id": c.AgentID}); err != nil {
-		return err
-	}
+	// System-driven progress is not audited (AUDIT/20 F20-05, owner
+	// decision): the audit trail records intents and outcomes, and every
+	// append serializes on the workspace's chain lock. The state is in the
+	// row itself.
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit capability dispatch: %w", err)
 	}

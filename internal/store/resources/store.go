@@ -346,7 +346,9 @@ func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID
 	if s.dialect == sqlx.PostgreSQL && fence == nil {
 		return resource.ErrLeaseRequired
 	}
-	action, details := domain.AuditResourceHostUpdated, map[string]string(nil)
+	// A reconcile's status is not audited (automatic, AUDIT/20 F20-05); a
+	// host newly presenting a different key is.
+	action, details := "", map[string]string(nil)
 	if reason := resource.ReadyReason(host.Status.Conditions); reason == "HostKeyChanged" && previousReason != reason {
 		presented := make([]string, 0, len(host.Status.ObservedHostKeys))
 		for _, key := range host.Status.ObservedHostKeys {
@@ -406,13 +408,17 @@ func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevi
 			return err
 		}
 	}
-	if auditDetails == nil {
-		auditDetails = map[string]string{}
-	}
-	auditDetails["generation"] = fmt.Sprint(host.Metadata.Generation)
-	if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, auditAction, domain.AuditTargetResourceHost,
-		string(host.Metadata.ID), auditDetails); err != nil {
-		return err
+	// auditAction "" marks a write that is not audited: a reconcile's status
+	// update (AUDIT/20 F20-05). A host key change is still audited.
+	if auditAction != "" {
+		if auditDetails == nil {
+			auditDetails = map[string]string{}
+		}
+		auditDetails["generation"] = fmt.Sprint(host.Metadata.Generation)
+		if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, auditAction, domain.AuditTargetResourceHost,
+			string(host.Metadata.ID), auditDetails); err != nil {
+			return err
+		}
 	}
 	if eventType != "" {
 		if err := s.appendHostEvent(ctx, tx, host, eventType, eventChange); err != nil {
@@ -933,9 +939,13 @@ func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operati
 			return err
 		}
 	}
-	if err := s.audit(ctx, tx, operation.WorkspaceID, domain.AuditOperationUpdated, domain.AuditTargetOperation,
-		string(operation.ID), map[string]string{"state": string(operation.Status.State)}); err != nil {
-		return err
+	// Audited: a cancel request (an intent) and the final outcome. Starting
+	// is system progress and is not (AUDIT/20 F20-05).
+	if operation.Status.State == resource.OperationCancelRequested || operation.IsTerminal() {
+		if err := s.audit(ctx, tx, operation.WorkspaceID, domain.AuditOperationUpdated, domain.AuditTargetOperation,
+			string(operation.ID), map[string]string{"state": string(operation.Status.State)}); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Operation update: %w", err)

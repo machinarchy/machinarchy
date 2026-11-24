@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
@@ -60,10 +59,10 @@ func (s *Store) UpdateOperationTarget(ctx context.Context, workspaceID int, oper
 		}
 		return resource.ErrOperationFinished
 	}
-	if err := s.audit(ctx, tx, workspaceID, domain.AuditOperationUpdated, domain.AuditTargetOperation, string(operationID),
-		map[string]string{"host_id": string(hostID), "target_state": string(state)}); err != nil {
-		return err
-	}
+	// System-driven progress is not audited (AUDIT/20 F20-05, owner
+	// decision): the audit trail records intents and outcomes, and every
+	// append serializes on the workspace's chain lock. The state is in the
+	// row itself.
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Operation target update: %w", err)
 	}

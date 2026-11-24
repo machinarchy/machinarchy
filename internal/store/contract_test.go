@@ -187,6 +187,7 @@ var contractTests = []struct {
 	{"capability operations", testCapabilityOperations},
 	{"host label selectors", testHostLabelSelectors},
 	{"host resync keyset uses an index", testHostKeysPlan},
+	{"audit records intents and outcomes", testAuditScope},
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"audit trail", testAuditTrail},
