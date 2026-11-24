@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-24 — Host resync pages through an index (Phase 19: Q-08; branch audit/data-path)
+
+- **Migration 000010 (both engines):** `idx_managed_hosts_keyset ON managed_hosts(workspace_id, id)`.
+- **`ListHostKeys`:** uses the row-value predicate `(workspace_id, id) > (?, ?)` instead of `workspace_id > ? OR (workspace_id = ? AND id > ?)`. The query is exported as `resources.HostKeysQuery` so a test can check its plan.
+- **Before:**
+  - SQLite: `MULTI-INDEX OR` plus `USE TEMP B-TREE FOR ORDER BY`;
+  - PostgreSQL: `Incremental Sort` over a scan that filtered every row.
+- **After:**
+  - SQLite: `SEARCH managed_hosts USING COVERING INDEX idx_managed_hosts_keyset ((workspace_id,id)>(?,?))`;
+  - PostgreSQL: `Index Only Scan using idx_managed_hosts_keyset`, `Index Cond: (ROW(workspace_id, id) > ROW(...))`.
+- **Test:** store contract "host resync keyset uses an index" on both engines (PostgreSQL with sorts and sequential scans disabled). It failed before the fix on both.
+- **Checks run:**
+  - `go test ./internal/store/... ./internal/controlmanager/...` with PostgreSQL required: pass;
+  - lint: 0 issues.
+
 ## 2026-11-24 — SQLite connection settings survive a reconnect (Phase 19: Q-10; branch audit/data-path)
 
 - `internal/store/sqlite`:

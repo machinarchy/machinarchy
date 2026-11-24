@@ -12,14 +12,20 @@ import (
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
+// HostKeysQuery pages through every Host in (workspace, ID) order for the
+// periodic resync. Exported so a test can check its plan (AUDIT Q-08).
+// The row-value comparison lets both engines read idx_managed_hosts_keyset as
+// a range; the equivalent OR form made them sort every page.
+const HostKeysQuery = `SELECT workspace_id, id FROM managed_hosts
+		WHERE (workspace_id, id) > (?, ?)
+		ORDER BY workspace_id, id LIMIT ?`
+
 func (s *Store) ListHostKeys(ctx context.Context, cursor resource.HostKeyCursor) ([]resource.HostKey, error) {
 	limit := cursor.Limit
 	if limit < 1 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT workspace_id, id FROM managed_hosts
-		WHERE workspace_id > ? OR (workspace_id = ? AND id > ?)
-		ORDER BY workspace_id, id LIMIT ?`), cursor.AfterWorkspaceID, cursor.AfterWorkspaceID, cursor.AfterID, limit)
+	rows, err := s.db.QueryContext(ctx, s.bind(HostKeysQuery), cursor.AfterWorkspaceID, cursor.AfterID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list managed Host keys: %w", err)
 	}
