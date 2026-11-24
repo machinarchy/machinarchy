@@ -23,7 +23,7 @@ Both main Compose projects receive this file through `docker compose --env-file`
 
 The `run-*` targets therefore override settings you exported in your shell with the values in `.env`. To run with another file (for example the CLI guide's lab settings), pass it: `make run-monolit ENV_FILE="$LAB/server.env"`. Variables that `.env` does not set, such as `MACHINARCHY_CONFIG`, are inherited.
 
-`make run-cli` passes the words after `--` to the CLI: `make run-cli -- get hosts`. Make cannot pass a word containing `=` (it becomes a make variable) or keep quoting; use `ARGS="…"` for those.
+`make run-cli` passes the words after `--` to the CLI: `make run-cli -- get hosts -l tier=web`. Make would take a word containing `=` as a make variable, so the target reads the words back from make's own command line (`ps`); quoting is still lost, so use `ARGS="…"` for arguments that need quotes.
 
 Create a local file from the example when needed:
 

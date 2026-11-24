@@ -22,12 +22,13 @@ Or through `make` (it loads `.env` first; exported variables such as
 
 ```sh
 make run-cli -- get hosts
-make run-cli -- config set-cluster local --server http://localhost:8080
-make run-cli ARGS='create host web-01 --label tier=web'   # arguments with "=" or quotes
+make run-cli -- create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web
+make run-cli ARGS='run --host web-01 --yes -- sh -c "echo hi"'   # arguments that need quotes
 ```
 
-Make cannot pass an argument containing `=` or keep quoting; use `ARGS` for
-those, or the binary.
+Quoting is lost after `--` (`sh -c "echo hi"` arrives as three words); use
+`ARGS` for such arguments, or the binary. A word that is also a make target
+(`help`, `build`) runs that target too.
 
 The CLI does not start the API. Start the API or monolith separately; the project [README](../../README.md#quick-start) describes local server setup.
 

@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-24 — `make run-cli -- …` passes arguments containing `=` (owner report; branch audit/keys)
+
+- **Bug:** `make run-cli -- create host … --label tier=web --label auth=key` failed with `label "--label" must be KEY=VALUE`. Make takes any word containing `=` as a make variable, so those words never reached the CLI.
+- **`mk/build.mk` fix:** `run-cli` now has its own recipe. With arguments after `--` (and no `ARGS` on the command line), the recipe reads make's own command line (`ps -o command= -p $PPID`) and passes everything after the first ` -- `, in order. Words containing `=` arrive, and a later `--` (`run … -- uptime`) is kept. Globbing is off (`set -f`) and nothing is `eval`ed. Without `ps` it falls back to the goals, as before. `ARGS="…"` is unchanged and still the way to pass quoted arguments.
+- **Docs:** the `=` caveat is removed from `README.md`, `docs/cli/README.md`, `docs/cli/user-full-guide.md`, `docs/development/getting-started.md` and `docs/development/local-environment.md`. What remains: quoting is lost after `--`, and a word that is also a make target runs it.
+
+### Verification
+
+- Make 3.81, scratch CLI context on a closed port, so reaching the network proves the arguments parsed:
+  - the reported command → "list access profiles: cannot reach the API server" (before: the label error);
+  - `get hosts -l tier=web` → reached the API;
+  - `run --host ssh-key --yes -- uptime` → reached target preview;
+  - `ARGS="config current-context"` → `t`;
+  - `ARGS=` together with `--` words is refused.
+
 ## 2026-11-24 — Docs: `make run-cli -- …` and the `.env` behaviour of `make run-*` (owner request; branch audit/keys)
 
 - `docs/cli/user-full-guide.md`:
