@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	// Import modernc.org/sqlite to register the SQLite database driver.
 	_ "modernc.org/sqlite"
@@ -19,6 +20,8 @@ import (
 // Config contains the settings required to open a SQLite database.
 type Config struct {
 	DatabasePath string
+	// BusyTimeout is how long a statement waits for a lock (default 5s).
+	BusyTimeout time.Duration
 }
 
 // OpenDB opens a SQLite database using the provided configuration.
@@ -31,6 +34,10 @@ func OpenDB(cfg Config) (*sql.DB, error) {
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve SQLite database path: %w", err)
+	}
+	if strings.ContainsAny(absolutePath, "?#") {
+		// The path becomes a DSN with a query string of settings.
+		return nil, errors.New("SQLite database path must not contain '?' or '#'")
 	}
 	dir := filepath.Dir(absolutePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -49,29 +56,37 @@ func OpenDB(cfg Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("inspect SQLite database path: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", absolutePath)
+	busy := cfg.BusyTimeout
+	if busy <= 0 {
+		busy = DefaultBusyTimeout
+	}
+	// Connection-scoped settings go in the DSN, so the driver applies them to
+	// every connection it opens, including after a reconnect (AUDIT Q-10).
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", absolutePath, busy.Milliseconds())
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite database: %w", err)
 	}
 
-	// SQLite is intentionally a single-controller store. Limiting the pool to
-	// one connection also makes connection-scoped PRAGMAs deterministic.
+	// SQLite is intentionally a single-controller store.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
 	return db, nil
 }
 
-// Configure applies the required SQLite connection and database settings.
-// It returns an error if any configuration operation fails.
+// DefaultBusyTimeout is how long a statement waits for a lock by default.
+const DefaultBusyTimeout = 5 * time.Second
+
+// Configure applies the database-wide settings (WAL, stored in the file) and
+// checks that the connection settings from the DSN are in effect.
 func Configure(ctx context.Context, db *sql.DB) error {
-	for _, statement := range []string{
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA busy_timeout = 5000",
-	} {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("configure SQLite: %w", err)
-		}
+	var foreignKeys int
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("configure SQLite: %w", err)
+	}
+	if foreignKeys != 1 {
+		return errors.New("SQLite foreign keys are off")
 	}
 	var journalMode string
 	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode = WAL").Scan(&journalMode); err != nil {

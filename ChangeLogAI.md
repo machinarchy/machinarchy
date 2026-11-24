@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — SQLite connection settings survive a reconnect (Phase 19: Q-10; branch audit/data-path)
+
+- `internal/store/sqlite`:
+  - `foreign_keys(1)` and `busy_timeout` are now DSN `_pragma` parameters, so the driver applies them to every connection it opens. Before, they were set with `Exec` on whichever connection ran it, and a reopened connection had foreign keys off and no busy timeout.
+  - `Config.BusyTimeout`, default 5 s.
+  - `Configure` keeps enabling WAL (stored in the file) and now verifies that foreign keys are on.
+  - A database path containing `?` or `#` is refused, since the path becomes a DSN.
+- **Tests:**
+  - `TestPragmasSurviveReconnect` forces a new connection for every query. Without the fix it fails with `foreign_keys=0 busy_timeout=0`.
+  - `TestOpenDBRefusesAQueryInThePath`.
+- **Checks run:** `go test ./internal/store/sqlite/ ./internal/store/`: pass. `golangci-lint run --new-from-rev=HEAD ./...`: 0 issues.
+
 ## 2026-11-24 — Label selectors run in the database (Phase 18: A-12; branch audit/scale)
 
 - **Migration 000009 (SQLite and PostgreSQL):** `managed_host_labels(host_id → managed_hosts ON DELETE CASCADE, workspace_id, label_key, label_value)`.
