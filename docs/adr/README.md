@@ -59,3 +59,4 @@ All ADRs live in this directory; the two earlier directories (`docs/DECISIONS`, 
 | [ADR-053: Resolve cross-phase architecture conflicts and gate implementation](ADR-053-integrated-architecture-review.md) | Proposed |  |
 | [ADR-054: Workspace-scoped Access Profiles and immutable secret bindings](ADR-054-workspace-access-profiles-and-secret-bindings.md) | Implemented | Access Profiles with immutable revisions and version-pinned SecretRefs; owner-only binding (AUDIT S-02). |
 | [ADR-055: The managed resource model is the only host model; the schema is one baseline](ADR-055-managed-model-only-and-schema-baseline.md) | Implemented |  |
+| [ADR-056: One root of trust behind a key-provider interface, built-in by default](ADR-056-key-providers-built-in-default.md) | Implemented | `local` provider; KMS providers optional (AUDIT/10 K1–K4); signing key and Operation data in the same envelope. |
