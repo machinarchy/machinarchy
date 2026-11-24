@@ -118,7 +118,6 @@ func RegisterRoutes(
 		if repos.Agents != nil {
 			agents.RegisterRoutes(
 				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionInventoryRead)),
-				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionRunsExecute)),
 				apiv1.Group("/agents", middleware.RequireOwner(), middleware.RequireHuman()),
 				agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentKeys))
 		}

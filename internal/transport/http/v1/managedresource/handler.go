@@ -52,11 +52,14 @@ type profileUpdateRequest struct {
 // operationRequest targets explicit hostIds, or a rule (selector, include,
 // exclude, all) resolved at submission. expectTargetsHash, from a preview,
 // makes the submission fail with 409 targets_changed if the set differs.
+// Exactly one of run (a program over SSH) and capability (an agent
+// capability, ADR-057) is given.
 type operationRequest struct {
-	HostIDs           []resource.ID      `json:"hostIds,omitempty"`
-	Targets           *domain.TargetRule `json:"targets,omitempty"`
-	ExpectTargetsHash string             `json:"expectTargetsHash,omitempty"`
-	Run               resource.RunSpec   `json:"run"`
+	HostIDs           []resource.ID            `json:"hostIds,omitempty"`
+	Targets           *domain.TargetRule       `json:"targets,omitempty"`
+	ExpectTargetsHash string                   `json:"expectTargetsHash,omitempty"`
+	Run               *resource.RunSpec        `json:"run,omitempty"`
+	Capability        *resource.CapabilitySpec `json:"capability,omitempty"`
 }
 
 // trustRequest approves SSH host keys for a Host.
@@ -445,6 +448,8 @@ func (h *Handler) listOperations(c echo.Context) error {
 
 // @Summary Submit an operation
 // @Description Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).
+// @Description Give run (argv over SSH, hosts with an ssh Access Profile) or capability (an agent capability such as
+// @Description runtime.info or service.status, hosts with an agent Access Profile), not both. Results arrive per target.
 // @Tags Managed
 // @Produce json
 // @Accept json
@@ -460,15 +465,25 @@ func (h *Handler) listOperations(c echo.Context) error {
 func (h *Handler) submitOperation(c echo.Context) error {
 	var request operationRequest
 	return call(c, http.StatusAccepted, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
+		// Permission first: a reader learns nothing about the request's shape.
+		if !p.Role.Allows(domain.PermissionRunsExecute) {
+			return nil, domain.ErrPermissionDenied
+		}
 		switch {
+		case (request.Run == nil) == (request.Capability == nil):
+			return nil, domainInput("give either run or capability")
 		case request.Targets != nil && len(request.HostIDs) > 0:
 			return nil, domainInput("give either hostIds or targets, not both")
-		case request.Targets != nil:
-			return h.service.SubmitOperationForRule(ctx, p, *request.Targets, request.ExpectTargetsHash, request.Run)
-		case request.ExpectTargetsHash != "":
+		case request.Targets == nil && request.ExpectTargetsHash != "":
 			return nil, domainInput("expectTargetsHash requires targets")
+		case request.Capability != nil && request.Targets != nil:
+			return h.service.SubmitCapabilityForRule(ctx, p, *request.Targets, request.ExpectTargetsHash, *request.Capability)
+		case request.Capability != nil:
+			return h.service.SubmitCapability(ctx, p, request.HostIDs, *request.Capability)
+		case request.Targets != nil:
+			return h.service.SubmitOperationForRule(ctx, p, *request.Targets, request.ExpectTargetsHash, *request.Run)
 		default:
-			return h.service.SubmitOperation(ctx, p, request.HostIDs, request.Run)
+			return h.service.SubmitOperation(ctx, p, request.HostIDs, *request.Run)
 		}
 	})
 }

@@ -289,8 +289,11 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
 	}
-	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector,
-		hostaccess.WithDefaultHostKeyPolicy(resource.HostKeyPolicy(r.hostKeyPolicy)))
+	reconcilerOptions := []hostaccess.Option{hostaccess.WithDefaultHostKeyPolicy(resource.HostKeyPolicy(r.hostKeyPolicy))}
+	if r.agentGateway != nil {
+		reconcilerOptions = append(reconcilerOptions, hostaccess.WithAgentBindings(r.stores.Agents))
+	}
+	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector, reconcilerOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("construct managed Host reconciler: %w", err)
 	}
@@ -334,10 +337,23 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 	if r.stores.Engine() == store.EngineSQLite {
 		operationLeases = nil
 	}
-	return operationworker.New(operationworker.Dependencies{Operations: r.stores.Operations, Queue: queue, Hosts: r.stores.ResourceHosts,
+	deps := operationworker.Dependencies{Operations: r.stores.Operations, Queue: queue, Hosts: r.stores.ResourceHosts,
 		Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Connector: connector,
 		ExecutionPolicy: r.executionPolicyProvider(domain.ExecutionPolicy{}), Logger: slog.Default(), Leases: operationLeases,
-		Recovery: recovery, Registerer: r.metrics}, workers)
+		Recovery: recovery, Registerer: r.metrics}
+	if r.agentGateway != nil {
+		// Capability Operations go through the gateway (ADR-057); it hands
+		// every agent result to the worker before acknowledging it.
+		deps.Agents, deps.AgentBindings = r.agentGateway, r.stores.Agents
+	}
+	worker, err := operationworker.New(deps, workers)
+	if err != nil {
+		return nil, err
+	}
+	if r.agentGateway != nil {
+		r.agentGateway.SetResultHandler(worker.HandleAgentResult)
+	}
+	return worker, nil
 }
 
 // defaultSSHConcurrency bounds concurrent SSH sessions per connector until a

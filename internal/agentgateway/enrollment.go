@@ -32,8 +32,10 @@ type Enrollment struct {
 // EnrollmentToken is an owner-issued, single-use enrolment token. Only the
 // hash of the secret is stored.
 type EnrollmentToken struct {
-	ID          string     `json:"id"`
-	Hostname    string     `json:"hostname,omitempty"`
+	ID       string `json:"id"`
+	Hostname string `json:"hostname,omitempty"`
+	// HostID is the managed host the enrolling agent is bound to (ADR-057).
+	HostID      string     `json:"hostId,omitempty"`
 	CreatedBy   int        `json:"createdBy"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	ExpiresAt   time.Time  `json:"expiresAt"`

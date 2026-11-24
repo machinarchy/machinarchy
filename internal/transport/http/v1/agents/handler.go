@@ -4,7 +4,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
 	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
 	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 )
@@ -25,10 +25,9 @@ type Lister interface {
 	agentgateway.TokenStore
 }
 
-// Gateway runs capabilities and revokes agents; it is nil in processes that
+// Gateway revokes agents; it is nil in processes that
 // do not run the gateway (the standalone API).
 type Gateway interface {
-	Invoke(ctx context.Context, agentID, capability string, input json.RawMessage, timeout time.Duration) (*agentv1.Result, error)
 	Revoke(ctx context.Context, agentID string) error
 }
 
@@ -55,12 +54,12 @@ func NewHandler(lister Lister, gateway Gateway, keys SigningKeys) *Handler {
 	return &Handler{lister: lister, gateway: gateway, keys: keys}
 }
 
-// RegisterRoutes mounts the routes; read needs inventory:read, execute needs
-// runs:execute, owner needs the workspace owner.
-func RegisterRoutes(read, execute, owner *echo.Group, h *Handler) {
+// RegisterRoutes mounts the routes; read needs inventory:read, owner needs
+// the workspace owner. Agent work runs as capability Operations
+// (/api/v1/managed/operations), not here (ADR-057).
+func RegisterRoutes(read, owner *echo.Group, h *Handler) {
 	read.GET("", h.list)
 	read.GET("/controller-key", h.controllerKey)
-	execute.POST("/:id/invoke", h.invoke)
 	owner.POST("/:id/revoke", h.revoke)
 	owner.POST("/enrollment-tokens", h.createToken)
 	owner.GET("/enrollment-tokens", h.listTokens)
@@ -76,6 +75,10 @@ type createTokenRequest struct {
 	Hostname string `json:"hostname,omitempty"`
 	// TTLSeconds defaults to 3600; 60 to 86400.
 	TTLSeconds int `json:"ttlSeconds,omitempty"`
+	// HostID binds the agent that enrols with this token to this managed
+	// host (its Access Profile uses the agent connector), replacing any
+	// earlier binding of the host (ADR-057).
+	HostID string `json:"hostId,omitempty"`
 }
 
 // tokenView is an enrolment token as the API shows it: never the secret or
@@ -83,6 +86,7 @@ type createTokenRequest struct {
 type tokenView struct {
 	ID          string     `json:"id"`
 	Hostname    string     `json:"hostname,omitempty"`
+	HostID      string     `json:"hostId,omitempty"`
 	CreatedBy   int        `json:"createdBy"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	ExpiresAt   time.Time  `json:"expiresAt"`
@@ -92,7 +96,7 @@ type tokenView struct {
 }
 
 func viewToken(token agentgateway.EnrollmentToken) tokenView {
-	return tokenView{ID: token.ID, Hostname: token.Hostname, CreatedBy: token.CreatedBy, CreatedAt: token.CreatedAt,
+	return tokenView{ID: token.ID, Hostname: token.Hostname, HostID: token.HostID, CreatedBy: token.CreatedBy, CreatedAt: token.CreatedAt,
 		ExpiresAt: token.ExpiresAt, UsedAt: token.UsedAt, UsedByAgent: token.UsedByAgent, RevokedAt: token.RevokedAt}
 }
 
@@ -138,6 +142,12 @@ func (h *Handler) createToken(c echo.Context) error {
 	secret, token, err := agentgateway.NewEnrollmentToken(request.Hostname, time.Duration(request.TTLSeconds)*time.Second, principal.UserID, time.Now())
 	if err != nil {
 		return httperr.BadRequest(c, err.Error())
+	}
+	if request.HostID != "" {
+		if resource.ID(request.HostID).Validate() != nil {
+			return httperr.BadRequest(c, "hostId must be a managed host ID")
+		}
+		token.HostID = request.HostID
 	}
 	if err := h.lister.CreateEnrollmentToken(c.Request().Context(), token); err != nil {
 		return mapError(c, err)
@@ -252,60 +262,6 @@ type controllerKeyResponse struct {
 	NextPublicKey string `json:"nextPublicKey,omitempty"`
 	// PublicKeys is the value for MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY.
 	PublicKeys []string `json:"publicKeys"`
-}
-
-type invokeRequest struct {
-	Capability     string          `json:"capability"`
-	Input          json.RawMessage `json:"input,omitempty" swaggertype:"object"`
-	TimeoutSeconds int             `json:"timeoutSeconds"`
-}
-
-// invoke godoc
-// @Summary Run a capability on an agent and wait for its result
-// @Description 200 means the agent answered. The body is the agent's signed result: check its `status`.
-// @Description `succeeded` carries `output`. `rejected` (with `code`, for example `capability_unavailable`)
-// @Description and `failed` are the agent's own answers and also return 200.
-// @Description HTTP errors mean there was no answer: 503 when this process runs no gateway or the agent has no live lease,
-// @Description 504 when the agent did not answer within `timeoutSeconds` (default 15, at most 20).
-// @Tags Agents
-// @Accept json
-// @Produce json
-// @Security BearerAuth
-// @Param id path string true "Agent ID"
-// @Param request body invokeRequest true "Capability call"
-// @Success 200 {object} map[string]interface{} "The agent's result; see status"
-// @Failure 400 {object} httperr.Body
-// @Failure 401 {object} httperr.Body
-// @Failure 403 {object} httperr.Body
-// @Failure 404 {object} httperr.Body
-// @Failure 503 {object} httperr.Body
-// @Failure 504 {object} httperr.Body
-// @Router /api/v1/agents/{id}/invoke [post]
-func (h *Handler) invoke(c echo.Context) error {
-	if _, ok := middleware.Principal(c); !ok {
-		return httperr.Unauthorized(c)
-	}
-	if h.gateway == nil {
-		return httperr.Status(c, http.StatusServiceUnavailable, "this process does not run the agent gateway")
-	}
-	var request invokeRequest
-	if err := c.Bind(&request); err != nil || request.Capability == "" {
-		return httperr.BadRequest(c, "capability is required")
-	}
-	timeout := time.Duration(request.TimeoutSeconds) * time.Second
-	if request.TimeoutSeconds <= 0 {
-		timeout = 15 * time.Second
-	}
-	// The call is synchronous, so it must finish inside the API's 25s
-	// request deadline.
-	if timeout > 20*time.Second {
-		return httperr.BadRequest(c, "timeoutSeconds must be at most 20")
-	}
-	result, err := h.gateway.Invoke(c.Request().Context(), c.Param("id"), request.Capability, request.Input, timeout)
-	if err != nil {
-		return mapError(c, err)
-	}
-	return c.JSON(http.StatusOK, result)
 }
 
 // revoke godoc

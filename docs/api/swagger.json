@@ -541,89 +541,6 @@
                 }
             }
         },
-        "/api/v1/agents/{id}/invoke": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "200 means the agent answered. The body is the agent's signed result: check its `status`.\n`succeeded` carries `output`. `rejected` (with `code`, for example `capability_unavailable`)\nand `failed` are the agent's own answers and also return 200.\nHTTP errors mean there was no answer: 503 when this process runs no gateway or the agent has no live lease,\n504 when the agent did not answer within `timeoutSeconds` (default 15, at most 20).",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Agents"
-                ],
-                "summary": "Run a capability on an agent and wait for its result",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Capability call",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/agents.invokeRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "The agent's result; see status",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    },
-                    "504": {
-                        "description": "Gateway Timeout",
-                        "schema": {
-                            "$ref": "#/definitions/httperr.Body"
-                        }
-                    }
-                }
-            }
-        },
         "/api/v1/agents/{id}/revoke": {
             "post": {
                 "security": [
@@ -1891,7 +1808,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).",
+                "description": "Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).\nGive run (argv over SSH, hosts with an ssh Access Profile) or capability (an agent capability such as\nruntime.info or service.status, hosts with an agent Access Profile), not both. Results arrive per target.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3615,6 +3532,10 @@
         "agents.createTokenRequest": {
             "type": "object",
             "properties": {
+                "hostId": {
+                    "description": "HostID binds the agent that enrols with this token to this managed\nhost (its Access Profile uses the agent connector), replacing any\nearlier binding of the host (ADR-057).",
+                    "type": "string"
+                },
                 "hostname": {
                     "description": "Hostname, when set, is the only hostname this token enrols.",
                     "type": "string"
@@ -3637,6 +3558,9 @@
                 "expiresAt": {
                     "type": "string"
                 },
+                "hostId": {
+                    "type": "string"
+                },
                 "hostname": {
                     "type": "string"
                 },
@@ -3655,20 +3579,6 @@
                 },
                 "usedByAgent": {
                     "type": "string"
-                }
-            }
-        },
-        "agents.invokeRequest": {
-            "type": "object",
-            "properties": {
-                "capability": {
-                    "type": "string"
-                },
-                "input": {
-                    "type": "object"
-                },
-                "timeoutSeconds": {
-                    "type": "integer"
                 }
             }
         },
@@ -3731,6 +3641,9 @@
                     "type": "integer"
                 },
                 "expiresAt": {
+                    "type": "string"
+                },
+                "hostId": {
                     "type": "string"
                 },
                 "hostname": {
@@ -4155,6 +4068,9 @@
         "managedresource.operationRequest": {
             "type": "object",
             "properties": {
+                "capability": {
+                    "$ref": "#/definitions/resource.CapabilitySpec"
+                },
                 "expectTargetsHash": {
                     "type": "string"
                 },
@@ -4361,6 +4277,23 @@
                 "AuthenticationPrivateKey"
             ]
         },
+        "resource.CapabilitySpec": {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "description": "Input is the capability's JSON input ({} when it takes none).",
+                    "type": "object"
+                },
+                "name": {
+                    "description": "Name is the capability, e.g. runtime.info or service.status.",
+                    "type": "string"
+                },
+                "timeoutSeconds": {
+                    "description": "TimeoutSeconds bounds the call on each agent.",
+                    "type": "integer"
+                }
+            }
+        },
         "resource.Condition": {
             "type": "object",
             "properties": {
@@ -4400,10 +4333,12 @@
         "resource.ConnectorKind": {
             "type": "string",
             "enum": [
-                "ssh"
+                "ssh",
+                "agent"
             ],
             "x-enum-varnames": [
-                "ConnectorSSH"
+                "ConnectorSSH",
+                "ConnectorAgent"
             ]
         },
         "resource.DesiredPresence": {
@@ -4730,20 +4665,30 @@
         "resource.OperationKind": {
             "type": "string",
             "enum": [
-                "Run"
+                "Run",
+                "Capability"
             ],
             "x-enum-varnames": [
-                "OperationKindRun"
+                "OperationKindRun",
+                "OperationKindCapability"
             ]
         },
         "resource.OperationSpec": {
             "type": "object",
             "properties": {
+                "capability": {
+                    "$ref": "#/definitions/resource.CapabilitySpec"
+                },
                 "deadline": {
                     "type": "string"
                 },
                 "run": {
-                    "$ref": "#/definitions/resource.RunSpec"
+                    "description": "Run (SSH) and Capability (agent) are exclusive; Kind says which.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/resource.RunSpec"
+                        }
+                    ]
                 },
                 "targets": {
                     "type": "array",

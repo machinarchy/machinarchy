@@ -7,11 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,8 +18,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
-
-	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
 // Config configures the gateway. NATSOptions carries authentication and TLS.
@@ -68,9 +64,17 @@ type Gateway struct {
 	js        jetstream.JetStream
 	connected atomic.Bool
 
-	mu      sync.Mutex
-	waiters map[string]chan agentv1.Result
+	results atomic.Pointer[ResultHandler]
 }
+
+// ResultHandler persists an agent's result (ADR-057). The gateway sends
+// result.ack for a terminal result only after it returns nil, so a result
+// that could not be stored is republished by the agent and none is lost.
+type ResultHandler func(ctx context.Context, result agentv1.Result) error
+
+// SetResultHandler installs the handler; without one, results are dropped
+// unacknowledged.
+func (g *Gateway) SetResultHandler(handler ResultHandler) { g.results.Store(&handler) }
 
 type gatewayMetrics struct {
 	registrations *prometheus.CounterVec
@@ -131,7 +135,7 @@ func New(store Store, cfg Config) (*Gateway, error) {
 		cfg.Logger = slog.Default()
 	}
 	g := &Gateway{cfg: cfg, store: store, logger: cfg.Logger.With("component", "agent-gateway"),
-		waiters: map[string]chan agentv1.Result{}, metrics: newMetrics(cfg.Registerer)}
+		metrics: newMetrics(cfg.Registerer)}
 	return g, nil
 }
 
@@ -432,18 +436,19 @@ func (g *Gateway) onResult(msg *nats.Msg) {
 		return
 	}
 	g.metrics.results.WithLabelValues(string(result.Status)).Inc()
-	g.mu.Lock()
-	waiter := g.waiters[result.OperationID]
-	g.mu.Unlock()
-	if waiter != nil {
-		select {
-		case waiter <- result:
-		default:
-		}
+	handler := g.results.Load()
+	if handler == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.cfg.ConnectTimeout)
+	defer cancel()
+	if err := (*handler)(ctx, result); err != nil {
+		// Not acknowledged: the agent republishes and the result is retried.
+		g.logger.Warn("agent result not stored; it will be redelivered", "agent_id", result.AgentID,
+			"operation_id", result.OperationID, "error", err)
+		return
 	}
 	if result.Status.Terminal() {
-		ctx, cancel := context.WithTimeout(context.Background(), g.cfg.ConnectTimeout)
-		defer cancel()
 		if err := g.send(ctx, result.AgentID, agentv1.Command{Type: agentv1.CommandResultAck, OperationID: result.OperationID}); err != nil {
 			g.logger.Warn("acknowledge agent result", "agent_id", result.AgentID, "operation_id", result.OperationID, "error", err)
 		}
@@ -459,13 +464,29 @@ func (g *Gateway) send(ctx context.Context, agentID string, cmd agentv1.Command)
 	if err != nil {
 		return err
 	}
-	cmd.ProtocolVersion, cmd.CommandID, cmd.AgentID = agentv1.ProtocolVersion, id, agentID
+	cmd.CommandID, cmd.AgentID = id, agentID
 	cmd.IssuedAt, cmd.ExpiresAt = now, now.Add(g.cfg.CommandLifetime)
+	return g.PublishCommand(ctx, cmd)
+}
+
+// CommandLifetime is how long an agent accepts a command after issue.
+func (g *Gateway) CommandLifetime() time.Duration { return g.cfg.CommandLifetime }
+
+// PublishCommand signs cmd as given (command ID, agent, issue and expiry
+// times set by the caller) and publishes it to the agent's subject with
+// Nats-Msg-Id = command ID. It returns after the PubAck, so a nil error means
+// JetStream stored it; publishing the same command again within the
+// duplicate window is ignored by JetStream (ADR-057, M-7).
+func (g *Gateway) PublishCommand(ctx context.Context, cmd agentv1.Command) error {
+	if !g.connected.Load() || g.js == nil {
+		return ErrUnavailable
+	}
+	cmd.ProtocolVersion = agentv1.ProtocolVersion
 	payload, err := agentv1.SealWith(g.signer(), agentv1.KindCommand, &cmd)
 	if err != nil {
 		return err
 	}
-	subject, err := agentv1.CommandSubject(agentID)
+	subject, err := agentv1.CommandSubject(cmd.AgentID)
 	if err != nil {
 		return err
 	}
@@ -476,56 +497,6 @@ func (g *Gateway) send(ctx context.Context, agentID string, cmd agentv1.Command)
 	}
 	g.metrics.commands.WithLabelValues(string(cmd.Type), outcome).Inc()
 	return err
-}
-
-// Invoke runs one capability on an agent and waits for its terminal result.
-// The agent must be connected (live lease). input may be nil.
-func (g *Gateway) Invoke(ctx context.Context, agentID, capability string, input json.RawMessage, timeout time.Duration) (*agentv1.Result, error) {
-	if !agentv1.ValidCapabilityName(capability) {
-		return nil, fmt.Errorf("%w: unknown capability %q", domain.ErrInvalidInput, capability)
-	}
-	if timeout <= 0 || timeout > agentv1.MaxOperationTimeout {
-		return nil, fmt.Errorf("%w: timeout must be between 1ms and %s", domain.ErrInvalidInput, agentv1.MaxOperationTimeout)
-	}
-	agent, err := g.store.GetAgent(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	if !agent.Connected(time.Now()) {
-		return nil, fmt.Errorf("%w: agent %s has no live lease", ErrUnavailable, agentID)
-	}
-	if len(input) == 0 {
-		input = json.RawMessage(`{}`)
-	}
-	operationID, err := randomID("op-")
-	if err != nil {
-		return nil, err
-	}
-	results := make(chan agentv1.Result, 8)
-	g.mu.Lock()
-	g.waiters[operationID] = results
-	g.mu.Unlock()
-	defer func() {
-		g.mu.Lock()
-		delete(g.waiters, operationID)
-		g.mu.Unlock()
-	}()
-	if err := g.send(ctx, agentID, agentv1.Command{Type: agentv1.CommandOperationRequest, OperationID: operationID,
-		Capability: capability, Input: input, TimeoutMillis: timeout.Milliseconds()}); err != nil {
-		return nil, fmt.Errorf("send operation to agent: %w", err)
-	}
-	wait, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
-	defer cancel()
-	for {
-		select {
-		case <-wait.Done():
-			return nil, fmt.Errorf("waiting for agent %s: %w", agentID, wait.Err())
-		case result := <-results:
-			if result.Status.Terminal() {
-				return &result, nil
-			}
-		}
-	}
 }
 
 // Agents lists enrolled agents.

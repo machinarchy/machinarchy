@@ -47,6 +47,9 @@ const (
 	// Enrolment tokens (AUDIT M-4); the secret is never recorded.
 	AuditAgentEnrollmentTokenIssued  = "agent.enrollment_token_issued"
 	AuditAgentEnrollmentTokenRevoked = "agent.enrollment_token_revoked"
+	// AuditAgentHostBound records an agent bound to a managed host by a
+	// per-host enrolment token (ADR-057).
+	AuditAgentHostBound = "agent.host_bound"
 	// Controller signing keys (AUDIT M-3, Phase 16); key material is never
 	// recorded, only the key's ID and public key.
 	AuditAgentSigningKeyCreated   = "agent.signing_key_created"

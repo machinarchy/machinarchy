@@ -11,7 +11,10 @@ type ConnectorKind string
 type AuthenticationMethod string
 
 const (
-	ConnectorSSH             ConnectorKind        = "ssh"
+	ConnectorSSH ConnectorKind = "ssh"
+	// ConnectorAgent reaches the host through its enrolled machinarchy-agent
+	// (ADR-057); the host is bound to the agent by a per-host enrolment token.
+	ConnectorAgent           ConnectorKind        = "agent"
 	AuthenticationPassword   AuthenticationMethod = "password"
 	AuthenticationPrivateKey AuthenticationMethod = "private-key"
 )
@@ -82,7 +85,23 @@ func (p AccessProfile) Validate() error {
 	return nil
 }
 func (r AccessProfileRevision) Validate() error {
-	if r.ProfileID.Validate() != nil || r.WorkspaceID <= 0 || r.Revision == 0 || r.CreatedBy <= 0 || r.CreatedAt.IsZero() || r.Spec.Connector != ConnectorSSH || strings.TrimSpace(r.Spec.Username) == "" || len(r.Spec.Username) > 255 || r.Spec.Credential.ID == "" || r.Spec.Credential.Version == 0 {
+	if r.ProfileID.Validate() != nil || r.WorkspaceID <= 0 || r.Revision == 0 || r.CreatedBy <= 0 || r.CreatedAt.IsZero() {
+		return fmt.Errorf("%w: invalid Access Profile revision", ErrInvalidResource)
+	}
+	if len(r.Checksum) > 0 && len(r.Checksum) != 64 {
+		return fmt.Errorf("%w: invalid Access Profile checksum", ErrInvalidResource)
+	}
+	if r.Spec.Connector == ConnectorAgent {
+		// The agent authenticates itself: no username, credential, host keys
+		// or SSH execution settings (ADR-057).
+		s := r.Spec
+		if s.Username != "" || s.Authentication != "" || s.Credential != (SecretReference{}) || s.HostKeyPolicy != "" ||
+			len(s.HostCertificateAuthorities) > 0 || s.Execution != nil {
+			return fmt.Errorf("%w: an agent Access Profile takes no username, credential, host-key or execution settings", ErrInvalidResource)
+		}
+		return nil
+	}
+	if r.Spec.Connector != ConnectorSSH || strings.TrimSpace(r.Spec.Username) == "" || len(r.Spec.Username) > 255 || r.Spec.Credential.ID == "" || r.Spec.Credential.Version == 0 {
 		return fmt.Errorf("%w: invalid Access Profile revision", ErrInvalidResource)
 	}
 	if r.Spec.Authentication != AuthenticationPassword && r.Spec.Authentication != AuthenticationPrivateKey {
@@ -93,9 +112,6 @@ func (r AccessProfileRevision) Validate() error {
 	}
 	if err := r.Spec.validateHostKeys(); err != nil {
 		return err
-	}
-	if len(r.Checksum) > 0 && len(r.Checksum) != 64 {
-		return fmt.Errorf("%w: invalid Access Profile checksum", ErrInvalidResource)
 	}
 	return nil
 }

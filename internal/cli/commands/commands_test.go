@@ -1161,9 +1161,17 @@ func TestManagedCommands(t *testing.T) {
 		if missing.code != clierr.ExitNotFound {
 			t.Fatalf("unknown profile = %+v", missing)
 		}
-		usage := run(t, fixtures(), "create", "host", "x", "--profile", "deploy")
+		usage := run(t, fixtures(), "create", "host", "x", "--endpoint", "h:22")
 		if usage.code != clierr.ExitUsage {
-			t.Fatalf("missing endpoint = %+v", usage)
+			t.Fatalf("missing profile = %+v", usage)
+		}
+		// A host reached through its agent has no SSH endpoint.
+		client = fixtures()
+		if got := run(t, client, "create", "host", "agent-01", "--profile", "deploy", "-q"); got.code != 0 {
+			t.Fatalf("host without endpoint = %+v", got)
+		}
+		if created := client.hosts[len(client.hosts)-1]; created.Spec.AccessTarget.Endpoint != "" {
+			t.Fatalf("created = %+v", created)
 		}
 	})
 
@@ -1295,6 +1303,31 @@ func TestManagedCommands(t *testing.T) {
 			run(t, client, args...)
 			if !client.submitted[0].Run.Detach {
 				t.Fatalf("%v submitted an attached run", args)
+			}
+		}
+	})
+
+	t.Run("run --capability submits a capability Operation", func(t *testing.T) {
+		client := fixtures()
+		got := run(t, client, "run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", `{"service":"nginx.service"}`, "--timeout", "45")
+		if got.code != 0 || !strings.Contains(got.stdout, "op-1") {
+			t.Fatalf("capability run = %+v", got)
+		}
+		submitted := client.submitted[0]
+		if submitted.Run != nil || submitted.Capability == nil || submitted.Capability.Name != "service.status" ||
+			string(submitted.Capability.Input) != `{"service":"nginx.service"}` || submitted.Capability.TimeoutSeconds != 45 || submitted.ExpectTargetsHash != "hash-2" {
+			t.Fatalf("submitted = %+v", submitted)
+		}
+		for _, args := range [][]string{
+			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--", "uptime"},    // a program as well
+			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", "[1]"},  // input not an object
+			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", "{bad"}, // input not JSON
+			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--detach"},
+			{"run", "--yes", "--capability", "service.status"}, // no selection
+		} {
+			client := fixtures()
+			if got := run(t, client, args...); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
+				t.Errorf("%v = %+v, want a usage error", args, got)
 			}
 		}
 	})

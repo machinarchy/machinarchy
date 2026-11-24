@@ -53,4 +53,10 @@ type Store interface {
 	RenewAgentLease(ctx context.Context, id, leaseID string, expiresAt, now time.Time) error
 	ListAgents(ctx context.Context) ([]Agent, error)
 	RevokeAgent(ctx context.Context, id string, now time.Time) error
+	// HostAgent returns the live (not revoked) agent bound to a managed host;
+	// ErrHostNotBound when there is none.
+	HostAgent(ctx context.Context, workspaceID int, hostID string) (*Agent, error)
 }
+
+// ErrHostNotBound reports a managed host with no enrolled agent.
+var ErrHostNotBound = errors.New("no agent is bound to this host")

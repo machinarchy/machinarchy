@@ -1,5 +1,56 @@
 # ChangeLogAI
 
+## 2026-11-24 — Agent capabilities run as Operations (Phase 17: A-05, M-7, M-8, M-9; branch audit/capability-ops)
+
+Implements ADR-057.
+
+- **Domain:**
+  - `OperationKind=Capability` with `CapabilitySpec{name, input, timeoutSeconds}`: the name is lowercase words joined by dots, the input is a JSON object of at most 16 KiB, and the timeout is 1–3600 s.
+  - `Run` stays SSH-only.
+  - Access Profile connector `agent`, which takes no username, credential, host-key or execution settings.
+- **Migration 000008 (SQLite and PostgreSQL):**
+  - the `Capability` operation kind;
+  - `agent_enrollment_tokens.host_id`;
+  - `agent_host_bindings`;
+  - `operation_agent_commands`.
+  - SQLite rebuilds `operations` and `operation_targets` together (copy both, then drop): rebuilding only the parent would cascade-delete targets. `TestSQLiteMigration8KeepsOperations` covers it.
+- **Host binding:**
+  - an enrolment token with `hostId` binds the enrolling agent to that managed host;
+  - re-enrolment replaces the binding;
+  - revoked agents serve no host;
+  - tokens for unknown hosts are refused;
+  - binding is audited as `agent.host_bound`.
+- **Dispatch (M-9):** the Operation worker routes Capability Operations to agents. One durable command is written per target, in the same transaction that marks the target Running.
+- **Relay (M-7):**
+  - publishes with `Nats-Msg-Id` = command ID;
+  - marks a command published only after the PubAck;
+  - retries with backoff;
+  - fails a target `agent_command_undelivered` when its command expires unsent.
+- **Results (M-8):**
+  - stored before the gateway acks them;
+  - status mapping: `unknown` → `Interrupted` (never retried), no result by the due time → `Lost` (`no_result`);
+  - duplicates are idempotent;
+  - a result from the wrong agent is refused.
+- **Cancel and restart:** cancelling sends `operation.cancel` to running targets. Capability Operations resume after a controller restart.
+- **Ready:** agent hosts report `Ready` from their agent's lease. They are never contacted over SSH.
+- **Removed:** `POST /api/v1/agents/{id}/invoke` and its synchronous waiters (A-05).
+- **API:** `POST /api/v1/managed/operations` takes exactly one of `run` or `capability`. Each kind requires targets on a matching connector. Readers don't see a capability's input. API docs are regenerated.
+- **CLI:**
+  - `run --capability NAME [--input JSON]`;
+  - `create host` needs `--endpoint` only for SSH hosts.
+- **Fix found by the new tests:** the service checked a credential SecretRef even for agent profiles, so agent Access Profiles could not be created.
+- **Tests:**
+  - store contract (both engines);
+  - migration 8;
+  - worker flow on a real store with a fake transport: dispatch and relay with a refused first publish, results and duplicates, controller restart, status mapping, `Lost`, undelivered command, cancel, undispatchable targets;
+  - domain validation, the reconciler's agent-host conditions, the HTTP handler, and the CLI.
+  - The e2e tests move to capability Operations in the next commit; at this commit they still call the removed `invoke`.
+- **Checks run:**
+  - `go build ./...` and `go vet ./...`: clean;
+  - `golangci-lint run --new-from-rev=HEAD ./...`: 0 issues;
+  - `go test -race -count=3` on the worker capability tests: pass;
+  - `go test ./...` with PostgreSQL required (`MACHINARCHY_REQUIRE_POSTGRES_TESTS=1`), together with the next commit's e2e tests: pass.
+
 ## 2026-11-24 — CLI guide step 16 shows the owner's secrets (owner report; branch audit/capability-ops)
 
 - `docs/cli/user-full-guide.md` step 16: `machinarchy --context lab secret list` printed `[]`, which came from a separate fresh lab. A reader following the guide sees `lab-key` and `lab-password` from step 5. The example now prints their names through `jq`.

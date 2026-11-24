@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
@@ -101,7 +102,11 @@ func (s *Store) RegisterAgent(ctx context.Context, agent agentgateway.Agent, req
 	case err == nil:
 		// A known key enrolling again (an agent that lost its identity) must
 		// present a valid enrolment like a new one.
-		if _, err := s.consumeEnrollment(ctx, tx, enrollment, requestID, existingID, agent.RegisteredAt); err != nil {
+		consumed, err := s.consumeEnrollment(ctx, tx, enrollment, requestID, existingID, agent.RegisteredAt)
+		if err != nil {
+			return agentgateway.Agent{}, err
+		}
+		if err := s.bindHost(ctx, tx, consumed, existingID, agent.RegisteredAt); err != nil {
 			return agentgateway.Agent{}, err
 		}
 		existing, err := scanAgent(tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT `+agentColumns+` FROM agents WHERE id = ?`), existingID))
@@ -115,7 +120,7 @@ func (s *Store) RegisterAgent(ctx context.Context, agent agentgateway.Agent, req
 	case !errors.Is(err, sql.ErrNoRows):
 		return agentgateway.Agent{}, fmt.Errorf("read agent registration: %w", err)
 	}
-	details, err := s.consumeEnrollment(ctx, tx, enrollment, requestID, agent.ID, agent.RegisteredAt)
+	consumed, err := s.consumeEnrollment(ctx, tx, enrollment, requestID, agent.ID, agent.RegisteredAt)
 	if err != nil {
 		return agentgateway.Agent{}, err
 	}
@@ -130,7 +135,10 @@ func (s *Store) RegisterAgent(ctx context.Context, agent agentgateway.Agent, req
 	}
 	if err := s.audit(ctx, tx, domain.AuditEvent{WorkspaceID: domain.DefaultWorkspaceID, Action: domain.AuditAgentRegistered,
 		TargetType: domain.AuditTargetAgent, TargetID: agent.ID,
-		Details: mergeDetails(map[string]string{"hostname": agent.Hostname, "agent_version": agent.AgentVersion}, details)}); err != nil {
+		Details: mergeDetails(map[string]string{"hostname": agent.Hostname, "agent_version": agent.AgentVersion}, consumed.details)}); err != nil {
+		return agentgateway.Agent{}, err
+	}
+	if err := s.bindHost(ctx, tx, consumed, agent.ID, agent.RegisteredAt); err != nil {
 		return agentgateway.Agent{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -212,34 +220,92 @@ func (s *Store) RevokeAgent(ctx context.Context, id string, now time.Time) error
 // token, marks it used. It returns audit details naming how the agent
 // enrolled. The UPDATE re-checks used_at, so two registrations racing for one
 // token cannot both succeed.
-func (s *Store) consumeEnrollment(ctx context.Context, tx *sql.Tx, enrollment agentgateway.Enrollment, requestID, agentID string, now time.Time) (map[string]string, error) {
+// consumedEnrollment is what a registration's enrolment allows.
+type consumedEnrollment struct {
+	details map[string]string
+	tokenID string
+	hostID  string // bind the agent to this managed host ("" for none)
+}
+
+func (s *Store) consumeEnrollment(ctx context.Context, tx *sql.Tx, enrollment agentgateway.Enrollment, requestID, agentID string, now time.Time) (consumedEnrollment, error) {
 	if enrollment.Shared {
-		return map[string]string{"enrollment": "shared_token"}, nil
+		return consumedEnrollment{details: map[string]string{"enrollment": "shared_token"}}, nil
 	}
 	if enrollment.TokenHash == "" {
-		return nil, agentgateway.ErrEnrollmentRejected
+		return consumedEnrollment{}, agentgateway.ErrEnrollmentRejected
 	}
 	token, err := scanToken(tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT `+enrollmentColumns+` FROM agent_enrollment_tokens
 		WHERE token_hash = ? AND workspace_id = ?`), enrollment.TokenHash, domain.DefaultWorkspaceID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, agentgateway.ErrEnrollmentRejected
+		return consumedEnrollment{}, agentgateway.ErrEnrollmentRejected
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read enrollment token: %w", err)
+		return consumedEnrollment{}, fmt.Errorf("read enrollment token: %w", err)
 	}
 	if !token.Usable(now) || !token.Matches(enrollment.Hostname) {
-		return nil, agentgateway.ErrEnrollmentRejected
+		return consumedEnrollment{}, agentgateway.ErrEnrollmentRejected
 	}
 	result, err := tx.ExecContext(ctx, s.dialect.Bind(`UPDATE agent_enrollment_tokens SET used_at = ?, used_request_id = ?, used_by_agent = ?
 		WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`), sqlx.Time(now), requestID, agentID, token.ID)
 	if err != nil {
-		return nil, fmt.Errorf("consume enrollment token: %w", err)
+		return consumedEnrollment{}, fmt.Errorf("consume enrollment token: %w", err)
 	}
 	if err := sqlx.RowsAffected(result, agentgateway.ErrEnrollmentRejected); err != nil {
-		return nil, err
+		return consumedEnrollment{}, err
 	}
-	return map[string]string{"enrollment": "token", "token_id": token.ID}, nil
+	details := map[string]string{"enrollment": "token", "token_id": token.ID}
+	if token.HostID != "" {
+		details["host_id"] = token.HostID
+	}
+	return consumedEnrollment{details: details, tokenID: token.ID, hostID: token.HostID}, nil
 }
+
+// bindHost binds the agent to the managed host its token names, replacing
+// any earlier binding of that host or that agent (a replaced machine).
+func (s *Store) bindHost(ctx context.Context, tx *sql.Tx, consumed consumedEnrollment, agentID string, now time.Time) error {
+	if consumed.hostID == "" {
+		return nil
+	}
+	var workspaceID int
+	err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT workspace_id FROM managed_hosts WHERE id = ?`), consumed.hostID).Scan(&workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentgateway.ErrEnrollmentRejected // the host was deleted after the token was issued
+	}
+	if err != nil {
+		return fmt.Errorf("read host to bind: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`DELETE FROM agent_host_bindings WHERE host_id = ? OR agent_id = ?`), consumed.hostID, agentID); err != nil {
+		return fmt.Errorf("replace host binding: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`INSERT INTO agent_host_bindings (host_id, workspace_id, agent_id, token_id, bound_at_ns)
+		VALUES (?, ?, ?, ?, ?)`), consumed.hostID, workspaceID, agentID, consumed.tokenID, now.UnixNano()); err != nil {
+		return fmt.Errorf("bind host: %w", err)
+	}
+	return s.audit(ctx, tx, domain.AuditEvent{WorkspaceID: workspaceID, Action: domain.AuditAgentHostBound,
+		TargetType: domain.AuditTargetAgent, TargetID: agentID,
+		Details: map[string]string{"host_id": consumed.hostID, "token_id": consumed.tokenID}})
+}
+
+// HostAgent implements agentgateway.Store.
+func (s *Store) HostAgent(ctx context.Context, workspaceID int, hostID string) (*agentgateway.Agent, error) {
+	agent, err := scanAgent(s.db.QueryRowContext(ctx, s.dialect.Bind(`SELECT `+prefixedAgentColumns+` FROM agent_host_bindings b
+		JOIN agents a ON a.id = b.agent_id WHERE b.workspace_id = ? AND b.host_id = ? AND a.revoked_at IS NULL`), workspaceID, hostID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, agentgateway.ErrHostNotBound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read host binding: %w", err)
+	}
+	return agent, nil
+}
+
+var prefixedAgentColumns = func() string {
+	fields := strings.Split(agentColumns, ",")
+	for i, field := range fields {
+		fields[i] = "a." + strings.TrimSpace(field)
+	}
+	return strings.Join(fields, ", ")
+}()
 
 func mergeDetails(base, extra map[string]string) map[string]string {
 	for key, value := range extra {
@@ -248,13 +314,13 @@ func mergeDetails(base, extra map[string]string) map[string]string {
 	return base
 }
 
-const enrollmentColumns = `id, hostname, created_by, created_at, expires_at, used_at, used_by_agent, revoked_at`
+const enrollmentColumns = `id, hostname, host_id, created_by, created_at, expires_at, used_at, used_by_agent, revoked_at`
 
 func scanToken(row interface{ Scan(...any) error }) (*agentgateway.EnrollmentToken, error) {
 	var token agentgateway.EnrollmentToken
 	var hostname, usedAt, usedBy, revokedAt sql.NullString
 	var created, expires string
-	if err := row.Scan(&token.ID, &hostname, &token.CreatedBy, &created, &expires, &usedAt, &usedBy, &revokedAt); err != nil {
+	if err := row.Scan(&token.ID, &hostname, &token.HostID, &token.CreatedBy, &created, &expires, &usedAt, &usedBy, &revokedAt); err != nil {
 		return nil, err
 	}
 	token.Hostname, token.UsedByAgent = hostname.String, usedBy.String
@@ -290,12 +356,25 @@ func (s *Store) CreateEnrollmentToken(ctx context.Context, token agentgateway.En
 	if token.Hostname != "" {
 		hostname = token.Hostname
 	}
-	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`INSERT INTO agent_enrollment_tokens (id, workspace_id, token_hash, hostname,
-		created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`), token.ID, domain.DefaultWorkspaceID, token.Hash, hostname,
-		token.CreatedBy, sqlx.Time(token.CreatedAt), sqlx.Time(token.ExpiresAt)); err != nil {
+	if token.HostID != "" {
+		var exists int
+		err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT 1 FROM managed_hosts WHERE id = ? AND workspace_id = ?`), token.HostID, domain.DefaultWorkspaceID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: no managed host %s", domain.ErrInvalidInput, token.HostID)
+		}
+		if err != nil {
+			return fmt.Errorf("read host for enrollment token: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`INSERT INTO agent_enrollment_tokens (id, workspace_id, token_hash, hostname, host_id,
+		created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`), token.ID, domain.DefaultWorkspaceID, token.Hash, hostname,
+		token.HostID, token.CreatedBy, sqlx.Time(token.CreatedAt), sqlx.Time(token.ExpiresAt)); err != nil {
 		return fmt.Errorf("insert enrollment token: %w", err)
 	}
 	details := map[string]string{"expires_at": sqlx.Time(token.ExpiresAt)}
+	if token.HostID != "" {
+		details["host_id"] = token.HostID
+	}
 	if token.Hostname != "" {
 		details["hostname"] = token.Hostname
 	}

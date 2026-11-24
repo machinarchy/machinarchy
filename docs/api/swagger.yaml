@@ -23,6 +23,12 @@ definitions:
     type: object
   agents.createTokenRequest:
     properties:
+      hostId:
+        description: |-
+          HostID binds the agent that enrols with this token to this managed
+          host (its Access Profile uses the agent connector), replacing any
+          earlier binding of the host (ADR-057).
+        type: string
       hostname:
         description: Hostname, when set, is the only hostname this token enrols.
         type: string
@@ -38,6 +44,8 @@ definitions:
         type: integer
       expiresAt:
         type: string
+      hostId:
+        type: string
       hostname:
         type: string
       id:
@@ -51,15 +59,6 @@ definitions:
         type: string
       usedByAgent:
         type: string
-    type: object
-  agents.invokeRequest:
-    properties:
-      capability:
-        type: string
-      input:
-        type: object
-      timeoutSeconds:
-        type: integer
     type: object
   agents.signingKeyView:
     properties:
@@ -101,6 +100,8 @@ definitions:
       createdBy:
         type: integer
       expiresAt:
+        type: string
+      hostId:
         type: string
       hostname:
         type: string
@@ -382,6 +383,8 @@ definitions:
     type: object
   managedresource.operationRequest:
     properties:
+      capability:
+        $ref: '#/definitions/resource.CapabilitySpec'
       expectTargetsHash:
         type: string
       hostIds:
@@ -520,6 +523,18 @@ definitions:
     x-enum-varnames:
     - AuthenticationPassword
     - AuthenticationPrivateKey
+  resource.CapabilitySpec:
+    properties:
+      input:
+        description: Input is the capability's JSON input ({} when it takes none).
+        type: object
+      name:
+        description: Name is the capability, e.g. runtime.info or service.status.
+        type: string
+      timeoutSeconds:
+        description: TimeoutSeconds bounds the call on each agent.
+        type: integer
+    type: object
   resource.Condition:
     properties:
       lastTransitionTime:
@@ -548,9 +563,11 @@ definitions:
   resource.ConnectorKind:
     enum:
     - ssh
+    - agent
     type: string
     x-enum-varnames:
     - ConnectorSSH
+    - ConnectorAgent
   resource.DesiredPresence:
     enum:
     - Managed
@@ -796,15 +813,21 @@ definitions:
   resource.OperationKind:
     enum:
     - Run
+    - Capability
     type: string
     x-enum-varnames:
     - OperationKindRun
+    - OperationKindCapability
   resource.OperationSpec:
     properties:
+      capability:
+        $ref: '#/definitions/resource.CapabilitySpec'
       deadline:
         type: string
       run:
-        $ref: '#/definitions/resource.RunSpec'
+        allOf:
+        - $ref: '#/definitions/resource.RunSpec'
+        description: Run (SSH) and Capability (agent) are exclusive; Kind says which.
       targets:
         items:
           $ref: '#/definitions/resource.OperationTargetSpec'
@@ -1243,65 +1266,6 @@ paths:
       security:
       - BearerAuth: []
       summary: List enrolled agents
-      tags:
-      - Agents
-  /api/v1/agents/{id}/invoke:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        200 means the agent answered. The body is the agent's signed result: check its `status`.
-        `succeeded` carries `output`. `rejected` (with `code`, for example `capability_unavailable`)
-        and `failed` are the agent's own answers and also return 200.
-        HTTP errors mean there was no answer: 503 when this process runs no gateway or the agent has no live lease,
-        504 when the agent did not answer within `timeoutSeconds` (default 15, at most 20).
-      parameters:
-      - description: Agent ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Capability call
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/agents.invokeRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: The agent's result; see status
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httperr.Body'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httperr.Body'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/httperr.Body'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httperr.Body'
-        "503":
-          description: Service Unavailable
-          schema:
-            $ref: '#/definitions/httperr.Body'
-        "504":
-          description: Gateway Timeout
-          schema:
-            $ref: '#/definitions/httperr.Body'
-      security:
-      - BearerAuth: []
-      summary: Run a capability on an agent and wait for its result
       tags:
       - Agents
   /api/v1/agents/{id}/revoke:
@@ -2353,8 +2317,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Target hostIds, or a rule; expectTargetsHash binds the run to a
-        preview (409 targets_changed).
+      description: |-
+        Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).
+        Give run (argv over SSH, hosts with an ssh Access Profile) or capability (an agent capability such as
+        runtime.info or service.status, hosts with an agent Access Profile), not both. Results arrive per target.
       parameters:
       - description: Request
         in: body

@@ -235,10 +235,10 @@ func (w *Worker) finishDetachedIfDone(ctx context.Context, key resource.Operatio
 	w.mu.Unlock()
 }
 
-// detachedResumeNeeded reports whether a Running detached Operation still
-// has targets to launch.
+// detachedResumeNeeded reports whether a Running detached or capability
+// Operation still has targets to launch or dispatch.
 func detachedResumeNeeded(op *resource.Operation) bool {
-	if op.Spec.Run == nil || !op.Spec.Run.Detach {
+	if (op.Spec.Run == nil || !op.Spec.Run.Detach) && op.Kind != resource.OperationKindCapability {
 		return false
 	}
 	for _, target := range op.Status.Targets {

@@ -63,7 +63,7 @@ func router(store *fakeStore) *echo.Echo {
 		}
 	}
 	group := e.Group("/api/v1/agents", inject)
-	RegisterRoutes(group, group, group, NewHandler(store, nil, nil))
+	RegisterRoutes(group, group, NewHandler(store, nil, nil))
 	return e
 }
 
@@ -186,7 +186,7 @@ func TestControllerKeyListsTheNextKeyDuringARotation(t *testing.T) {
 	} {
 		e := echo.New()
 		group := e.Group("/api/v1/agents")
-		RegisterRoutes(group, group, group, NewHandler(&fakeStore{}, nil, tc.keys))
+		RegisterRoutes(group, group, NewHandler(&fakeStore{}, nil, tc.keys))
 		recorder := call(e, http.MethodGet, "/api/v1/agents/controller-key", "")
 		if recorder.Code != tc.want || (tc.body != "" && strings.TrimSpace(recorder.Body.String()) != tc.body) {
 			t.Errorf("keys %v: %d %s", tc.keys, recorder.Code, recorder.Body)
@@ -206,7 +206,7 @@ func TestSigningKeyEndpoints(t *testing.T) {
 		}
 	}
 	group := e.Group("/api/v1/agents", inject)
-	RegisterRoutes(group, group, group, NewHandler(&fakeStore{}, nil, keys))
+	RegisterRoutes(group, group, NewHandler(&fakeStore{}, nil, keys))
 	for _, step := range []struct {
 		method, path string
 		want         int
@@ -232,7 +232,7 @@ func TestSigningKeyEndpoints(t *testing.T) {
 	}
 	off := echo.New()
 	offGroup := off.Group("/api/v1/agents", inject)
-	RegisterRoutes(offGroup, offGroup, offGroup, NewHandler(&fakeStore{}, nil, nil))
+	RegisterRoutes(offGroup, offGroup, NewHandler(&fakeStore{}, nil, nil))
 	if got := call(off, http.MethodPost, "/api/v1/agents/signing-keys/next", ""); got.Code != http.StatusServiceUnavailable {
 		t.Fatalf("without a gateway = %d", got.Code)
 	}

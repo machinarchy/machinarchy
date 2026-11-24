@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/machinarchy/machinarchy/internal/agentgateway"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 )
 
@@ -24,6 +25,20 @@ type HostReconciler struct {
 	defaultPolicy  resource.HostKeyPolicy
 	rescanInterval time.Duration
 	now            func() time.Time
+	// agents reports the agent bound to an agent-connector Host; nil when
+	// the agent gateway is off.
+	agents AgentBindings
+}
+
+// AgentBindings finds the agent bound to a managed host (ADR-057).
+type AgentBindings interface {
+	HostAgent(ctx context.Context, workspaceID int, hostID string) (*agentgateway.Agent, error)
+}
+
+// WithAgentBindings lets agent-connector Hosts report whether their agent
+// is enrolled and connected.
+func WithAgentBindings(bindings AgentBindings) Option {
+	return func(r *HostReconciler) { r.agents = bindings }
 }
 
 // DefaultHostKeyRescanInterval is how long a host-key scan is reused. Every
@@ -88,6 +103,9 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 		conditions[2].Status, conditions[2].Reason = resource.ConditionFalse, "AccessProfileDisabled"
 		return observation(phase, conditions, nil), nil
 	}
+	if revision.Spec.Connector == resource.ConnectorAgent {
+		return r.reconcileAgentHost(ctx, host, phase, conditions), nil
+	}
 	policy := revision.Spec.EffectiveHostKeyPolicy(r.defaultPolicy)
 	trusted := len(host.Spec.AccessTarget.Trust) > 0
 	scanner, canScan := r.connector.(HostKeyScanner)
@@ -136,6 +154,32 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 	conditions[0].Status, conditions[0].Reason = resource.ConditionTrue, "SSHVerified"
 	conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
 	return observation(phase, conditions, nil), nil
+}
+
+// reconcileAgentHost: a Host reached through its agent is Ready while the
+// agent bound to it holds a live lease. Nothing is sent to the host.
+func (r *HostReconciler) reconcileAgentHost(ctx context.Context, host *resource.Host, phase resource.HostPhase, conditions []resource.Condition) resource.HostObservation {
+	if r.agents == nil {
+		conditions[0].Reason, conditions[0].Message = "AgentGatewayDisabled", "this controller does not run the agent gateway"
+		conditions[1].Status, conditions[1].Reason = resource.ConditionUnknown, "AgentGatewayDisabled"
+		return observation(phase, conditions, nil)
+	}
+	agent, err := r.agents.HostAgent(ctx, host.Metadata.WorkspaceID, string(host.Metadata.ID))
+	switch {
+	case errors.Is(err, agentgateway.ErrHostNotBound):
+		conditions[0].Reason = "AgentNotEnrolled"
+		conditions[0].Message = "no agent is bound to this host; issue an enrolment token with hostId " + string(host.Metadata.ID)
+		conditions[1].Status, conditions[1].Reason = resource.ConditionUnknown, "AgentNotEnrolled"
+	case err != nil:
+		conditions[0].Reason, conditions[1].Reason = "AgentBindingUnavailable", "AgentBindingUnavailable"
+	case !agent.Connected(r.now()):
+		conditions[0].Reason, conditions[0].Message = "AgentDisconnected", "agent "+agent.ID+" has no live lease"
+		conditions[1].Reason = "AgentDisconnected"
+	default:
+		conditions[0].Status, conditions[0].Reason, conditions[0].Message = resource.ConditionTrue, "AgentConnected", "agent "+agent.ID
+		conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "AgentConnected"
+	}
+	return observation(phase, conditions, nil)
 }
 
 // scan returns the host's keys, reusing the last scan while it is recent,

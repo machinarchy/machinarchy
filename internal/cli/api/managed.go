@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -100,7 +101,17 @@ type RunSpec struct {
 type OperationInput struct {
 	Targets           TargetRule `json:"targets"`
 	ExpectTargetsHash string     `json:"expectTargetsHash,omitempty"`
-	Run               RunSpec    `json:"run"`
+	// Run (a program over SSH) and Capability (an agent capability) are
+	// exclusive.
+	Run        *RunSpec        `json:"run,omitempty"`
+	Capability *CapabilitySpec `json:"capability,omitempty"`
+}
+
+// CapabilitySpec is an agent capability call (ADR-057).
+type CapabilitySpec struct {
+	Name           string          `json:"name" yaml:"name"`
+	Input          json.RawMessage `json:"input,omitempty" yaml:"input,omitempty"`
+	TimeoutSeconds int             `json:"timeoutSeconds" yaml:"timeoutSeconds"`
 }
 
 type Operation struct {

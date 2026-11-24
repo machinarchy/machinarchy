@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,7 +12,31 @@ import (
 
 type OperationKind string
 
-const OperationKindRun OperationKind = "Run"
+const (
+	// OperationKindRun runs a program over SSH (spec.run).
+	OperationKindRun OperationKind = "Run"
+	// OperationKindCapability runs an agent capability (spec.capability) on
+	// hosts whose Access Profile uses the agent connector (ADR-057).
+	OperationKindCapability OperationKind = "Capability"
+)
+
+// Capability limits.
+const (
+	MaxCapabilityInputBytes      = 16 << 10
+	MaxCapabilityTimeoutSeconds  = 3600 // agentv1.MaxOperationTimeout
+	maxCapabilityNameLength      = 64
+	DefaultCapabilityTimeoutSecs = 60
+)
+
+// CapabilitySpec is one agent capability call, the same for every target.
+type CapabilitySpec struct {
+	// Name is the capability, e.g. runtime.info or service.status.
+	Name string `json:"name"`
+	// Input is the capability's JSON input ({} when it takes none).
+	Input json.RawMessage `json:"input,omitempty" swaggertype:"object"`
+	// TimeoutSeconds bounds the call on each agent.
+	TimeoutSeconds int `json:"timeoutSeconds"`
+}
 
 type OperationState string
 
@@ -72,7 +97,9 @@ type OperationTargetSpec struct {
 type OperationSpec struct {
 	Targets  []OperationTargetSpec `json:"targets"`
 	Deadline *time.Time            `json:"deadline,omitempty"`
-	Run      *RunSpec              `json:"run,omitempty"`
+	// Run (SSH) and Capability (agent) are exclusive; Kind says which.
+	Run        *RunSpec        `json:"run,omitempty"`
+	Capability *CapabilitySpec `json:"capability,omitempty"`
 }
 
 type TargetResult struct {
@@ -144,25 +171,50 @@ func NewRunOperation(workspaceID int, actor ActorRef, spec OperationSpec, now ti
 	return op, nil
 }
 
+// NewCapabilityOperation creates an agent capability Operation (ADR-057).
+func NewCapabilityOperation(workspaceID int, actor ActorRef, spec OperationSpec, now time.Time) (*Operation, error) {
+	id, err := NewResourceID()
+	if err != nil {
+		return nil, err
+	}
+	if spec.Capability != nil {
+		capability := *spec.Capability
+		capability.Input = append(json.RawMessage(nil), capability.Input...)
+		if len(capability.Input) == 0 {
+			capability.Input = json.RawMessage(`{}`)
+		}
+		spec.Capability = &capability
+	}
+	spec.Targets = append([]OperationTargetSpec(nil), spec.Targets...)
+	op := &Operation{ID: id, WorkspaceID: workspaceID, Kind: OperationKindCapability, CreatedBy: actor,
+		Revision: 1, CreatedAt: now.UTC(), Spec: spec, Status: OperationStatus{State: OperationQueued}}
+	for _, target := range spec.Targets {
+		op.Status.Targets = append(op.Status.Targets, OperationTarget{Spec: target, State: TargetPending})
+	}
+	if err := op.Validate(); err != nil {
+		return nil, err
+	}
+	return op, nil
+}
+
 func (o *Operation) Validate() error {
-	if o == nil || o.ID.Validate() != nil || o.WorkspaceID <= 0 || o.Revision == 0 || o.Kind != OperationKindRun {
+	if o == nil || o.ID.Validate() != nil || o.WorkspaceID <= 0 || o.Revision == 0 {
 		return fmt.Errorf("%w: operation identity, workspace, revision, and supported kind are required", ErrInvalidResource)
 	}
-	if o.Spec.Run == nil || len(o.Spec.Targets) == 0 || len(o.Spec.Targets) > MaxOperationTargets {
-		return fmt.Errorf("%w: Run operations require a bounded target set and Run spec", ErrInvalidResource)
+	if len(o.Spec.Targets) == 0 || len(o.Spec.Targets) > MaxOperationTargets {
+		return fmt.Errorf("%w: Operations require a bounded target set", ErrInvalidResource)
 	}
-	if err := domain.ValidateArgv(o.Spec.Run.Argv); err != nil {
-		return err
-	}
-	if len(strings.Join(o.Spec.Run.Argv, "\x00")) > MaxOperationArgvBytes {
-		return fmt.Errorf("%w: operation arguments exceed %d bytes", ErrInvalidResource, MaxOperationArgvBytes)
-	}
-	maxTimeout := MaxAttachedTimeoutSeconds
-	if o.Spec.Run.Detach {
-		maxTimeout = MaxDetachedTimeoutSeconds
-	}
-	if o.Spec.Run.TimeoutSeconds < 1 || o.Spec.Run.TimeoutSeconds > maxTimeout || o.Spec.Run.Concurrency < 1 || o.Spec.Run.Concurrency > 20 {
-		return fmt.Errorf("%w: Run timeout or concurrency is outside supported bounds", ErrInvalidResource)
+	switch o.Kind {
+	case OperationKindRun:
+		if err := o.Spec.validateRun(); err != nil {
+			return err
+		}
+	case OperationKindCapability:
+		if err := o.Spec.validateCapability(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%w: unsupported Operation kind %q", ErrInvalidResource, o.Kind)
 	}
 	seen := make(map[ID]struct{}, len(o.Spec.Targets))
 	for _, target := range o.Spec.Targets {
@@ -223,6 +275,56 @@ func (o *Operation) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (s OperationSpec) validateRun() error {
+	if s.Run == nil || s.Capability != nil {
+		return fmt.Errorf("%w: Run operations require a Run spec and no capability", ErrInvalidResource)
+	}
+	if err := domain.ValidateArgv(s.Run.Argv); err != nil {
+		return err
+	}
+	if len(strings.Join(s.Run.Argv, "\x00")) > MaxOperationArgvBytes {
+		return fmt.Errorf("%w: operation arguments exceed %d bytes", ErrInvalidResource, MaxOperationArgvBytes)
+	}
+	maxTimeout := MaxAttachedTimeoutSeconds
+	if s.Run.Detach {
+		maxTimeout = MaxDetachedTimeoutSeconds
+	}
+	if s.Run.TimeoutSeconds < 1 || s.Run.TimeoutSeconds > maxTimeout || s.Run.Concurrency < 1 || s.Run.Concurrency > 20 {
+		return fmt.Errorf("%w: Run timeout or concurrency is outside supported bounds", ErrInvalidResource)
+	}
+	return nil
+}
+
+func (s OperationSpec) validateCapability() error {
+	c := s.Capability
+	if c == nil || s.Run != nil {
+		return fmt.Errorf("%w: Capability operations require a capability and no Run spec", ErrInvalidResource)
+	}
+	if !validCapabilityName(c.Name) {
+		return fmt.Errorf("%w: capability name must be lowercase words joined by dots, e.g. service.status", ErrInvalidResource)
+	}
+	if len(c.Input) > MaxCapabilityInputBytes || !json.Valid(c.Input) || (len(c.Input) > 0 && c.Input[0] != '{') {
+		return fmt.Errorf("%w: capability input must be a JSON object of at most %d bytes", ErrInvalidResource, MaxCapabilityInputBytes)
+	}
+	if c.TimeoutSeconds < 1 || c.TimeoutSeconds > MaxCapabilityTimeoutSeconds {
+		return fmt.Errorf("%w: capability timeout must be 1..%d seconds", ErrInvalidResource, MaxCapabilityTimeoutSeconds)
+	}
+	return nil
+}
+
+// validCapabilityName checks the form; the agent decides what exists.
+func validCapabilityName(name string) bool {
+	if name == "" || len(name) > maxCapabilityNameLength || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (o *Operation) Start(now time.Time) error {

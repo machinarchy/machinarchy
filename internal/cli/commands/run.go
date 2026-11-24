@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -29,19 +30,30 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	var rule api.TargetRule
 	var timeout int
 	var wait, detach bool
+	var capability, input string
 	command := &cobra.Command{
-		Use:   "run (-l SELECTOR | --host NAME-OR-ID... | --all) [--exclude NAME-OR-ID...] -- PROGRAM [ARG...]",
-		Short: "Run a program (no shell) on selected managed hosts",
+		Use:   "run (-l SELECTOR | --host NAME-OR-ID... | --all) [--exclude NAME-OR-ID...] (-- PROGRAM [ARG...] | --capability NAME)",
+		Short: "Run a program (no shell) or an agent capability on selected managed hosts",
 		Long: "Run a program on managed hosts. Without --wait the run is detached: each host's command runs under a\n" +
 			"supervisor (systemd-run or setsid) and the SSH session ends at once, so it may run up to 24 hours;\n" +
 			"follow it with `machinarchy logs operation ID --follow`. With --wait the session stays open (at most\n" +
-			"15 minutes) unless --detach is given or the timeout is longer.",
+			"15 minutes) unless --detach is given or the timeout is longer.\n\n" +
+			"With --capability, run an agent capability (runtime.info, system.facts, service.status, service.control)\n" +
+			"on hosts reached through their machinarchy-agent; --input passes its JSON input.",
 		Example: "  machinarchy run -l tier=web -- uptime\n" +
 			"  machinarchy run --host web-01 --host web-02 --wait -- systemctl is-active nginx\n" +
-			"  machinarchy run -l tier=db --timeout 7200 -- /opt/backup/run.sh",
-		Args: cobra.MinimumNArgs(1),
+			"  machinarchy run -l tier=db --timeout 7200 -- /opt/backup/run.sh\n" +
+			"  machinarchy run -l role=agent --capability runtime.info --wait\n" +
+			"  machinarchy run --host web-01 --capability service.status --input '{\"service\":\"nginx.service\"}' --wait",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(command *cobra.Command, argv []string) error {
-			if command.ArgsLenAtDash() != 0 {
+			if capability != "" {
+				return runCapability(command, factory, rule, capability, input, timeout, wait)
+			}
+			if input != "" {
+				return clierr.Usagef("--input needs --capability")
+			}
+			if len(argv) == 0 || command.ArgsLenAtDash() != 0 {
 				return clierr.Usagef("put the program after --, for example: machinarchy run -l tier=web -- uptime")
 			}
 			if rule.Selector == "" && len(rule.Include) == 0 && !rule.All {
@@ -80,7 +92,7 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 				concurrency = min(len(preview.Hosts), 20) // a launch takes about a second
 			}
 			op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
-				Run: api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: concurrency, Detach: detached}})
+				Run: &api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: concurrency, Detach: detached}})
 			if err != nil {
 				return fmt.Errorf("submit operation: %w", err)
 			}
@@ -108,7 +120,74 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 	flags.IntVar(&timeout, "timeout", 60, "Per-host timeout in seconds (up to 86400 when detached, 900 otherwise)")
 	flags.BoolVar(&wait, "wait", false, "Wait for the result and print it; exit non-zero unless every host succeeded")
 	flags.BoolVar(&detach, "detach", false, "Run detached even with --wait (the default without --wait)")
+	flags.StringVar(&capability, "capability", "", "Run this agent capability instead of a program (hosts with an agent Access Profile)")
+	flags.StringVar(&input, "input", "", "JSON object passed to the capability, e.g. '{\"service\":\"nginx.service\"}'")
 	return command
+}
+
+// runCapability submits an agent capability Operation (ADR-057), bound to
+// the previewed hosts like a program run.
+func runCapability(command *cobra.Command, factory *cli.Factory, rule api.TargetRule, name, input string, timeout int, wait bool) error {
+	if command.ArgsLenAtDash() >= 0 || len(command.Flags().Args()) > 0 {
+		return clierr.Usagef("--capability takes no program; pass its input with --input")
+	}
+	if rule.Selector == "" && len(rule.Include) == 0 && !rule.All {
+		return clierr.Usagef("select hosts with -l SELECTOR, --host or --all")
+	}
+	var raw json.RawMessage
+	if input != "" {
+		if !json.Valid([]byte(input)) || !strings.HasPrefix(strings.TrimSpace(input), "{") {
+			return clierr.Usagef("--input must be a JSON object")
+		}
+		raw = json.RawMessage(input)
+	}
+	if command.Flags().Changed("detach") {
+		return clierr.Usagef("--detach applies to programs, not capabilities")
+	}
+	printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
+	if err != nil {
+		return err
+	}
+	client, err := factory.NewAPIClient(command.Context())
+	if err != nil {
+		return err
+	}
+	preview, err := client.PreviewTargets(command.Context(), rule)
+	if err != nil {
+		return fmt.Errorf("preview targets: %w", err)
+	}
+	if len(preview.UnknownIncludes)+len(preview.UnknownExcludes) > 0 {
+		return clierr.Newf(clierr.ExitNotFound, "", "unknown hosts: %s", strings.Join(append(preview.UnknownIncludes, preview.UnknownExcludes...), ", "))
+	}
+	if len(preview.Hosts) == 0 {
+		return clierr.Newf(clierr.ExitNotFound, "", "no hosts match the selection")
+	}
+	names := make([]string, len(preview.Hosts))
+	for i, host := range preview.Hosts {
+		names[i] = host.Metadata.Name
+	}
+	if err := factory.RequireConfirmation(fmt.Sprintf("Run capability %s on %d host(s): %s?", name, len(names), summarize(names, 10))); err != nil {
+		return err
+	}
+	op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
+		Capability: &api.CapabilitySpec{Name: name, Input: raw, TimeoutSeconds: timeout}})
+	if err != nil {
+		return fmt.Errorf("submit operation: %w", err)
+	}
+	if !wait {
+		_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted.\nStatus: machinarchy get operation %s\n", op.ID, op.ID)
+		return err
+	}
+	if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
+		return err
+	}
+	if err := printOperation(printer, op); err != nil {
+		return err
+	}
+	if op.Status.State != "Succeeded" {
+		return clierr.Newf(clierr.ExitFailure, "", "operation %s finished %s", op.ID, op.Status.State)
+	}
+	return nil
 }
 
 func waitForOperation(ctx context.Context, client api.Client, id string) (*api.Operation, error) {

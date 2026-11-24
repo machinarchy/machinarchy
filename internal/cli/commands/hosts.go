@@ -37,10 +37,11 @@ func newCreateHostCommand(factory *cli.Factory) *cobra.Command {
 	var endpoint, profile string
 	var labels, trust []string
 	command := &cobra.Command{
-		Use:     "host NAME --endpoint HOST:PORT --profile NAME-OR-ID",
-		Short:   "Register a managed host bound to an Access Profile",
-		Args:    cobra.ExactArgs(1),
-		Example: "  machinarchy create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web",
+		Use:   "host NAME --profile NAME-OR-ID [--endpoint HOST:PORT]",
+		Short: "Register a managed host bound to an Access Profile",
+		Args:  cobra.ExactArgs(1),
+		Example: "  machinarchy create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web\n" +
+			"  machinarchy create host web-02 --profile agents   # reached through its enrolled agent",
 		RunE: func(command *cobra.Command, args []string) error {
 			labelMap, removals, err := parseLabels(labels)
 			if err != nil {
@@ -49,8 +50,8 @@ func newCreateHostCommand(factory *cli.Factory) *cobra.Command {
 			if len(removals) > 0 {
 				return clierr.Usagef("--label takes KEY=VALUE; removing labels is only possible with 'label host'")
 			}
-			if strings.TrimSpace(endpoint) == "" || strings.TrimSpace(profile) == "" {
-				return clierr.Usagef("--endpoint and --profile are required")
+			if strings.TrimSpace(profile) == "" {
+				return clierr.Usagef("--profile is required (and --endpoint for a host reached over SSH)")
 			}
 			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
 			if err != nil {
@@ -72,7 +73,7 @@ func newCreateHostCommand(factory *cli.Factory) *cobra.Command {
 			return printer.Host(*host)
 		},
 	}
-	command.Flags().StringVar(&endpoint, "endpoint", "", "SSH endpoint as HOST:PORT")
+	command.Flags().StringVar(&endpoint, "endpoint", "", "SSH endpoint as HOST:PORT (hosts on an SSH Access Profile)")
 	command.Flags().StringVar(&profile, "profile", "", "Access Profile name or ID")
 	command.Flags().StringArrayVar(&labels, "label", nil, "Label as KEY=VALUE (repeatable)")
 	command.Flags().StringArrayVar(&trust, "trust", nil, "Trusted host key fingerprint, for example SHA256:... (repeatable)")

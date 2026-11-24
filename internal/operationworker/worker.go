@@ -36,6 +36,14 @@ type Dependencies struct {
 	Logger          *slog.Logger
 	// Registerer receives the worker's metrics; nil leaves them unexported.
 	Registerer prometheus.Registerer
+	// Agents and AgentBindings run capability Operations (ADR-057); both
+	// nil in a process without the agent gateway, where such targets fail
+	// with agent_gateway_unavailable.
+	Agents        AgentTransport
+	AgentBindings AgentBindings
+	// CapabilityResultGrace is added to a command's lifetime and timeout
+	// before a target without a result becomes Lost (default 2 minutes).
+	CapabilityResultGrace time.Duration
 	// Poll tunes the detached-target poller (zero values take defaults).
 	// Detached runs need Operations to implement
 	// resource.DetachedTargetRepository and Connector to implement
@@ -57,6 +65,10 @@ type Worker struct {
 	// settled lists detached Operations with every target launched, so the
 	// recovery scan does not reload them on every tick.
 	settled map[resource.OperationKey]bool
+	// capabilities stores agent commands; nil when Operations does not
+	// implement it. relayWake nudges the command relay.
+	capabilities resource.CapabilityRepository
+	relayWake    chan struct{}
 }
 
 func New(deps Dependencies, workers int) (*Worker, error) {
@@ -66,6 +78,9 @@ func New(deps Dependencies, workers int) (*Worker, error) {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
+	if deps.CapabilityResultGrace <= 0 {
+		deps.CapabilityResultGrace = defaultCapabilityResultGrace
+	}
 	id, err := resource.NewResourceID()
 	if err != nil {
 		return nil, fmt.Errorf("generate Operation worker identity: %w", err)
@@ -73,6 +88,8 @@ func New(deps Dependencies, workers int) (*Worker, error) {
 	w := &Worker{metrics: newWorkerMetrics(deps.Registerer), deps: deps, workers: workers, queue: make(chan resource.OperationKey, workers*16), pending: make(map[resource.OperationKey]struct{}), active: make(map[resource.OperationKey]context.CancelFunc), owner: string(id),
 		settled: map[resource.OperationKey]bool{}}
 	w.detached, _ = deps.Operations.(resource.DetachedTargetRepository)
+	w.capabilities, _ = deps.Operations.(resource.CapabilityRepository)
+	w.relayWake = make(chan struct{}, 1)
 	return w, nil
 }
 
@@ -97,6 +114,10 @@ func (w *Worker) Start(ctx context.Context) error {
 	if connector, ok := w.deps.Connector.(RunnerConnector); ok && w.detached != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.runPoller(ctx, connector) }()
+	}
+	if w.capabilityReady() {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.runCapabilityRelay(ctx) }()
 	}
 	for i := 0; i < w.workers; i++ {
 		wg.Add(1)
@@ -132,9 +153,11 @@ func (w *Worker) recoverRunning(ctx context.Context) error {
 		if active || settled {
 			continue
 		}
-		// A detached Operation keeps running on its hosts across restarts:
-		// it is never interrupted. Targets not launched yet are resumed.
-		if op, err := w.deps.Operations.GetOperation(ctx, key.WorkspaceID, key.ID); err == nil && op.Spec.Run != nil && op.Spec.Run.Detach {
+		// A detached or capability Operation keeps running on its hosts
+		// across restarts: it is never interrupted. Targets not launched or
+		// dispatched yet are resumed.
+		if op, err := w.deps.Operations.GetOperation(ctx, key.WorkspaceID, key.ID); err == nil &&
+			((op.Spec.Run != nil && op.Spec.Run.Detach) || op.Kind == resource.OperationKindCapability) {
 			if detachedResumeNeeded(op) {
 				w.enqueue(ctx, key)
 			} else {
@@ -291,6 +314,14 @@ func (w *Worker) Cancel(ctx context.Context, workspace int, id resource.ID) (*re
 		return nil, resource.ErrConflict
 	}
 	key := resource.OperationKey{WorkspaceID: workspace, ID: id}
+	if op.Kind == resource.OperationKindCapability && op.Status.State == resource.OperationCancelRequested && w.capabilityReady() {
+		// Running targets get operation.cancel; their final state comes from
+		// the agent's result.
+		if _, err := w.capabilities.AddCancelCommands(ctx, workspace, id, time.Now().UTC(), w.deps.Agents.CommandLifetime()); err != nil {
+			w.deps.Logger.Warn("record capability cancel commands failed", "operation_id", id, "error", err)
+		}
+		w.nudgeRelay()
+	}
 	w.mu.Lock()
 	cancel := w.active[key]
 	w.mu.Unlock()
@@ -361,6 +392,10 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 	}
 	op, err := w.deps.Operations.GetOperation(ctx, key.WorkspaceID, key.ID)
 	if err != nil {
+		return
+	}
+	if op.Kind == resource.OperationKindCapability {
+		w.executeCapability(ctx, key, op)
 		return
 	}
 	if (op.Status.State == resource.OperationRunning || op.Status.State == resource.OperationCancelRequested) && detachedResumeNeeded(op) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
@@ -133,6 +135,10 @@ func (s *memStore) ListAgents(context.Context) ([]Agent, error) {
 		list = append(list, *agent)
 	}
 	return list, nil
+}
+
+func (s *memStore) HostAgent(context.Context, int, string) (*Agent, error) {
+	return nil, ErrHostNotBound
 }
 
 func (s *memStore) RevokeAgent(_ context.Context, id string, now time.Time) error {
@@ -283,40 +289,32 @@ func TestEnrollmentAndLeases(t *testing.T) {
 	}
 }
 
-func TestResultsMustComeFromTheSigningAgent(t *testing.T) {
+// ADR-057: only a result signed by the agent it names, on that agent's
+// subject, reaches the handler; it is acknowledged only after the handler
+// stored it.
+func TestResultsMustComeFromTheSigningAgentAndAreAckedAfterStorage(t *testing.T) {
 	f := newFixture(t)
 	agent, intruder := key(2), key(3)
 	victim := f.register(agent, enrollmentToken, "req-a").AgentID
 	other := f.register(intruder, enrollmentToken, "req-b").AgentID
 
-	// Capture the command the gateway publishes, then answer it in three ways.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	type outcome struct {
-		result *agentv1.Result
-		err    error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		result, err := f.gateway.Invoke(ctx, victim, agentv1.CapabilityRuntimeInfo, nil, 5*time.Second)
-		done <- outcome{result, err}
-	}()
-	var operationID string
-	for operationID == "" {
-		f.gateway.mu.Lock()
-		for id := range f.gateway.waiters {
-			operationID = id
+	var mu sync.Mutex
+	var stored []agentv1.Result
+	failNext := true
+	f.gateway.SetResultHandler(func(_ context.Context, result agentv1.Result) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failNext {
+			failNext = false
+			return errors.New("database unavailable")
 		}
-		f.gateway.mu.Unlock()
-		if ctx.Err() != nil {
-			t.Fatal("no operation was started")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	publish := func(signer ed25519.PrivateKey, agentID, subjectAgent string, output string) {
+		stored = append(stored, result)
+		return nil
+	})
+	publish := func(signer ed25519.PrivateKey, agentID, subjectAgent, output string) {
 		now := time.Now().UTC()
 		raw, err := agentv1.Seal(signer, agentv1.KindResult, &agentv1.Result{ProtocolVersion: agentv1.ProtocolVersion,
-			AgentID: agentID, OperationID: operationID, Capability: agentv1.CapabilityRuntimeInfo, Status: agentv1.StatusSucceeded,
+			AgentID: agentID, OperationID: "op-0123456789", Capability: agentv1.CapabilityRuntimeInfo, Status: agentv1.StatusSucceeded,
 			Output: json.RawMessage(output), AcceptedAt: now, StartedAt: &now, CompletedAt: &now})
 		if err != nil {
 			t.Fatal(err)
@@ -325,16 +323,70 @@ func TestResultsMustComeFromTheSigningAgent(t *testing.T) {
 		if err := f.nc.Publish(subject, raw); err != nil {
 			t.Fatal(err)
 		}
+		_ = f.nc.Flush()
+	}
+	acks := func() uint64 {
+		js, err := jetstream.New(f.nc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		subject, _ := agentv1.CommandSubject(victim)
+		stream, err := js.Stream(context.Background(), agentv1.CommandStream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := stream.Info(context.Background(), jetstream.WithSubjectFilter(subject))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.State.Subjects[subject]
 	}
 	publish(intruder, victim, victim, `{"forged":"wrong key"}`)    // claims the victim's ID, signed by another agent
 	publish(intruder, other, victim, `{"forged":"wrong subject"}`) // valid signer, but on the victim's subject
-	publish(agent, victim, victim, `{"genuine":true}`)
-	got := <-done
-	if got.err != nil {
-		t.Fatal(got.err)
+	publish(agent, victim, victim, `{"genuine":1}`)                // the handler fails: no ack
+	time.Sleep(300 * time.Millisecond)
+	if n := acks(); n != 0 {
+		t.Fatalf("%d acks after the handler failed, want 0 (the agent must republish)", n)
 	}
-	if !strings.Contains(string(got.result.Output), "genuine") {
-		t.Fatalf("accepted result %s, want only the genuine one", got.result.Output)
+	publish(agent, victim, victim, `{"genuine":2}`) // the republished result is stored and acknowledged
+	deadline := time.Now().Add(5 * time.Second)
+	for acks() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(stored) != 1 || !strings.Contains(string(stored[0].Output), `"genuine":2`) {
+		t.Fatalf("stored %+v, want only the genuine republished result", stored)
+	}
+	if n := acks(); n != 1 {
+		t.Fatalf("%d acks, want 1", n)
+	}
+}
+
+// M-7: a command published twice with the same ID is stored once.
+func TestPublishCommandIsIdempotent(t *testing.T) {
+	f := newFixture(t)
+	agentID := f.register(key(2), enrollmentToken, "req-a").AgentID
+	now := time.Now().UTC()
+	cmd := agentv1.Command{Type: agentv1.CommandOperationRequest, CommandID: "cmd-0123456789", AgentID: agentID,
+		OperationID: "op-0123456789", Capability: agentv1.CapabilityRuntimeInfo, Input: json.RawMessage(`{}`),
+		TimeoutMillis: 5000, IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
+	for range 3 {
+		if err := f.gateway.PublishCommand(context.Background(), cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	js, _ := jetstream.New(f.nc)
+	stream, err := js.Stream(context.Background(), agentv1.CommandStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 1 {
+		t.Fatalf("%d messages after 3 publishes of one command, want 1", info.State.Msgs)
 	}
 }
 
@@ -354,9 +406,5 @@ func TestNewValidatesConfiguration(t *testing.T) {
 	}
 	if _, err := New(newMemStore(), valid); err != nil {
 		t.Fatalf("valid config: %v", err)
-	}
-	g, _ := New(newMemStore(), valid)
-	if _, err := g.Invoke(context.Background(), "agent-x", "shell exec", nil, time.Second); err == nil {
-		t.Fatal("invalid capability name accepted")
 	}
 }

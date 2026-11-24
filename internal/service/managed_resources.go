@@ -153,25 +153,9 @@ func (s *ManagedResourceService) SubmitOperation(ctx context.Context, principal 
 	if err := s.policy().Check(run.Argv[0]); err != nil {
 		return nil, err
 	}
-	targets := make([]resource.OperationTargetSpec, 0, len(hostIDs))
-	for _, id := range hostIDs {
-		host, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)
-		if err != nil {
-			return nil, err
-		}
-		if host.Spec.Presence != resource.PresenceManaged || host.Spec.AccessProfileID == "" {
-			return nil, resource.ErrInvalidResource
-		}
-		profile, err := s.profiles.GetAccessProfile(ctx, principal.WorkspaceID, host.Spec.AccessProfileID)
-		if err != nil || profile.DeletedAt != nil {
-			return nil, resource.ErrAccessProfileNotFound
-		}
-		revision, err := s.profiles.GetAccessProfileRevision(ctx, principal.WorkspaceID, profile.ID, profile.CurrentRevision)
-		if err != nil || !revision.Spec.Enabled {
-			return nil, resource.ErrInvalidResource
-		}
-		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation, DisplayName: host.Metadata.Name,
-			AccessProfileID: profile.ID, AccessProfileRevision: profile.CurrentRevision})
+	targets, err := s.operationTargets(ctx, principal.WorkspaceID, hostIDs, resource.ConnectorSSH)
+	if err != nil {
+		return nil, err
 	}
 	operation, err := resource.NewRunOperation(principal.WorkspaceID, resource.ActorRef{UserID: principal.UserID, APITokenID: principal.APITokenID},
 		resource.OperationSpec{Targets: targets, Run: &run}, time.Now().UTC())
@@ -184,12 +168,83 @@ func (s *ManagedResourceService) SubmitOperation(ctx context.Context, principal 
 	return operation, nil
 }
 
-// SubmitOperationForRule resolves rule (selector, include/exclude lists or
-// all) to managed Hosts and submits the Operation on them. When
-// expectTargetsHash is set it must equal the hash of the resolved set, so the
-// Operation runs exactly on the Hosts the caller previewed.
+// SubmitCapability creates an agent capability Operation on hosts whose
+// Access Profile uses the agent connector (ADR-057). It needs the same
+// permission as running a program.
+func (s *ManagedResourceService) SubmitCapability(ctx context.Context, principal domain.Principal, hostIDs []resource.ID, capability resource.CapabilitySpec) (*resource.Operation, error) {
+	if principal.UserID <= 0 || principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionRunsExecute) {
+		return nil, domain.ErrPermissionDenied
+	}
+	if capability.TimeoutSeconds == 0 {
+		capability.TimeoutSeconds = resource.DefaultCapabilityTimeoutSecs
+	}
+	targets, err := s.operationTargets(ctx, principal.WorkspaceID, hostIDs, resource.ConnectorAgent)
+	if err != nil {
+		return nil, err
+	}
+	operation, err := resource.NewCapabilityOperation(principal.WorkspaceID, resource.ActorRef{UserID: principal.UserID, APITokenID: principal.APITokenID},
+		resource.OperationSpec{Targets: targets, Capability: &capability}, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err = s.operations.CreateOperation(ctx, operation); err != nil {
+		return nil, err
+	}
+	return operation, nil
+}
+
+// operationTargets snapshots the hosts and their current Access Profile
+// revisions; every host must use the given connector.
+func (s *ManagedResourceService) operationTargets(ctx context.Context, workspaceID int, hostIDs []resource.ID, connector resource.ConnectorKind) ([]resource.OperationTargetSpec, error) {
+	targets := make([]resource.OperationTargetSpec, 0, len(hostIDs))
+	for _, id := range hostIDs {
+		host, err := s.hosts.GetHost(ctx, workspaceID, id)
+		if err != nil {
+			return nil, err
+		}
+		if host.Spec.Presence != resource.PresenceManaged || host.Spec.AccessProfileID == "" {
+			return nil, resource.ErrInvalidResource
+		}
+		profile, err := s.profiles.GetAccessProfile(ctx, workspaceID, host.Spec.AccessProfileID)
+		if err != nil || profile.DeletedAt != nil {
+			return nil, resource.ErrAccessProfileNotFound
+		}
+		revision, err := s.profiles.GetAccessProfileRevision(ctx, workspaceID, profile.ID, profile.CurrentRevision)
+		if err != nil || !revision.Spec.Enabled {
+			return nil, resource.ErrInvalidResource
+		}
+		if revision.Spec.Connector != connector {
+			if connector == resource.ConnectorAgent {
+				return nil, fmt.Errorf("%w: host %s uses the %s connector; capabilities need an agent host", domain.ErrInvalidInput, host.Metadata.Name, revision.Spec.Connector)
+			}
+			return nil, fmt.Errorf("%w: host %s uses the %s connector; run a capability on it instead", domain.ErrInvalidInput, host.Metadata.Name, revision.Spec.Connector)
+		}
+		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation, DisplayName: host.Metadata.Name,
+			AccessProfileID: profile.ID, AccessProfileRevision: profile.CurrentRevision})
+	}
+	return targets, nil
+}
+
 func (s *ManagedResourceService) SubmitOperationForRule(ctx context.Context, principal domain.Principal, rule domain.TargetRule,
 	expectTargetsHash string, run resource.RunSpec) (*resource.Operation, error) {
+	ids, err := s.ruleHosts(ctx, principal, rule, expectTargetsHash)
+	if err != nil {
+		return nil, err
+	}
+	return s.SubmitOperation(ctx, principal, ids, run)
+}
+
+// SubmitCapabilityForRule is SubmitCapability over the hosts a rule selects.
+func (s *ManagedResourceService) SubmitCapabilityForRule(ctx context.Context, principal domain.Principal, rule domain.TargetRule,
+	expectTargetsHash string, capability resource.CapabilitySpec) (*resource.Operation, error) {
+	ids, err := s.ruleHosts(ctx, principal, rule, expectTargetsHash)
+	if err != nil {
+		return nil, err
+	}
+	return s.SubmitCapability(ctx, principal, ids, capability)
+}
+
+func (s *ManagedResourceService) ruleHosts(ctx context.Context, principal domain.Principal, rule domain.TargetRule, expectTargetsHash string) ([]resource.ID, error) {
 	if principal.UserID <= 0 || principal.WorkspaceID <= 0 || !principal.Role.Allows(domain.PermissionRunsExecute) {
 		return nil, domain.ErrPermissionDenied
 	}
@@ -207,7 +262,7 @@ func (s *ManagedResourceService) SubmitOperationForRule(ctx context.Context, pri
 	for i, host := range set.Matched {
 		ids[i] = host.Metadata.ID
 	}
-	return s.SubmitOperation(ctx, principal, ids, run)
+	return ids, nil
 }
 
 func (s *ManagedResourceService) GetOperation(ctx context.Context, principal domain.Principal, id resource.ID) (*resource.Operation, error) {
@@ -234,6 +289,11 @@ func redactOperation(op *resource.Operation) *resource.Operation {
 		run := *op.Spec.Run
 		run.Argv = nil
 		redacted.Spec.Run = &run
+	}
+	if op.Spec.Capability != nil {
+		capability := *op.Spec.Capability
+		capability.Input = nil
+		redacted.Spec.Capability = &capability
 	}
 	redacted.Status.Targets = make([]resource.OperationTarget, len(op.Status.Targets))
 	for i, target := range op.Status.Targets {
@@ -360,6 +420,9 @@ func authorizeProfileOwner(principal domain.Principal) error {
 }
 
 func (s *ManagedResourceService) validateSecretReference(ctx context.Context, principal domain.Principal, spec resource.AccessProfileSpec) error {
+	if spec.Connector == resource.ConnectorAgent {
+		return nil // the agent authenticates itself; the profile holds no SecretRef
+	}
 	if s.secretReader == nil {
 		return errors.New("access profile secret validation is unavailable")
 	}

@@ -26,6 +26,7 @@ type apiFixture struct {
 	server  *echo.Echo
 	hosts   []*resource.Host
 	profile *resource.AccessProfile
+	app     *service.ManagedResourceService
 }
 
 // newAPI serves /managed over a real SQLite store. The X-Role header picks
@@ -66,7 +67,7 @@ func newAPI(t *testing.T) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &apiFixture{t: t, profile: profile}
+	f := &apiFixture{t: t, profile: profile, app: application}
 	for i, tier := range []string{"web", "web", "db"} {
 		host, err := application.CreateHost(ctx, owner, fmt.Sprintf("host-%d", i), map[string]string{"tier": tier},
 			resource.HostSpec{AccessProfileID: profile.ID, AccessTarget: resource.HostAccessTarget{Endpoint: fmt.Sprintf("10.0.0.%d:22", i+1)}})
@@ -216,4 +217,43 @@ func TestManagedAPIAuthorizationAndQueries(t *testing.T) {
 	idle := f.hosts[2]
 	f.expect(f.do(operator, http.MethodDelete, fmt.Sprintf("/managed/hosts/%s?revision=%d", idle.Metadata.ID, idle.Metadata.Revision), nil), http.StatusNoContent, "delete idle host")
 	f.expect(f.do(reader, http.MethodGet, "/managed/hosts/"+string(idle.Metadata.ID), nil), http.StatusNotFound, "deleted host")
+}
+
+func TestCapabilityOperationsAPI(t *testing.T) {
+	f := newAPI(t)
+	const operator, reader = domain.RoleOperator, domain.RoleReader
+	ctx := context.Background()
+	owner := domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner}
+	agents, err := f.app.CreateAccessProfile(ctx, owner, "agents", "", resource.AccessProfileSpec{Connector: resource.ConnectorAgent, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentHost, err := f.app.CreateHost(ctx, owner, "agent-0", map[string]string{"tier": "agent"}, resource.HostSpec{AccessProfileID: agents.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.app.CreateAccessProfile(ctx, owner, "bad", "", resource.AccessProfileSpec{Connector: resource.ConnectorAgent, Enabled: true, Username: "root"}); err == nil {
+		t.Fatal("an agent profile with a username was accepted")
+	}
+
+	capability := map[string]any{"name": "service.status", "input": map[string]any{"service": "nginx.service"}, "timeoutSeconds": 30}
+	run := map[string]any{"argv": []string{"uptime"}, "timeoutSeconds": 30, "concurrency": 1}
+	agentIDs := []string{string(agentHost.Metadata.ID)}
+	f.expect(f.do(reader, http.MethodPost, "/managed/operations", map[string]any{"hostIds": agentIDs, "capability": capability}), http.StatusForbidden, "reader capability")
+	f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"hostIds": agentIDs}), http.StatusBadRequest, "neither run nor capability")
+	f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"hostIds": agentIDs, "run": run, "capability": capability}), http.StatusBadRequest, "run and capability")
+	f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"hostIds": agentIDs, "capability": map[string]any{"name": "Bad Name!"}}), http.StatusBadRequest, "bad capability name")
+	// Each kind needs hosts of its own connector.
+	f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"hostIds": agentIDs, "run": run}), http.StatusBadRequest, "run on an agent host")
+	f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"hostIds": []string{string(f.hosts[0].Metadata.ID)}, "capability": capability}), http.StatusBadRequest, "capability on an SSH host")
+
+	submitted := f.expect(f.do(operator, http.MethodPost, "/managed/operations", map[string]any{"targets": map[string]any{"selector": "tier=agent"}, "capability": capability}), http.StatusAccepted, "submit capability")
+	if submitted.body["kind"] != "Capability" {
+		t.Fatalf("submitted = %s", submitted.raw)
+	}
+	id, _ := submitted.body["id"].(string)
+	view := f.expect(f.do(reader, http.MethodGet, "/managed/operations/"+id, nil), http.StatusOK, "get capability Operation")
+	if !strings.Contains(view.raw, "service.status") || strings.Contains(view.raw, "nginx.service") {
+		t.Fatalf("capability view must name the capability and hide its input: %s", view.raw)
+	}
 }

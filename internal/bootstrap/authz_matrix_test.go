@@ -65,7 +65,7 @@ var matrix = map[string]access{
 	"POST /api/v1/secrets/{id}/rotate": ownerHuman, "POST /api/v1/secrets/rewrap": ownerHuman,
 
 	"GET /api/v1/agents": readers, "GET /api/v1/agents/controller-key": readers,
-	"POST /api/v1/agents/{id}/invoke": writers, "POST /api/v1/agents/{id}/revoke": ownerHuman,
+	"POST /api/v1/agents/{id}/revoke":      ownerHuman,
 	"GET /api/v1/agents/enrollment-tokens": ownerHuman, "POST /api/v1/agents/enrollment-tokens": ownerHuman,
 	"DELETE /api/v1/agents/enrollment-tokens/{id}": ownerHuman,
 	"GET /api/v1/agents/signing-keys":              ownerHuman, "POST /api/v1/agents/signing-keys/next": ownerHuman,
