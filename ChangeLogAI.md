@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-25 — The cause of an unexpected 500 is logged (Phase 20: F20-06; branch audit/ha)
+
+- **Found by the HA load profile:** 62 `POST /api/v1/managed/operations` requests failed with `500 request failed`, each after exactly 25 s (the request deadline). The API logs had only the status line: `httperr.FromError` turned unknown errors into a generic 500 without recording the cause anywhere.
+- **Fix:** `FromError` logs an error with the request ID, method, route and the cause. The client still gets no detail; the request ID in the response leads to the log line.
+- **Test:** `TestUnexpectedErrorsAreLogged`. Before the fix nothing was logged.
+- **Checks run:** `go test ./internal/transport/http/...`: pass. Lint: 0 issues.
+
 ## 2026-11-25 — The audit trail records intents and outcomes, not system progress (Phase 20: F20-05; branch audit/ha)
 
 - **Found by the HA load profile:** at about one Operation per second plus the periodic host resync, both Control Managers timed out on `lock audit chain`. Statements hit the statement timeout, agent results were "not stored; redelivered" (adding load), and submissions failed with 500. Each audited write takes the workspace's audit-chain lock until it commits, and system-driven progress was audited:

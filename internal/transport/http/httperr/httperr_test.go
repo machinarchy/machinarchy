@@ -1,11 +1,14 @@
 package httperr
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
@@ -57,5 +60,31 @@ func TestOneErrorShape(t *testing.T) {
 	}
 	if status, body := serve(t, e, http.MethodPost, "/mapped"); status != http.StatusMethodNotAllowed || body.Code != CodeInvalidRequest {
 		t.Errorf("method not allowed = %d %+v", status, body)
+	}
+}
+
+// TestUnexpectedErrorsAreLogged (AUDIT/20 F20-06): an unknown error becomes
+// a generic 500 for the client, and its cause is logged with the request ID,
+// so an operator can find out what failed.
+func TestUnexpectedErrorsAreLogged(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	e := echo.New()
+	e.GET("/boom", func(c echo.Context) error {
+		c.Response().Header().Set(echo.HeaderXRequestID, "req-123")
+		return FromError(c, errors.New("begin Operation creation: context deadline exceeded"))
+	})
+	status, body := serve(t, e, http.MethodGet, "/boom")
+	if status != http.StatusInternalServerError || body.Error != "request failed" {
+		t.Fatalf("response = %d %+v", status, body)
+	}
+	line := logs.String()
+	for _, want := range []string{`"error":"begin Operation creation: context deadline exceeded"`, `"request_id":"req-123"`, `"route":"/boom"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log %q lacks %s", line, want)
+		}
 	}
 }

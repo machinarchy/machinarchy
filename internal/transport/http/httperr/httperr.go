@@ -9,6 +9,7 @@ package httperr
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -151,5 +152,10 @@ func FromError(c echo.Context, err error, mappings ...Mapping) error {
 			}
 		}
 	}
+	// The client gets no detail; the log keeps the cause, so an operator can
+	// match the request ID in the response to it (AUDIT/20 F20-06).
+	slog.ErrorContext(c.Request().Context(), "request failed with an unexpected error",
+		"request_id", c.Response().Header().Get(echo.HeaderXRequestID), "method", c.Request().Method,
+		"route", c.Path(), "error", err)
 	return Write(c, http.StatusInternalServerError, CodeInternal, "request failed")
 }
