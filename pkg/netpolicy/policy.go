@@ -7,6 +7,8 @@
 //
 //  1. Unspecified, multicast, broadcast, "this network" (0.0.0.0/8), zoned
 //     addresses, and well-known cloud metadata addresses are always denied.
+//     An IPv6 address that carries an IPv4 address (NAT64 64:ff9b::/96, 6to4
+//     2002::/16, Teredo 2001::/32) is denied when that IPv4 address is.
 //  2. Addresses inside Deny are denied.
 //  3. Addresses inside Allow are allowed. This is the way to permit loopback or
 //     link-local ranges deliberately.
@@ -61,6 +63,11 @@ func Default() Policy { return Policy{} }
 var (
 	cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
+	// IPv6 ranges that carry an IPv4 address (AUDIT S-19).
+	nat64Prefix     = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFourPrefix = netip.MustParsePrefix("2002::/16")
+	teredoPrefix    = netip.MustParsePrefix("2001::/32")
+
 	// Addresses of cloud instance-metadata services. Reaching them through a
 	// managed-host record would expose instance credentials, so they stay denied
 	// even when an Allow range covers them.
@@ -71,6 +78,27 @@ var (
 		netip.MustParseAddr("fd00:ec2::254"),
 	}
 )
+
+// embeddedIPv4 returns the IPv4 addresses an IPv6 address reaches through a
+// translation or tunnelling mechanism: NAT64 (64:ff9b::/96, RFC 6052), 6to4
+// (2002::/16, RFC 3056) and Teredo (2001::/32, RFC 4380: the server and the
+// inverted client address).
+func embeddedIPv4(addr netip.Addr) []netip.Addr {
+	if !addr.Is6() || addr.Is4In6() {
+		return nil
+	}
+	b := addr.As16()
+	switch {
+	case nat64Prefix.Contains(addr):
+		return []netip.Addr{netip.AddrFrom4([4]byte(b[12:16]))}
+	case sixToFourPrefix.Contains(addr):
+		return []netip.Addr{netip.AddrFrom4([4]byte(b[2:6]))}
+	case teredoPrefix.Contains(addr):
+		client := [4]byte{b[12] ^ 0xff, b[13] ^ 0xff, b[14] ^ 0xff, b[15] ^ 0xff}
+		return []netip.Addr{netip.AddrFrom4([4]byte(b[4:8])), netip.AddrFrom4(client)}
+	}
+	return nil
+}
 
 // CheckAddr reports whether dialing addr is permitted.
 func (p Policy) CheckAddr(addr netip.Addr) error {
@@ -93,6 +121,13 @@ func (p Policy) CheckAddr(addr netip.Addr) error {
 	for _, metadata := range metadataAddrs {
 		if addr == metadata {
 			return deny("a cloud metadata address")
+		}
+	}
+	// A NAT64, 6to4 or Teredo address reaches the IPv4 host it carries, so
+	// that address must pass the policy too (AUDIT S-19).
+	for _, v4 := range embeddedIPv4(addr) {
+		if err := p.CheckAddr(v4); err != nil {
+			return fmt.Errorf("%w: %s carries IPv4 %s, which is not allowed", domain.ErrTargetNotAllowed, addr, v4)
 		}
 	}
 	for _, prefix := range p.Deny {

@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-24 — Egress policy checks IPv4 inside NAT64, 6to4 and Teredo (Phase 19: S-19; branch audit/data-path)
+
+- `pkg/netpolicy`: `CheckAddr` now decodes the IPv4 address that an IPv6 address carries and checks it under the same policy (metadata addresses, Deny ranges, loopback, link-local, private). The IPv6 address is refused if that IPv4 address would be.
+  - NAT64 `64:ff9b::/96` (RFC 6052);
+  - 6to4 `2002::/16` (RFC 3056);
+  - Teredo `2001::/32` (RFC 4380): both the server and the inverted client address.
+- **Before:** for example, `64:ff9b::a9fe:a9fe` (the metadata address 169.254.169.254) and `2002:c0a8:101::1` (192.168.1.1) counted as public IPv6 addresses and were allowed.
+- **Tests:**
+  - `TestEmbeddedIPv4IsChecked`: 11 denied cases (all allowed before the fix) and 4 allowed ones, including `2001:db8::1`, which is outside the Teredo range.
+  - New `FuzzEmbeddedIPv4`: 20 s, no failures.
+  - `FuzzParsePrefixes` corpus extended with the NAT64, 6to4 and Teredo prefixes: 10 s, no failures.
+- **Checks run:** `go test ./pkg/... ./internal/hostaccess/... ./internal/config/`: pass. Lint: 0 issues.
+
 ## 2026-11-24 — Database statement timeout below the request deadline (Phase 19: Q-20; branch audit/data-path)
 
 - **`store.Config.StatementTimeout`:**
