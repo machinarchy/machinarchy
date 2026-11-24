@@ -2913,7 +2913,7 @@
                 "tags": [
                     "Secrets"
                 ],
-                "summary": "Rewrap stored keys under the active KEK",
+                "summary": "Move secrets and Operation data off an old encryption key",
                 "parameters": [
                     {
                         "description": "{\\",

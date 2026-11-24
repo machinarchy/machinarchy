@@ -1,5 +1,17 @@
 # ChangeLogAI
 
+## 2026-11-24 — Docs check after Phases 14–16 (owner request; branch audit/keys)
+
+- **Links:** a script resolved every relative link and `#anchor` in `README.md`, `CONTRIBUTING.md` and `docs/` (77 files, `docs/archive` excluded). Two links pointed at a removed `#quick-start` heading; one was also relative to the wrong README. Both now point at the project README's "Run locally" (`docs/cli/README.md`, `docs/cli/example-cli.md`).
+- **Settings:** all 56 `MACHINARCHY_*` settings read by `internal/config` appear in `README.md`, `.env.example`, `docs/operations.md` or `docs/runbook.md`. The reverse check found only two placeholder shell variables in `docs/SECURITY.md` curl examples (not settings).
+- **Stale references:** none left for `NEXT_PUBLIC_KEY`, `make run-cli --`, `StaticKeyProvider` or a required signing-key file.
+- **`machinarchy secret rewrap` help** (`internal/cli/commands/management.go`) still described secrets only ("Rewrap stored DEKs under the active external key"). It now says it moves secrets and Operation data, repeats until `done`, and keeps the old key until older backups expire; the flag texts and the confirmation prompt are updated too. The OpenAPI summary of `POST /api/v1/secrets/rewrap` is updated likewise; spec regenerated.
+- `docs/cli/user-full-guide.md`: "A session lasts 24 hours" now names the setting (the default `MACHINARCHY_SESSION_TTL`).
+
+### Verification
+
+- The link check reported 0 problems after the fix. `go build ./...`; `go test ./internal/cli/... ./internal/transport/http/v1/...` passed; `secret rewrap --help` shows the new text; golangci-lint `--new-from-rev` 0 issues.
+
 ## 2026-11-24 — Back to `make run-cli ARGS="…"` only (owner decision; branch audit/keys)
 
 - `mk/build.mk`: removed the `make run-cli -- …` support (`2b0050f`, `2f10e27`). `run-cli` is again `$(call run_with_env,./cmd/machinarchy)` with `ARGS`, byte-identical to before. Why: the `--` form relied on reading make's own command line through `ps`, lost quoting, ran make targets named like CLI words, and let `NAME=…` words change make's own settings. `ARGS` has none of these problems.

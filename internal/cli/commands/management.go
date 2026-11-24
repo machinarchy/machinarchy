@@ -193,25 +193,29 @@ func newSecretRotate(f *cli.Factory) *cobra.Command {
 func newSecretRewrap(f *cli.Factory) *cobra.Command {
 	var oldKeyID string
 	var batchSize int
-	c := &cobra.Command{Use: "rewrap --old-key-id ID", Short: "Rewrap stored DEKs under the active external key", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if strings.TrimSpace(oldKeyID) == "" {
-			return clierr.Usagef("--old-key-id is required")
-		}
-		if err := f.RequireConfirmation(fmt.Sprintf("Rewrap stored secret keys from %q to the active key?", oldKeyID)); err != nil {
-			return err
-		}
-		client, err := f.NewManagementClient(cmd.Context())
-		if err != nil {
-			return err
-		}
-		raw, err := client.RewrapSecrets(cmd.Context(), oldKeyID, batchSize)
-		if err != nil {
-			return err
-		}
-		return writeJSON(cmd, raw)
-	}}
-	c.Flags().StringVar(&oldKeyID, "old-key-id", "", "KEK identifier to rewrap from")
-	c.Flags().IntVar(&batchSize, "batch-size", 100, "Maximum secret versions to rewrap in this request")
+	c := &cobra.Command{Use: "rewrap --old-key-id ID", Short: "Move secrets and Operation data off an old encryption key",
+		Long: "Rewraps the data keys of secrets and Operation data (specs, output, progress) from --old-key-id to the current key, " +
+			"--batch-size of each per call, and reseals Operation data written before key IDs existed. Repeat until the result " +
+			"says \"done\": true, then remove the old key from the keyring (keep it until database backups made before are expired).",
+		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(oldKeyID) == "" {
+				return clierr.Usagef("--old-key-id is required")
+			}
+			if err := f.RequireConfirmation(fmt.Sprintf("Move secrets and Operation data from key %q to the current key?", oldKeyID)); err != nil {
+				return err
+			}
+			client, err := f.NewManagementClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			raw, err := client.RewrapSecrets(cmd.Context(), oldKeyID, batchSize)
+			if err != nil {
+				return err
+			}
+			return writeJSON(cmd, raw)
+		}}
+	c.Flags().StringVar(&oldKeyID, "old-key-id", "", "Key ID to move off (e.g. bootstrap-v1 or local:bootstrap-v1)")
+	c.Flags().IntVar(&batchSize, "batch-size", 100, "Maximum values of each kind to rewrap in this call (1-256)")
 	return c
 }
 func newSecretDelete(f *cli.Factory) *cobra.Command {

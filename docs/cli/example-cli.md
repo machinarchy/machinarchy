@@ -14,7 +14,7 @@ make build
 
 ## Configure a local API context
 
-Start the local stack as described in the [project quick start](README.md#quick-start). Obtain a user JWT from signup or login, then set it in your shell. The CLI's `--token-stdin` option avoids placing the token in the command line:
+Start the local stack as described in the [project README](../../README.md#run-locally). Obtain a user JWT from signup or login, then set it in your shell. The CLI's `--token-stdin` option avoids placing the token in the command line:
 
 ```sh
 export MACHINARCHY_USER_TOKEN='paste-the-user-jwt-here'

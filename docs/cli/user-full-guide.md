@@ -191,7 +191,7 @@ $ echo "${TOKEN:0:12}…"
 eyJhbGciOiJI…
 ```
 
-A session lasts 24 hours. For day-to-day use, create an API token instead
+A session lasts 24 hours (the default `MACHINARCHY_SESSION_TTL`). For day-to-day use, create an API token instead
 (step 16).
 
 ---

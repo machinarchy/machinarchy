@@ -29,7 +29,7 @@ make run-cli ARGS='run --host web-01 --yes -- sh -c "echo hi"'
 All CLI arguments go in `ARGS`, quoted as one value; quotes inside it are
 kept.
 
-The CLI does not start the API. Start the API or monolith separately; the project [README](../../README.md#quick-start) describes local server setup.
+The CLI does not start the API. Start the API or monolith separately; the project [README](../../README.md#run-locally) describes local server setup.
 
 ## Quick setup
 

@@ -3188,7 +3188,7 @@ paths:
             $ref: '#/definitions/httperr.Body'
       security:
       - BearerAuth: []
-      summary: Rewrap stored keys under the active KEK
+      summary: Move secrets and Operation data off an old encryption key
       tags:
       - Secrets
   /api/v1/sessions:

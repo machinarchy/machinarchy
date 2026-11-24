@@ -186,7 +186,7 @@ func (h *Handler) Delete(c echo.Context) error {
 	return c.NoContent(204)
 }
 
-// @Summary Rewrap stored keys under the active KEK
+// @Summary Move secrets and Operation data off an old encryption key
 // @Description Moves secrets and Operation data off oldKeyId to the current key, batchSize at a time per kind; repeat until done. Workspace owner, human session only.
 // @Tags Secrets
 // @Produce json
