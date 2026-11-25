@@ -310,6 +310,7 @@ func TestReportError(t *testing.T) {
 		name        string
 		err         error
 		started     bool
+		path        string
 		wantCode    int
 		wantStderr  string
 		wantAbsent  []string
@@ -325,6 +326,11 @@ func TestReportError(t *testing.T) {
 			name: "usage error without a hint points at help", err: clierr.Usagef("bad value"),
 			started: true, wantCode: clierr.ExitUsage,
 			wantPresent: []string{"Error: bad value\n", "Hint: Run 'machinarchy --help'"},
+		},
+		{
+			name: "usage error in a subcommand points at that command's help", err: clierr.Usagef("pick one with --host"),
+			started: true, path: "machinarchy logs operation", wantCode: clierr.ExitUsage,
+			wantPresent: []string{"Hint: Run 'machinarchy logs operation --help' for its usage."}, wantAbsent: []string{"available commands"},
 		},
 		{
 			name: "unclassified error before the command ran is a usage error", err: errors.New("unknown flag: --x"),
@@ -360,7 +366,7 @@ func TestReportError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var buffer bytes.Buffer
 
-			code := reportError(&buffer, test.err, test.started)
+			code := reportError(&buffer, test.err, test.started, test.path)
 
 			if code != test.wantCode {
 				t.Fatalf("exit code = %d, want %d", code, test.wantCode)

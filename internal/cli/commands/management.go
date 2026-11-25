@@ -12,6 +12,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/spf13/cobra"
 )
 
@@ -124,11 +125,63 @@ func NewSecretCommand(factory *cli.Factory) *cobra.Command {
 	root.AddCommand(newSecretList(factory), newSecretCreate(factory), newSecretVersions(factory), newSecretRotate(factory), newSecretRewrap(factory), newSecretDelete(factory))
 	return root
 }
+
+// secretMetadata is what the CLI shows of a secret; values are never returned.
+type secretMetadata struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Purpose        string `json:"purpose"`
+	CurrentVersion uint64 `json:"currentVersion"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
 func newSecretList(f *cli.Factory) *cobra.Command {
-	return managementRead(f, &cobra.Command{Use: "list", Short: "List secret metadata", Args: cobra.NoArgs},
-		func(ctx context.Context, c api.ManagementClient, _ []string) (json.RawMessage, error) {
-			return c.ListSecrets(ctx)
-		})
+	return &cobra.Command{Use: "list", Short: "List secret metadata", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		client, err := f.NewManagementClient(cmd.Context())
+		if err != nil {
+			return err
+		}
+		raw, err := client.ListSecrets(cmd.Context())
+		if err != nil {
+			return err
+		}
+		printer, err := f.Printer(cmd.OutOrStdout(), output.FormatTable)
+		if err != nil {
+			return err
+		}
+		if printer.Format() != output.FormatTable {
+			return printDocument(printer, raw)
+		}
+		var secrets []secretMetadata
+		if err := json.Unmarshal(raw, &secrets); err != nil {
+			return fmt.Errorf("decode secrets: %w", err)
+		}
+		if f.Config().Quiet() {
+			ids := make([]string, 0, len(secrets))
+			for _, secret := range secrets {
+				ids = append(ids, secret.ID)
+			}
+			return printer.IDs(ids)
+		}
+		if len(secrets) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "No resources found.")
+			return err
+		}
+		rows := make([][]string, 0, len(secrets))
+		for _, secret := range secrets {
+			rows = append(rows, []string{secret.Name, secret.ID, secret.Purpose, fmt.Sprint(secret.CurrentVersion), secret.UpdatedAt})
+		}
+		return printer.Table([]string{"NAME", "ID", "PURPOSE", "VERSION", "UPDATED"}, rows)
+	}}
+}
+
+// printDocument prints a raw JSON response in the printer's format.
+func printDocument(printer *output.Printer, raw json.RawMessage) error {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	return printer.Document(value)
 }
 func newSecretCreate(f *cli.Factory) *cobra.Command {
 	var description string
@@ -153,7 +206,22 @@ func newSecretCreate(f *cli.Factory) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		return writeJSON(cmd, raw)
+		printer, e := f.Printer(cmd.OutOrStdout(), output.FormatTable)
+		if e != nil {
+			return e
+		}
+		if printer.Format() != output.FormatTable {
+			return printDocument(printer, raw)
+		}
+		var created secretMetadata
+		if e := json.Unmarshal(raw, &created); e != nil {
+			return fmt.Errorf("decode created secret: %w", e)
+		}
+		if f.Config().Quiet() {
+			return printer.IDs([]string{created.ID})
+		}
+		_, e = fmt.Fprintf(cmd.OutOrStdout(), "Secret %q created: %s (version %d).\n", created.Name, created.ID, created.CurrentVersion)
+		return e
 	}}
 	c.Flags().StringVar(&description, "description", "", "Non-secret description")
 	c.Flags().BoolVar(&stdin, "value-stdin", false, "Read secret value from stdin")

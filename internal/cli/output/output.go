@@ -159,10 +159,11 @@ func (p *Printer) Host(host api.Host) error {
 }
 
 func (p *Printer) hostTable(hosts []api.Host) error {
-	headers := []string{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY"}
+	headers := []string{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY", "REASON"}
 
 	if len(hosts) == 0 {
-		return p.Table(headers, [][]string{{"No resources found.", "", "", "", "", ""}})
+		_, err := fmt.Fprintln(p.writer, "No resources found.")
+		return err
 	}
 
 	rows := make([][]string, 0, len(hosts))
@@ -172,7 +173,8 @@ func (p *Printer) hostTable(hosts []api.Host) error {
 			environment = fmt.Sprintf("%d", host.Metadata.EnvironmentID)
 		}
 		rows = append(rows, []string{host.Metadata.Name, host.Metadata.ID, environment,
-			orDash(host.Spec.AccessTarget.Endpoint), orDash(host.Status.Phase), condition(host.Status.Conditions, "Ready")})
+			orDash(host.Spec.AccessTarget.Endpoint), orDash(host.Status.Phase), condition(host.Status.Conditions, "Ready"),
+			conditionReason(host.Status.Conditions, "Ready")})
 	}
 
 	return p.Table(headers, rows)
@@ -183,6 +185,16 @@ func condition(conditions []api.Condition, kind string) string {
 	for _, c := range conditions {
 		if c.Type == kind {
 			return c.Status
+		}
+	}
+	return "-"
+}
+
+// conditionReason returns the reason of the named condition, or "-".
+func conditionReason(conditions []api.Condition, kind string) string {
+	for _, c := range conditions {
+		if c.Type == kind {
+			return orDash(c.Reason)
 		}
 	}
 	return "-"

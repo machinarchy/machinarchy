@@ -85,6 +85,8 @@ func (e *Error) ErrorHint() string {
 			"Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them."
 	case e.Status == http.StatusNotFound:
 		return "Check the identifier. If the whole feature is missing, the server may not have it enabled, or --server may point at the wrong address."
+	case e.Status == http.StatusConflict && e.Fields["code"] == "already_exists":
+		return "A resource with that name already exists. Choose another name, or look at it with 'machinarchy get'."
 	case e.Status == http.StatusConflict, e.Status == http.StatusPreconditionFailed:
 		return "The resource changed or a precondition failed. Read the current state and retry with an up-to-date revision."
 	case e.Status == http.StatusTooManyRequests, e.Status == http.StatusServiceUnavailable:

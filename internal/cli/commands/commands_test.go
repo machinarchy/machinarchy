@@ -519,7 +519,7 @@ func TestGetHosts(t *testing.T) {
 		if len(lines) != 6 || !strings.HasPrefix(lines[0], "NAME") {
 			t.Fatalf("output:\n%s", got.stdout)
 		}
-		if first := strings.Fields(lines[1]); strings.Join(first, "|") != "web-01|1|1|10.0.0.1:22|Active|-" {
+		if first := strings.Fields(lines[1]); strings.Join(first, "|") != "web-01|1|1|10.0.0.1:22|Active|-|-" {
 			t.Errorf("first row = %v", first)
 		}
 	})
@@ -1038,6 +1038,31 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		}
 		if body["value"] != "s3cr3t-value" || body["purpose"] != "ssh-credential" || body["name"] != "db" {
 			t.Errorf("body = %v", body)
+		}
+	})
+
+	t.Run("secret list and create print a table unless -o asks for a document", func(t *testing.T) {
+		list := `[{"id":"s1","name":"db","purpose":"ssh-credential","currentVersion":2,"updatedAt":"2026-11-25T10:00:00Z"}]`
+		server := newAPIServer(t, jsonReply(200, list))
+		got := execute(t, nil, "", "--config", writeConfig(t, server.URL, "tok"), "secret", "list")
+		lines := strings.Split(strings.TrimSpace(got.stdout), "\n")
+		if got.code != 0 || len(lines) != 2 || strings.Join(strings.Fields(lines[0]), " ") != "NAME ID PURPOSE VERSION UPDATED" ||
+			strings.Join(strings.Fields(lines[1]), " ") != "db s1 ssh-credential 2 2026-11-25T10:00:00Z" {
+			t.Fatalf("table = %+v", got)
+		}
+		asJSON := execute(t, nil, "", "--config", writeConfig(t, server.URL, "tok"), "secret", "list", "-o", "json")
+		var decoded []map[string]any
+		if err := json.Unmarshal([]byte(asJSON.stdout), &decoded); err != nil || len(decoded) != 1 || decoded[0]["name"] != "db" {
+			t.Fatalf("-o json = %q (%v)", asJSON.stdout, err)
+		}
+		empty := newAPIServer(t, jsonReply(200, `[]`))
+		if got := execute(t, nil, "", "--config", writeConfig(t, empty.URL, "tok"), "secret", "list"); got.stdout != "No resources found.\n" {
+			t.Fatalf("empty list = %q", got.stdout)
+		}
+		created := newAPIServer(t, jsonReply(201, `{"id":"s9","name":"key","currentVersion":1}`))
+		got = execute(t, nil, "v\n", "--config", writeConfig(t, created.URL, "tok"), "secret", "create", "key", "--value-stdin")
+		if got.code != 0 || got.stdout != "Secret \"key\" created: s9 (version 1).\n" {
+			t.Fatalf("create = %+v", got)
 		}
 	})
 

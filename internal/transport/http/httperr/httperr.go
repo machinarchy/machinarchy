@@ -24,7 +24,10 @@ const (
 	CodePermissionDenied = "permission_denied"
 	CodeNotFound         = "not_found"
 	CodeConflict         = "conflict"
-	CodeTargetsChanged   = "targets_changed"
+	// CodeAlreadyExists: a resource with that name exists (a 409 that a
+	// newer revision cannot fix).
+	CodeAlreadyExists  = "already_exists"
+	CodeTargetsChanged = "targets_changed"
 	// CodeExecutionNotAllowed: the execution policy refuses the command.
 	CodeExecutionNotAllowed = "execution_not_allowed"
 	CodeTooManyRequests     = "too_many_requests"
@@ -130,7 +133,7 @@ var common = []Mapping{
 	{domain.ErrExecutionNotAllowed, http.StatusForbidden, CodeExecutionNotAllowed, ""},
 	{resource.ErrTargetsChanged, http.StatusConflict, CodeTargetsChanged, resource.ErrTargetsChanged.Error()},
 	{resource.ErrConflict, http.StatusConflict, CodeConflict, "resource revision conflict"},
-	{resource.ErrAlreadyExists, http.StatusConflict, CodeConflict, resource.ErrAlreadyExists.Error()},
+	{resource.ErrAlreadyExists, http.StatusConflict, CodeAlreadyExists, resource.ErrAlreadyExists.Error()},
 	{resource.ErrHostNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrOperationNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrAccessProfileNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},

@@ -27,15 +27,21 @@ func Run(ctx context.Context, options Options, args []string) int {
 		root.SetArgs(args)
 	}
 
-	err := root.ExecuteContext(ctx)
+	command, err := root.ExecuteContextC(ctx)
+	path := ""
+	if command != nil {
+		path = command.CommandPath()
+	}
 
-	return reportError(options.Streams.ErrOut, err, factory.started)
+	return reportError(options.Streams.ErrOut, err, factory.started, path)
 }
 
 // reportError prints err to w and returns the exit code it maps to.
 // started reports whether the selected command began to run; an unclassified
-// error before that point came from Cobra rejecting the command line.
-func reportError(w io.Writer, err error, started bool) int {
+// error before that point came from Cobra rejecting the command line. path is
+// the command that failed ("machinarchy logs operation"), so a usage error
+// points at that command's help rather than the list of all commands.
+func reportError(w io.Writer, err error, started bool, path string) int {
 	if err == nil {
 		return clierr.ExitOK
 	}
@@ -55,6 +61,9 @@ func reportError(w io.Writer, err error, started bool) int {
 	hint := clierr.Hint(err)
 	if hint == "" && code == clierr.ExitUsage {
 		hint = "Run 'machinarchy --help' to see available commands."
+		if path != "" && path != "machinarchy" {
+			hint = fmt.Sprintf("Run '%s --help' for its usage.", path)
+		}
 	}
 	if hint != "" {
 		_, _ = fmt.Fprintf(w, "Hint: %s\n", hint)

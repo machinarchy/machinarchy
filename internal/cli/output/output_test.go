@@ -13,7 +13,7 @@ import (
 func sampleHosts() []api.Host {
 	return []api.Host{
 		{Metadata: api.HostMetadata{ID: "7", Name: "web-01", EnvironmentID: 2}, Spec: api.HostSpec{AccessTarget: api.HostAccessTarget{Endpoint: "10.0.0.7:22"}},
-			Status: api.HostStatus{Phase: "Active", Conditions: []api.Condition{{Type: "Ready", Status: "True"}}}},
+			Status: api.HostStatus{Phase: "Active", Conditions: []api.Condition{{Type: "Ready", Status: "True", Reason: "SSHVerified"}}}},
 		{Metadata: api.HostMetadata{ID: "12", Name: "db"}, Status: api.HostStatus{Phase: "Pending"}},
 	}
 }
@@ -86,9 +86,9 @@ func TestHostTable(t *testing.T) {
 	}
 
 	want := [][]string{
-		{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY"},
-		{"web-01", "7", "2", "10.0.0.7:22", "Active", "True"},
-		{"db", "12", "-", "-", "Pending", "-"},
+		{"NAME", "ID", "ENVIRONMENT", "ENDPOINT", "PHASE", "READY", "REASON"},
+		{"web-01", "7", "2", "10.0.0.7:22", "Active", "True", "SSHVerified"},
+		{"db", "12", "-", "-", "Pending", "-", "-"},
 	}
 	for index, line := range lines {
 		got := strings.Fields(line)
@@ -106,11 +106,10 @@ func TestHostTable(t *testing.T) {
 	}
 }
 
-func TestEmptyHostTableKeepsOriginalMessage(t *testing.T) {
+// An empty list prints the message alone, not inside an empty table (G-13C-03).
+func TestEmptyHostTableSaysSoPlainly(t *testing.T) {
 	output := render(t, FormatTable, Options{}, func(p *Printer) error { return p.Hosts(nil) })
-
-	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NAME") || !strings.HasPrefix(lines[1], "No resources found.") {
+	if output != "No resources found.\n" {
 		t.Fatalf("output = %q", output)
 	}
 }

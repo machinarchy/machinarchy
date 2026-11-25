@@ -25,7 +25,7 @@ A stale value is `409` with code `conflict`, or `targets_changed` for a changed 
 
 **Errors.** Every error is `{"error": "<safe message>", "code": "<stable code>"}`. The request ID is in the `X-Request-Id` response header. The codes are:
 - `invalid_request`, `unauthorized`, `permission_denied`, `not_found`;
-- `conflict`, `targets_changed`;
+- `conflict`, `already_exists`, `targets_changed`;
 - `execution_not_allowed`, `too_many_requests`, `unavailable`, `internal`.
 
 Validation errors are `400`. An unexpected error is `500 internal` with no detail: its cause is logged with the request ID (AUDIT/20 F20-06). Internal errors and secrets are never exposed.

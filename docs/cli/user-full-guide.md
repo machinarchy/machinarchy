@@ -232,7 +232,7 @@ them back. The lab needs two: the client key for `ssh-key`, and the password
 for the other two (`tr -d "\n"` drops the file's trailing newline):
 
 ```console
-$ machinarchy secret create lab-key --value-stdin --description "data/.ssh/test_id_ed25519" < data/.ssh/test_id_ed25519 | jq "{id, name, purpose, currentVersion}"
+$ machinarchy secret create lab-key -o json --value-stdin --description "data/.ssh/test_id_ed25519" < data/.ssh/test_id_ed25519 | jq "{id, name, purpose, currentVersion}"
 {
   "id": "ccf383fb-e59d-4ba3-8901-41b56200a018",
   "name": "lab-key",
@@ -240,7 +240,7 @@ $ machinarchy secret create lab-key --value-stdin --description "data/.ssh/test_
   "currentVersion": 1
 }
 
-$ tr -d "\n" < data/.ssh/testuser.password | machinarchy secret create lab-password --value-stdin --description "data/.ssh/testuser.password" | jq "{id, name, purpose, currentVersion}"
+$ tr -d "\n" < data/.ssh/testuser.password | machinarchy secret create lab-password -o json --value-stdin --description "data/.ssh/testuser.password" | jq "{id, name, purpose, currentVersion}"
 {
   "id": "ef1fadb4-6891-410d-95e8-45b8e6398aa7",
   "name": "lab-password",
@@ -248,7 +248,7 @@ $ tr -d "\n" < data/.ssh/testuser.password | machinarchy secret create lab-passw
   "currentVersion": 1
 }
 
-$ machinarchy secret list | jq -r ".[] | [.name, .id, .currentVersion] | @tsv"
+$ machinarchy secret list -o json | jq -r ".[] | [.name, .id, .currentVersion] | @tsv"
 lab-key	ccf383fb-e59d-4ba3-8901-41b56200a018	1
 lab-password	ef1fadb4-6891-410d-95e8-45b8e6398aa7	1
 ```
@@ -272,7 +272,7 @@ Profiles are owner-only and are created through the API (the CLI lists them):
 | `lab-password` | password | not set | Needs an owner's approval: Machinarchy never trusts keys on first contact for a password login, because an impostor would receive the password |
 
 ```console
-$ KEY_SECRET=$(machinarchy secret list | jq -r ".[] | select(.name==\"lab-key\") | .id"); PASSWORD_SECRET=$(machinarchy secret list | jq -r ".[] | select(.name==\"lab-password\") | .id")
+$ KEY_SECRET=$(machinarchy secret list -o json | jq -r ".[] | select(.name==\"lab-key\") | .id"); PASSWORD_SECRET=$(machinarchy secret list -o json | jq -r ".[] | select(.name==\"lab-password\") | .id")
 
 $ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-key\",\"description\":\"key login, keys pinned on first contact\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"private-key\",\"username\":\"testuser\",\"enabled\":true,\"hostKeyPolicy\":\"tofu\",\"credential\":{\"id\":\"$KEY_SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
 {
@@ -308,30 +308,30 @@ fingerprint is needed:
 
 ```console
 $ machinarchy create host ssh-key --endpoint 127.0.0.1:2222 --profile lab-key --label tier=web --label auth=key
-NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Pending  Unknown
+NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY    REASON
+ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Pending  Unknown  NotObserved
 
 $ machinarchy create host ssh-password --endpoint 127.0.0.1:2221 --profile lab-password --label tier=web --label auth=password
-NAME          ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-ssh-password  f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Pending  Unknown
+NAME          ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY    REASON
+ssh-password  f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Pending  Unknown  NotObserved
 
 $ machinarchy create host ssh-hostcheck --endpoint 127.0.0.1:2223 --profile lab-password --label tier=db --label auth=password
-NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Pending  Unknown
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY    REASON
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Pending  Unknown  NotObserved
 ```
 
 A second later the controller has checked them:
 
 ```console
 $ machinarchy get hosts
-NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-ssh-key        55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True
-ssh-password   f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Active  False
-ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  False
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+ssh-key        55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True   SSHVerified
+ssh-password   f6f2d7cb-84be-40a7-af7d-2df9191fb8a9  -            127.0.0.1:2221  Active  False  HostKeyPendingApproval
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  False  HostKeyPendingApproval
 ```
 
-The table shows only `READY True/False`. The reason is in the JSON (or YAML)
-view:
+`REASON` says why a host is not ready. The JSON (or YAML) view has the whole
+condition, for scripts:
 
 ```console
 $ machinarchy get hosts -o json | jq -r '.[] | [.metadata.name, (.status.conditions[] | select(.type=="Ready") | .reason)] | @tsv'
@@ -561,20 +561,20 @@ allowed to run commands; readers see states and exit codes.
 
 ```console
 $ machinarchy label host ssh-hostcheck role=primary
-NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True   SSHVerified
 
 $ machinarchy get hosts -l role=primary
-NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True   SSHVerified
 
 $ machinarchy get hosts -l "auth in (key)"
-NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True
+NAME     ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+ssh-key  55ad1e17-d9b1-4dd8-8d9f-1d31b3751560  -            127.0.0.1:2222  Active  True   SSHVerified
 
 $ machinarchy label host ssh-hostcheck role-
-NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True
+NAME           ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+ssh-hostcheck  fcf37d66-7774-4848-9c2a-6d9aef2c9c5b  -            127.0.0.1:2223  Active  True   SSHVerified
 ```
 
 `KEY=VALUE` sets a label and `KEY-` removes it. The table does not show labels;
@@ -655,12 +655,12 @@ $ KEYS=($(machinarchy get hosts ssh-key -o json | jq -r '.spec.accessTarget.trus
 --trust SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4 --trust SHA256:N+XdeA
 
 $ machinarchy create host moved --endpoint 127.0.0.1:2223 --profile lab-password "${KEYS[@]}"
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY
-moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Pending  Unknown
+NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE    READY    REASON
+moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Pending  Unknown  NotObserved
 
 $ machinarchy get hosts moved
-NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY
-moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Active  False
+NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE   READY  REASON
+moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Active  False  HostKeyChanged
 
 $ machinarchy get hosts moved -o json | jq -r '.status.conditions[] | select(.type=="Ready") | .reason + ": " + .message'
 HostKeyChanged: the host presents SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA, SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM, SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM; trusted: SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA. Nothing was sent to it. If the change is expected: machinarchy trust host moved --replace
@@ -774,7 +774,7 @@ Error: API returned HTTP 403: permission denied (request ID IssupaPSPGpSdQQHnNwQ
 Hint: The credential is valid but is not permitted to do this.
 Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them.
 
-$ machinarchy --context lab secret list | jq -r ".[].name"
+$ machinarchy --context lab secret list -o json | jq -r ".[].name"
 lab-key
 lab-password
 ```

@@ -228,8 +228,9 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 			if !strings.HasPrefix(got.stderr, "Error: ") || !strings.Contains(got.stderr, test.message) {
 				t.Errorf("stderr = %q, want an error mentioning %q", got.stderr, test.message)
 			}
-			if !strings.Contains(got.stderr, "Hint: Run 'machinarchy --help'") {
-				t.Errorf("stderr = %q, want the help hint", got.stderr)
+			// The hint points at the help of the command that failed.
+			if !strings.Contains(got.stderr, "Hint: Run 'machinarchy") || !strings.Contains(got.stderr, " --help'") {
+				t.Errorf("stderr = %q, want a help hint", got.stderr)
 			}
 			if got.stdout != "" {
 				t.Errorf("stdout = %q, want nothing", got.stdout)

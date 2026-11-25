@@ -1,5 +1,23 @@
 # ChangeLogAI
 
+## 2026-11-25 — CLI rough edges (Phase 21: G-13C-03, part 1; branch audit/final)
+
+- **Usage errors:** the hint now points at the help of the command that failed (`Run 'machinarchy logs operation --help' for its usage.`), not the list of all commands. Root-level errors keep the old hint.
+- **`get hosts`:**
+  - a new `REASON` column shows why a host is or isn't ready (`SSHVerified`, `HostKeyPendingApproval`, `AgentNotEnrolled`…), so the guide no longer needs `-o json | jq` for it;
+  - an empty list prints `No resources found.` alone, not inside an empty table.
+- **Breaking default output:**
+  - `secret list` prints a table by default (`NAME ID PURPOSE VERSION UPDATED`);
+  - `secret create` prints a line naming the new secret;
+  - `-o json`/`-o yaml` give the JSON as before, and `-q` prints only IDs.
+  - The guide's `jq` pipelines now pass `-o json`.
+- **409 for a name that is taken:** the server's code is now `already_exists` (it was `conflict`), and the CLI hint says to choose another name instead of "retry with an up-to-date revision". ADR-034's code list is updated.
+- **Docs:** the CLI guide's host tables now show the `REASON` column.
+- **Checks run:**
+  - `go test ./internal/cli/... ./internal/transport/...`: pass, with new tests for the command-specific hint, the secret table and JSON, the plain empty list, the reason column and the `already_exists` hint;
+  - `golangci-lint run ./...`: 0 issues;
+  - `make api-docs`: no change.
+
 ## 2026-11-25 — Agent host Ready follows enrolment and revocation at once (Phase 21: F17-04; branch audit/final)
 
 - `store/agents`: binding a host (enrolment with a host-bound token) and revoking an agent each write a host event and its Control Manager delivery, in the same transaction, for every affected host. The host is reconciled within seconds, and its `Ready` condition (`AgentConnected`, `AgentNotEnrolled`) follows. Before, it waited for the next host resync, up to 5 minutes.

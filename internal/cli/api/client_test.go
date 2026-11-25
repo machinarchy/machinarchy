@@ -357,6 +357,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 		{"internal error with html body", 500, `<html>oops</html>`, nil, clierr.ExitUnavailable, "Internal Server Error", "internal error"},
 		{"problem details", 400, `{"title":"Bad Request","detail":"selector is malformed"}`, nil, clierr.ExitUsage, "selector is malformed", ""},
 		{"empty body", 502, ``, nil, clierr.ExitUnavailable, "Bad Gateway", ""},
+		{"name taken", 409, `{"error":"resource already exists","code":"already_exists"}`, nil, clierr.ExitConflict, "resource already exists", "already exists. Choose another name"},
 		{"execution policy", 403, `{"error":"command execution is not permitted: program \"rm\" is not on the allowed list","code":"execution_not_allowed"}`, nil,
 			clierr.ExitAuth, `command execution is not permitted: program "rm" is not on the allowed list`, "allowedPrograms"},
 	}
