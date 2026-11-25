@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-25 — ADR-034 amended to the implemented API design (Phase 21: D-15; branch audit/final)
+
+- **Owner decision: amend rather than implement.** ADR-034 now records what the API does:
+  - keyset pagination (`limit`, `cursor`, `{items, nextCursor}`);
+  - the expected revision in the request (`revision`, `expectedRevision`, `expectTargetsHash`), with `409 conflict` or `targets_changed`;
+  - `{error, code}` errors with the request ID in `X-Request-Id`, and unexpected errors logged (F20-06).
+- RFC 9457 problem details and ETag/`If-Match` are deferred as an additive option. The ADR index row is updated.
+- Docs only; no checks run.
+
 ## 2026-11-25 — `monolit` renamed to `monolith` (Phase 21: D-15; branch audit/final)
 
 - **Renamed (owner decision):**

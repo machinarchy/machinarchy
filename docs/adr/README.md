@@ -37,7 +37,7 @@ All ADRs live in this directory; the two earlier directories (`docs/DECISIONS`, 
 | [ADR-031: Integrate a future Agent as a capability adapter](ADR-031-agent-as-capability-adapter.md) | Accepted, not implemented | Agent integration is pending (AUDIT/04 M-1..M-11). |
 | [ADR-032: Keep a versioned transport boundary over application commands and queries](ADR-032-versioned-api-and-application-boundary.md) | Accepted |  |
 | [ADR-033: Represent long-running imperative work as durable Operations](ADR-033-durable-asynchronous-operations.md) | Implemented | Managed Operations with a durable worker, cancellation and non-replaying recovery. |
-| [ADR-034: Standardize pagination, concurrency preconditions, and API errors](ADR-034-uniform-pagination-and-problem-errors.md) | Partially implemented | Keyset pagination with {items, nextCursor} and one {error, code} error shape; not RFC 9457 problem details, no ETag/If-Match (revisions travel in bodies and query strings). |
+| [ADR-034: Standardize pagination, concurrency preconditions, and API errors](ADR-034-uniform-pagination-and-problem-errors.md) | Implemented (amended 2026-11-25) | Keyset pagination `{items, nextCursor}`; revisions in the request for optimistic concurrency; `{error, code}` errors. RFC 9457 and ETag deferred. |
 | [ADR-035: Keep CLI commands thin and use the HTTP API for all server operations](ADR-035-cli-as-api-client.md) | Implemented | Enforced by TestCLIStaysAnAPIClient. |
 | [ADR-036: Treat authentication, authorization, auditing, and secret protection as independent controls](ADR-036-separate-security-controls.md) | Accepted |  |
 | [ADR-037: Deny outbound Host access by default in production](ADR-037-production-egress-deny-by-default.md) | Accepted |  |
