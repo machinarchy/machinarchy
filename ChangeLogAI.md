@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-25 — CONTRIBUTING: audit rule and HA harness (Phase 20; branch audit/ha)
+
+- The audit rule now matches F20-05: intents and Operation outcomes are audited; system-driven progress is not.
+- How to run `test/ha` (`MACHINARCHY_HA=1`, Docker, about 7 minutes, `MACHINARCHY_HA_LOG_DIR`).
+- Docs only; no checks run.
+
 ## 2026-11-25 — HA verification harness (Phase 20: D-16; branch audit/ha)
 
 - **`test/ha`:** real binaries in a multi-replica topology, all started at once.

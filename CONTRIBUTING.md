@@ -32,7 +32,15 @@ go test ./internal/store/... -count=1
 
 Each test creates and drops its own schema, so the database may be shared, but use a disposable server. Set `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` to fail instead of skip when the URL is missing. The URL must use the `postgres://` form. GitHub Actions (`.github/workflows/ci.yml`) runs formatting, build, vet, and `go test -race` with a PostgreSQL service on every pull request.
 
-Every store method that changes inventory or access data must record an audit event in the same transaction (see `appendAudit` in `internal/store/sqlite/audit.go` and `internal/store/postgres/audit.go`) and a contract test in `internal/store/contract_test.go` that checks the event; never put credentials or token hashes in event details.
+Every store method that records an intent (a user or API action that changes inventory, access, configuration or secrets) or an Operation's outcome must record an audit event in the same transaction, with a contract test in `internal/store/contract_test.go` that checks the event. System-driven progress (a reconcile's status, an Operation starting, target transitions, launches, capability dispatch) is not audited: each event takes the workspace's audit-chain lock (AUDIT/20 F20-05; see "audit records intents and outcomes" in the contract tests). Never put credentials or token hashes in event details.
+
+`test/ha` checks the multi-replica design under failure: real binaries with two API replicas, two Control Managers, agents, NATS and a PostgreSQL container, and scenarios that kill a Control Manager, restart PostgreSQL, partition NATS and run a short load profile. It needs Docker and takes about 7 minutes, so it runs only when asked:
+
+```sh
+MACHINARCHY_HA=1 go test -v -timeout 45m ./test/ha/
+```
+
+Set `MACHINARCHY_HA_LOG_DIR` to keep the process logs of a failed run.
 
 Install `golangci-lint` and the Swaggo CLI before using the corresponding targets. Do not commit credentials, local database files, generated binaries, or unreviewed generated API changes.
 
