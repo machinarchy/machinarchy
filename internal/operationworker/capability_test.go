@@ -374,7 +374,11 @@ func TestCapabilityResultStatusesMapToTargetStates(t *testing.T) {
 func TestCapabilityTargetWithoutResultBecomesLost(t *testing.T) {
 	t.Parallel()
 	e := newCapabilityEnv(t)
-	e.agents.lifetime = 200 * time.Millisecond
+	// The relay publishes a command only while it is valid, so the lifetime
+	// must outlast a slow first relay pass (a 2-core runner with the race
+	// detector missed 200 ms). The target becomes Lost at lifetime + timeout
+	// + grace, about 3 s here.
+	e.agents.lifetime = 2 * time.Second
 	e.grace = 50 * time.Millisecond
 	web := e.host("web", "agent-web")
 	id := e.submit(1, web)

@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-25 — A capability test that failed on the CI runner (branch fix/capability-test-timing)
+
+- **First CI run on `main`:** `TestCapabilityTargetWithoutResultBecomesLost` failed ("timed out waiting for 1 published requests") in `make coverage` (`-race ./...` on a GitHub runner). The test gave each agent command a 200 ms lifetime. The capability relay publishes a command only while it is valid (`now < ExpiresAt`), so when the first relay pass came later than 200 ms the command expired unpublished and the target failed as `agent_command_undelivered`, which the test does not expect. The code is right; the lifetime was too short for a slow runner.
+- **Fix:** the lifetime is 2 s, so the target becomes Lost about 3 s after dispatch (lifetime + the Operation's 1 s timeout + 50 ms grace); the test still checks the same behavior (published, no result, Lost with `no_result`).
+- **Checks run:** none; per the owner's instruction tests are not run locally during GitHub work, CI runs them. The other tests of the file keep their own short lifetimes on purpose (`TestCapabilityCommandNeverPublishedFailsTheTarget` expects the expiry).
+
 ## 2026-11-25 — First CI run: smoke test, a timing test, Node 24 actions (branch release/initial)
 
 - **The smoke test failed in CI** (`scripts/smoke.sh`, "secret and Access Profile": `JSONDecodeError`). The script parsed the output of `secret create` as JSON, but since the CLI work of G-13C-03 that command prints a line for people by default. The script passes `-o json` now (the owner approved editing the script), and starts `machinarchy-monolith` instead of the deprecated alias. `make smoke` passes locally.
