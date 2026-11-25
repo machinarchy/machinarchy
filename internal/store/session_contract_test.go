@@ -12,7 +12,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
-// testSessions covers migration 000005 and the session store (AUDIT S-08)
+// testSessions covers the user_sessions table and the session store (AUDIT S-08)
 // on both engines.
 func testSessions(t *testing.T, f *fixture) {
 	ctx := context.Background()

@@ -2,10 +2,7 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
@@ -13,10 +10,9 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
-	"github.com/machinarchy/machinarchy/internal/store"
 )
 
-// AUDIT A-12 / migration 000009: label selectors run in the database. The
+// AUDIT A-12: label selectors run in the database. The
 // SQL conditions must select exactly what the Go selector selects, follow
 // label changes and deletions, and stay inside the workspace.
 func testHostLabelSelectors(t *testing.T, f *fixture) {
@@ -144,62 +140,5 @@ func testHostLabelSelectors(t *testing.T, f *fixture) {
 	sort.Strings(paged)
 	if !slices.Equal(paged, []string{"bulk-1", "bulk-3", "bulk-5"}) {
 		t.Errorf("paged batch=1 = %v", paged)
-	}
-}
-
-// Migration 000009 fills managed_host_labels from the labels of existing hosts.
-func TestSQLiteMigration9IndexesExistingLabels(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "m.db")
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `CREATE TABLE schema_migrations (version INT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`); err != nil {
-		t.Fatal(err)
-	}
-	files, err := filepath.Glob("migrations/sqlite/00000[1-8]_*.up.sql")
-	if err != nil || len(files) != 8 {
-		t.Fatalf("migrations 1-8: %v, %v", files, err)
-	}
-	for i, file := range files {
-		content, err := os.ReadFile(file) // #nosec G304 -- repository migration files
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.ExecContext(ctx, string(content)); err != nil {
-			t.Fatalf("%s: %v", file, err)
-		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, i+1); err != nil {
-			t.Fatal(err)
-		}
-	}
-	insert := `INSERT INTO managed_hosts (id, workspace_id, name, labels, desired_presence, generation, revision, phase, created_at, updated_at)
-		VALUES (?, 1, ?, ?, 'Managed', 1, 1, 'Active', '2026-11-24T00:00:00Z', '2026-11-24T00:00:00Z')`
-	for _, row := range [][3]string{
-		{"00000000-0000-4000-8000-000000000001", "web-1", `{"tier":"web","zone":"a"}`},
-		{"00000000-0000-4000-8000-000000000002", "bare", `{}`},
-	} {
-		if _, err := db.ExecContext(ctx, insert, row[0], row[1], row[2]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	stores, err := store.Open(ctx, store.Config{Engine: store.EngineSQLite, SQLitePath: path,
-		EncryptionSecret: "migration-test-secret-with-more-than-32-bytes"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stores.Close()
-	page, err := stores.ResourceHosts.ListHosts(ctx, resource.HostListFilter{WorkspaceID: 1, Limit: 10,
-		Labels: []domain.LabelConstraint{{Key: "tier", Op: domain.LabelIn, Values: []string{"web"}}, {Key: "zone", Op: domain.LabelIn, Values: []string{"a"}}}})
-	if err != nil || len(page) != 1 || page[0].Metadata.Name != "web-1" {
-		t.Fatalf("after migration 9, tier=web,zone=a = %+v, %v", page, err)
 	}
 }

@@ -477,8 +477,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 10 {
-		t.Fatalf("applied migrations = %d, want the baseline and 000002-000010 (agent enrolment tokens, host key observations, detached targets, user sessions, login failures, agent signing keys, capability operations, host label index, host keyset index)", before)
+	if before != 1 {
+		t.Fatalf("applied migrations = %d, want the single baseline", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

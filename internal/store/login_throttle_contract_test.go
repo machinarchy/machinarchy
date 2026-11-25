@@ -10,7 +10,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
 
-// testLoginThrottle covers migration 000006 and the login throttle store
+// testLoginThrottle covers the login_failures table and the login throttle store
 // (AUDIT S-09) on both engines.
 func testLoginThrottle(t *testing.T, f *fixture) {
 	ctx := context.Background()

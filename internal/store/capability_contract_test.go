@@ -14,7 +14,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 )
 
-// ADR-057 / migration 000008: per-host enrolment binds agents to hosts;
+// ADR-057: per-host enrolment binds agents to hosts;
 // capability Operations persist their kind; dispatch, relay states, result
 // lookup, overdue detection and cancel commands work on both engines.
 func testCapabilityOperations(t *testing.T, f *fixture) {

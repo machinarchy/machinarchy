@@ -586,25 +586,26 @@ under `"error"`.
 
 ## Upgrades and schema
 
-The schema is one baseline per dialect. While the project is in development a
-release may squash it again; the process then refuses an older database
-(`ErrIncompatibleSchema`) and it must be recreated. Take a backup before any
-upgrade. After the first production release, schema changes will be additive
-migrations.
+The schema is one baseline per dialect (`internal/store/migrations`). The
+baseline was squashed again on 2026-11-25, before the first release, so a
+database created by an earlier development build records versions this build
+does not ship: the process refuses it (`ErrIncompatibleSchema`) and it must be
+recreated (delete the SQLite file, or drop and recreate the PostgreSQL
+database). From the first release (0.0.1) on, schema changes are additive
+migrations and the baseline is not squashed again. Take a backup before any
+upgrade.
 
 Migrations run at startup within `MACHINARCHY_DATABASE_MIGRATION_TIMEOUT`
 (10 minutes by default), separately from `MACHINARCHY_DATABASE_CONNECT_TIMEOUT`.
 
-On SQLite, migration `000004` rewrites `operation_targets` because SQLite
-cannot change a CHECK constraint, so it takes time proportional to the stored
-output. An 834 MB database (100,000 targets) took 3 minutes on a laptop.
-Raise the timeout for larger databases. PostgreSQL changes the constraint in
-place.
+Some future migrations will rewrite tables on SQLite, which cannot change a
+CHECK constraint in place; those take time proportional to the stored output
+(an 834 MB database took 3 minutes on a laptop in a test). Raise the timeout
+for larger databases. PostgreSQL changes constraints in place.
 
-Migration `000009` adds `managed_host_labels`, an indexed copy of every host's
-labels that label selectors query, and fills it from the existing hosts. It
-takes time proportional to the number of labels. The API still returns labels
-from `managed_hosts`; both are written in one transaction.
+`managed_host_labels` is an indexed copy of every host's labels that label
+selectors query. The API still returns labels from `managed_hosts`; both are
+written in one transaction.
 
 **Selectors at scale.** Label requirements (`tier=web`, `role in (a,b)`,
 `tier!=legacy`, `canary`, `!canary`) run in the database, so neither a host

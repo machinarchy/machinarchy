@@ -698,7 +698,7 @@ func testResourceListing(t *testing.T, f *fixture) {
 	}
 }
 
-// testHostKeyTrust covers migration 000003 (observed_host_keys) and the
+// testHostKeyTrust covers observed_host_keys (managed_hosts) and the
 // audited, evented TrustHostKeys write on both engines.
 func testHostKeyTrust(t *testing.T, f *fixture) {
 	ctx := context.Background()
@@ -766,7 +766,7 @@ func testHostKeyTrust(t *testing.T, f *fixture) {
 	}
 }
 
-// testDetachedTargets covers migration 000004 and the detached-execution
+// testDetachedTargets covers the detached-execution
 // store methods on both engines.
 func testDetachedTargets(t *testing.T, f *fixture) {
 	ctx := context.Background()

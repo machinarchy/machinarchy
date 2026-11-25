@@ -1,9 +1,11 @@
--- Machinarchy baseline schema (squashed during development, 2026-11-18).
+-- Machinarchy baseline schema (squashed during development; last squash
+-- 2026-11-25, before the first release).
 --
--- It replaces migrations 000001-000013 and contains only the managed resource
--- model and the shared account tables; the legacy hosts/jobs/runs tables and
--- workspaces.owner_user_id are gone. A database created before this baseline
--- must be recreated: the migrator refuses to run against it.
+-- It contains the whole current schema: accounts and sessions, the managed
+-- resource model (hosts, labels, Operations and their targets, agent commands),
+-- agents and their enrolment, signing keys, secrets and the runtime
+-- configuration. A database created by an earlier development schema must be
+-- recreated: the migrator refuses to run against it.
 --
 -- Every timestamp is RFC 3339 text in UTC, identical in both dialects.
 
@@ -112,16 +114,22 @@ CREATE TABLE managed_hosts (
     deletion_timestamp TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    -- SSH host keys last seen for the Host: kept so an owner can approve them,
+    -- or see what changed.
+    observed_host_keys TEXT NOT NULL DEFAULT '[]',
     UNIQUE (workspace_id, name),
     FOREIGN KEY (workspace_id, environment_id) REFERENCES environments(workspace_id, id)
 );
 CREATE INDEX idx_managed_hosts_resync ON managed_hosts(workspace_id, phase, updated_at, id);
 CREATE INDEX idx_managed_hosts_generation ON managed_hosts(workspace_id, generation, observed_generation);
+-- The periodic resync pages through every Host in (workspace_id, id) order;
+-- with this index each page is an index range read.
+CREATE INDEX idx_managed_hosts_keyset ON managed_hosts(workspace_id, id);
 
 CREATE TABLE operations (
     id TEXT PRIMARY KEY,
     workspace_id BIGINT NOT NULL REFERENCES workspaces(id),
-    kind TEXT NOT NULL CHECK (kind = 'Run'),
+    kind TEXT NOT NULL CHECK (kind IN ('Run', 'Capability')),
     state TEXT NOT NULL CHECK (state IN ('Queued', 'Running', 'CancelRequested', 'Succeeded', 'PartiallySucceeded', 'Failed', 'Cancelled', 'TimedOut', 'Interrupted')),
     revision BIGINT NOT NULL CHECK (revision > 0),
     actor_user_id BIGINT NOT NULL DEFAULT 0,
@@ -143,13 +151,19 @@ CREATE TABLE operation_targets (
     display_name VARCHAR(255) NOT NULL,
     access_profile_id TEXT NOT NULL DEFAULT '',
     access_profile_revision BIGINT NOT NULL DEFAULT 0,
-    state TEXT NOT NULL CHECK (state IN ('Pending', 'Running', 'Succeeded', 'Failed', 'TimedOut', 'Cancelled', 'Interrupted')),
+    state TEXT NOT NULL CHECK (state IN ('Pending', 'Running', 'Succeeded', 'Failed', 'TimedOut', 'Cancelled', 'Interrupted', 'Lost')),
     exit_code INTEGER,
     output TEXT NOT NULL DEFAULT '',
     error_class TEXT NOT NULL DEFAULT '',
+    -- Detached execution: the launch handle (plain JSON: mode, unit, pid, state
+    -- root, endpoint, times) and the live progress while running (encrypted
+    -- like target output).
+    launch TEXT NOT NULL DEFAULT '',
+    live TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (operation_id, host_id)
 );
 CREATE INDEX idx_operation_targets_host ON operation_targets(host_id, operation_id);
+CREATE INDEX idx_operation_targets_detached ON operation_targets(state, operation_id) WHERE launch <> '';
 
 -- Control loop: outbox, deliveries and leases.
 CREATE TABLE outbox_events (
@@ -345,3 +359,116 @@ CREATE TABLE agents (
     revoked_at TEXT
 );
 CREATE INDEX idx_agents_workspace ON agents(workspace_id, id);
+
+-- Owner-issued, single-use agent enrolment tokens (AUDIT M-4). Only the
+-- SHA-256 of the secret is stored. A token is consumed in the same
+-- transaction that registers the agent.
+CREATE TABLE agent_enrollment_tokens (
+    id TEXT PRIMARY KEY,
+    workspace_id BIGINT NOT NULL REFERENCES workspaces(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    hostname TEXT,
+    created_by BIGINT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    used_request_id TEXT,
+    used_by_agent TEXT,
+    revoked_at TEXT,
+    -- A per-host enrolment token binds the agent that uses it to that host.
+    host_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_agent_enrollment_tokens_workspace ON agent_enrollment_tokens(workspace_id, created_at);
+
+-- Server-side login sessions (AUDIT S-08). The session JWT carries the row's
+-- id; a request is accepted only while the row is active. Times are Unix
+-- nanoseconds, so comparisons are exact (0 = never revoked).
+CREATE TABLE user_sessions (
+    id TEXT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    workspace_id BIGINT NOT NULL,
+    created_at_ns BIGINT NOT NULL,
+    expires_at_ns BIGINT NOT NULL,
+    revoked_at_ns BIGINT NOT NULL DEFAULT 0,
+    revoke_reason TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '',
+    client_ip TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_user_sessions_user ON user_sessions(user_id, revoked_at_ns, expires_at_ns);
+
+-- Failed logins per account and per client network (AUDIT S-09), shared by
+-- every replica. scope is 'account' or 'network'. Times are Unix nanoseconds.
+CREATE TABLE login_failures (
+    scope TEXT NOT NULL CHECK (scope IN ('account', 'network')),
+    subject TEXT NOT NULL,
+    failures INTEGER NOT NULL,
+    window_started_at_ns BIGINT NOT NULL,
+    blocked_until_ns BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, subject)
+);
+
+-- Controller signing keys for the agent gateway (AUDIT M-3, Phase 16). The
+-- private seed is a Secret Store secret (secret_id, secret_version); this
+-- table holds only public data and the rotation state. At most one key is
+-- 'active' (signs) and at most one is 'next' (announced to agents).
+-- Times are Unix nanoseconds.
+CREATE TABLE agent_signing_keys (
+    id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('next', 'active', 'retired')),
+    public_key TEXT NOT NULL UNIQUE,
+    secret_id TEXT NOT NULL,
+    secret_version INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('generated', 'imported')),
+    created_by INTEGER NOT NULL DEFAULT 0,
+    created_at_ns BIGINT NOT NULL,
+    activated_at_ns BIGINT NOT NULL DEFAULT 0,
+    retired_at_ns BIGINT NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX agent_signing_keys_one_active ON agent_signing_keys (state) WHERE state = 'active';
+CREATE UNIQUE INDEX agent_signing_keys_one_next ON agent_signing_keys (state) WHERE state = 'next';
+
+-- Agent capability Operations (ADR-057).
+-- Which agent serves which managed host (one each way).
+CREATE TABLE agent_host_bindings (
+    host_id TEXT PRIMARY KEY REFERENCES managed_hosts(id) ON DELETE CASCADE,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    agent_id TEXT NOT NULL UNIQUE REFERENCES agents(id),
+    token_id TEXT NOT NULL,
+    bound_at_ns BIGINT NOT NULL
+);
+
+-- Commands to agents, written with the Operation's targets and published by
+-- the relay (PubAck-gated, Nats-Msg-Id = command_id). Times are Unix ns.
+CREATE TABLE operation_agent_commands (
+    command_id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    host_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_operation_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('operation.request', 'operation.cancel', 'result.ack')),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'published', 'expired')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at_ns BIGINT NOT NULL,
+    created_at_ns BIGINT NOT NULL,
+    expires_at_ns BIGINT NOT NULL,
+    -- When a target with no terminal result becomes Lost (request rows only).
+    result_due_at_ns BIGINT NOT NULL DEFAULT 0,
+    published_at_ns BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_operation_agent_commands_due ON operation_agent_commands(state, next_attempt_at_ns);
+CREATE INDEX idx_operation_agent_commands_target ON operation_agent_commands(operation_id, host_id);
+CREATE INDEX idx_operation_agent_commands_agent_op ON operation_agent_commands(agent_operation_id);
+
+-- Host labels as rows, so label selectors run in the database with an index
+-- instead of a bounded scan in Go (AUDIT A-12). managed_hosts.labels stays the
+-- source the API returns; this table mirrors it and is rewritten with it in
+-- the same transaction.
+CREATE TABLE managed_host_labels (
+    host_id TEXT NOT NULL REFERENCES managed_hosts(id) ON DELETE CASCADE,
+    workspace_id BIGINT NOT NULL,
+    label_key TEXT NOT NULL,
+    label_value TEXT NOT NULL,
+    PRIMARY KEY (host_id, label_key)
+);
+CREATE INDEX idx_managed_host_labels_lookup ON managed_host_labels(workspace_id, label_key, label_value, host_id);

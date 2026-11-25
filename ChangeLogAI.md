@@ -1,5 +1,16 @@
 # ChangeLogAI
 
+## 2026-11-25 — Migrations merged into one baseline (before the first release; branch audit/baseline)
+
+- **Schema:** migrations `000002`-`000010` (agent enrolment tokens, host key observations, detached targets, user sessions, login failures, agent signing keys, capability Operations, host label index, host keyset index) are folded into `000001_baseline.up.sql` for SQLite and PostgreSQL. Columns and constraints that were `ALTER`ed in are now part of their `CREATE TABLE`; the SQLite table rebuilds and the label backfill are gone (a fresh database has nothing to backfill).
+- **Breaking for development databases:** a database that recorded versions 2-10 is refused with `ErrIncompatibleSchema` and must be recreated (delete the SQLite file; drop and recreate the PostgreSQL database). From the first release (0.0.1) on, schema changes are additive migrations. `docs/operations.md` "Upgrades and schema" says so.
+- **Tests:** the two upgrade-path tests (`migration8_test.go`, the migration 9 backfill test) are removed, since the migrations they upgraded through no longer exist. Their lasting checks are kept: `TestSQLiteBaselineOperations` (Capability kind and `Lost` state accepted, deleting an Operation cascades to its targets) and the existing label-selector contract test. The idempotence test now expects one applied migration. Comments naming old migration numbers were updated.
+- **Verification that nothing changed in the schema:**
+  - PostgreSQL: the old chain and the new baseline, built in two scratch databases, give identical columns, indexes and constraints (411 rows compared);
+  - SQLite: identical tables (columns, foreign keys), indexes and CHECK clauses;
+  - column order inside a table was not compared on PostgreSQL.
+- **Checks run:** `go test ./...` with PostgreSQL required: pass; `golangci-lint run ./...`: 0 issues.
+
 ## 2026-11-25 — Release channels: alpha and beta pre-releases (CI; branch audit/ci)
 
 - **First version:** `initial-version` is `0.0.1` and the manifests start empty, so the first tags are `v0.0.1-alpha.1`, `v0.0.1-beta.1` and `v0.0.1`. Unverified until Release Please runs.
