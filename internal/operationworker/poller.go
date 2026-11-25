@@ -3,6 +3,8 @@ package operationworker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -149,8 +151,27 @@ func (p *poller) tick(ctx context.Context, slots chan struct{}, wg *sync.WaitGro
 			defer wg.Done()
 			defer func() { <-slots }()
 			defer func() { p.mu.Lock(); delete(p.inFlight, host); p.mu.Unlock() }()
+			defer p.isolatePollPanic(host, targets)
 			p.pollHost(ctx, host, targets)
 		}(host, groups[host])
+	}
+}
+
+// isolatePollPanic keeps a panic while polling one host from ending the
+// process. The targets are polled again at their normal interval (not on the
+// next tick), and a host that keeps panicking shows in the log and the
+// panics metric; its targets end through their own deadline.
+func (p *poller) isolatePollPanic(host hostKey, targets []resource.DetachedTarget) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	p.w.metrics.panics.Inc()
+	p.w.deps.Logger.Error("detached poll panicked", "host_id", host.host, "targets", len(targets),
+		"panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+	now := time.Now()
+	for _, target := range targets {
+		p.schedule(target, now, false)
 	}
 }
 
@@ -243,6 +264,9 @@ func (p *poller) pollBatch(ctx context.Context, hk hostKey, profileID resource.I
 	}
 	if pollErr != nil {
 		p.w.metrics.polls.WithLabelValues("unreachable").Inc()
+		// A changed host key looks like an unreachable host from here; have
+		// the Control Manager look at the Host (AUDIT G-13C-01).
+		p.w.recheckAfterHostKeyFailure(ctx, hk.workspace, hk.host, pollErr)
 	} else {
 		p.w.metrics.polls.WithLabelValues("ok").Inc()
 	}

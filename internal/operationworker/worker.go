@@ -371,6 +371,23 @@ func (w *Worker) Cancel(ctx context.Context, workspace int, id resource.ID) (*re
 	return op, nil
 }
 
+// isolateTargetPanic is deferred first in a goroutine that runs one target
+// (an attached run or a detached launch). A panic there (a bug in a connector
+// or a library) would otherwise end the whole process, since safeExecute only
+// covers the goroutine of the Operation itself. The target fails as
+// worker_panic and is never retried: the command may already have run. The
+// siblings and the Operation carry on.
+func (w *Worker) isolateTargetPanic(ctx context.Context, key resource.OperationKey, hostID resource.ID) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	w.metrics.panics.Inc()
+	w.deps.Logger.Error("Operation target panicked", "operation_id", key.ID, "host_id", hostID,
+		"panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+	w.completeTarget(context.WithoutCancel(ctx), key, hostID, resource.TargetFailed, &resource.TargetResult{ErrorClass: "worker_panic"})
+}
+
 // safeExecute isolates a panic in one Operation (AUDIT Q-04): it is logged
 // with its stack, the Operation is finished as Interrupted with reason
 // worker_panic (like a crash during execution: a command may already have
@@ -516,6 +533,7 @@ func (w *Worker) runAttached(ctx context.Context, key resource.OperationKey, op 
 		go func(targetSpec resource.OperationTargetSpec) {
 			defer wg.Done()
 			defer func() { <-slots }()
+			defer w.isolateTargetPanic(ctx, key, targetSpec.HostID)
 			w.runAttachedTarget(ctx, key, op, targetSpec)
 		}(targetSpec)
 	}

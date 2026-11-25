@@ -35,6 +35,8 @@ func (scriptedConnector) Execute(ctx context.Context, host *resource.Host, _ *re
 		return hostaccess.Result{Stderr: "boom", ExitCode: 2}, nil
 	case strings.HasPrefix(host.Metadata.Name, "broken"):
 		return hostaccess.Result{}, errors.New("connection refused")
+	case strings.HasPrefix(host.Metadata.Name, "panicky"):
+		panic("connector bug")
 	case strings.HasPrefix(host.Metadata.Name, "rekeyed"):
 		return hostaccess.Result{}, hostaccess.ErrHostKey
 	default:
@@ -238,5 +240,27 @@ func TestHostKeyFailureQueuesAHostRecheck(t *testing.T) {
 	defer recorder.mu.Unlock()
 	if len(recorder.calls) != 1 || recorder.calls[0] != rekeyed+" host-key-rejected" {
 		t.Fatalf("rechecks = %v, want one for %s", recorder.calls, rekeyed)
+	}
+}
+
+// A panic while one target runs (a bug in a connector or a library) must not
+// take the process down: the target fails as worker_panic, its sibling is
+// unaffected and the Operation finishes (AUDIT Q-04 covered the Operation's
+// own goroutine, not the ones that run its targets).
+func TestPanicInATargetIsIsolated(t *testing.T) {
+	e := newEnv(t)
+	op := e.submit(30, "panicky-1", "ok-1")
+	_, stop := e.run()
+	defer stop()
+	done := e.await(op.ID, resource.OperationPartiallySucceeded)
+	states := map[string]*resource.OperationTarget{}
+	for i := range done.Status.Targets {
+		states[done.Status.Targets[i].Spec.DisplayName] = &done.Status.Targets[i]
+	}
+	if target := states["panicky-1"]; target == nil || target.State != resource.TargetFailed || target.Result == nil || target.Result.ErrorClass != "worker_panic" {
+		t.Fatalf("panicking target = %+v", target)
+	}
+	if target := states["ok-1"]; target == nil || target.State != resource.TargetSucceeded {
+		t.Fatalf("sibling target = %+v", target)
 	}
 }

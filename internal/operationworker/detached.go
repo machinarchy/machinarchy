@@ -67,6 +67,7 @@ func (w *Worker) launchDetached(ctx context.Context, key resource.OperationKey, 
 		go func(spec resource.OperationTargetSpec) {
 			defer wg.Done()
 			defer func() { <-slots }()
+			defer w.isolateTargetPanic(ctx, key, spec.HostID)
 			w.launchTarget(ctx, connector, key, op, spec, 1)
 		}(target.Spec)
 	}

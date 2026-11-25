@@ -28,12 +28,17 @@ type fakeAgents struct {
 	lifetime time.Duration
 	failing  int  // publishes still to refuse
 	down     bool // refuse every publish
+	panics   int  // publishes that panic first (a gateway bug)
 	commands []agentv1.Command
 }
 
 func (f *fakeAgents) PublishCommand(_ context.Context, cmd agentv1.Command) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.panics > 0 {
+		f.panics--
+		panic("gateway bug")
+	}
 	if f.down || f.failing > 0 {
 		f.failing--
 		return errors.New("jetstream unavailable")
@@ -454,5 +459,18 @@ func TestCapabilityTargetsThatCannotBeDispatchedFail(t *testing.T) {
 	}
 	if got := len(e.agents.published(agentv1.CommandOperationRequest)); got != 0 {
 		t.Fatalf("published %d requests for undispatchable targets", got)
+	}
+}
+
+// A panic in the relay (here, the gateway's publish) is isolated: the next
+// tick publishes the command.
+func TestCapabilityRelaySurvivesAPanic(t *testing.T) {
+	e := newCapabilityEnv(t)
+	e.agents.panics = 2
+	host := e.host("web-1", "agent-1")
+	e.submit(60, host)
+	e.start()
+	if got := e.waitRequests(1); len(got) != 1 {
+		t.Fatalf("requests = %v", got)
 	}
 }

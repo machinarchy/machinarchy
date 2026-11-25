@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -659,5 +660,89 @@ func TestDetachedHostKeyFailureQueuesAHostRecheck(t *testing.T) {
 	defer recorder.mu.Unlock()
 	if len(recorder.calls) != 1 || recorder.calls[0] != string(host.Metadata.ID)+" host-key-rejected" {
 		t.Fatalf("rechecks = %v", recorder.calls)
+	}
+}
+
+// panickingRunner panics in the launch session, or in the first status
+// polls, the way a bug in a connector or library would.
+type panickingRunner struct {
+	*hostaccess.SSHConnector
+	onLaunch bool
+	polls    atomic.Int32
+}
+
+func (c *panickingRunner) RunRunner(ctx context.Context, host *resource.Host, profile *resource.AccessProfileRevision, operationID, command string) (string, error) {
+	switch {
+	case c.onLaunch && strings.Contains(command, " 'launch' "):
+		panic("launch bug")
+	case !c.onLaunch && strings.Contains(command, " 'status' ") && c.polls.Add(1) <= 2:
+		panic("poll bug")
+	}
+	return c.SSHConnector.RunRunner(ctx, host, profile, operationID, command)
+}
+
+// A panic while launching or polling must not end the process: the launch
+// fails as worker_panic; polling carries on and the command still finishes.
+func TestDetachedPanicsAreIsolated(t *testing.T) {
+	t.Parallel()
+	t.Run("launch", func(t *testing.T) {
+		t.Parallel()
+		e := newDetachedEnv(t)
+		e.start(&panickingRunner{SSHConnector: e.connector.(*hostaccess.SSHConnector), onLaunch: true})
+		id := e.submit(e.hosts(1), 600, 1, "true")
+		op := e.waitTerminal(id, 90*time.Second)
+		if target := op.Status.Targets[0]; target.State != resource.TargetFailed || target.Result.ErrorClass != "worker_panic" {
+			t.Fatalf("target = %s %+v", target.State, target.Result)
+		}
+	})
+	t.Run("poll", func(t *testing.T) {
+		t.Parallel()
+		e := newDetachedEnv(t)
+		connector := &panickingRunner{SSHConnector: e.connector.(*hostaccess.SSHConnector)}
+		e.start(connector)
+		id := e.submit(e.hosts(1), 600, 1, "true")
+		op := e.waitTerminal(id, 90*time.Second)
+		if target := op.Status.Targets[0]; target.State != resource.TargetSucceeded {
+			t.Fatalf("target = %s %+v", target.State, target.Result)
+		}
+		if connector.polls.Load() < 3 {
+			t.Fatalf("polls = %d; the panicking polls were not retried", connector.polls.Load())
+		}
+	})
+}
+
+// statusRekeyedConnector launches normally, but every status poll fails on
+// the host's keys, as after the host was rebuilt.
+type statusRekeyedConnector struct{ *hostaccess.SSHConnector }
+
+func (c statusRekeyedConnector) RunRunner(ctx context.Context, host *resource.Host, profile *resource.AccessProfileRevision, operationID, command string) (string, error) {
+	if strings.Contains(command, " 'status' ") {
+		return "", hostaccess.ErrHostKey
+	}
+	return c.SSHConnector.RunRunner(ctx, host, profile, operationID, command)
+}
+
+// AUDIT G-13C-01: a host whose keys changed while a detached command runs is
+// noticed by the poller too, not only by launches.
+func TestDetachedPollHostKeyFailureQueuesAHostRecheck(t *testing.T) {
+	t.Parallel()
+	e := newDetachedEnv(t)
+	recorder := &recheckRecorder{}
+	e.rechecker = recorder
+	e.start(statusRekeyedConnector{SSHConnector: e.connector.(*hostaccess.SSHConnector)})
+	host := e.hosts(1)[0]
+	e.submit([]*resource.Host{host}, 600, 1, "true")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		recorder.mu.Lock()
+		calls := append([]string(nil), recorder.calls...)
+		recorder.mu.Unlock()
+		if len(calls) == 1 && calls[0] == string(host.Metadata.ID)+" host-key-rejected" {
+			return
+		}
+		if len(calls) > 1 || time.Now().After(deadline) {
+			t.Fatalf("rechecks = %v, want exactly one for %s", calls, host.Metadata.ID)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

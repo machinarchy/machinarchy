@@ -3,6 +3,8 @@ package operationworker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
@@ -167,9 +169,21 @@ func (w *Worker) runCapabilityRelay(ctx context.Context) {
 		case <-ticker.C:
 		case <-w.relayWake:
 		}
-		w.relayOnce(ctx)
-		w.settleOverdue(ctx)
+		w.relayTick(ctx)
 	}
+}
+
+// relayTick is one pass of the relay. A panic in it (the gateway, the store)
+// is logged and the next tick tries again, rather than ending the process.
+func (w *Worker) relayTick(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			w.metrics.panics.Inc()
+			w.deps.Logger.Error("capability relay panicked", "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		}
+	}()
+	w.relayOnce(ctx)
+	w.settleOverdue(ctx)
 }
 
 func (w *Worker) relayOnce(ctx context.Context) {
@@ -225,6 +239,10 @@ func (w *Worker) relayOnce(ctx context.Context) {
 func (w *Worker) settleOverdue(ctx context.Context) {
 	overdue, err := w.capabilities.ListOverdueCapabilityTargets(ctx, time.Now().UTC(), capabilityRelayBatch)
 	if err != nil {
+		if ctx.Err() == nil {
+			// Without this scan no target ever becomes Lost: say so.
+			w.deps.Logger.Warn("list overdue capability targets failed", "error", err)
+		}
 		return
 	}
 	for _, c := range overdue {

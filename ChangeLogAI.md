@@ -1,5 +1,19 @@
 # ChangeLogAI
 
+## 2026-11-25 — Operation worker review: panics no longer end the process (branch audit/operationworker)
+
+Reviewed `internal/operationworker` (worker, detached launcher, poller, capability relay).
+
+- **A panic in a target ended the whole process (High).** AUDIT Q-04 isolated a panic in the goroutine that runs an Operation (`safeExecute`), but the goroutines that run its targets had no recovery: the attached target (`runAttachedTarget`, one goroutine per target), the detached launch (`launchTarget`) and the per-host status poll. A bug in a connector or an SSH library, triggered by one odd host, would exit the API too in monolith mode. The test that reproduced it killed the test binary with `panic: connector bug`. Now:
+  - an attached run or a detached launch that panics fails its target as `worker_panic` (never retried: the command may have run), the sibling targets and the Operation carry on, and the panic is logged with its stack and counted in `panics_total`;
+  - a panic while polling a host is logged and counted; its targets are polled again at their normal interval, not on the next tick;
+  - a panic in one pass of the capability relay (the gateway's publish, the store) is logged and the next tick tries again.
+- **Host-key failures found while polling (G-13C-01, completed).** A detached command whose host changed keys while it ran failed every poll as "unreachable" without queueing a recheck. Poll failures on a host key now queue it (still at most once a minute per host).
+- **A silent failure.** When the scan for overdue capability targets failed, nothing was logged, so targets would never become Lost without a trace; it logs a warning now.
+- **Looked at, left as is:** a result from an agent other than the one a command went to is refused without acknowledgement, so a buggy agent would republish it; `markSettled` reads with an unbounded context; `recoverRunning` lists running Operations every 500 ms (cheap, bounded to 500).
+- **Tests (each failed or crashed before its fix):** attached target panic, detached launch panic, poll panic, relay panic, poll host-key recheck.
+- **Checks run:** `go test -race ./internal/operationworker/` three times: pass; `go test ./...` with PostgreSQL required: pass (44 packages) on the second run. The first full run had one failure, `TestTwoWorkersOnPostgresRunEachCommandOnce`, which hit its 130 s limit while the whole suite ran at once; it passes in 9 s alone and in 3 of 3 runs of the package, so it is load-sensitive (like the `runner` test noted earlier) and not caused by this change. `golangci-lint run ./...`: 0 issues. The HA harness was not run.
+
 ## 2026-11-25 — F14-01, F14-02, G-13C-01 (branch audit/small-fixes)
 
 - **F14-01, timestamps compared wrongly within a second.** `sqlx.Time` wrote RFC 3339 text without trailing zeros, so a whole second (`…:00Z`) sorted after the half second following it (`…:00.5Z`, since `Z` sorts after `.`). A SQL comparison such as `expires_at > now` was wrong for up to a second: an API token stayed valid up to 1 s past its expiry (224 ms in the regression test). Times are now fixed-width (`2006-01-02T15:04:05.000000000Z`); `ParseTime` still reads both forms. Tests: text order equals time order; a token that expired at a whole second is refused on both engines (it was accepted before the fix).
