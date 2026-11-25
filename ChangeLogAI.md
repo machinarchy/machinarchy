@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-25 — Go module bumps done by hand: pgx 5.13.0, nats.go 1.56.0, sqlite 1.63.0 (branch deps/go-modules)
+
+- `github.com/jackc/pgx/v5` 5.11.0 → 5.13.0 (with `puddle/v2` 2.2.2 → 2.2.3), `github.com/nats-io/nats.go` 1.55.0 → 1.56.0 (the agent repository is on the same version), `modernc.org/sqlite` 1.62.0 → 1.63.0; `go mod tidy` run after each.
+- **Why not Dependabot's own PRs:** their CI failed in `make tidy-check`: the `go.sum` update left the old pgx 5.11.0 and puddle 2.2.2 lines, which `go mod tidy` removes. Dependabot cannot run a full tidy while `go.mod` replaces the agent protocol module with the sibling folder `../machinarchy-agent/protocol` (AUDIT D-4); until that `replace` is gone, Go-module PRs from Dependabot will need the same hand fix.
+- **Checks run:** `go mod verify` and `go mod tidy -diff` (clean), `go build ./...`. **Not run:** the tests; CI runs them on the pull request. The sqlite and pgx bumps change drivers the store depends on, so a red `verify` job there is the thing to look at first.
+
 ## 2026-11-25 — First CI run: smoke test, a timing test, Node 24 actions (branch release/initial)
 
 - **The smoke test failed in CI** (`scripts/smoke.sh`, "secret and Access Profile": `JSONDecodeError`). The script parsed the output of `secret create` as JSON, but since the CLI work of G-13C-03 that command prints a line for people by default. The script passes `-o json` now (the owner approved editing the script), and starts `machinarchy-monolith` instead of the deprecated alias. `make smoke` passes locally.
