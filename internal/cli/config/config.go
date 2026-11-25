@@ -3,9 +3,9 @@
 //
 // The on-disk document is parsed directly as YAML so that context, cluster,
 // and user names are preserved exactly (Viper would case-fold map keys and
-// split them on dots). Viper is used only to resolve flag and environment
-// overrides with the documented precedence: flag, environment, config file,
-// default.
+// split them on dots). Global options resolve with one precedence, in
+// settings.go: flag, MACHINARCHY_<NAME> environment variable, the deprecated
+// MACHINARCHY_CLI_<NAME> variable, saved "defaults:", flag default.
 package config
 
 import (
@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,12 +39,6 @@ const (
 	// DefaultRequestTimeout bounds one API request when no timeout is set.
 	DefaultRequestTimeout = 30 * time.Second
 
-	envPrefix = "MACHINARCHY_CLI"
-
-	// flagYes is deliberately never bound to the environment or the config
-	// file: a confirmation bypass must be an explicit per-invocation choice.
-	flagYes = "yes"
-
 	setupHint = "Log in to create a context:\n" +
 		"  machinarchy login --server http://localhost:8080 --context local --username admin\n" +
 		"or, with an API token, set one up by hand:\n" +
@@ -64,6 +57,9 @@ type File struct {
 	Contexts       map[string]Context `yaml:"contexts"`
 	Clusters       map[string]Cluster `yaml:"clusters"`
 	Users          map[string]User    `yaml:"users"`
+	// Defaults are saved values for a few global options (see settings.go):
+	// they apply when neither a flag nor an environment variable is given.
+	Defaults map[string]string `yaml:"defaults,omitempty"`
 }
 
 // Context selects a cluster, credential, and optional Machinarchy environment.
@@ -135,55 +131,14 @@ func Load(path string, flags *pflag.FlagSet) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{path: resolvedPath, v: newSettings(flags), doc: doc, warnings: warnings}, nil
+	return &Store{path: resolvedPath, v: newSettings(flags, doc.Defaults), doc: doc, warnings: warnings}, nil
 }
 
 // LoadSettings binds only flags and environment variables and reads no file.
 // Commands that must work with a missing or damaged config file (help,
 // version, completion) use it so global flags still apply.
 func LoadSettings(flags *pflag.FlagSet) (*Store, error) {
-	return &Store{v: newSettings(flags), doc: newDocument()}, nil
-}
-
-// settings resolves a global setting with the precedence flag (when given on
-// the command line) > MACHINARCHY_CLI_<NAME> environment variable > flag
-// default. It replaces viper, which the CLI used only for this lookup (AUDIT
-// P-02); the config file is read separately by readDocument.
-type settings struct {
-	flags *pflag.FlagSet
-}
-
-func newSettings(flags *pflag.FlagSet) *settings { return &settings{flags: flags} }
-
-// envName maps a flag name to its variable, for example request-timeout to
-// MACHINARCHY_CLI_REQUEST_TIMEOUT.
-func envName(key string) string {
-	return envPrefix + "_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(key))
-}
-
-func (s *settings) GetString(key string) string {
-	var flag *pflag.Flag
-	if s != nil && s.flags != nil {
-		flag = s.flags.Lookup(key)
-	}
-	if flag != nil && flag.Changed {
-		return flag.Value.String()
-	}
-	// --yes is deliberately not settable through the environment.
-	if key != flagYes {
-		if value, ok := os.LookupEnv(envName(key)); ok {
-			return value
-		}
-	}
-	if flag != nil {
-		return flag.DefValue
-	}
-	return ""
-}
-
-func (s *settings) GetBool(key string) bool {
-	value, err := strconv.ParseBool(strings.TrimSpace(s.GetString(key)))
-	return err == nil && value
+	return &Store{v: newSettings(flags, nil), doc: newDocument()}, nil
 }
 
 func newDocument() File {
@@ -233,6 +188,10 @@ func readDocument(path string) (File, []string, error) {
 			return File{}, nil, clierr.Wrap(clierr.ExitUsage,
 				fmt.Errorf("parse CLI config %q: %w", path, err), fileHint)
 		}
+	}
+
+	if err := validateDefaults(doc.Defaults); err != nil {
+		return File{}, nil, err
 	}
 
 	if doc.APIVersion == "" {
@@ -325,7 +284,7 @@ func (s *Store) Resolve() (Target, error) {
 	}
 	if token == "" {
 		return Target{}, clierr.Wrap(clierr.ExitUsage,
-			errors.New("no API token configured; set credentials or MACHINARCHY_CLI_TOKEN"),
+			errors.New("no API token configured; set credentials or MACHINARCHY_TOKEN"),
 			"Store a token with: printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin")
 	}
 	if err := ValidateToken(token); err != nil {

@@ -53,6 +53,17 @@ func isolate(t *testing.T) {
 		"MACHINARCHY_CLI_NO_HEADERS",
 		"MACHINARCHY_CLI_NO_INPUT",
 		"MACHINARCHY_CLI_YES",
+		"MACHINARCHY_ENV",
+		"MACHINARCHY_OUTPUT",
+		"MACHINARCHY_VERBOSE",
+		"MACHINARCHY_SERVER",
+		"MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT",
+		"MACHINARCHY_QUIET",
+		"MACHINARCHY_NO_HEADERS",
+		"MACHINARCHY_NO_INPUT",
+		"MACHINARCHY_PLAIN",
+		"MACHINARCHY_NO_DEPRECATION_WARNINGS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -374,10 +385,10 @@ func TestGlobalFlagsAndEnvironmentReachCommands(t *testing.T) {
 
 	t.Run("environment variables", func(t *testing.T) {
 		isolate(t)
-		t.Setenv("MACHINARCHY_CLI_OUTPUT", "yaml")
-		t.Setenv("MACHINARCHY_CLI_QUIET", "true")
-		t.Setenv("MACHINARCHY_CLI_REQUEST_TIMEOUT", "2m")
-		t.Setenv("MACHINARCHY_CLI_ENV", "staging")
+		t.Setenv("MACHINARCHY_OUTPUT", "yaml")
+		t.Setenv("MACHINARCHY_QUIET", "true")
+		t.Setenv("MACHINARCHY_REQUEST_TIMEOUT", "2m")
+		t.Setenv("MACHINARCHY_ENV", "staging")
 
 		var out, errOut bytes.Buffer
 		options := testOptions()
@@ -392,7 +403,7 @@ func TestGlobalFlagsAndEnvironmentReachCommands(t *testing.T) {
 
 	t.Run("flag beats environment", func(t *testing.T) {
 		isolate(t)
-		t.Setenv("MACHINARCHY_CLI_OUTPUT", "yaml")
+		t.Setenv("MACHINARCHY_OUTPUT", "yaml")
 
 		var out, errOut bytes.Buffer
 		options := testOptions()

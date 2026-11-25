@@ -39,6 +39,9 @@ func isolate(t *testing.T) {
 		"MACHINARCHY_CLI_VERBOSE", "MACHINARCHY_CLI_SERVER", "MACHINARCHY_CLI_TOKEN",
 		"MACHINARCHY_CLI_REQUEST_TIMEOUT", "MACHINARCHY_CLI_QUIET", "MACHINARCHY_CLI_NO_HEADERS",
 		"MACHINARCHY_CLI_NO_INPUT", "MACHINARCHY_CLI_YES",
+		"MACHINARCHY_ENV", "MACHINARCHY_OUTPUT", "MACHINARCHY_VERBOSE", "MACHINARCHY_SERVER", "MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT", "MACHINARCHY_QUIET", "MACHINARCHY_NO_HEADERS", "MACHINARCHY_NO_INPUT",
+		"MACHINARCHY_PLAIN", "MACHINARCHY_NO_DEPRECATION_WARNINGS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -949,8 +952,8 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 	t.Run("the server URL and token can come from the environment", func(t *testing.T) {
 		server := newAPIServer(t, jsonReply(200, `{"revision":1}`))
 		isolate(t)
-		t.Setenv("MACHINARCHY_CLI_SERVER", server.URL)
-		t.Setenv("MACHINARCHY_CLI_TOKEN", "env-token")
+		t.Setenv("MACHINARCHY_SERVER", server.URL)
+		t.Setenv("MACHINARCHY_TOKEN", "env-token")
 
 		var out, errOut bytes.Buffer
 		code := cli.Run(context.Background(), cli.Options{

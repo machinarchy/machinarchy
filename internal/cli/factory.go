@@ -8,15 +8,19 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
+	"github.com/machinarchy/machinarchy/internal/cli/msg"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
+	"github.com/machinarchy/machinarchy/internal/cli/ui"
 )
 
 // IOStreams keeps command input, output, and diagnostics independently injectable.
@@ -36,7 +40,14 @@ type Factory struct {
 	Logger        *slog.Logger
 	ClientBuilder APIClientBuilder
 
+	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
+	// locale, COLUMNS). Nil selects os.Getenv; tests replace it.
+	Getenv func(string) string
+
 	config *config.Store
+
+	// style is how output to the diagnostics stream looks; set by install.
+	style ui.Style
 
 	// yes is read from the --yes flag only, never from the environment or the
 	// config file, so a confirmation bypass is always an explicit choice.
@@ -100,6 +111,17 @@ func (f *Factory) install(store *config.Store, flags *pflag.FlagSet) error {
 	f.Logger = slog.New(slog.NewJSONHandler(f.Streams.ErrOut,
 		&slog.HandlerOptions{Level: level}))
 
+	f.style = ui.DetectStyle(f.getenv, f.Streams.ErrOut, store.Plain())
+	if !deprecationWarningsOff(f.getenv) {
+		for _, legacy := range store.LegacyEnv() {
+			text := ui.Render(msg.Get("deprecate.env_var").With(msg.Vars{
+				"old": legacy.Old, "new": legacy.New, "version": "the next release"}), f.style)
+			if _, err := fmt.Fprint(f.Streams.ErrOut, text); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, warning := range store.Warnings() {
 		if _, err := fmt.Fprintf(f.Streams.ErrOut, "Warning: %s\n", warning); err != nil {
 			return err
@@ -107,6 +129,83 @@ func (f *Factory) install(store *config.Store, flags *pflag.FlagSet) error {
 	}
 
 	return nil
+}
+
+func (f *Factory) getenv(key string) string {
+	if f.Getenv != nil {
+		return f.Getenv(key)
+	}
+
+	return os.Getenv(key)
+}
+
+// deprecationWarningsOff reports MACHINARCHY_NO_DEPRECATION_WARNINGS=1, the
+// stop-gap for scripts that cannot change yet.
+func deprecationWarningsOff(getenv func(string) string) bool {
+	value, err := strconv.ParseBool(strings.TrimSpace(getenv("MACHINARCHY_NO_DEPRECATION_WARNINGS")))
+
+	return err == nil && value
+}
+
+// Style returns how output to the diagnostics stream (stderr) looks: symbols,
+// colour and plain mode. Before the configuration is loaded it is the style
+// the environment alone gives.
+func (f *Factory) Style() ui.Style {
+	if f == nil {
+		return ui.Style{}
+	}
+
+	return f.style
+}
+
+// StyleFor returns the style for output written to w, which may be stdout.
+func (f *Factory) StyleFor(w io.Writer) ui.Style {
+	return ui.DetectStyle(f.getenv, w, f.Plain())
+}
+
+// Width returns the line width available on w.
+func (f *Factory) Width(w io.Writer) int {
+	return ui.Width(f.getenv, w)
+}
+
+// Plain reports whether plain output was asked for (--plain,
+// MACHINARCHY_PLAIN, or a saved default).
+func (f *Factory) Plain() bool {
+	return f != nil && f.config.Plain()
+}
+
+// DryRun reports whether --dry-run was given.
+func (f *Factory) DryRun() bool {
+	return f != nil && f.config.DryRun()
+}
+
+// ConfirmName returns the value of --confirm.
+func (f *Factory) ConfirmName() string {
+	if f == nil {
+		return ""
+	}
+
+	return f.config.ConfirmName()
+}
+
+// ConfirmEnv returns the value of --confirm-env.
+func (f *Factory) ConfirmEnv() string {
+	if f == nil {
+		return ""
+	}
+
+	return f.config.ConfirmEnv()
+}
+
+// checkDryRun refuses --dry-run for a command that does not support it, so the
+// flag can never be silently ignored while the command changes something.
+func (f *Factory) checkDryRun(command *cobra.Command) error {
+	if !f.DryRun() || command.Annotations[AnnotationDryRun] == "true" {
+		return nil
+	}
+
+	return clierr.Newf(clierr.ExitUsage, "Run it without --dry-run, or read the command's help.",
+		"%q does not support --dry-run yet, so it would make the change for real", command.CommandPath())
 }
 
 // Config returns the loaded context configuration.

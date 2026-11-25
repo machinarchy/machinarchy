@@ -14,6 +14,11 @@ import (
 // still apply. Cobra's built-in help and completion commands are exempt too.
 const AnnotationSkipConfig = "machinarchy.io/skip-config"
 
+// AnnotationDryRun marks a command that honours --dry-run. A command without
+// it refuses the flag instead of ignoring it, so "--dry-run" can never run
+// something for real.
+const AnnotationDryRun = "machinarchy.io/dry-run"
+
 // CommandBuilder creates a command with the shared CLI dependencies.
 type CommandBuilder func(*Factory) *cobra.Command
 
@@ -63,9 +68,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	root.SetOut(streams.Out)
 	root.SetErr(streams.ErrOut)
 
-	// Global flags. Every flag except --config and --yes is bound to Viper by
-	// name, giving the precedence flag > MACHINARCHY_CLI_<NAME> > config
-	// file > default.
+	// Global flags. Every flag except --config, --yes, --confirm, --confirm-env
+	// and --dry-run resolves with the precedence flag > MACHINARCHY_<NAME> >
+	// MACHINARCHY_CLI_<NAME> (deprecated) > saved defaults > default
+	// (config/settings.go). The four exceptions are flag-only on purpose.
 	flags := root.PersistentFlags()
 	flags.StringVar(&configPath, "config", "", "CLI config file (default: user config directory)")
 	flags.String("context", "", "Context to use for this command")
@@ -78,6 +84,16 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	flags.Bool("no-headers", false, "Omit table headers")
 	flags.Bool("no-input", false, "Never prompt; fail if input or confirmation is required")
 	flags.BoolP("yes", "y", false, "Confirm destructive or sensitive actions without prompting")
+	flags.Bool("plain", false, "Plain output: no colour, symbols or flavour text (MACHINARCHY_PLAIN=1)")
+
+	// Answers to confirmations and the dry run belong to commands that do not
+	// exist yet; they are accepted and hidden so scripts can be written ahead.
+	flags.Bool("dry-run", false, "Show what would happen and change nothing")
+	flags.String("confirm", "", "Answer a type-the-name confirmation without a prompt")
+	flags.String("confirm-env", "", "Answer a protected-environment confirmation without a prompt")
+	for _, name := range []string{"dry-run", "confirm", "confirm-env"} {
+		_ = flags.MarkHidden(name)
+	}
 
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		// Cobra validates the command line before this hook runs, so reaching
@@ -85,11 +101,17 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 		// is a runtime failure, not a usage error.
 		factory.started = true
 
+		var err error
 		if skipsConfig(command) {
-			return factory.LoadSettings(command.Root().PersistentFlags())
+			err = factory.LoadSettings(command.Root().PersistentFlags())
+		} else {
+			err = factory.LoadConfig(configPath, command.Root().PersistentFlags())
+		}
+		if err != nil {
+			return err
 		}
 
-		return factory.LoadConfig(configPath, command.Root().PersistentFlags())
+		return factory.checkDryRun(command)
 	}
 
 	registered := map[string]string{"help": "cobra", "completion": "cobra"}
