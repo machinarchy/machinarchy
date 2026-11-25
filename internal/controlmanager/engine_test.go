@@ -1,10 +1,13 @@
 package controlmanager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -419,5 +422,76 @@ func TestEngineFansOutAccessProfileNotificationToHosts(t *testing.T) {
 	cancel()
 	if err := <-finished; err != nil {
 		t.Fatal(err)
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buf.String() }
+
+// The startup scan finishes even when a listed Host's kind has no controller
+// (the cursor must advance past every Host, not only the ones it queues).
+func TestResyncAdvancesPastHostsWithoutAController(t *testing.T) {
+	first, _ := resource.NewResourceID()
+	second, _ := resource.NewResourceID()
+	keys := &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: first}, {WorkspaceID: 1, ID: second}}}
+	engine := newTestEngine(t, keys, &fakeOutbox{}, 1)
+	engine.cfg.PageSize = 1
+	engine.controllers = map[ResourceKind]Controller{"other": controllerFunc{name: "other", kind: "other",
+		run: func(context.Context, ResourceKey) (ReconcileResult, error) { return ReconcileResult{}, nil }}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- engine.Start(ctx) }()
+	waitReady := time.After(3 * time.Second)
+	for engine.CheckReadiness(ctx) != nil {
+		select {
+		case <-waitReady:
+			cancel()
+			t.Fatal("the startup scan never finished: it kept listing the same page")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+// A panic in a controller is recovered, and the log says what panicked and
+// where, so the cause can be found from the request-less background log.
+func TestControllerPanicIsLoggedWithItsCause(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	engine := newTestEngine(t, &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id}}}, &fakeOutbox{}, 1)
+	logs := &lockedBuffer{}
+	engine.deps.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	var calls atomic.Int32
+	engine.controllers[HostResourceKind] = controllerFunc{name: "panicky", kind: HostResourceKind, run: func(context.Context, ResourceKey) (ReconcileResult, error) {
+		calls.Add(1)
+		panic("the unique panic value")
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- engine.Start(ctx) }()
+	deadline := time.After(3 * time.Second)
+	for calls.Load() == 0 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("the controller never ran")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+	if out := logs.String(); !strings.Contains(out, "the unique panic value") || !strings.Contains(out, "goroutine") {
+		t.Fatalf("log lacks the panic value or stack:\n%s", out)
 	}
 }

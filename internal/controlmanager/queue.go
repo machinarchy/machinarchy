@@ -26,6 +26,12 @@ const (
 	QueueShuttingDown
 )
 
+// ResourceQueue is a de-duplicating work queue of resource keys.
+//
+// capacity bounds the keys that are ready to run. Keys waiting for a delayed
+// retry are not counted: each is a distinct resource that already exists, and
+// counting them would let a fleet with many not-Ready hosts block every new
+// event (and the startup scan) once the retries alone filled the queue.
 type ResourceQueue struct {
 	mu          sync.Mutex
 	capacity    int
@@ -88,7 +94,7 @@ func (q *ResourceQueue) addLocked(key ResourceKey) Admission {
 		}
 		return QueueCoalesced
 	}
-	if !q.processing[key] && len(q.queue)+len(q.delayed) >= q.capacity {
+	if !q.processing[key] && len(q.queue) >= q.capacity {
 		return QueueBackpressured
 	}
 	q.dirty[key] = true
@@ -120,9 +126,8 @@ func (q *ResourceQueue) AddAfter(key ResourceKey, delay time.Duration) Admission
 		q.signal()
 		return QueueAccepted
 	}
-	if len(q.queue)+len(q.delayed) >= q.capacity {
-		return QueueBackpressured
-	}
+	// A delayed retry is never refused: dropping it would leave the resource
+	// unchecked until the next periodic scan.
 	q.dirty[key] = true
 	q.delayed[key] = time.Now().Add(delay)
 	q.signal()
@@ -198,9 +203,16 @@ func (q *ResourceQueue) Done(key ResourceKey) {
 	q.mu.Lock()
 	delete(q.processing, key)
 	if q.dirty[key] {
-		_, delayed := q.delayed[key]
-		if !delayed && (q.shutdown || len(q.queue) < q.capacity) {
-			q.queue = append(q.queue, key)
+		if _, delayed := q.delayed[key]; !delayed {
+			if q.shutdown || len(q.queue) < q.capacity {
+				q.queue = append(q.queue, key)
+			} else {
+				// The queue is full: keep the key as an immediate delayed
+				// entry, which the scheduler moves into the queue as soon as
+				// there is room. Leaving it dirty but in neither place would
+				// make every later Add coalesce into it, and never run.
+				q.delayed[key] = time.Now()
+			}
 		}
 	}
 	q.mu.Unlock()
@@ -223,11 +235,11 @@ func (q *ResourceQueue) Shutdown() {
 	q.closeOnce.Do(func() {
 		q.mu.Lock()
 		q.shutdown = true
+		// Pending retries are dropped, not run: they exist only in memory and
+		// the next start scans every resource anyway.
 		for key := range q.delayed {
 			delete(q.delayed, key)
-			if !q.processing[key] && q.dirty[key] {
-				q.queue = append(q.queue, key)
-			}
+			delete(q.dirty, key)
 		}
 		q.mu.Unlock()
 		close(q.shutdownCh)

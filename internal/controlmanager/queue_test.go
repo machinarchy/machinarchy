@@ -167,3 +167,75 @@ func TestResourceQueueAddOverridesDelayedRetry(t *testing.T) {
 		t.Fatalf("queue length = %d", q.Len())
 	}
 }
+
+// Delayed retries (every host that is not Ready waits for its next check)
+// must not use the capacity of the queue of work that is ready to run, or a
+// fleet with more not-Ready hosts than the capacity can no longer admit new
+// events or finish its startup scan.
+func TestResourceQueueDelayedKeysDoNotUseTheCapacity(t *testing.T) {
+	q := NewResourceQueue(2, time.Millisecond, time.Second)
+	defer q.Shutdown()
+	for _, id := range []string{"a", "b", "c"} {
+		if got := q.AddAfter(ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: id}, time.Hour); got != QueueAccepted {
+			t.Fatalf("AddAfter %s = %v, want accepted", id, got)
+		}
+	}
+	if got := q.Add(ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: "new"}); got != QueueAccepted {
+		t.Fatalf("Add with 3 delayed keys and capacity 2 = %v, want accepted", got)
+	}
+}
+
+// A key that is added again while a worker processes it is reconciled again
+// afterwards, even if the queue is full at the moment the worker finishes.
+func TestResourceQueueRequeuesAfterDoneWhenFull(t *testing.T) {
+	q := NewResourceQueue(2, time.Millisecond, time.Second)
+	defer q.Shutdown()
+	key := func(id string) ResourceKey { return ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: id} }
+	q.Add(key("a"))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if got, ok := q.Get(ctx); !ok || got != key("a") {
+		t.Fatalf("Get = %+v, %v", got, ok)
+	}
+	if got := q.Add(key("a")); got != QueueAccepted { // a is processing: marked dirty
+		t.Fatalf("Add while processing = %v", got)
+	}
+	q.Add(key("b"))
+	q.Add(key("c")) // the queue is full now
+	q.Done(key("a"))
+	seen := map[string]bool{}
+	for range 3 {
+		got, ok := q.Get(ctx)
+		if !ok {
+			break
+		}
+		seen[got.ID] = true
+		q.Done(got)
+	}
+	if !seen["a"] || !seen["b"] || !seen["c"] {
+		t.Fatalf("keys reconciled = %v; a key added during processing was lost", seen)
+	}
+}
+
+// Stopping drops pending retries: they are in memory only, and the next
+// start scans everything. Running them at shutdown would only delay the stop.
+func TestResourceQueueShutdownDropsDelayedRetries(t *testing.T) {
+	q := NewResourceQueue(8, time.Millisecond, time.Second)
+	q.AddAfter(ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: "later"}, time.Hour)
+	q.Add(ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: "now"})
+	q.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var got []string
+	for {
+		key, ok := q.Get(ctx)
+		if !ok {
+			break
+		}
+		got = append(got, key.ID)
+		q.Done(key)
+	}
+	if len(got) != 1 || got[0] != "now" {
+		t.Fatalf("work after shutdown = %v, want only the ready key", got)
+	}
+}

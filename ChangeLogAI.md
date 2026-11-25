@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-25 — Control Manager review: queue and resync fixes (branch audit/controlmanager)
+
+Reviewed `internal/controlmanager` (engine, queue, host controller, metrics) and how bootstrap runs it. Five defects, each found by a failing test first:
+
+- **Delayed retries used the queue capacity (Medium).** `ResourceQueue` counted keys waiting for their next check (every not-Ready host waits `managedHostResyncSeconds`) against `capacity` (default 1024). A fleet with more not-Ready hosts than that could not admit new events: the startup scan waited on a full queue, so the Control Manager never became ready, and outbox events were retried again and again. The capacity now bounds only the keys ready to run; a delayed retry is never refused (before, a refused one was dropped silently and waited for the next scan).
+- **A key could be lost for good (Medium).** A key added while a worker processed it was marked dirty and queued when the worker finished, but only if the queue had room. When it was full the key stayed dirty and in neither place, so every later event for it was coalesced into nothing and the host was never reconciled again until a restart. It now goes to the scheduler as an immediate retry and runs when there is room.
+- **Shutdown ran every pending retry (Low).** `Shutdown` moved all delayed keys into the queue, so a stop with many not-Ready hosts started an SSH check for each of them and used the whole drain timeout. They are dropped now; the next start scans everything anyway.
+- **The scan could loop forever (Low).** The resync advanced its cursor only for hosts it queued, so a full page of hosts without a registered controller was listed again and again. It advances for every host.
+- **A panic left no trace (Low).** A controller panic was recovered into the error "controller panic" with no value and no stack. It is logged now (controller, resource, panic value, stack); the retry behaviour is the same.
+- **Looked at, left as is:** a lease contention is counted as a successful reconcile in `reconciles_total` (rare, because only one replica receives an event); `queue_depth` includes delayed keys; `Get` leaves a cosmetic `waiting` counter off by one when its context ends. The host controller, metrics and `cmd/controlmanager` were fine.
+- **Tests:** five new tests (queue capacity with delayed keys, requeue after Done on a full queue, shutdown with delayed keys, scan past hosts without a controller, panic log). Each failed before its fix.
+- **Checks run:** `go test -race` for the package, the new tests 15 times: pass; `go test ./...` with PostgreSQL required: pass (44 packages); `golangci-lint run ./...`: 0 issues. The HA harness was not run.
+
 ## 2026-11-25 — Restart-required runtime settings can be changed (F21-01; branch audit/restart-settings)
 
 - **Problem:** `PUT /runtime-config` answered 422 for any change to a restart-required setting (worker counts, resync interval, queue limits, SSH timeout and concurrency, Operation workers and timeout), and nothing else set them, so they stayed at their defaults.

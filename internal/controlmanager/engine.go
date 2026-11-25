@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -454,6 +455,7 @@ func (e *Engine) resync(ctx context.Context) error {
 		}
 		for _, host := range page {
 			key := ResourceKey{Kind: HostResourceKind, WorkspaceID: host.WorkspaceID, ID: string(host.ID)}
+			cursor.AfterWorkspaceID, cursor.AfterID = host.WorkspaceID, string(host.ID)
 			if _, ok := e.controllers[key.Kind]; !ok {
 				continue
 			}
@@ -471,7 +473,6 @@ func (e *Engine) resync(ctx context.Context) error {
 				case <-time.After(25 * time.Millisecond):
 				}
 			}
-			cursor.AfterWorkspaceID, cursor.AfterID = host.WorkspaceID, string(host.ID)
 		}
 		if len(page) < cursor.Limit {
 			return nil
@@ -608,6 +609,10 @@ func (e *Engine) reconcile(parent context.Context, controller Controller, key Re
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			// The cause and the stack go to the log; the retry path only
+			// sees a generic error.
+			e.deps.Logger.Error("controller panicked", "controller", controller.Name(), "kind", key.Kind,
+				"workspace_id", key.WorkspaceID, "resource_id", key.ID, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
 			retErr = errors.New("controller panic")
 		}
 	}()
