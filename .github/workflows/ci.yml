@@ -221,6 +221,9 @@ jobs:
     uses: ./.github/workflows/release.yml
     permissions:
       contents: read
+      # For the release binaries' provenance attestation (release.yml).
+      id-token: write
+      attestations: write
     secrets:
       # A PAT or GitHub App token, not GITHUB_TOKEN, so Release Please's
       # PR/tag events can trigger downstream workflows.

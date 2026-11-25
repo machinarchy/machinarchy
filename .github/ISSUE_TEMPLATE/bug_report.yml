@@ -11,14 +11,14 @@ body:
     id: description
     attributes:
       label: Description of the Bug
-      description: What is failing? (e.g., host enrollment drops, command execution timeouts)
+      description: What is failing? (e.g., host enrollment drops, command execution timeouts). Security vulnerabilities do not belong here; report them privately (see SECURITY.md).
     validations:
       required: true
   - type: input
     id: control-plane-version
     attributes:
       label: Control Plane Version / Commit Hash
-      placeholder: e.g., v0.1.0 or main@abc1234
+      placeholder: e.g., v0.0.1, v0.0.1-beta.1 (pre-releases are -alpha.N and -beta.N) or main@abc1234
     validations:
       required: true
   - type: dropdown

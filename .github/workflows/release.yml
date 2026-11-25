@@ -96,9 +96,14 @@ jobs:
         !inputs.dry_run &&
         needs.release.outputs.new_release_published == 'true'
       }}
-    # gh uses MY_GITHUB_TOKEN for release edits/uploads; checkout only needs read.
+    # gh uses MY_GITHUB_TOKEN for release edits/uploads; checkout only needs
+    # read. The attestation step signs with the job's OIDC token and stores
+    # the attestation, so it needs id-token and attestations write; the
+    # caller (ci.yml) must grant the same, a reusable workflow cannot exceed it.
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Validate release metadata
         env:
