@@ -305,7 +305,7 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 // queue, so the queued hosts come back through the periodic resync, which
 // the other replica must take over soon after the crashed one's lease
 // expires (AUDIT/20 F20-08). With the default 300 s interval that is about
-// 1.5 intervals; the interval cannot be shortened at runtime (F21-01).
+// 1.5 intervals. The scenario keeps the default interval; a shorter one needs a published revision and a restart.
 func sigkillDuringOutboxBurst(t *testing.T, topo *topology) {
 	burstWhileStopping(t, topo, "kburst", func() error { topo.cm[0].kill(); return nil }, 9*time.Minute)
 }

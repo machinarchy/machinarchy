@@ -33,7 +33,7 @@ On PostgreSQL, run two or more API replicas behind a load balancer and two or mo
 | PostgreSQL restarts | Readiness fails during the outage (the "readiness failing" alert) | Back as soon as the database accepts connections (seconds); running Operations finish |
 | One Control Manager loses NATS | Its readiness fails; agents keep working through the other gateways | It reconnects on its own |
 
-The resync interval is `controlManager.resyncSeconds` (default 300). It is a restart-required setting, and the runtime-configuration API refuses changes to those today (AUDIT/21 F21-01), so it stays at its default. The 2-minute Operation and host lease is fixed.
+The resync interval is `controlManager.resyncSeconds` (default 300). It is a restart-required setting: publish it through the runtime configuration and restart the Control Managers (see "Restart-required settings" below). The 2-minute Operation and host lease is fixed.
 
 ## Configuration
 
@@ -341,6 +341,20 @@ Machinarchy never contacts such a host over SSH. Enrolling or revoking its
 agent queues the host for reconciliation, so `Ready` follows within seconds.
 An agent losing its lease is noticed at the next host resync (5 minutes by
 default). Dispatch does not wait for `Ready`.
+
+### Restart-required settings
+
+Most runtime settings apply to every running process at once (SSH policy, allowed programs, log level, signup). These are read once at process start, so a change applies only after each process restarts:
+
+| Setting | Meaning |
+|---|---|
+| `controlManager.workers`, `controlManager.resyncSeconds` | Control Manager workers; full resync interval |
+| `workQueue.capacity`, `retryBaseSeconds`, `retryMaxSeconds`, `ratePerSecond` | Reconcile queue and its retry and rate limits |
+| `reconciliation.timeoutSeconds`, `managedHostResyncSeconds` | Reconcile budget; per-host resync interval |
+| `ssh.connectTimeoutSeconds`, `ssh.maxConcurrent` | SSH dial timeout; concurrent SSH sessions |
+| `operations.workers`, `operations.timeoutSeconds` | Operation workers and timeout |
+
+Publishing a revision that changes one of them succeeds: the revision is stored, the response lists the settings in `restartRequired`, and any hot-reloadable change in it applies at once. Restart the processes one at a time (a rolling restart keeps the service up). Until then `GET /api/v1/runtime-config/status` shows `restartPending: true` for every process that started with other values (`startedRevision` is the revision it read at startup), and the flag clears when the process has restarted or the settings are rolled back.
 
 ## Key management
 

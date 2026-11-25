@@ -101,22 +101,27 @@ func TestRuntimeConfigEndpoints(t *testing.T) {
 		{"publish", owner, http.MethodPut, "/api/v1/runtime-config", `{"expectedRevision":1,"config":` + signupOn + `,"changeNote":"on"}`, http.StatusCreated},
 		{"publish stale", owner, http.MethodPut, "/api/v1/runtime-config", `{"expectedRevision":1,"config":` + signupOn + `}`, http.StatusConflict},
 		{"publish restart field", owner, http.MethodPut, "/api/v1/runtime-config",
-			`{"expectedRevision":2,"config":` + configJSON(t, func(c *runtimeconfig.Config) { c.Features.SignupEnabled = true; c.Operations.Workers++ }) + `}`, 422},
+			`{"expectedRevision":2,"config":` + configJSON(t, func(c *runtimeconfig.Config) { c.Features.SignupEnabled = true; c.Operations.Workers++ }) + `}`, http.StatusCreated},
 		{"publish bad body", owner, http.MethodPut, "/api/v1/runtime-config", `{`, http.StatusBadRequest},
 		{"rollback as operator", operator, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":2,"targetRevision":1}`, http.StatusForbidden},
 		{"rollback without principal", nil, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":2,"targetRevision":1}`, http.StatusUnauthorized},
 		{"rollback bad body", owner, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expected":2}`, http.StatusBadRequest},
-		{"rollback", owner, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":2,"targetRevision":1,"changeNote":"off"}`, http.StatusCreated},
-		{"rollback missing target", owner, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":3,"targetRevision":9}`, http.StatusNotFound},
+		{"rollback", owner, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":3,"targetRevision":1,"changeNote":"off"}`, http.StatusCreated},
+		{"rollback missing target", owner, http.MethodPost, "/api/v1/runtime-config/rollback", `{"expectedRevision":4,"targetRevision":9}`, http.StatusNotFound},
 		{"status", owner, http.MethodGet, "/api/v1/runtime-config/status", "", http.StatusOK},
 	} {
-		if got := call(step.principal, step.method, step.path, step.body); got.Code != step.want {
+		got := call(step.principal, step.method, step.path, step.body)
+		if got.Code != step.want {
 			t.Errorf("%s: %d %s, want %d", step.name, got.Code, got.Body, step.want)
+		}
+		// F21-01: a restart-required change is stored and named in the response.
+		if step.name == "publish restart field" && !strings.Contains(got.Body.String(), `"restartRequired":["operations.workers"]`) {
+			t.Errorf("%s: %s lacks restartRequired", step.name, got.Body)
 		}
 	}
 	snapshot, _ := service.Snapshot()
-	if snapshot.Revision.Revision != 3 || snapshot.Revision.Config.Features.SignupEnabled {
-		t.Fatalf("after publish and rollback the live revision is %d (signup %v), want 3 with signup off",
+	if snapshot.Revision.Revision != 4 || snapshot.Revision.Config.Features.SignupEnabled {
+		t.Fatalf("after publish and rollback the live revision is %d (signup %v), want 4 with signup off",
 			snapshot.Revision.Revision, snapshot.Revision.Config.Features.SignupEnabled)
 	}
 }

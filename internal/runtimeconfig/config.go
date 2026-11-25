@@ -21,11 +21,10 @@ import (
 const SchemaVersion = 1
 
 var (
-	ErrConflict        = errors.New("runtime configuration revision conflict")
-	ErrInvalid         = errors.New("invalid runtime configuration")
-	ErrNotFound        = errors.New("runtime configuration revision not found")
-	ErrRestartRequired = errors.New("runtime configuration contains restart-required settings")
-	ErrApplyPending    = errors.New("runtime configuration persisted but application is pending")
+	ErrConflict     = errors.New("runtime configuration revision conflict")
+	ErrInvalid      = errors.New("invalid runtime configuration")
+	ErrNotFound     = errors.New("runtime configuration revision not found")
+	ErrApplyPending = errors.New("runtime configuration persisted but application is pending")
 )
 
 type ApplyClass string
@@ -92,6 +91,11 @@ type Revision struct {
 	CreatedAt     time.Time `json:"createdAt"`
 	CreatedBy     int       `json:"createdBy,omitempty"`
 	ChangeNote    string    `json:"changeNote,omitempty"`
+	// RestartRequired names the restart-required settings this revision
+	// changed from the one before it. Only Publish and Rollback fill it. The
+	// revision is stored and applies to every process at its next start; hot
+	// reloadable settings apply at once.
+	RestartRequired []string `json:"restartRequired,omitempty"`
 }
 
 type ProcessStatus struct {
@@ -102,6 +106,13 @@ type ProcessStatus struct {
 	LastSuccess       *time.Time `json:"lastSuccess,omitempty"`
 	LastErrorClass    string     `json:"lastErrorClass,omitempty"`
 	Heartbeat         time.Time  `json:"heartbeat"`
+	// StartedRevision is the revision the process read at startup. Its
+	// restart-required settings (worker counts, resync interval, ...) stay in
+	// effect until the next restart; 0 means it has not applied one yet.
+	StartedRevision uint64 `json:"startedRevision"`
+	// RestartPending is set by Status when the current revision changes a
+	// restart-required setting that this process started without.
+	RestartPending bool `json:"restartPending"`
 }
 
 type Repository interface {
@@ -229,6 +240,9 @@ type SnapshotManager struct {
 	repo            Repository
 	processID, role string
 	appliers        []Applier
+	// started is the revision of the first snapshot this process applied; the
+	// settings that need a restart were read from it.
+	started atomic.Uint64
 }
 
 func NewSnapshotManager(repo Repository, processID, role string, appliers ...Applier) (*SnapshotManager, error) {
@@ -266,7 +280,7 @@ func (m *SnapshotManager) Reload(ctx context.Context) error {
 	if old, ok := m.Current(); ok && old.Revision.Revision >= r.Revision {
 		now := time.Now().UTC()
 		return m.repo.RecordProcessStatus(ctx, ProcessStatus{ProcessID: m.processID, Role: m.role,
-			AppliedRevision: old.Revision.Revision, AttemptedRevision: old.Revision.Revision, Heartbeat: now})
+			AppliedRevision: old.Revision.Revision, AttemptedRevision: old.Revision.Revision, Heartbeat: now, StartedRevision: m.started.Load()})
 	}
 	candidate := Snapshot{Revision: r, AppliedAt: time.Now().UTC()}
 	prepared := make([]PreparedApply, 0, len(m.appliers))
@@ -297,8 +311,10 @@ func (m *SnapshotManager) Reload(ctx context.Context) error {
 		}
 	}
 	m.current.Store(&candidate)
+	m.started.CompareAndSwap(0, r.Revision)
 	now := candidate.AppliedAt
-	return m.repo.RecordProcessStatus(ctx, ProcessStatus{ProcessID: m.processID, Role: m.role, AppliedRevision: r.Revision, AttemptedRevision: r.Revision, LastSuccess: &now, Heartbeat: now})
+	return m.repo.RecordProcessStatus(ctx, ProcessStatus{ProcessID: m.processID, Role: m.role, AppliedRevision: r.Revision, AttemptedRevision: r.Revision,
+		LastSuccess: &now, Heartbeat: now, StartedRevision: m.started.Load()})
 }
 
 // abortAll releases prepared changes that will never be committed, newest
@@ -388,6 +404,7 @@ func (m *SnapshotManager) record(ctx context.Context, attempted uint64, class st
 		AttemptedRevision: attempted,
 		LastErrorClass:    class,
 		Heartbeat:         time.Now().UTC(),
+		StartedRevision:   m.started.Load(),
 	}
 	if err := m.repo.RecordProcessStatus(ctx, status); err != nil {
 		slog.Warn("failed to record process status",

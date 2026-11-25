@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-25 — Restart-required runtime settings can be changed (F21-01; branch audit/restart-settings)
+
+- **Problem:** `PUT /runtime-config` answered 422 for any change to a restart-required setting (worker counts, resync interval, queue limits, SSH timeout and concurrency, Operation workers and timeout), and nothing else set them, so they stayed at their defaults.
+- **Now:** the revision is stored like any other. Hot-reloadable changes in it apply at once; the response (publish and rollback) lists the restart-required settings it changed in `restartRequired`; each process uses the new values from its next start. The 422 and `ErrRestartRequired` are gone.
+- **Visibility:** each process records the revision it started with (`startedRevision`, new column `started_revision` in `runtime_config_process_status`). `GET /runtime-config/status` sets `restartPending` for a process whose startup revision differs from the current one in a restart-required setting. A rollback to the startup settings clears it.
+- **Docs:** `docs/operations.md` has a "Restart-required settings" section (the settings, the rolling restart, the status fields) and the resync note no longer says it is fixed; API descriptions say the same. The HA scenario comment was updated; the scenario itself is unchanged.
+- **Breaking for development databases:** the baseline gained a column, so a database created from the previous baseline must be recreated (same as the baseline merge on the same day).
+- **Checks run:**
+  - `go test ./...` with PostgreSQL required: pass, except `TestTimeoutWithoutProcessGroupKillsTheTree` (`runner`), which failed again only when run with the whole suite on a loaded machine and passed alone earlier; it is not related to this change;
+  - a real monolith (SQLite): publishing a changed `controlManager.resyncSeconds` returned 201 with `restartRequired`, the running process showed `restartPending: true`, and after a restart the new process showed `startedRevision: 2` and `restartPending: false` (the stopped process's row stays for two minutes);
+  - `golangci-lint run ./...`: 0 issues; `make api-docs`: only the new descriptions changed.
+- **Not run:** the HA harness; the PostgreSQL path is covered by the contract tests only (the live check used SQLite).
+
 ## 2026-11-25 — HTTP API v1: one shape for packages, routes and errors (branch audit/v1-handlers)
 
 - **Routes:** every package under `internal/transport/http/v1` now has a `routes.go` with `RegisterRoutes(v1 *echo.Group, h *Handler)` that mounts its own prefix and states its own access rule (permission, owner, human session). Before, five packages had a routes file, `agents` and `managedresource` registered in `handler.go` with other signatures (two groups; different parameter names), `environments` took a read and a write group, and `router.go` built the groups and their middleware itself. `router.go` is now a list: build the handler, mount the package. `auth` has two functions in `routes.go` (`RegisterRoutes` public, `RegisterSessionRoutes` including `/me`).

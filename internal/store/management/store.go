@@ -207,11 +207,11 @@ func (s *Store) RecordProcessStatus(ctx context.Context, v runtimeconfig.Process
 	if v.LastSuccess != nil {
 		success = ts(*v.LastSuccess)
 	}
-	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO runtime_config_process_status(process_id,role,applied_revision,attempted_revision,last_success,last_error_class,heartbeat) VALUES(?,?,?,?,?,?,?) ON CONFLICT(process_id) DO UPDATE SET role=excluded.role,applied_revision=excluded.applied_revision,attempted_revision=excluded.attempted_revision,last_success=COALESCE(excluded.last_success,runtime_config_process_status.last_success),last_error_class=excluded.last_error_class,heartbeat=excluded.heartbeat`), v.ProcessID, v.Role, v.AppliedRevision, v.AttemptedRevision, success, v.LastErrorClass, ts(v.Heartbeat))
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO runtime_config_process_status(process_id,role,applied_revision,attempted_revision,last_success,last_error_class,heartbeat,started_revision) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(process_id) DO UPDATE SET role=excluded.role,applied_revision=excluded.applied_revision,attempted_revision=excluded.attempted_revision,last_success=COALESCE(excluded.last_success,runtime_config_process_status.last_success),last_error_class=excluded.last_error_class,heartbeat=excluded.heartbeat,started_revision=CASE WHEN excluded.started_revision>0 THEN excluded.started_revision ELSE runtime_config_process_status.started_revision END`), v.ProcessID, v.Role, v.AppliedRevision, v.AttemptedRevision, success, v.LastErrorClass, ts(v.Heartbeat), v.StartedRevision)
 	return err
 }
 func (s *Store) ProcessStatuses(ctx context.Context, since time.Time) ([]runtimeconfig.ProcessStatus, error) {
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT process_id,role,applied_revision,attempted_revision,last_success,last_error_class,heartbeat FROM runtime_config_process_status WHERE heartbeat>=? ORDER BY role,process_id`), ts(since))
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT process_id,role,applied_revision,attempted_revision,last_success,last_error_class,heartbeat,started_revision FROM runtime_config_process_status WHERE heartbeat>=? ORDER BY role,process_id`), ts(since))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (s *Store) ProcessStatuses(ctx context.Context, since time.Time) ([]runtime
 		var v runtimeconfig.ProcessStatus
 		var success sql.NullString
 		var heartbeat string
-		if err = rows.Scan(&v.ProcessID, &v.Role, &v.AppliedRevision, &v.AttemptedRevision, &success, &v.LastErrorClass, &heartbeat); err != nil {
+		if err = rows.Scan(&v.ProcessID, &v.Role, &v.AppliedRevision, &v.AttemptedRevision, &success, &v.LastErrorClass, &heartbeat, &v.StartedRevision); err != nil {
 			return nil, err
 		}
 		//nolint:errcheck // Timestamp is generated internally in RFC3339Nano format.

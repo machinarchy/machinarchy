@@ -2376,7 +2376,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Workspace owner, human session only.",
+                "description": "Workspace owner, human session only. Hot-reloadable settings apply at once. A change to a restart-required setting (worker counts, resync interval, ...) is stored too and applies when each process next starts; the response lists those settings in `restartRequired`, and `GET /runtime-config/status` shows `restartPending` for the processes that started without them.",
                 "produces": [
                     "application/json"
                 ],
@@ -2560,7 +2560,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Workspace owner, human session only.",
+                "description": "Workspace owner, human session only. Like publish, it lists changed restart-required settings in `restartRequired`.",
                 "produces": [
                     "application/json"
                 ],

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -94,11 +95,10 @@ func TestPublishAndRollback(t *testing.T) {
 		mutate   func(*runtimeconfig.Config)
 		want     error
 	}{
-		"operator":            {domain.Principal{UserID: 2, WorkspaceID: 1, Role: domain.RoleOperator}, 2, nil, domain.ErrPermissionDenied},
-		"reader":              {domain.Principal{UserID: 3, WorkspaceID: 1, Role: domain.RoleReader}, 2, nil, domain.ErrPermissionDenied},
-		"owner API token":     {domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner, APITokenID: 4}, 2, nil, domain.ErrPermissionDenied},
-		"stale revision":      {owner, 1, nil, runtimeconfig.ErrConflict},
-		"restart-only change": {owner, 2, func(c *runtimeconfig.Config) { c.Operations.Workers++ }, runtimeconfig.ErrRestartRequired},
+		"operator":        {domain.Principal{UserID: 2, WorkspaceID: 1, Role: domain.RoleOperator}, 2, nil, domain.ErrPermissionDenied},
+		"reader":          {domain.Principal{UserID: 3, WorkspaceID: 1, Role: domain.RoleReader}, 2, nil, domain.ErrPermissionDenied},
+		"owner API token": {domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner, APITokenID: 4}, 2, nil, domain.ErrPermissionDenied},
+		"stale revision":  {owner, 1, nil, runtimeconfig.ErrConflict},
 	} {
 		candidate := next
 		if tc.mutate != nil {
@@ -260,5 +260,51 @@ func TestConstructorsAndChecksum(t *testing.T) {
 	}
 	if err := (&runtimeconfig.Service{}).Bootstrap(context.Background(), runtimeconfig.Config{}); err == nil {
 		t.Fatal("bootstrap accepted an invalid configuration")
+	}
+}
+
+// F21-01: a restart-required setting is stored like any other, the response
+// names it, hot-reloadable settings still apply at once, and Status shows
+// which processes started without the new value.
+func TestRestartRequiredSettingsArePublished(t *testing.T) {
+	ctx := context.Background()
+	repo := repository(t)
+	service, snapshots := newService(t, repo, &applier{})
+	if err := service.Bootstrap(ctx, runtimeconfig.Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	next := runtimeconfig.Defaults()
+	next.ControlManager.ResyncSeconds = 60
+	next.Operations.Workers++
+	next.Logging.Level = "debug"
+	published, err := service.Publish(ctx, owner, 1, next, "faster resync")
+	if err != nil || published.Revision != 2 {
+		t.Fatalf("publish = %+v, %v", published, err)
+	}
+	if want := []string{"controlManager.resyncSeconds", "operations.workers"}; !slices.Equal(published.RestartRequired, want) {
+		t.Fatalf("restartRequired = %v, want %v", published.RestartRequired, want)
+	}
+	if got, err := service.Current(ctx); err != nil || got.Config.ControlManager.ResyncSeconds != 60 || len(got.RestartRequired) != 0 {
+		t.Fatalf("stored revision = %+v, %v (restartRequired is a response field, not stored)", got, err)
+	}
+	if snapshot, _ := snapshots.Current(); snapshot.Revision.Config.Logging.Level != "debug" {
+		t.Fatal("the hot-reloadable setting was not applied")
+	}
+	statuses, err := service.Status(ctx)
+	if err != nil || len(statuses) != 1 || statuses[0].StartedRevision != 1 || statuses[0].AppliedRevision != 2 || !statuses[0].RestartPending {
+		t.Fatalf("status after the change = %+v, %v (started with revision 1, restart pending)", statuses, err)
+	}
+
+	// A hot-only change leaves the process exactly as pending as before; a
+	// rollback to the settings it started with ends the pending restart.
+	if again, err := service.Publish(ctx, owner, 2, next, "same restart settings"); err != nil || len(again.RestartRequired) != 0 {
+		t.Fatalf("a revision with no restart-required change = %+v, %v", again, err)
+	}
+	rolled, err := service.Rollback(ctx, owner, 3, 1, "back")
+	if err != nil || !slices.Equal(rolled.RestartRequired, []string{"controlManager.resyncSeconds", "operations.workers"}) {
+		t.Fatalf("rollback = %+v, %v", rolled, err)
+	}
+	if statuses, err := service.Status(ctx); err != nil || len(statuses) != 1 || statuses[0].RestartPending {
+		t.Fatalf("status after rolling back to the startup settings = %+v, %v", statuses, err)
 	}
 }

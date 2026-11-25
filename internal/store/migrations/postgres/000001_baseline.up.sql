@@ -232,7 +232,10 @@ CREATE TABLE runtime_config_process_status (
     attempted_revision BIGINT NOT NULL DEFAULT 0,
     last_success TEXT,
     last_error_class VARCHAR(128) NOT NULL DEFAULT '',
-    heartbeat TEXT NOT NULL
+    heartbeat TEXT NOT NULL,
+    -- The revision the process read at startup: its restart-required settings
+    -- come from it until the next restart.
+    started_revision BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_runtime_config_status_heartbeat ON runtime_config_process_status(heartbeat);
 

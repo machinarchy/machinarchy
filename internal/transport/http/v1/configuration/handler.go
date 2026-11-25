@@ -128,7 +128,7 @@ func (h *Handler) Validate(c echo.Context) error {
 }
 
 // @Summary Publish a new configuration revision
-// @Description Workspace owner, human session only.
+// @Description Workspace owner, human session only. Hot-reloadable settings apply at once. A change to a restart-required setting (worker counts, resync interval, ...) is stored too and applies when each process next starts; the response lists those settings in `restartRequired`, and `GET /runtime-config/status` shows `restartPending` for the processes that started without them.
 // @Tags Runtime configuration
 // @Produce json
 // @Security BearerAuth
@@ -160,7 +160,7 @@ func (h *Handler) Publish(c echo.Context) error {
 }
 
 // @Summary Copy an earlier revision into a new one
-// @Description Workspace owner, human session only.
+// @Description Workspace owner, human session only. Like publish, it lists changed restart-required settings in `restartRequired`.
 // @Tags Runtime configuration
 // @Produce json
 // @Security BearerAuth
@@ -227,7 +227,6 @@ func decode(c echo.Context, dst any) error {
 var errorMappings = []httperr.Mapping{
 	httperr.Map(runtimeconfig.ErrConflict, http.StatusConflict, "configuration revision conflict"),
 	httperr.Map(runtimeconfig.ErrInvalid, http.StatusUnprocessableEntity, ""),
-	httperr.Map(runtimeconfig.ErrRestartRequired, http.StatusUnprocessableEntity, ""),
 	httperr.Map(domain.ErrInvalidInput, http.StatusUnprocessableEntity, ""),
 	httperr.Map(runtimeconfig.ErrNotFound, http.StatusNotFound, "configuration revision not found"),
 }
