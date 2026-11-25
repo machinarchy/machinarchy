@@ -67,22 +67,14 @@ func execute(t *testing.T, builder cli.APIClientBuilder, stdin string, args ...s
 func writeConfig(t *testing.T, server, token string) string {
 	t.Helper()
 
-	content := fmt.Sprintf(`apiVersion: machinarchy.io/v1
-current-context: test
-clusters:
-  test:
-    server: %s
-users:
-  test:
-    token: %s
-contexts:
-  test:
-    cluster: test
-    user: test
-`, server, token)
-
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("version: 2\nactive: test\nservers:\n  test:\n    url: %s\n", server)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Both credentials hold the same secret, so a command works whether it runs
+	// with the saved API token or, as an owner command does, the saved session.
+	credentials := fmt.Sprintf("version: 2\nservers:\n  test:\n    session:\n      kind: session\n      secret: %s\n    token:\n      kind: token\n      secret: %s\n", token, token)
+	if err := os.WriteFile(config.CredentialsPath(path), []byte(credentials), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,15 +316,19 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 	root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
 
 	want := map[string][]string{
-		"get":            {"agent-tokens", "hosts", "operations", "profiles", "tokens"},
-		"create":         {"agent-token", "host", "profile", "token"},
-		"delete":         {"agent-token", "host", "profile", "token"},
+		"get":            {"agent-tokens", "hosts", "operations", "profiles"},
+		"create":         {"agent-token", "host", "profile"},
+		"delete":         {"agent-token", "host", "profile"},
 		"label":          {"host"},
 		"trust":          {"host"},
 		"run":            nil,
 		"cancel":         {"operation"},
 		"logs":           {"operation"},
-		"config":         {"current-context", "get-contexts", "set-cluster", "set-context", "set-credentials", "use-context"},
+		"config":         {"path", "show"},
+		"tokens":         {"create", "revoke"},
+		"logout":         nil,
+		"whoami":         nil,
+		"switch":         nil,
 		"runtime-config": {"get", "history", "publish", "rollback", "status", "validate"},
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
 		"version":        nil,
@@ -665,7 +661,7 @@ func TestGetHosts(t *testing.T) {
 			wantCode int
 			wantHint string
 		}{
-			{"unauthorized", &api.Error{Status: 401, Message: "expired"}, clierr.ExitAuth, "set-credentials"},
+			{"unauthorized", &api.Error{Status: 401, Message: "expired"}, clierr.ExitAuth, "machinarchy login"},
 			{"forbidden", &api.Error{Status: 403, Message: "no"}, clierr.ExitAuth, "permitted"},
 			{"server error", &api.Error{Status: 502, Message: "bad gateway"}, clierr.ExitUnavailable, "Retry later"},
 			{"unreachable", clierr.Newf(clierr.ExitUnavailable, "check the URL", "cannot reach the API server"), clierr.ExitUnavailable, "check the URL"},
@@ -688,10 +684,10 @@ func TestGetHosts(t *testing.T) {
 		}
 	})
 
-	t.Run("a missing context explains how to set one up", func(t *testing.T) {
+	t.Run("no server explains how to sign in", func(t *testing.T) {
 		got := execute(t, fake(fixtures()), "", "--config", filepath.Join(t.TempDir(), "absent.yaml"), "get", "hosts")
 
-		if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "config set-cluster") {
+		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "machinarchy login YOUR-SERVER-URL") {
 			t.Fatalf("result = %+v", got)
 		}
 	})
@@ -702,138 +698,6 @@ func TestGetHosts(t *testing.T) {
 			t.Fatalf("result = %+v", got)
 		}
 	})
-}
-
-// ---- config commands -------------------------------------------------------
-
-func TestConfigCommandsEndToEnd(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
-	step := func(stdin string, args ...string) result {
-		t.Helper()
-
-		return execute(t, nil, stdin, append([]string{"--config", path}, args...)...)
-	}
-
-	// Mixed case and dots are preserved exactly: the config document is parsed
-	// as YAML, not through Viper's case-folding key handling.
-	for _, command := range []struct {
-		stdin string
-		args  []string
-	}{
-		{"", []string{"config", "set-cluster", "Prod.EU", "--server", "https://api.example.com/"}},
-		{"", []string{"config", "set-cluster", "Lab", "--server", "http://lab.example.test", "--insecure-http"}},
-		{"tok-abc123\n", []string{"config", "set-credentials", "Ops.User", "--token-stdin"}},
-		{"", []string{"config", "set-context", "Prod.EU", "--cluster", "Prod.EU", "--user", "Ops.User", "--env", "Staging"}},
-		{"", []string{"config", "use-context", "Prod.EU"}},
-	} {
-		if got := step(command.stdin, command.args...); got.code != 0 {
-			t.Fatalf("%v: %+v", command.args, got)
-		}
-	}
-
-	t.Run("credentials are never echoed", func(t *testing.T) {
-		got := step("tok-abc123\n", "config", "set-credentials", "Again", "--token-stdin")
-
-		if got.code != 0 || strings.Contains(got.stdout+got.stderr, "tok-abc123") {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("current context", func(t *testing.T) {
-		if got := step("", "config", "current-context"); got.code != 0 || got.stdout != "Prod.EU\n" {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("get contexts preserves the exact names", func(t *testing.T) {
-		got := step("", "config", "get-contexts")
-
-		for _, want := range []string{"Prod.EU", "Ops.User", "Staging", "*"} {
-			if !strings.Contains(got.stdout, want) {
-				t.Errorf("output lacks %q:\n%s", want, got.stdout)
-			}
-		}
-		if strings.Contains(got.stdout, "prod.eu") {
-			t.Errorf("a context name was case-folded:\n%s", got.stdout)
-		}
-	})
-
-	t.Run("the file is owner-only and keeps the original spelling", func(t *testing.T) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "Prod.EU:") || !strings.Contains(string(data), "https://api.example.com") {
-			t.Errorf("config file:\n%s", data)
-		}
-		if runtime.GOOS != "windows" {
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode := info.Mode().Perm(); mode != 0o600 {
-				t.Errorf("config file mode = %04o, want 0600", mode)
-			}
-		}
-	})
-
-	t.Run("a command resolves the saved context", func(t *testing.T) {
-		var target config.Target
-		builder := func(resolved config.Target) (api.Client, error) {
-			target = resolved
-			return &fakeClient{envs: []api.Environment{{ID: 1, Name: "Staging"}}}, nil
-		}
-
-		got := execute(t, builder, "", "--config", path, "get", "hosts", "--env", "")
-		if got.code != 0 {
-			t.Fatalf("result = %+v", got)
-		}
-		if target.ContextName != "Prod.EU" || target.Server != "https://api.example.com" || target.Token != "tok-abc123" || target.Environment != "Staging" {
-			t.Fatalf("target = %+v", target)
-		}
-	})
-}
-
-func TestConfigCommandErrorsAreUsageErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-
-	tests := []struct {
-		name    string
-		stdin   string
-		args    []string
-		message string
-	}{
-		{"set-cluster without server", "", []string{"config", "set-cluster", "x"}, "--server is required"},
-		{"set-cluster with a bad URL", "", []string{"config", "set-cluster", "x", "--server", "localhost"}, "absolute http:// or https:// URL"},
-		{"set-cluster with remote plain http", "", []string{"config", "set-cluster", "x", "--server", "http://api.example.test"}, "--insecure-http"},
-		{"use-context unknown", "", []string{"config", "use-context", "nope"}, `context "nope" does not exist`},
-		{"current-context unset", "", []string{"config", "current-context"}, "no current context is selected"},
-		{"set-credentials without a source", "", []string{"config", "set-credentials", "x"}, "provide exactly one of"},
-		{"set-credentials with both sources", "t", []string{"config", "set-credentials", "x", "--token", "t", "--token-stdin"}, "provide exactly one of"},
-		{"set-credentials with an invalid token", "has space", []string{"config", "set-credentials", "x", "--token-stdin"}, "API token is invalid"},
-		{"set-context referencing nothing", "", []string{"config", "set-context", "x", "--cluster", "c", "--user", "u"}, `cluster "c" does not exist`},
-		{"set-context without references", "", []string{"config", "set-context", "x"}, "--cluster and --user are required"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := execute(t, nil, test.stdin, append([]string{"--config", path}, test.args...)...)
-
-			if got.code != clierr.ExitUsage {
-				t.Fatalf("exit code = %d, want %d (stderr %q)", got.code, clierr.ExitUsage, got.stderr)
-			}
-			if !strings.Contains(got.stderr, test.message) {
-				t.Errorf("stderr = %q, want %q", got.stderr, test.message)
-			}
-			if strings.Contains(got.stderr, "has space") {
-				t.Errorf("the rejected token leaked: %q", got.stderr)
-			}
-		})
-	}
-
-	if _, err := os.Stat(path); err == nil {
-		t.Error("a failed command created a config file")
-	}
 }
 
 // ---- management commands ---------------------------------------------------
@@ -950,7 +814,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 	})
 
 	t.Run("the server URL and token can come from the environment", func(t *testing.T) {
-		server := newAPIServer(t, jsonReply(200, `{"revision":1}`))
+		server := newAPIServer(t, jsonReply(200, `{"items":[]}`))
 		isolate(t)
 		t.Setenv("MACHINARCHY_SERVER", server.URL)
 		t.Setenv("MACHINARCHY_TOKEN", "env-token")
@@ -959,12 +823,12 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		code := cli.Run(context.Background(), cli.Options{
 			Streams: cli.IOStreams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
 			Groups:  commands.DefaultGroups(),
-		}, []string{"--config", writeConfig(t, "http://127.0.0.1:1", "file-token"), "runtime-config", "status"})
+		}, []string{"--config", writeConfig(t, "http://127.0.0.1:1", "file-token"), "get", "hosts", "-o", "json"})
 
 		if code != 0 {
 			t.Fatalf("code = %d, stderr = %q", code, errOut.String())
 		}
-		if request := server.last(t); request.Auth != "Bearer env-token" || request.Path != "/api/v1/runtime-config/status" {
+		if request := server.last(t); request.Auth != "Bearer env-token" || request.Path != "/api/v1/managed/hosts" {
 			t.Errorf("request = %+v", request)
 		}
 	})
@@ -1021,7 +885,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		server := newAPIServer(t, jsonReply(401, `{"error":"token expired"}`))
 
 		got := execute(t, nil, "", "--config", writeConfig(t, server.URL, "tok"), "runtime-config", "get")
-		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "set-credentials") {
+		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "Next:  machinarchy login") {
 			t.Fatalf("result = %+v", got)
 		}
 	})

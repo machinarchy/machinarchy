@@ -113,22 +113,14 @@ type stubClient struct{ api.Client }
 func writeConfig(t *testing.T, server, token string) string {
 	t.Helper()
 
-	content := fmt.Sprintf(`apiVersion: machinarchy.io/v1
-current-context: test
-clusters:
-  test:
-    server: %s
-users:
-  test:
-    token: %s
-contexts:
-  test:
-    cluster: test
-    user: test
-`, server, token)
-
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("version: 2\nactive: test\nservers:\n  test:\n    url: %s\n", server)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Both credentials hold the same secret, so a command works whether it runs
+	// with the saved API token or, as an owner command does, the saved session.
+	credentials := fmt.Sprintf("version: 2\nservers:\n  test:\n    session:\n      kind: session\n      secret: %s\n    token:\n      kind: token\n      secret: %s\n", token, token)
+	if err := os.WriteFile(config.CredentialsPath(path), []byte(credentials), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +196,7 @@ func TestHelpShowsGroupsAndEveryGlobalFlag(t *testing.T) {
 			t.Fatalf("%v: exit code = %d, stderr = %q", args, got.code, got.stderr)
 		}
 		for _, want := range []string{
-			"Usage:", "Test Commands", "--config", "--context", "--env", "--output", "--verbose",
+			"Usage:", "Test Commands", "--config", "--env", "--output", "--verbose",
 			"--server", "--request-timeout", "--quiet", "--no-headers", "--no-input", "--yes",
 		} {
 			if !strings.Contains(got.stdout, want) {
@@ -257,7 +249,7 @@ func TestRuntimeFailuresMapToExitCodes(t *testing.T) {
 		wantStderr   []string
 		wantNoStderr []string
 	}{
-		{"fail-api", clierr.ExitAuth, []string{"Error: list hosts: API returned HTTP 401: nope", "Why:   The server did not accept the stored credential", "Next:  ", "set-credentials"}, nil},
+		{"fail-api", clierr.ExitAuth, []string{"Error: list hosts: API returned HTTP 401: nope", "Why:   The server did not accept the credential", "Next:  machinarchy login"}, nil},
 		{"fail-plain", clierr.ExitFailure, []string{"Error: boom"}, []string{"Next:", "--help"}},
 		{"fail-conflict", clierr.ExitConflict, []string{"Error: stale revision", "Next:  retry with a newer revision"}, nil},
 		{"fail-deadline", clierr.ExitUnavailable, []string{"Error: wait: context deadline exceeded"}, nil},
@@ -315,7 +307,7 @@ func TestInvalidGlobalSettingsAreUsageErrors(t *testing.T) {
 		{"unsupported output", []string{"--output", "xml", "ok"}, `unsupported output format "xml"`},
 		{"bad timeout", []string{"--request-timeout", "banana", "ok"}, `invalid request timeout "banana"`},
 		{"negative timeout", []string{"--request-timeout", "-5s", "ok"}, "invalid request timeout"},
-		{"damaged config", []string{"--config", "BROKEN", "ok"}, "parse CLI config"},
+		{"damaged config", []string{"--config", "BROKEN", "ok"}, "is not valid YAML"},
 	}
 
 	for _, test := range tests {
@@ -572,33 +564,61 @@ func TestFactoryBuildsTargetsFromResolvedConfiguration(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		if got.Server != "https://file.example" || got.Token != "file-token" || got.RequestTimeout != 30*time.Second || got.ContextName != "test" {
+		if got.Server != "https://file.example" || got.Token != "file-token" || got.RequestTimeout != 30*time.Second || got.ServerName != "test" {
 			t.Fatalf("target = %+v", got)
 		}
 	})
 
-	t.Run("flags override the file", func(t *testing.T) {
+	t.Run("a request timeout flag applies and the saved credential stays", func(t *testing.T) {
 		path := writeConfig(t, "https://file.example", "file-token")
 
-		result := run(t, options, "--config", path, "--server", "https://flag.example", "--request-timeout", "5s", "client-target")
+		result := run(t, options, "--config", path, "--request-timeout", "5s", "client-target")
 		if result.code != 0 {
 			t.Fatalf("result = %+v", result)
 		}
 
 		mu.Lock()
 		defer mu.Unlock()
-		if got.Server != "https://flag.example" || got.RequestTimeout != 5*time.Second || got.Token != "file-token" {
+		if got.Server != "https://file.example" || got.RequestTimeout != 5*time.Second || got.Token != "file-token" {
 			t.Fatalf("target = %+v", got)
 		}
 	})
 
-	t.Run("no context is a usage error with setup help", func(t *testing.T) {
+	t.Run("an address that is not saved never gets a saved credential", func(t *testing.T) {
+		path := writeConfig(t, "https://file.example", "file-token")
+
+		result := run(t, options, "--config", path, "--server", "https://other.example", "client-target")
+		if result.code != clierr.ExitAuth || strings.Contains(result.stderr, "file-token") {
+			t.Fatalf("result = %+v", result)
+		}
+		if !strings.Contains(result.stderr, "you have no credential for https://other.example") ||
+			!strings.Contains(result.stderr, "saved credentials are only sent to the server they were saved for") {
+			t.Fatalf("stderr = %q", result.stderr)
+		}
+	})
+
+	t.Run("an address with MACHINARCHY_TOKEN is used for that command only", func(t *testing.T) {
+		path := writeConfig(t, "https://file.example", "file-token")
+
+		result := runWithEnv(t, map[string]string{"MACHINARCHY_TOKEN": "env-token", "MACHINARCHY_SERVER": "https://other.example"}, options, "--config", path, "client-target")
+		if result.code != 0 {
+			t.Fatalf("result = %+v", result)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if got.Server != "https://other.example" || got.Token != "env-token" || !got.FromEnv || got.ServerName != "" {
+			t.Fatalf("target = %+v", got)
+		}
+	})
+
+	t.Run("no server is exit 3 with the command to sign in", func(t *testing.T) {
 		result := run(t, options, "--config", filepath.Join(t.TempDir(), "absent.yaml"), "client-target")
 
-		if result.code != clierr.ExitUsage {
-			t.Fatalf("exit code = %d, want %d", result.code, clierr.ExitUsage)
+		if result.code != clierr.ExitAuth {
+			t.Fatalf("exit code = %d, want %d", result.code, clierr.ExitAuth)
 		}
-		if !strings.Contains(result.stderr, "no active context is configured") || !strings.Contains(result.stderr, "config set-cluster") {
+		if !strings.Contains(result.stderr, "you are not signed in to any server") || !strings.Contains(result.stderr, "machinarchy login YOUR-SERVER-URL") {
 			t.Errorf("stderr = %q", result.stderr)
 		}
 		if strings.Contains(result.stderr, "--help") {

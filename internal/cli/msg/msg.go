@@ -158,6 +158,40 @@ func All() []Message {
 }
 
 func init() {
+	// Sign-in and credentials (docs/cli/spec/03-ux.md sections 3 and 4).
+	register(Message{ID: "auth.signed_in", Kind: KindSuccess,
+		Primary: "Signed in to {server} as {user}.",
+		Why:     "{detail}",
+		Lore:    "The authority acknowledges you.",
+		Next:    "{next}"})
+	register(Message{ID: "auth.device_token_saved", Kind: KindSuccess,
+		Primary: "Device token saved ({role}, {days} days).",
+		Why:     "Owner actions still use your password session while it lasts."})
+	register(Message{ID: "auth.device_token_failed", Kind: KindWarning,
+		Primary: "Could not create a device token, so you stay signed in for this session only.",
+		Why:     "{why}",
+		Next:    "machinarchy login"})
+	register(Message{ID: "auth.logged_out", Kind: KindSuccess,
+		Primary: "Signed out of {server}.",
+		Why:     "{detail}"})
+	register(Message{ID: "auth.logged_out_token", Kind: KindWarning,
+		Primary: "The saved token was removed from this computer. It still works until it expires or is revoked.",
+		Next:    "{next}"})
+	register(Message{ID: "auth.logout_unconfirmed", Kind: KindError,
+		Primary: "Signed out locally, but the server could not be told: {why}.",
+		Why:     "The session may still be active on the server.",
+		Next:    "machinarchy login\nmachinarchy logout"})
+	register(Message{ID: "server.switched", Kind: KindSuccess,
+		Primary: "Active server: {server}.",
+		Next:    "machinarchy whoami"})
+	register(Message{ID: "token.created", Kind: KindSuccess,
+		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
+	register(Message{ID: "token.created_file", Kind: KindSuccess,
+		Primary: "Token {name} created ({role}, expires {expires}) and written to {file}.",
+		Why:     "It is shown only once; keep the file private."})
+	register(Message{ID: "token.revoked", Kind: KindSuccess,
+		Primary: "Token {name} revoked."})
+
 	// Input and confirmation (docs/cli/spec/02-commands.md section 2).
 	register(Message{ID: "input.required", Kind: KindError,
 		Primary: "{flag} is required when nothing can be asked.",

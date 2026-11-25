@@ -84,27 +84,6 @@ func TestAccessCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("create token shows the secret once; -q prints it alone", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "operator", "--expires-hours", "720")
-		if body := lastBody(t, server); got.code != 0 || body["role"] != "operator" || body["expiresInHours"] != float64(720) ||
-			!strings.Contains(got.stdout, "shown only now") || !strings.HasSuffix(got.stdout, "mch_pat_secret\n") {
-			t.Fatalf("result %+v, body %v", got, body)
-		}
-		if quiet := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "operator", "-q"); quiet.stdout != "mch_pat_secret\n" {
-			t.Fatalf("-q = %q", quiet.stdout)
-		}
-		if bad := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "owner"); bad.code != clierr.ExitUsage {
-			t.Fatalf("owner role = %+v", bad)
-		}
-	})
-
-	t.Run("get tokens never shows secrets", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "get", "tokens")
-		if got.code != 0 || !strings.Contains(got.stdout, "ci") || strings.Contains(got.stdout, "mch_pat_secret") {
-			t.Fatalf("result %+v", got)
-		}
-	})
-
 	t.Run("create agent-token binds to the named host", func(t *testing.T) {
 		got := execute(t, nil, "", "--config", config, "create", "agent-token", "--host", "web-01", "--hostname", "web-01.example")
 		body := lastBody(t, server)
@@ -124,12 +103,9 @@ func TestAccessCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("delete profile and token", func(t *testing.T) {
+	t.Run("delete profile", func(t *testing.T) {
 		if got := execute(t, nil, "", "--config", config, "delete", "profile", "agents", "--yes"); got.code != 0 || server.last(t).Method != http.MethodDelete {
 			t.Fatalf("delete profile = %+v", got)
-		}
-		if got := execute(t, nil, "", "--config", config, "delete", "token", "7", "--yes"); got.code != 0 || server.last(t).Path != "/api/v1/tokens/7" {
-			t.Fatalf("delete token = %+v", got)
 		}
 	})
 }

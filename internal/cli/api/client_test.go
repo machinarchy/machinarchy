@@ -345,7 +345,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 		wantMessage  string
 		wantHintPart string
 	}{
-		{"unauthorized", 401, `{"error":"invalid token"}`, nil, clierr.ExitAuth, "invalid token", "set-credentials"},
+		{"unauthorized", 401, `{"error":"invalid token"}`, nil, clierr.ExitAuth, "invalid token", "machinarchy login"},
 		{"forbidden", 403, `{"error":"owner role required"}`, nil, clierr.ExitAuth, "owner role required", "human owner session"},
 		{"not found via framework message", 404, `{"message":"Not Found"}`, nil, clierr.ExitNotFound, "Not Found", "Check the identifier"},
 		{"conflict", 409, `{"error":"stale revision"}`, nil, clierr.ExitConflict, "stale revision", "up-to-date revision"},

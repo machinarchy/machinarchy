@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -146,36 +145,6 @@ func newDeleteProfileCommand(f *cli.Factory) *cobra.Command {
 	}
 }
 
-func newCreateTokenCommand(f *cli.Factory) *cobra.Command {
-	var role string
-	var expiresInHours int
-	command := &cobra.Command{
-		Use:   "token NAME --role reader|operator [--expires-hours N]",
-		Short: "Issue an API token (shown once)",
-		Example: "  machinarchy create token ci --role operator --expires-hours 720\n" +
-			"  machinarchy create token ci --role reader -q | machinarchy config set-credentials ci --token-stdin",
-		Args: cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			if role != "reader" && role != "operator" {
-				return clierr.Usagef("--role must be reader or operator")
-			}
-			_, access, err := accessClient(command.Context(), f)
-			if err != nil {
-				return err
-			}
-			issued, err := access.CreateAPIToken(command.Context(), args[0], role, expiresInHours)
-			if err != nil {
-				return fmt.Errorf("create token: %w", err)
-			}
-			return printIssued(command, f, issued, issued.Secret,
-				fmt.Sprintf("API token %q (id %d, role %s) created. It is shown only now:", issued.Name, issued.ID, issued.Role))
-		},
-	}
-	command.Flags().StringVar(&role, "role", "", "reader or operator")
-	command.Flags().IntVar(&expiresInHours, "expires-hours", 0, "Lifetime in hours (default: the server's)")
-	return command
-}
-
 func newCreateAgentTokenCommand(f *cli.Factory) *cobra.Command {
 	var host, hostname string
 	var ttl time.Duration
@@ -235,32 +204,6 @@ func printIssued(command *cobra.Command, f *cli.Factory, document any, secret, n
 	return err
 }
 
-func newGetTokensCommand(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:   "tokens",
-		Short: "List your API tokens (never their secrets)",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			_, access, err := accessClient(command.Context(), f)
-			if err != nil {
-				return err
-			}
-			tokens, err := access.ListAPITokens(command.Context())
-			if err != nil {
-				return fmt.Errorf("list tokens: %w", err)
-			}
-			rows := make([][]string, 0, len(tokens))
-			ids := make([]string, 0, len(tokens))
-			for _, t := range tokens {
-				id := strconv.Itoa(t.ID)
-				ids = append(ids, id)
-				rows = append(rows, []string{id, t.Name, t.Role, t.CreatedAt.Format(time.RFC3339), timeOrDash(t.ExpiresAt), timeOrDash(t.RevokedAt)})
-			}
-			return printList(command, f, tokens, ids, []string{"ID", "NAME", "ROLE", "CREATED", "EXPIRES", "REVOKED"}, rows)
-		},
-	}
-}
-
 func newGetAgentTokensCommand(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
 		Use:   "agent-tokens",
@@ -314,12 +257,6 @@ func printList(command *cobra.Command, f *cli.Factory, document any, ids []strin
 	return printer.Table(headers, rows)
 }
 
-func newDeleteTokenCommand(f *cli.Factory) *cobra.Command {
-	return newRevokeCommand(f, "token ID", "Revoke an API token", "API token", func(ctx context.Context, a api.AccessClient, id string) error {
-		return a.RevokeAPIToken(ctx, id)
-	})
-}
-
 func newDeleteAgentTokenCommand(f *cli.Factory) *cobra.Command {
 	return newRevokeCommand(f, "agent-token ID", "Revoke an unused agent enrolment token (owner)", "Agent enrolment token",
 		func(ctx context.Context, a api.AccessClient, id string) error {
@@ -347,13 +284,6 @@ func newRevokeCommand(f *cli.Factory, use, short, what string, revoke func(conte
 			return err
 		},
 	}
-}
-
-func timeOrDash(t *time.Time) string {
-	if t == nil {
-		return "-"
-	}
-	return t.Format(time.RFC3339)
 }
 
 func orDash(value string) string {

@@ -2,179 +2,224 @@ package commands
 
 import (
 	"fmt"
-	"io"
-	"strings"
-	"text/tabwriter"
+	"sort"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
-	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
-	"github.com/spf13/cobra"
+	"github.com/machinarchy/machinarchy/internal/cli/cred"
+	"github.com/machinarchy/machinarchy/internal/cli/output"
+	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 )
 
-const maxCredentialInput = config.MaxTokenBytes
-
-// NewConfigCommand registers configuration and context management commands.
+// NewConfigCommand registers the hidden `config path` and `config show`. They
+// are for support and scripts; nothing on the beginner path needs them, and
+// they change nothing.
 func NewConfigCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "config",
-		Short: "Inspect and update CLI contexts and credentials",
-		Args:  cobra.NoArgs,
+		Use:    "config",
+		Short:  "Show where the CLI keeps its settings",
+		Hidden: true,
+		Args:   cobra.NoArgs,
 	}
-	command.AddCommand(
-		newCurrentContextCommand(factory),
-		newGetContextsCommand(factory),
-		newUseContextCommand(factory),
-		newSetClusterCommand(factory),
-		newSetCredentialsCommand(factory),
-		newSetContextCommand(factory),
-	)
+	command.AddCommand(newConfigPathCommand(factory), newConfigShowCommand(factory))
+
 	return command
 }
 
-func newCurrentContextCommand(factory *cli.Factory) *cobra.Command {
+func newConfigPathCommand(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "current-context",
-		Short: "Print the selected context",
+		Use:   "path",
+		Short: "Print the config file and the credentials file",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			name := factory.Config().CurrentContext()
-			if name == "" {
-				return clierr.Usagef("no current context is selected")
+			path := f.Config().Path()
+			if _, err := fmt.Fprintln(command.OutOrStdout(), path); err != nil {
+				return err
 			}
-			_, err := fmt.Fprintln(command.OutOrStdout(), name)
+			if f.Config().Quiet() {
+				return nil
+			}
+			_, err := fmt.Fprintln(command.OutOrStdout(), config.CredentialsPath(path))
+
 			return err
 		},
 	}
 }
 
-func newGetContextsCommand(factory *cli.Factory) *cobra.Command {
+type showCredential struct {
+	Kind      cred.Kind  `json:"kind" yaml:"kind"`
+	Secret    string     `json:"secret" yaml:"secret"`
+	User      string     `json:"user,omitempty" yaml:"user,omitempty"`
+	Name      string     `json:"name,omitempty" yaml:"name,omitempty"`
+	Role      string     `json:"role,omitempty" yaml:"role,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty" yaml:"expiresAt,omitempty"`
+	Expired   bool       `json:"expired" yaml:"expired"`
+}
+
+type showServer struct {
+	Name         string          `json:"name" yaml:"name"`
+	URL          string          `json:"url" yaml:"url"`
+	Active       bool            `json:"active" yaml:"active"`
+	InsecureHTTP bool            `json:"insecureHttp" yaml:"insecureHttp"`
+	CAFile       string          `json:"caFile,omitempty" yaml:"caFile,omitempty"`
+	Env          string          `json:"env,omitempty" yaml:"env,omitempty"`
+	Session      *showCredential `json:"session,omitempty" yaml:"session,omitempty"`
+	Token        *showCredential `json:"token,omitempty" yaml:"token,omitempty"`
+}
+
+type showOption struct {
+	Value  string `json:"value" yaml:"value"`
+	Source string `json:"source" yaml:"source"`
+}
+
+type showDocument struct {
+	ConfigFile      string                `json:"configFile" yaml:"configFile"`
+	CredentialsFile string                `json:"credentialsFile" yaml:"credentialsFile"`
+	CredentialsIn   string                `json:"credentialsIn" yaml:"credentialsIn"`
+	Active          string                `json:"active,omitempty" yaml:"active,omitempty"`
+	Servers         []showServer          `json:"servers" yaml:"servers"`
+	Options         map[string]showOption `json:"options" yaml:"options"`
+}
+
+// newConfigShowCommand prints everything the CLI has saved and every effective
+// option with its source. Every credential is shown as ***.
+func newConfigShowCommand(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "get-contexts",
-		Short: "List configured contexts",
+		Use:   "show",
+		Short: "Print the saved servers and the effective options, with secrets hidden",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 4, 2, ' ', 0)
-			if _, err := fmt.Fprintln(writer, "CURRENT\tNAME\tCLUSTER\tUSER\tENVIRONMENT"); err != nil {
+			printer, err := f.Printer(command.OutOrStdout(), output.FormatTable)
+			if err != nil {
 				return err
 			}
-			for _, name := range factory.Config().ContextNames() {
-				context, _ := factory.Config().GetContext(name)
-				current := ""
-				if name == factory.Config().CurrentContext() {
-					current = "*"
-				}
-				if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
-					current, name, context.Cluster, context.User, context.Environment); err != nil {
-					return err
-				}
+			doc, err := buildShow(f)
+			if err != nil {
+				return err
 			}
-			return writer.Flush()
+			if printer.Format() != output.FormatTable {
+				return printer.Document(doc)
+			}
+
+			return printShow(command, doc)
 		},
 	}
 }
 
-func newUseContextCommand(factory *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:   "use-context NAME",
-		Short: "Set the current context",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			if err := factory.Config().UseContext(args[0]); err != nil {
-				return err
-			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "Switched to context %q.\n", args[0])
-			return err
-		},
+func buildShow(f *cli.Factory) (showDocument, error) {
+	store := f.Config()
+	doc := showDocument{
+		ConfigFile: store.Path(), CredentialsFile: config.CredentialsPath(store.Path()), CredentialsIn: f.Credentials().Where(),
+		Active: store.ActiveName(), Servers: []showServer{}, Options: map[string]showOption{},
 	}
+
+	now := f.Now()
+	for _, name := range store.ServerNames() {
+		server, _ := store.Server(name)
+		entry, err := f.Credentials().Get(name)
+		if err != nil {
+			return showDocument{}, err
+		}
+		doc.Servers = append(doc.Servers, showServer{
+			Name: name, URL: server.URL, Active: name == store.ActiveName(), InsecureHTTP: server.InsecureHTTP,
+			CAFile: server.CAFile, Env: server.Env, Session: redact(entry.Session, now), Token: redact(entry.Token, now),
+		})
+	}
+
+	for _, key := range []string{"server", "env", "output", "plain", "quiet", "verbose", "no-headers", "no-input", "request-timeout", "token"} {
+		value, source := store.Setting(key)
+		if key == "token" && value != "" {
+			value = "***"
+		}
+		doc.Options[key] = showOption{Value: value, Source: source.String()}
+	}
+
+	return doc, nil
 }
 
-func newSetClusterCommand(factory *cli.Factory) *cobra.Command {
-	var server string
-	var insecureHTTP bool
-	command := &cobra.Command{
-		Use:   "set-cluster NAME --server URL",
-		Short: "Add or update an API server",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			if strings.TrimSpace(server) == "" {
-				return clierr.Usagef("--server is required")
-			}
-			if err := factory.Config().SetCluster(args[0], server, insecureHTTP); err != nil {
-				return err
-			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "Cluster %q configured.\n", args[0])
-			return err
-		},
+// redact copies a credential for display. The secret is replaced; nothing else
+// about it is secret.
+func redact(c *cred.Credential, now time.Time) *showCredential {
+	if c == nil {
+		return nil
 	}
-	command.Flags().StringVar(&server, "server", "", "Machinarchy API base URL")
-	command.Flags().BoolVar(&insecureHTTP, "insecure-http", false, "Allow sending the API token over plain http:// to a non-loopback host")
-	return command
+
+	return &showCredential{Kind: c.Kind, Secret: "***", User: c.User, Name: c.Name, Role: c.Role, ExpiresAt: c.ExpiresAt, Expired: c.Expired(now)}
 }
 
-func newSetCredentialsCommand(factory *cli.Factory) *cobra.Command {
-	var token string
-	var tokenStdin bool
-	command := &cobra.Command{
-		Use:   "set-credentials NAME [--token TOKEN | --token-stdin]",
-		Short: "Store an API bearer token in the CLI config",
-		Long:  "Stores credentials in the config file with owner-only permissions. Prefer --token-stdin to avoid placing a token in shell history or process arguments.",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			if tokenStdin == (strings.TrimSpace(token) != "") {
-				return clierr.Usagef("provide exactly one of --token or --token-stdin")
-			}
-			if tokenStdin {
-				data, err := io.ReadAll(io.LimitReader(command.InOrStdin(), maxCredentialInput+1))
-				if err != nil {
-					return fmt.Errorf("read credential from stdin: %w", err)
-				}
-				if len(data) > maxCredentialInput {
-					return clierr.Usagef("credential input exceeds %d bytes", maxCredentialInput)
-				}
-				token = string(data)
-			}
-			if err := factory.Config().SetUser(args[0], token); err != nil {
-				return err
-			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "Credentials %q configured.\n", args[0])
-			return err
-		},
-	}
-	command.Flags().StringVar(&token, "token", "", "API bearer token (prefer --token-stdin)")
-	command.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read the API bearer token from stdin")
-	return command
-}
+func printShow(command *cobra.Command, doc showDocument) error {
+	out := command.OutOrStdout()
+	line := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(out, format+"\n", args...)
 
-func newSetContextCommand(factory *cli.Factory) *cobra.Command {
-	var cluster string
-	var user string
-	var environment string
-	command := &cobra.Command{
-		Use:   "set-context NAME --cluster CLUSTER --user USER [--env ENVIRONMENT]",
-		Short: "Create or update a named context",
-		Args: func(command *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return fmt.Errorf("missing context NAME\n\nUsage: %s\n\nTo configure a local context, run these commands in order (replace the API URL and provide a JWT):\n  machinarchy config set-cluster local --server http://localhost:8080\n  printf '%%s' \"$MACHINARCHY_USER_TOKEN\" | machinarchy config set-credentials local --token-stdin\n  machinarchy config set-context local --cluster local --user local\n  machinarchy config use-context local\n\nRun '%s --help' for details", command.UseLine(), command.CommandPath())
-			}
-			if len(args) != 1 {
-				return fmt.Errorf("expected one context NAME, received %d; usage: %s", len(args), command.UseLine())
-			}
-			return nil
-		},
-		RunE: func(command *cobra.Command, args []string) error {
-			if strings.TrimSpace(cluster) == "" || strings.TrimSpace(user) == "" {
-				return clierr.Usagef("--cluster and --user are required; example: machinarchy config set-context %s --cluster local --user local", args[0])
-			}
-			if err := factory.Config().SetContext(args[0], cluster, user, environment); err != nil {
+		return err
+	}
+
+	if err := line("Config file:       %s", sanitize.Line(doc.ConfigFile)); err != nil {
+		return err
+	}
+	if err := line("Credentials file:  %s (%s)", sanitize.Line(doc.CredentialsFile), sanitize.Line(doc.CredentialsIn)); err != nil {
+		return err
+	}
+	active := doc.Active
+	if active == "" {
+		active = "none"
+	}
+	if err := line("Active server:     %s", sanitize.Line(active)); err != nil {
+		return err
+	}
+
+	for _, server := range doc.Servers {
+		if err := line("\nServer %s  %s", sanitize.Line(server.Name), sanitize.Line(server.URL)); err != nil {
+			return err
+		}
+		if server.InsecureHTTP {
+			if err := line("  plain http allowed"); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintf(command.OutOrStdout(), "Context %q configured.\n", args[0])
-			return err
-		},
+		}
+		if server.CAFile != "" {
+			if err := line("  CA file: %s", sanitize.Line(server.CAFile)); err != nil {
+				return err
+			}
+		}
+		for _, c := range []struct {
+			label string
+			value *showCredential
+		}{{"session", server.Session}, {"token", server.Token}} {
+			if c.value == nil {
+				continue
+			}
+			expiry := "no expiry known"
+			if c.value.ExpiresAt != nil {
+				expiry = "expires " + c.value.ExpiresAt.Local().Format("2006-01-02 15:04")
+			}
+			if c.value.Expired {
+				expiry = "expired"
+			}
+			if err := line("  %-8s %s (%s) %s, %s", c.label+":", c.value.Kind, c.value.Secret, sanitize.Line(c.value.Name), expiry); err != nil {
+				return err
+			}
+		}
 	}
-	command.Flags().StringVar(&cluster, "cluster", "", "Cluster name from config set-cluster")
-	command.Flags().StringVar(&user, "user", "", "Credential name from config set-credentials")
-	command.Flags().StringVar(&environment, "env", "", "Default Machinarchy environment name or ID")
-	return command
+
+	if err := line("\nOptions"); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(doc.Options))
+	for key := range doc.Options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		option := doc.Options[key]
+		if err := line("  %-16s %-24s from %s", key, sanitize.Line(option.Value), option.Source); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

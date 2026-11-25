@@ -75,7 +75,7 @@ func (c Credential) String() string { return redacted }
 func (c Credential) GoString() string { return redacted }
 
 // Format makes every fmt verb print "***".
-func (c Credential) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(redacted)) }
+func (c Credential) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, redacted) }
 
 // Expired reports whether the credential is known to have expired at now.
 func (c Credential) Expired(now time.Time) bool {

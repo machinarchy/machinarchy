@@ -40,12 +40,6 @@ var savedDefaults = map[string]bool{ // value: is boolean
 	"plain": true, "quiet": true, "verbose": true, "no-headers": true, "no-input": true,
 }
 
-// envKeys are the options that have an environment variable.
-var envKeys = []string{
-	"server", "env", "output", "token", "request-timeout",
-	"verbose", "quiet", "no-headers", "no-input", "plain",
-}
-
 // Source says where a setting's value came from.
 type Source int
 
@@ -217,4 +211,14 @@ func (s *Store) Source(key string) Source {
 	_, source := s.v.resolve(key)
 
 	return source
+}
+
+// Setting returns the effective value of a global option and where it came
+// from, for `config show`.
+func (s *Store) Setting(key string) (string, Source) {
+	if s == nil || s.v == nil {
+		return "", SourceDefault
+	}
+
+	return s.v.resolve(key)
 }

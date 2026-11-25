@@ -1,11 +1,17 @@
-// Package config handles the CLI's kubeconfig-style contexts independently of
-// the server's runtime configuration.
+// Package config holds the CLI's non-secret settings: the servers a person has
+// signed in to, which one is active, and saved defaults for a few global
+// options. Secrets are not here: credentials live in package cred, in a file of
+// their own.
 //
-// The on-disk document is parsed directly as YAML so that context, cluster,
-// and user names are preserved exactly (Viper would case-fold map keys and
-// split them on dots). Global options resolve with one precedence, in
-// settings.go: flag, MACHINARCHY_<NAME> environment variable, the deprecated
-// MACHINARCHY_<NAME> variable, saved "defaults:", flag default.
+// The file is YAML. Global options resolve with one precedence, in
+// settings.go: flag, MACHINARCHY_<NAME> environment variable, saved
+// "defaults:", flag default. Which server and credential a command uses is
+// decided in resolve.go.
+//
+// Servers replace the cluster, user and context trio of earlier versions. A
+// config file in that older format is not read: it is named in an error that
+// says how to move it aside and sign in again, so nothing is overwritten and no
+// token is silently carried over.
 package config
 
 import (
@@ -13,12 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -27,77 +32,64 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/fsutil"
 )
 
 const (
-	defaultAPIVersion = "machinarchy.io/v1"
-	maxConfigSize     = 1 << 20
+	fileVersion   = 2
+	maxConfigSize = 1 << 20
 
 	// MaxTokenBytes is the largest accepted API token.
 	MaxTokenBytes = 64 << 10
 
 	// DefaultRequestTimeout bounds one API request when no timeout is set.
 	DefaultRequestTimeout = 30 * time.Second
-
-	setupHint = "Log in to create a context:\n" +
-		"  machinarchy login --server http://localhost:8080 --context local --username admin\n" +
-		"or, with an API token, set one up by hand:\n" +
-		"  machinarchy config set-cluster local --server http://localhost:8080\n" +
-		"  printf '%s' \"$MACHINARCHY_USER_TOKEN\" | machinarchy config set-credentials local --token-stdin\n" +
-		"  machinarchy config set-context local --cluster local --user local\n" +
-		"  machinarchy config use-context local"
-
-	fileHint = "Fix or remove the file, or point --config (or MACHINARCHY_CONFIG) at another file."
 )
 
-// File is the on-disk, kubeconfig-style CLI configuration.
+// serverNamePattern is what a saved server may be called.
+var serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+// File is the on-disk CLI configuration.
 type File struct {
-	APIVersion     string             `yaml:"apiVersion"`
-	CurrentContext string             `yaml:"current-context"`
-	Contexts       map[string]Context `yaml:"contexts"`
-	Clusters       map[string]Cluster `yaml:"clusters"`
-	Users          map[string]User    `yaml:"users"`
+	Version int `yaml:"version"`
+	// Active is the name of the server commands use unless --server says
+	// otherwise.
+	Active  string            `yaml:"active,omitempty"`
+	Servers map[string]Server `yaml:"servers,omitempty"`
 	// Defaults are saved values for a few global options (see settings.go):
 	// they apply when neither a flag nor an environment variable is given.
 	Defaults map[string]string `yaml:"defaults,omitempty"`
+
+	// The keys below belong to the format this CLI replaced. They are read only
+	// to recognise such a file and refuse it with a helpful message.
+	APIVersion string         `yaml:"apiVersion,omitempty"`
+	Contexts   map[string]any `yaml:"contexts,omitempty"`
+	Clusters   map[string]any `yaml:"clusters,omitempty"`
+	Users      map[string]any `yaml:"users,omitempty"`
 }
 
-// Context selects a cluster, credential, and optional Machinarchy environment.
-type Context struct {
-	Cluster     string `yaml:"cluster"`
-	User        string `yaml:"user"`
-	Environment string `yaml:"environment,omitempty"`
-}
-
-// Cluster stores the API server base URL.
-type Cluster struct {
-	Server string `yaml:"server"`
-	// InsecureHTTP allows sending the token over plain http:// to a host that
-	// is not loopback (AUDIT S-18). Set only with config set-cluster --insecure-http.
+// Server is one server the person has signed in to.
+type Server struct {
+	// URL is the API base URL.
+	URL string `yaml:"url"`
+	// InsecureHTTP allows sending a credential over plain http:// to a host
+	// that is not loopback. It is chosen per server, at login, and never
+	// inherited by another URL.
 	InsecureHTTP bool `yaml:"insecure-http,omitempty"`
+	// CAFile is a PEM file of certificate authorities trusted for this server
+	// only (a private CA, or a self-signed certificate).
+	CAFile string `yaml:"ca-file,omitempty"`
+	// Env is the default environment name or ID for commands on this server.
+	Env string `yaml:"env,omitempty"`
 }
 
-// User stores an API bearer token.
-type User struct {
-	Token string `yaml:"token"`
-}
-
-// Target is the resolved endpoint and credential for a single CLI operation.
-type Target struct {
-	ContextName    string
-	Server         string
-	Token          string
-	Environment    string
-	RequestTimeout time.Duration
-}
-
-// Store holds the typed config document and the flag/environment overrides.
-// A command updates and saves the document only through the methods below.
+// Store holds the typed config document and the flag and environment
+// overrides. A command changes and saves the document only through the
+// methods below.
 type Store struct {
-	path     string
-	v        *settings
-	doc      File
-	warnings []string
+	path string
+	v    *settings
+	doc  File
 }
 
 // ResolvePath applies precedence: --config, MACHINARCHY_CONFIG, then the
@@ -111,27 +103,35 @@ func ResolvePath(explicit string) (string, error) {
 	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return "", clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("resolve user config directory: %w", err),
-			"Set MACHINARCHY_CONFIG or pass --config.")
+		return "", clierr.Detailed(clierr.ExitUsage,
+			fmt.Errorf("resolve user config directory: %w", err), "", "Set MACHINARCHY_CONFIG or pass --config.")
 	}
+
 	return filepath.Join(configDir, ".machinarchy", "config.yaml"), nil
 }
 
-// Load reads the YAML config, then binds environment variables and command
-// flags. A missing file is not an error; a damaged one is.
+// CredentialsPath returns where the credentials that belong to the config file
+// at configPath are kept: next to it, with ".credentials" before the
+// extension (config.yaml -> config.credentials.yaml).
+func CredentialsPath(configPath string) string {
+	return strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".credentials" + filepath.Ext(configPath)
+}
+
+// Load reads the config file, then binds environment variables and command
+// flags. A missing file is not an error; a damaged one, or one in an older
+// format, is.
 func Load(path string, flags *pflag.FlagSet) (*Store, error) {
 	resolvedPath, err := ResolvePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	doc, warnings, err := readDocument(resolvedPath)
+	doc, err := readDocument(resolvedPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Store{path: resolvedPath, v: newSettings(flags, doc.Defaults), doc: doc, warnings: warnings}, nil
+	return &Store{path: resolvedPath, v: newSettings(flags, doc.Defaults), doc: doc}, nil
 }
 
 // LoadSettings binds only flags and environment variables and reads no file.
@@ -141,264 +141,171 @@ func LoadSettings(flags *pflag.FlagSet) (*Store, error) {
 	return &Store{v: newSettings(flags, nil), doc: newDocument()}, nil
 }
 
-func newDocument() File {
-	return File{
-		APIVersion: defaultAPIVersion,
-		Contexts:   make(map[string]Context),
-		Clusters:   make(map[string]Cluster),
-		Users:      make(map[string]User),
+// Path returns the config file path, or "" when no file was selected.
+func (s *Store) Path() string {
+	if s == nil {
+		return ""
 	}
+
+	return s.path
 }
 
-func readDocument(path string) (File, []string, error) {
+func newDocument() File {
+	return File{Version: fileVersion, Servers: make(map[string]Server)}
+}
+
+func readDocument(path string) (File, error) {
 	doc := newDocument()
 
 	file, err := os.Open(path) // #nosec G304 -- path is the operator-selected CLI config file.
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return doc, nil, nil
+			return doc, nil
 		}
-		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
+
+		return File{}, unreadable(path, err)
 	}
 	defer func() { _ = file.Close() }() // read-only: a close error cannot lose data
 
 	info, err := file.Stat()
 	if err != nil {
-		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
+		return File{}, unreadable(path, err)
 	}
 	if info.IsDir() {
-		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("CLI config %q is a directory", path), fileHint)
+		return File{}, unreadable(path, errors.New("it is a directory"))
 	}
 
 	data, err := io.ReadAll(io.LimitReader(file, maxConfigSize+1))
 	if err != nil {
-		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("read CLI config %q: %w", path, err), fileHint)
+		return File{}, unreadable(path, err)
 	}
 	if len(data) > maxConfigSize {
-		return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("CLI config %q exceeds the maximum supported size", path), fileHint)
+		return File{}, unreadable(path, errors.New("it exceeds the maximum supported size"))
 	}
 
-	if len(bytes.TrimSpace(data)) > 0 {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return File{}, nil, clierr.Wrap(clierr.ExitUsage,
-				fmt.Errorf("parse CLI config %q: %w", path, err), fileHint)
+	if len(bytes.TrimSpace(data)) == 0 {
+		return doc, nil
+	}
+	var parsed File
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return File{}, unreadable(path, fmt.Errorf("it is not valid YAML: %w", err))
+	}
+
+	if parsed.APIVersion != "" || parsed.Contexts != nil || parsed.Clusters != nil || parsed.Users != nil {
+		return File{}, clierr.Detailed(clierr.ExitUsage,
+			fmt.Errorf("the CLI config %s is in an older format that this version no longer reads", path),
+			"it describes contexts, clusters and users, which servers replace; its tokens were not copied",
+			fmt.Sprintf("mv %q %q\nmachinarchy login YOUR-SERVER-URL", path, path+".old"))
+	}
+	if parsed.Version > fileVersion {
+		return File{}, clierr.Detailed(clierr.ExitUsage,
+			fmt.Errorf("the CLI config %s has version %d; this CLI reads version %d", path, parsed.Version, fileVersion),
+			"it was written by a newer machinarchy", "Update the CLI, or move the file aside and log in again.")
+	}
+	if err := validateDefaults(parsed.Defaults); err != nil {
+		return File{}, err
+	}
+	for name, server := range parsed.Servers {
+		if !serverNamePattern.MatchString(name) {
+			return File{}, clierr.Newf(clierr.ExitUsage, "Rename it in "+path+".", "%q is not a valid server name in the CLI config", name)
+		}
+		if err := ValidateServer(server.URL); err != nil {
+			return File{}, clierr.Detailed(clierr.ExitUsage, fmt.Errorf("server %q in the CLI config has an invalid URL", name), "", "machinarchy login "+"YOUR-SERVER-URL")
 		}
 	}
 
-	if err := validateDefaults(doc.Defaults); err != nil {
-		return File{}, nil, err
+	parsed.Version = fileVersion
+	if parsed.Servers == nil {
+		parsed.Servers = make(map[string]Server)
 	}
 
-	if doc.APIVersion == "" {
-		doc.APIVersion = defaultAPIVersion
-	}
-	if doc.Contexts == nil {
-		doc.Contexts = make(map[string]Context)
-	}
-	if doc.Clusters == nil {
-		doc.Clusters = make(map[string]Cluster)
-	}
-	if doc.Users == nil {
-		doc.Users = make(map[string]User)
-	}
-
-	return doc, permissionWarnings(path, info, doc), nil
+	return parsed, nil
 }
 
-// permissionWarnings reports a config file that stores tokens but is readable
-// by other users. It never fails the command, so existing setups keep working.
-func permissionWarnings(path string, info os.FileInfo, doc File) []string {
-	if runtime.GOOS == "windows" || info.Mode().Perm()&0o077 == 0 {
-		return nil
-	}
-
-	for _, user := range doc.Users {
-		if user.Token != "" {
-			return []string{fmt.Sprintf(
-				"CLI config %s is readable by other users (mode %04o) and contains API tokens; restrict it with: chmod 600 %s",
-				path, info.Mode().Perm(), path)}
-		}
-	}
-
-	return nil
+func unreadable(path string, err error) error {
+	return clierr.Detailed(clierr.ExitUsage,
+		fmt.Errorf("read CLI config %q: %w", path, err),
+		"", "Fix or remove the file, or point --config (or MACHINARCHY_CONFIG) at another file.")
 }
 
-// Warnings returns non-fatal problems found while loading the config file.
-func (s *Store) Warnings() []string {
+// ServerNames returns the saved server names in stable order.
+func (s *Store) ServerNames() []string {
+	names := make([]string, 0, len(s.doc.Servers))
+	for name := range s.doc.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+// Server returns a saved server by name.
+func (s *Store) Server(name string) (Server, bool) {
+	server, ok := s.doc.Servers[name]
+
+	return server, ok
+}
+
+// ActiveName returns the saved active server's name, ignoring any --server
+// override.
+func (s *Store) ActiveName() string {
 	if s == nil {
+		return ""
+	}
+
+	return s.doc.Active
+}
+
+// SaveServer adds or replaces a saved server and makes it the active one.
+func (s *Store) SaveServer(name string, server Server) error {
+	if !serverNamePattern.MatchString(name) {
+		return clierr.Newf(clierr.ExitUsage, "Use letters, digits, '.', '_' or '-' (up to 63 characters), for example --name lab.",
+			"%q is not a valid server name", name)
+	}
+	if err := ValidateServer(server.URL); err != nil {
+		return err
+	}
+	server.URL = strings.TrimRight(strings.TrimSpace(server.URL), "/")
+
+	s.doc.Servers[name] = server
+	s.doc.Active = name
+
+	return s.save()
+}
+
+// Activate makes a saved server the active one.
+func (s *Store) Activate(name string) error {
+	if _, ok := s.doc.Servers[name]; !ok {
+		return unknownServer(name, s.ServerNames())
+	}
+	s.doc.Active = name
+
+	return s.save()
+}
+
+// RemoveServer forgets a saved server. When it was the active one, no server
+// is active afterwards.
+func (s *Store) RemoveServer(name string) error {
+	if _, ok := s.doc.Servers[name]; !ok {
 		return nil
 	}
+	delete(s.doc.Servers, name)
+	if s.doc.Active == name {
+		s.doc.Active = ""
+	}
 
-	return s.warnings
+	return s.save()
 }
 
-// Resolve combines the selected context with explicit flags and environment
-// overrides. The returned token is never included in error messages.
-func (s *Store) Resolve() (Target, error) {
-	if s == nil || s.v == nil {
-		return Target{}, errors.New("CLI config is not loaded")
+func unknownServer(name string, known []string) error {
+	next := "machinarchy login YOUR-SERVER-URL"
+	why := "no server has been saved yet"
+	if len(known) > 0 {
+		next = "machinarchy switch\nmachinarchy login YOUR-SERVER-URL"
+		why = "saved servers: " + strings.Join(known, ", ")
 	}
 
-	contextName := s.ContextName()
-	if contextName == "" {
-		return Target{}, clierr.Wrap(clierr.ExitUsage,
-			errors.New("no active context is configured"), setupHint)
-	}
-	selected, ok := s.doc.Contexts[contextName]
-	if !ok {
-		return Target{}, clierr.Wrap(clierr.ExitUsage,
-			fmt.Errorf("context %q does not exist", contextName),
-			"List configured contexts with 'machinarchy config get-contexts'.\n\n"+setupHint)
-	}
-
-	cluster, clusterOK := s.doc.Clusters[selected.Cluster]
-	if !clusterOK {
-		return Target{}, clierr.Usagef("context %q references unknown cluster %q", contextName, selected.Cluster)
-	}
-	user, userOK := s.doc.Users[selected.User]
-	if !userOK {
-		return Target{}, clierr.Usagef("context %q references unknown user %q", contextName, selected.User)
-	}
-
-	server := strings.TrimSpace(s.v.GetString("server"))
-	insecureAllowed := false
-	if server == "" {
-		server = cluster.Server
-		insecureAllowed = cluster.InsecureHTTP
-	}
-	if err := ValidateServer(server); err != nil {
-		return Target{}, err
-	}
-	if err := checkTransport(server, insecureAllowed); err != nil {
-		return Target{}, err
-	}
-
-	token := strings.TrimSpace(s.v.GetString("token"))
-	if token == "" {
-		token = user.Token
-	}
-	if token == "" {
-		return Target{}, clierr.Wrap(clierr.ExitUsage,
-			errors.New("no API token configured; set credentials or MACHINARCHY_TOKEN"),
-			"Store a token with: printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin")
-	}
-	if err := ValidateToken(token); err != nil {
-		return Target{}, err
-	}
-
-	timeout, err := s.RequestTimeout()
-	if err != nil {
-		return Target{}, err
-	}
-
-	environment := strings.TrimSpace(s.v.GetString("env"))
-	if environment == "" {
-		environment = selected.Environment
-	}
-
-	return Target{
-		ContextName:    contextName,
-		Server:         strings.TrimRight(server, "/"),
-		Token:          token,
-		Environment:    environment,
-		RequestTimeout: timeout,
-	}, nil
-}
-
-// LoginTarget is where `machinarchy login` signs in and which user entry
-// receives the session token.
-type LoginTarget struct {
-	ContextName    string
-	Server         string
-	User           string
-	RequestTimeout time.Duration
-	// Create: the context does not exist yet; login creates a cluster, user
-	// and context named ContextName for Server.
-	Create bool
-}
-
-// ResolveLogin resolves the active context's server and user without
-// requiring a stored token, for `machinarchy login`.
-func (s *Store) ResolveLogin() (LoginTarget, error) {
-	if s == nil || s.v == nil {
-		return LoginTarget{}, errors.New("CLI config is not loaded")
-	}
-	contextName := s.ContextName()
-	override := strings.TrimSpace(s.v.GetString("server"))
-	selected, ok := s.doc.Contexts[contextName]
-	if !ok {
-		// A first login with --server creates the context.
-		if override == "" {
-			return LoginTarget{}, clierr.Wrap(clierr.ExitUsage, fmt.Errorf("context %q does not exist", contextName),
-				"For a first login, name the server and the context to create: machinarchy login --server URL --context NAME --username USER")
-		}
-		if contextName == "" {
-			contextName = "default"
-		}
-		if err := ValidateServer(override); err != nil {
-			return LoginTarget{}, err
-		}
-		if err := checkTransport(override, false); err != nil {
-			return LoginTarget{}, err
-		}
-		timeout, err := s.RequestTimeout()
-		if err != nil {
-			return LoginTarget{}, err
-		}
-		return LoginTarget{ContextName: contextName, Server: strings.TrimRight(override, "/"), User: contextName,
-			RequestTimeout: timeout, Create: true}, nil
-	}
-	cluster, ok := s.doc.Clusters[selected.Cluster]
-	if !ok {
-		return LoginTarget{}, clierr.Usagef("context %q references unknown cluster %q", contextName, selected.Cluster)
-	}
-	server := strings.TrimSpace(s.v.GetString("server"))
-	insecureAllowed := false
-	if server == "" {
-		server, insecureAllowed = cluster.Server, cluster.InsecureHTTP
-	}
-	if err := ValidateServer(server); err != nil {
-		return LoginTarget{}, err
-	}
-	// A password is sent here: the same transport rule as for tokens.
-	if err := checkTransport(server, insecureAllowed); err != nil {
-		return LoginTarget{}, err
-	}
-	timeout, err := s.RequestTimeout()
-	if err != nil {
-		return LoginTarget{}, err
-	}
-	return LoginTarget{ContextName: contextName, Server: strings.TrimRight(server, "/"), User: selected.User, RequestTimeout: timeout}, nil
-}
-
-// ContextName returns the active context name, including any --context override.
-func (s *Store) ContextName() string {
-	if s == nil || s.v == nil {
-		return ""
-	}
-	if name := strings.TrimSpace(s.v.GetString("context")); name != "" {
-		return name
-	}
-	return s.doc.CurrentContext
-}
-
-// Environment returns the active Machinarchy environment filter, including --env.
-func (s *Store) Environment() string {
-	if s == nil || s.v == nil {
-		return ""
-	}
-	if environment := strings.TrimSpace(s.v.GetString("env")); environment != "" {
-		return environment
-	}
-	if selected, ok := s.doc.Contexts[s.ContextName()]; ok {
-		return selected.Environment
-	}
-	return ""
+	return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("no saved server is called %q", name), why, next)
 }
 
 // OutputFormat returns the selected resource output format, defaulting to
@@ -407,15 +314,17 @@ func (s *Store) OutputFormat() string {
 	if format := s.OutputExplicit(); format != "" {
 		return format
 	}
+
 	return "table"
 }
 
-// OutputExplicit returns the output format chosen by flag or environment, or
-// an empty string when the command's own default should apply.
+// OutputExplicit returns the output format chosen by flag, environment or saved
+// default, or an empty string when the command's own default should apply.
 func (s *Store) OutputExplicit() string {
 	if s == nil || s.v == nil {
 		return ""
 	}
+
 	return strings.ToLower(strings.TrimSpace(s.v.GetString("output")))
 }
 
@@ -458,101 +367,6 @@ func (s *Store) RequestTimeout() (time.Duration, error) {
 	return timeout, nil
 }
 
-// ContextNames returns configured context names in stable sorted order.
-func (s *Store) ContextNames() []string {
-	names := make([]string, 0, len(s.doc.Contexts))
-	for name := range s.doc.Contexts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// GetContext returns a named context if it exists.
-func (s *Store) GetContext(name string) (Context, bool) {
-	selected, ok := s.doc.Contexts[name]
-	return selected, ok
-}
-
-// CurrentContext returns the persisted current context, ignoring one-command overrides.
-func (s *Store) CurrentContext() string {
-	if s == nil {
-		return ""
-	}
-	return s.doc.CurrentContext
-}
-
-// Cluster returns a named API cluster if it exists.
-func (s *Store) Cluster(name string) (Cluster, bool) {
-	cluster, ok := s.doc.Clusters[name]
-	return cluster, ok
-}
-
-// User returns named credentials if they exist.
-func (s *Store) User(name string) (User, bool) {
-	user, ok := s.doc.Users[name]
-	return user, ok
-}
-
-// SetCluster adds or updates a cluster and saves the config securely.
-func (s *Store) SetCluster(name, server string, insecureHTTP bool) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return clierr.Usagef("cluster name is required")
-	}
-	if err := ValidateServer(server); err != nil {
-		return err
-	}
-	if err := checkTransport(server, insecureHTTP); err != nil {
-		return err
-	}
-	s.doc.Clusters[name] = Cluster{Server: strings.TrimRight(strings.TrimSpace(server), "/"), InsecureHTTP: insecureHTTP}
-	return s.save()
-}
-
-// SetUser adds or updates credentials and saves the config securely.
-func (s *Store) SetUser(name, token string) error {
-	name = strings.TrimSpace(name)
-	token = strings.TrimSpace(token)
-	if name == "" || token == "" {
-		return clierr.Usagef("credential name and non-empty token are required")
-	}
-	if err := ValidateToken(token); err != nil {
-		return err
-	}
-	s.doc.Users[name] = User{Token: token}
-	return s.save()
-}
-
-// SetContext adds or updates a context that references existing cluster and user entries.
-func (s *Store) SetContext(name, cluster, user, environment string) error {
-	name = strings.TrimSpace(name)
-	cluster = strings.TrimSpace(cluster)
-	user = strings.TrimSpace(user)
-	environment = strings.TrimSpace(environment)
-	if name == "" || cluster == "" || user == "" {
-		return clierr.Usagef("context name, cluster, and user are required")
-	}
-	if _, ok := s.doc.Clusters[cluster]; !ok {
-		return clierr.Usagef("cluster %q does not exist; create it with 'machinarchy config set-cluster'", cluster)
-	}
-	if _, ok := s.doc.Users[user]; !ok {
-		return clierr.Usagef("user %q does not exist; create it with 'machinarchy config set-credentials'", user)
-	}
-	s.doc.Contexts[name] = Context{Cluster: cluster, User: user, Environment: environment}
-	return s.save()
-}
-
-// UseContext persists the selected current context.
-func (s *Store) UseContext(name string) error {
-	name = strings.TrimSpace(name)
-	if _, ok := s.doc.Contexts[name]; !ok {
-		return clierr.Usagef("context %q does not exist", name)
-	}
-	s.doc.CurrentContext = name
-	return s.save()
-}
-
 // ValidateServer accepts absolute HTTP or HTTPS API base URLs.
 func ValidateServer(server string) error {
 	parsed, err := url.Parse(strings.TrimSpace(server))
@@ -561,21 +375,75 @@ func ValidateServer(server string) error {
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return clierr.Usagef("API server must be an absolute http:// or https:// URL without credentials, query, or fragment")
 	}
+
 	return nil
 }
 
-// checkTransport refuses to send a bearer token over plain HTTP to a host
-// that is not loopback, where anyone on the path can read it (AUDIT S-18).
-// insecureAllowed is the cluster's explicit --insecure-http opt-in.
-func checkTransport(server string, insecureAllowed bool) error {
+// NormalizeURL turns what a person typed into an API base URL: https:// is
+// assumed when there is no scheme, and a trailing slash is dropped.
+func NormalizeURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", clierr.Usagef("the server address is empty")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	if err := ValidateServer(raw); err != nil {
+		return "", err
+	}
+
+	return strings.TrimRight(raw, "/"), nil
+}
+
+// DefaultServerName derives a name for a server from its URL, for example
+// "machinarchy-example-com" or "localhost-8080".
+func DefaultServerName(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "server"
+	}
+
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(parsed.Host) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+
+			continue
+		}
+		if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "server"
+	}
+	if len(name) > 63 {
+		name = strings.TrimRight(name[:63], "-")
+	}
+
+	return name
+}
+
+// CheckTransport refuses to send a credential over plain HTTP to a host that
+// is not loopback, where anyone on the path can read it. insecureAllowed is the
+// server's explicit --insecure-http choice.
+func CheckTransport(server string, insecureAllowed bool) error {
 	parsed, err := url.Parse(strings.TrimSpace(server))
 	if err != nil || parsed.Scheme != "http" || insecureAllowed || IsLoopbackHost(parsed.Hostname()) {
 		return nil
 	}
-	return clierr.Wrap(clierr.ExitUsage,
-		fmt.Errorf("refusing to send the API token over plain http:// to %s", parsed.Host),
-		"Use an https:// server URL. If this network is trusted, opt in for this cluster with:\n"+
-			"  machinarchy config set-cluster NAME --server "+server+" --insecure-http")
+
+	return clierr.Detailed(clierr.ExitUsage,
+		fmt.Errorf("refusing to send your credentials over plain http:// to %s", parsed.Host),
+		"anyone on the network path can read them",
+		"Use an https:// address. On a network you trust, sign in again with --insecure-http:\n"+
+			"  machinarchy login "+server+" --insecure-http")
 }
 
 // IsLoopbackHost reports whether host is localhost, a *.localhost name or a
@@ -586,6 +454,7 @@ func IsLoopbackHost(host string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
+
 	return ip != nil && ip.IsLoopback()
 }
 
@@ -599,12 +468,14 @@ func ValidateToken(token string) error {
 	for _, r := range token {
 		if r <= ' ' || r == 0x7f {
 			invalid = true
+
 			break
 		}
 	}
 	if invalid {
 		return clierr.Usagef("API token is invalid; tokens must not contain whitespace or exceed 64 KiB")
 	}
+
 	return nil
 }
 
@@ -615,6 +486,8 @@ func (s *Store) save() error {
 	if s.path == "" {
 		return errors.New("CLI config file path is not set")
 	}
+
+	s.doc.Version = fileVersion
 	data, err := yaml.Marshal(s.doc)
 	if err != nil {
 		return fmt.Errorf("encode CLI config: %w", err)
@@ -623,54 +496,6 @@ func (s *Store) save() error {
 		return errors.New("CLI config exceeds the maximum supported size")
 	}
 
-	directory := filepath.Dir(s.path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-	file, err := os.CreateTemp(directory, ".machinarchy-config-*")
-	if err != nil {
-		return fmt.Errorf("create temporary config: %w", err)
-	}
-	tempPath := file.Name()
-	defer func() {
-		if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("failed to remove temporary config file",
-				"path", tempPath,
-				"error", err,
-			)
-		}
-	}()
-
-	// Write, sync, and close the temporary file.
-	writeErr := func() (retErr error) {
-		defer func() {
-			if err := file.Close(); err != nil {
-				retErr = errors.Join(
-					retErr,
-					fmt.Errorf("close temporary config: %w", err),
-				)
-			}
-		}()
-
-		if err := file.Chmod(0o600); err != nil {
-			return fmt.Errorf("secure temporary config: %w", err)
-		}
-
-		if _, err := file.Write(data); err != nil {
-			return fmt.Errorf("write CLI config: %w", err)
-		}
-
-		if err := file.Sync(); err != nil {
-			return fmt.Errorf("sync CLI config: %w", err)
-		}
-
-		return nil
-	}()
-	if writeErr != nil {
-		return writeErr
-	}
-	if err := os.Rename(tempPath, s.path); err != nil {
-		return fmt.Errorf("replace CLI config: %w", err)
-	}
-	return nil
+	// The file holds no secret, but it names every server, so it is private.
+	return fsutil.WriteAtomic(s.path, data, 0o700, 0o600)
 }

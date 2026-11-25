@@ -90,8 +90,8 @@ func (e *Error) ErrorHint() string {
 func (e *Error) advice() (why, next string) {
 	switch {
 	case e.Status == http.StatusUnauthorized:
-		return "The server did not accept the stored credential; it may be expired or revoked.",
-			"printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin"
+		return "The server did not accept the credential; it may have expired or been revoked.",
+			"machinarchy login"
 	case e.Status == http.StatusForbidden && e.Fields["code"] == "execution_not_allowed":
 		return "The server's execution policy does not allow this command.",
 			"An owner can add a matching entry, such as \"systemctl is-active {unit}\",\n" +

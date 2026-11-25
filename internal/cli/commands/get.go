@@ -26,7 +26,7 @@ func NewGetCommand(factory *cli.Factory) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 	command.AddCommand(newGetHostsCommand(factory), newGetProfilesCommand(factory), newGetOperationsCommand(factory),
-		newGetTokensCommand(factory), newGetAgentTokensCommand(factory))
+		newGetAgentTokensCommand(factory))
 	return command
 }
 

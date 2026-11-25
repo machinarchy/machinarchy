@@ -3,8 +3,10 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -13,6 +15,12 @@ import (
 // config file (version, for example). Global flags and environment overrides
 // still apply. Cobra's built-in help and completion commands are exempt too.
 const AnnotationSkipConfig = "machinarchy.io/skip-config"
+
+// AnnotationOwner marks a command that acts as the workspace owner. Such a
+// command runs with the saved login session and with nothing else: an API
+// token can never be an owner, so with only a token the command stops before
+// it sends anything and says how to sign in with a password.
+const AnnotationOwner = "machinarchy.io/owner"
 
 // AnnotationDryRun marks a command that honours --dry-run. A command without
 // it refuses the flag instead of ignoring it, so "--dry-run" can never run
@@ -38,6 +46,17 @@ type Options struct {
 	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
 	// locale, COLUMNS). Nil selects os.Getenv; tests inject one.
 	Getenv func(string) string
+	// IsTerminal reports whether a reader is an interactive terminal. Nil
+	// selects the real check; tests inject one.
+	IsTerminal func(io.Reader) bool
+	// ReadSecret reads a line without echo. Nil reads from the terminal;
+	// tests inject one.
+	ReadSecret func(prompt string) (string, error)
+	// Now returns the current time. Nil selects time.Now.
+	Now func() time.Time
+	// Hostname returns the computer's name, used to name a device token. Nil
+	// selects os.Hostname.
+	Hostname func() (string, error)
 }
 
 // NewRootCommand creates a Cobra root and binds shared configuration flags.
@@ -57,6 +76,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 		Streams:       streams,
 		ClientBuilder: options.ClientBuilder,
 		Getenv:        options.Getenv,
+		isTerminal:    options.IsTerminal,
+		readSecret:    options.ReadSecret,
+		now:           options.Now,
+		hostname:      options.Hostname,
 		Logger: slog.New(slog.NewJSONHandler(streams.ErrOut,
 			&slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
@@ -78,11 +101,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	// (config/settings.go). The four exceptions are flag-only on purpose.
 	flags := root.PersistentFlags()
 	flags.StringVar(&configPath, "config", "", "CLI config file (default: user config directory)")
-	flags.String("context", "", "Context to use for this command")
 	flags.StringP("env", "n", "", "Machinarchy environment name or ID")
 	flags.StringP("output", "o", "", "Output format: table, json, or yaml (default depends on the command)")
 	flags.BoolP("verbose", "v", false, "Enable debug logging")
-	flags.String("server", "", "API server URL, overriding the context's server")
+	flags.String("server", "", "Saved server name, or an address for this command only (MACHINARCHY_SERVER)")
 	flags.String("request-timeout", "", "Timeout for each API request, such as 10s or 2m (default 30s)")
 	flags.BoolP("quiet", "q", false, "Suppress status output; print only identifiers where supported")
 	flags.Bool("no-headers", false, "Omit table headers")
@@ -106,6 +128,7 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 		// it means the invocation was well formed. Anything that fails later
 		// is a runtime failure, not a usage error.
 		factory.started = true
+		factory.needsOwner = command.Annotations[AnnotationOwner] == "true"
 
 		var err error
 		if skipsConfig(command) {

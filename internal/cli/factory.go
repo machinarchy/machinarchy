@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -17,6 +18,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
+	"github.com/machinarchy/machinarchy/internal/cli/cred"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/machinarchy/machinarchy/internal/cli/ui"
 )
@@ -58,6 +60,23 @@ type Factory struct {
 	// isTerminal reports whether a reader is an interactive terminal. Tests
 	// replace it; nil selects the real check.
 	isTerminal func(io.Reader) bool
+
+	// readSecret reads a line without echo. Tests replace it; nil reads from
+	// the terminal.
+	readSecret func(prompt string) (string, error)
+
+	now      func() time.Time
+	hostname func() (string, error)
+
+	// creds keeps the saved credentials; nil when no config file was selected.
+	creds cred.Store
+
+	// needsOwner is set when the running command acts as the owner.
+	needsOwner bool
+
+	// input is the one buffered reader over Streams.In: a reader per question
+	// would lose what an earlier one had buffered.
+	input *bufio.Reader
 }
 
 // LoadConfig reads the selected configuration file and binds the root flags
@@ -67,6 +86,7 @@ func (f *Factory) LoadConfig(path string, flags *pflag.FlagSet) error {
 	if err != nil {
 		return err
 	}
+	f.creds = cred.NewFile(config.CredentialsPath(store.Path()))
 
 	return f.install(store, flags)
 }
@@ -110,12 +130,6 @@ func (f *Factory) install(store *config.Store, flags *pflag.FlagSet) error {
 		&slog.HandlerOptions{Level: level}))
 
 	f.style = ui.DetectStyle(f.getenv, f.Streams.ErrOut, store.Plain())
-
-	for _, warning := range store.Warnings() {
-		if _, err := fmt.Fprintf(f.Streams.ErrOut, "Warning: %s\n", warning); err != nil {
-			return err
-		}
-	}
 
 	return nil
 }
@@ -251,7 +265,7 @@ func (f *Factory) Confirm(prompt string) (bool, error) {
 		return false, err
 	}
 
-	line, err := bufio.NewReader(f.Streams.In).ReadString('\n')
+	line, err := f.reader().ReadString('\n')
 	if err != nil && line == "" {
 		if errors.Is(err, io.EOF) {
 			return false, required
@@ -266,6 +280,38 @@ func (f *Factory) Confirm(prompt string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// ConfirmTyped asks the person to type name before something is removed or
+// revoked. --yes does not answer it: removing a thing is confirmed by naming
+// it, on a terminal by typing it and in a script with --confirm NAME.
+func (f *Factory) ConfirmTyped(what, name string) error {
+	if given := f.ConfirmName(); given != "" {
+		if given == name {
+			return nil
+		}
+
+		return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("--confirm is %q, but this is about %q", given, name), "", "--confirm "+name)
+	}
+
+	if f.config.NoInput() || !f.interactive() {
+		return clierr.Detailed(clierr.ExitUsage,
+			fmt.Errorf("this needs confirmation, and --yes is not enough here (%s)", what),
+			"removing something is confirmed by naming it", "--confirm "+name)
+	}
+
+	if _, err := fmt.Fprintf(f.Streams.ErrOut, "%s\nType %q to confirm: ", what, name); err != nil {
+		return err
+	}
+	line, err := f.reader().ReadString('\n')
+	if err != nil && line == "" {
+		return clierr.Newf(clierr.ExitFailure, "", "aborted; nothing was changed")
+	}
+	if strings.TrimSpace(line) != name {
+		return clierr.Newf(clierr.ExitFailure, "", "aborted; nothing was changed")
+	}
+
+	return nil
 }
 
 // RequireConfirmation is Confirm for callers that simply stop when the user
@@ -301,18 +347,42 @@ func isTerminal(reader io.Reader) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// NewAPIClient resolves the effective context and constructs its API client.
+// NewAPIClient resolves the server and the credential this command runs with
+// and constructs its API client. A command marked AnnotationOwner gets the
+// saved login session or an explanation, never an API token.
 func (f *Factory) NewAPIClient(ctx context.Context) (api.Client, error) {
-	if f == nil || f.config == nil {
-		return nil, errors.New("CLI configuration is not initialized")
-	}
 	if ctx == nil {
 		return nil, errors.New("command context is required")
 	}
-	target, err := f.config.Resolve()
+	target, err := f.ResolveTarget()
 	if err != nil {
 		return nil, err
 	}
+
+	return f.ClientFor(target)
+}
+
+// ResolveTarget decides the server and the credential the running command
+// uses: the server --server or MACHINARCHY_SERVER names, else the active one;
+// the credential MACHINARCHY_TOKEN, else the saved API token, else the saved
+// login session. A command marked AnnotationOwner takes the saved login
+// session or stops with an explanation.
+func (f *Factory) ResolveTarget() (config.Target, error) {
+	if f == nil || f.config == nil {
+		return config.Target{}, errors.New("CLI configuration is not initialized")
+	}
+
+	need := config.NeedAny
+	if f.needsOwner {
+		need = config.NeedOwner
+	}
+
+	return f.config.Resolve(f.creds, need, f.Now())
+}
+
+// ClientFor constructs the API client for an explicit target, such as the
+// credential a login has just received and not yet saved.
+func (f *Factory) ClientFor(target config.Target) (api.Client, error) {
 	builder := f.ClientBuilder
 	if builder == nil {
 		builder = func(target config.Target) (api.Client, error) {
@@ -350,8 +420,14 @@ var ErrNoTerminal = errors.New("no terminal to prompt on")
 // returns ErrNoTerminal when input is not an interactive terminal or
 // --no-input is set; commands then offer a --*-stdin flag instead.
 func (f *Factory) ReadSecret(prompt string) (string, error) {
+	if !f.interactive() || f.config.NoInput() {
+		return "", ErrNoTerminal
+	}
+	if f.readSecret != nil {
+		return f.readSecret(prompt)
+	}
 	file, ok := f.Streams.In.(*os.File)
-	if !ok || !f.interactive() || f.config.NoInput() {
+	if !ok {
 		return "", ErrNoTerminal
 	}
 	if _, err := fmt.Fprint(f.Streams.ErrOut, prompt); err != nil {
@@ -362,5 +438,50 @@ func (f *Factory) ReadSecret(prompt string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read from the terminal: %w", err)
 	}
+
 	return string(value), nil
 }
+
+// reader returns the one buffered reader over standard input.
+func (f *Factory) reader() *bufio.Reader {
+	if f.input == nil {
+		f.input = bufio.NewReader(f.Streams.In)
+	}
+
+	return f.input
+}
+
+// Prompter returns a prompter for the conversation of one command. It asks
+// nothing, and returns ui.ErrNoInput, when input is not a terminal or
+// --no-input is set.
+func (f *Factory) Prompter() *ui.Prompter {
+	interactive := f.interactive() && !f.config.NoInput()
+	prompter := &ui.Prompter{In: f.reader(), Out: f.Streams.ErrOut, Interactive: interactive}
+	if interactive {
+		prompter.ReadSecret = f.ReadSecret
+	}
+
+	return prompter
+}
+
+// Now returns the current time.
+func (f *Factory) Now() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+
+	return time.Now()
+}
+
+// Hostname returns the computer's name.
+func (f *Factory) Hostname() (string, error) {
+	if f.hostname != nil {
+		return f.hostname()
+	}
+
+	return os.Hostname()
+}
+
+// Credentials returns the saved-credential store; nil when no config file was
+// selected (commands that skip the config).
+func (f *Factory) Credentials() cred.Store { return f.creds }
