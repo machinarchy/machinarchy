@@ -104,9 +104,18 @@ func IsUniqueViolation(err error) bool {
 	return false
 }
 
-// Time formats a timestamp the way every table stores it: RFC 3339 text in
-// UTC with nanoseconds, identical in both dialects.
-func Time(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+// timeLayout is RFC 3339 in UTC with exactly nine fractional digits.
+// time.RFC3339Nano drops trailing zeros ("…:00Z" for a whole second, "…:00.5Z"
+// for half a second), and as text "Z" sorts after ".", so a whole second
+// compared as later than the half second after it. Fixed width makes text
+// order equal time order, which every SQL comparison of a stored time relies
+// on (AUDIT F14-01).
+const timeLayout = "2006-01-02T15:04:05.000000000Z"
+
+// Time formats a timestamp the way every table stores it: fixed-width RFC 3339
+// text in UTC with nanoseconds, identical in both dialects, ordered like the
+// times it stands for. ParseTime also reads the older variable-width form.
+func Time(value time.Time) string { return value.UTC().Format(timeLayout) }
 
 // ParseTime reads a timestamp written by Time.
 func ParseTime(text string) (time.Time, error) {

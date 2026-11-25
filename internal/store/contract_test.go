@@ -185,6 +185,7 @@ var contractTests = []struct {
 	{"agent signing keys", testAgentSigningKeys},
 	{"operation data keys", testOperationDataKeys},
 	{"capability operations", testCapabilityOperations},
+	{"host recheck request", testHostRecheck},
 	{"host label selectors", testHostLabelSelectors},
 	{"host resync keyset uses an index", testHostKeysPlan},
 	{"audit records intents and outcomes", testAuditScope},
@@ -446,12 +447,25 @@ func testAPITokens(t *testing.T, f *fixture) {
 	if _, err := f.stores.Access.ResolveAPIToken(ctx, expired.TokenHash); !errors.Is(err, domain.ErrAPITokenNotFound) {
 		t.Errorf("expired token error = %v, want ErrAPITokenNotFound", err)
 	}
+	// AUDIT F14-01: a token that expired a fraction of a second ago, at a whole
+	// second, must be refused (as text, "…:00Z" once sorted after "…:00.3Z").
+	justExpired := newToken("just-expired", "d", time.Now().Truncate(time.Second))
+	storedTokens := 2
+	if time.Since(justExpired.ExpiresAt.UTC()) > 0 {
+		storedTokens++
+		if err := f.stores.Access.CreateAPIToken(ctx, justExpired); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.stores.Access.ResolveAPIToken(ctx, justExpired.TokenHash); !errors.Is(err, domain.ErrAPITokenNotFound) {
+			t.Errorf("token expired %v ago at a whole second: error = %v, want ErrAPITokenNotFound", time.Since(*justExpired.ExpiresAt), err)
+		}
+	}
 	if _, err := f.stores.Access.ResolveAPIToken(ctx, "short"); !errors.Is(err, domain.ErrAPITokenNotFound) {
 		t.Errorf("malformed hash error = %v, want ErrAPITokenNotFound", err)
 	}
 
-	if tokens, err := f.stores.Access.ListAPITokens(ctx, bob.ID, 1); err != nil || len(tokens) != 2 {
-		t.Errorf("bob's tokens = %d, %v; want 2", len(tokens), err)
+	if tokens, err := f.stores.Access.ListAPITokens(ctx, bob.ID, 1); err != nil || len(tokens) != storedTokens {
+		t.Errorf("bob's tokens = %d, %v; want %d", len(tokens), err, storedTokens)
 	}
 	if err := f.stores.Access.RevokeAPIToken(ctx, active.ID, bob.ID+1000, 1); !errors.Is(err, domain.ErrAPITokenNotFound) {
 		t.Errorf("revoking another user's token error = %v, want ErrAPITokenNotFound", err)
