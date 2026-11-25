@@ -173,6 +173,7 @@ func (s *Server) registerOperationalRoutes(e *echo.Echo, apiDocs, metrics bool) 
 		e.GET("/openapi.json", echo.WrapHandler(docs.SpecHandler()))
 		e.GET("/scalar", s.scalarReferenceHandler)
 		e.GET("/scalar/init.js", s.scalarInitHandler)
+		e.GET(scalarScriptPath, s.scalarBundleHandler)
 	}
 }
 

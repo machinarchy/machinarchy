@@ -57,6 +57,7 @@ func TestOperationalRoutesFollowConfiguration(t *testing.T) {
 				"/openapi.json":   tc.docs,
 				"/scalar":         tc.docs,
 				"/scalar/init.js": tc.docs,
+				scalarScriptPath:  tc.docs,
 			} {
 				recorder := httptest.NewRecorder()
 				e.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))

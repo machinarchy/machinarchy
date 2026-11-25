@@ -556,9 +556,11 @@ machinarchy and do not serve it on plain HTTP. Responses under `/api` add
 `Cache-Control: no-store`.
 
 The API reference page (`/scalar`) has its own policy. It allows only scripts
-from this origin and the version-pinned Scalar file on cdn.jsdelivr.net, and
-no inline scripts. Scalar's web fonts are turned off, so no other third-party
-host is contacted.
+from this origin and no inline scripts. The Scalar bundle is vendored in the
+binary (`internal/transport/http/scalar`, served at
+`/scalar/api-reference-1.75.0.js` with a one-year immutable cache and gzip when
+the client accepts it), so the page contacts no third-party host: Scalar's web
+fonts and telemetry are turned off.
 
 ## Metrics
 
