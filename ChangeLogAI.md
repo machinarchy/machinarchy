@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-25 — SSH review: handshake timeout and pinned keys on certified hosts (branch audit/ssh)
+
+Reviewed `pkg/sshclient` (client, host keys), `pkg/netpolicy`, and `internal/hostaccess` (connector, reconciler), and the argument quoting that builds the remote command.
+
+- **A silent host held its slot for the whole call (Medium).** `dial` set the handshake deadline to the call's deadline whenever there was one, so a host that accepts TCP and never speaks SSH (a firewall that drops, a tarpit, a wrong service) kept a connector slot until the call ended: up to 15 minutes for an attached command, 60 s for a launch. A handful of such hosts exhausted `ssh.maxConcurrent` and blocked every other run. The key scan already used the shorter of the two. The handshake now has its own 10 s limit, capped by the call deadline. The regression test hung for the full 5-minute call deadline before the fix and returns in 0.3 s with a shortened limit after it.
+- **A host pinned by its plain key was refused if it had a host certificate (Low).** A server with a host certificate lets the client negotiate the certificate form of its key; the pin (the plain key's fingerprint, from the scan) did not match the certificate's fingerprint, so a trusted host failed with `HostKeyRejected` and then showed `HostKeyChanged`. A pin now also matches the key inside a certificate (the server has just proved it holds that key); a certificate from an untrusted CA does not make a pinned key fail. Test: a certified host, pinned plain key, no CA.
+- **Cleanup:** the empty `pkg/sshclient/connection_pool.go` is removed.
+- **Looked at, left as is:** the egress policy (order of rules, DNS pinned to the dialed address, NAT64/6to4/Teredo, metadata addresses, ports denied unless listed) is sound; reserved IPv4 ranges such as 240.0.0.0/4 and 198.18.0.0/15 count as public (they are not routable on the public internet, so this is not an exposure); `QuoteArgv` single-quotes every argument correctly for a POSIX login shell (documented assumption); the credential is resolved before a connector slot is taken, so a queued call holds a decrypted credential in memory while it waits (bounded by the call deadline; the resolver audit is per attempt).
+- **Checks run:** `go test -race` for `pkg/sshclient`, `pkg/netpolicy`, `internal/hostaccess/...`: pass; `go test ./...` with PostgreSQL required: pass (44 packages); `golangci-lint run ./...`: 0 issues. A real SSH server with a host certificate and OpenSSH `MaxStartups` behaviour were not tried (the test SSH server is Go's).
+
 ## 2026-11-25 — Operation worker review: panics no longer end the process (branch audit/operationworker)
 
 Reviewed `internal/operationworker` (worker, detached launcher, poller, capability relay).

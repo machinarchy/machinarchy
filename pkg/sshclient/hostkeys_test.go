@@ -175,3 +175,23 @@ func TestScanHostKeysNeverReturnsAPartialSet(t *testing.T) {
 		t.Fatalf("a failed scan returned keys: %d", len(keys))
 	}
 }
+
+// A server that has a host certificate still has its plain host key. A host
+// pinned by that key's fingerprint (tofu, approve or pinned policy, no CA)
+// must connect, not be reported as a changed key: the scan sees the plain
+// key, and the client may negotiate the certificate form of the same key.
+func TestPinnedPlainKeyAcceptsTheCertifiedFormOfTheSameKey(t *testing.T) {
+	ca := newCA(t)
+	server := sshtest.Start(t, sshtest.Options{Password: "pw", HostCertificateAuthority: ca})
+	params := DialParams{IP: server.Host, Port: server.Port, Username: "deploy", AuthMethod: AuthPassword, SecretData: "pw",
+		TrustedFingerprints: server.Fingerprints, Dialer: loopbackDialer}
+	if err := TestConnection(timeout(t, 10*time.Second), params); err != nil {
+		t.Fatalf("pinned plain key against a certified host: %v", err)
+	}
+	// A different key is still refused.
+	params.TrustedFingerprints = []string{"SHA256:not-this-host"}
+	var unknown *domain.ErrHostKeyUnknown
+	if err := TestConnection(timeout(t, 10*time.Second), params); !errors.As(err, &unknown) {
+		t.Fatalf("an unrelated fingerprint = %v, want ErrHostKeyUnknown", err)
+	}
+}

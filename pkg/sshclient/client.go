@@ -27,6 +27,11 @@ const (
 	maxCommandOutputBytes   = 1 << 20
 )
 
+// handshakeTimeout bounds the SSH handshake of one connection: a host that
+// accepts TCP and never speaks must not hold its slot for the length of the
+// call (a command may be allowed 15 minutes). A variable so tests can shorten it.
+var handshakeTimeout = defaultHandshakeTimeout
+
 // AuthMethod selects how the client authenticates.
 type AuthMethod string
 
@@ -171,8 +176,8 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 		stopCancellation()
 		_ = netConn.Close()
 	}
-	deadline := time.Now().Add(defaultHandshakeTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok {
+	deadline := time.Now().Add(handshakeTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 
@@ -185,7 +190,7 @@ func dial(ctx context.Context, params DialParams) (*ssh.Client, func(), error) {
 		User:            params.Username,
 		Auth:            auth,
 		HostKeyCallback: hostKeyCallback(params),
-		Timeout:         defaultHandshakeTimeout,
+		Timeout:         handshakeTimeout,
 	}
 	sshConn, channels, requests, err := ssh.NewClientConn(netConn, addr, clientConfig)
 	if err != nil {

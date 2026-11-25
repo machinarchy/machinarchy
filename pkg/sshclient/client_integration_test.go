@@ -208,6 +208,23 @@ func TestSSHUnreachableAndMisbehavingHosts(t *testing.T) {
 		eventually(t, "the client to drop the hung connection", func() bool { return server.OpenConnections() == 0 })
 	})
 
+	t.Run("host that accepts TCP but never answers is dropped after the handshake timeout, not the call deadline", func(t *testing.T) {
+		// A command may be allowed minutes; a host that never starts the SSH
+		// handshake must still release its slot after the handshake timeout.
+		previous := handshakeTimeout
+		handshakeTimeout = 300 * time.Millisecond
+		t.Cleanup(func() { handshakeTimeout = previous })
+		server := sshtest.Start(t, sshtest.Options{Mode: sshtest.ModeSilent})
+		start := time.Now()
+		err := TestConnection(timeout(t, 5*time.Minute), passwordParams(server))
+		if !errors.Is(err, domain.ErrConnectionTimeout) {
+			t.Fatalf("error = %v, want ErrConnectionTimeout", err)
+		}
+		if elapsed := time.Since(start); elapsed > 3*time.Second {
+			t.Fatalf("took %s; the handshake timeout did not apply under a long call deadline", elapsed)
+		}
+	})
+
 	t.Run("cancellation interrupts a handshake in progress", func(t *testing.T) {
 		server := sshtest.Start(t, sshtest.Options{Mode: sshtest.ModeSilent})
 		ctx, cancel := context.WithCancel(context.Background())

@@ -28,10 +28,17 @@ func hostKeyCallback(params DialParams) ssh.HostKeyCallback {
 	}
 	byFingerprint := func(hostname string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
-		if !trusted[fingerprint] {
-			return &domain.ErrHostKeyUnknown{Host: hostname, Algorithm: key.Type(), Fingerprint: fingerprint}
+		if trusted[fingerprint] {
+			return nil
 		}
-		return nil
+		// A server with a host certificate may negotiate the certificate
+		// form of its key. A pin is a pin of the key, which the server has
+		// just proved it holds, so the key inside the certificate counts
+		// (the certificate itself is judged only against a CA).
+		if cert, ok := key.(*ssh.Certificate); ok && trusted[ssh.FingerprintSHA256(cert.Key)] {
+			return nil
+		}
+		return &domain.ErrHostKeyUnknown{Host: hostname, Algorithm: key.Type(), Fingerprint: fingerprint}
 	}
 	if len(params.HostCertAuthorities) == 0 {
 		return byFingerprint
@@ -51,11 +58,17 @@ func hostKeyCallback(params DialParams) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		err := checker.CheckHostKey(hostname, remote, key)
 		var unknown *domain.ErrHostKeyUnknown
-		if err == nil || errors.As(err, &unknown) {
-			return err
+		if err == nil {
+			return nil
 		}
 		// A certificate from another authority, for another principal, or
-		// expired: report it as an untrusted host key.
+		// expired is not accepted as one, but a pinned key still is.
+		if pinned := byFingerprint(hostname, remote, key); pinned == nil {
+			return nil
+		}
+		if errors.As(err, &unknown) {
+			return err
+		}
 		return &domain.ErrHostKeyUnknown{Host: hostname, Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key)}
 	}
 }
@@ -153,7 +166,7 @@ func scanOne(ctx context.Context, params DialParams, algorithms []string) (ssh.P
 		stop()
 		_ = netConn.Close()
 	}()
-	deadline := time.Now().Add(defaultHandshakeTimeout)
+	deadline := time.Now().Add(handshakeTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
@@ -168,7 +181,7 @@ func scanOne(ctx context.Context, params DialParams, algorithms []string) (ssh.P
 			captured = key
 			return errHostKeyCaptured
 		},
-		Timeout: defaultHandshakeTimeout,
+		Timeout: handshakeTimeout,
 	}
 	conn, _, _, err := ssh.NewClientConn(netConn, addr, config)
 	if conn != nil {
