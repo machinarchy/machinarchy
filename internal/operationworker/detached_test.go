@@ -95,6 +95,9 @@ func newDetachedEnvOn(t *testing.T, engine string) *detachedEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	// Detached commands outlive the test unless stopped; kill them before
+	// their home goes.
+	t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", home).Run() })
 	server := sshtest.Start(t, sshtest.Options{Password: "pw", ExecStreams: sshtest.ShellExec("", home)})
 	config := store.Config{Engine: store.EngineSQLite, SQLitePath: filepath.Join(dir, "d.db"), EncryptionSecret: "detached-test-key-material-long-enough"}
 	if engine == store.EnginePostgres {

@@ -43,6 +43,9 @@ func newHost(t *testing.T, shell string) *host {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// Commands launched here outlive the test unless stopped; kill them
+	// before their directory goes (they used to keep running for hours).
+	t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", dir).Run() })
 	return &host{t: t, shell: shell, root: filepath.Join(dir, "state"), path: os.Getenv("PATH")}
 }
 
@@ -443,4 +446,91 @@ func countProcesses(t *testing.T, pattern string) int {
 		return 0 // pgrep exits 1 when nothing matches
 	}
 	return len(strings.Fields(string(out)))
+}
+
+// TestSupervisorEndsWhenItsDirectoryIsGone (AUDIT/20 F20-07): when the
+// supervisor must signal a command without a process-group file (the
+// directory was removed, or job control failed), it walks the process tree.
+// That walk never ended: an always-present separator kept the work list
+// non-empty, and the supervisor ran ps and awk in a loop forever. The HA
+// runs found 19 such supervisors pushing a laptop's load average past 800.
+func TestSupervisorEndsWhenItsDirectoryIsGone(t *testing.T) {
+	t.Parallel()
+	eachShell(t, func(t *testing.T, h *host) {
+		r := ref(1)
+		h.launch(r, 1, ModeSetsid, "sleep", "30")
+		dir := h.dir(r)
+		h.waitState(r, StateRunning)
+		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", dir).Run() })
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(25 * time.Second) // 1 s timeout, 10 s grace, scheduling
+		for {
+			out, _ := exec.Command("ps", "-axo", "pid,ppid,pgid,args").Output()
+			if !bytes.Contains(out, []byte(dir)) {
+				return
+			}
+			if time.Now().After(deadline) {
+				var left []string
+				for _, line := range strings.Split(string(out), "\n") {
+					if strings.Contains(line, dir) {
+						left = append(left, line)
+					}
+				}
+				t.Fatalf("processes for %s still run 25 s after its timeout: the supervisor does not end:\n%s", dir, strings.Join(left, "\n"))
+			}
+			time.Sleep(500 * time.Millisecond) // poll interval of a deadline-bounded wait
+		}
+	})
+}
+
+// TestTimeoutWithoutProcessGroupKillsTheTree (AUDIT/20 F20-07): where the
+// command cannot get its own process group, the supervisor walks the
+// process tree to signal it. The walk must end and kill every process; it
+// used to loop forever after the last pid.
+func TestTimeoutWithoutProcessGroupKillsTheTree(t *testing.T) {
+	t.Parallel()
+	eachShell(t, func(t *testing.T, h *host) {
+		// A ps that never confirms the process group: the supervisor then
+		// uses the tree walk, as on hosts without job control.
+		bin := t.TempDir()
+		fake := "#!/bin/sh\ncase \"$*\" in *pgid=*) echo 0; exit 0 ;; esac\nexec /bin/ps \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "ps"), []byte(fake), 0o755); err != nil { // #nosec G306 -- test helper must be executable
+			t.Fatal(err)
+		}
+		if _, err := exec.LookPath("setsid"); err == nil {
+			t.Skip("setsid is installed: the supervisor always has a process group here")
+		}
+		h.path = bin + string(os.PathListSeparator) + h.path
+		r := ref(1)
+		h.launch(r, 1, ModeSetsid, "sh", "-c", "sleep 30 & sleep 30; wait")
+		dir := h.dir(r)
+		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", dir).Run() })
+		// The supervisor records its branch just after the launch reply.
+		for waited := 0; ; waited++ {
+			if _, err := os.Stat(filepath.Join(dir, "child")); err == nil {
+				break
+			}
+			if _, err := os.Stat(filepath.Join(dir, "pgid")); err == nil || waited == 50 {
+				t.Fatalf("the supervisor did not take the tree-walk branch (pgid file: %v)", err == nil)
+			}
+			time.Sleep(100 * time.Millisecond) // poll interval of a bounded wait
+		}
+		status := h.waitState(r, StateExited)
+		if !status.TimedOut {
+			t.Fatalf("status = %+v, want timed out", status)
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			out, _ := exec.Command("ps", "-axo", "args").Output()
+			if !bytes.Contains(out, []byte(dir)) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the supervisor for %s did not end after killing the tree", dir)
+			}
+			time.Sleep(500 * time.Millisecond) // poll interval of a deadline-bounded wait
+		}
+	})
 }

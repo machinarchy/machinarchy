@@ -1,5 +1,22 @@
 # ChangeLogAI
 
+## 2026-11-25 — Detached-run supervisor always ends and enforces its timeout (Phase 20: F20-07; branch audit/ha)
+
+- **Found during the HA load profile:** the laptop's load average was about 860, with 75 % system CPU. Nineteen detached-run supervisors (`wrapper`) left by earlier test runs had been looping on `ps` and `awk` for up to 4 hours. On a real host, the same supervisor would burn CPU forever.
+- **Two defects in `internal/hostaccess/runner/runner.sh` (owner approved editing it):**
+  1. **Tree walk never ended.** Without a process group, `signal()` walks the process tree. Its work list always carried a separator, so `[ -n "$todo" ]` never became false, and the loop ran `ps` and `awk` forever. It now stops when `set -- $todo` leaves no pid.
+  2. **Timeout not enforced once the directory was gone.** The watchdog marked the timeout with `: >"$d/timedout"`. A failed redirection on the special built-in `:` ends a POSIX shell, so with the state directory removed, the watchdog exited and never signalled the command.
+     - The marker is now written with `printf`.
+     - Whether the command has its own process group is now kept in a variable instead of re-read from the directory, so the whole group is still signalled.
+- **Tests (both fail against the old script):**
+  - `TestSupervisorEndsWhenItsDirectoryIsGone`: the command and supervisor still ran 25 s after the timeout.
+  - `TestTimeoutWithoutProcessGroupKillsTheTree`: a fake `ps` forces the tree walk; the supervisor never ended.
+  - Both run on `sh` and `dash`.
+- **Test hygiene:** the runner and detached-worker tests launched commands with a 600 s timeout and left them running when the test ended. Their cleanup now kills every process under the test's temporary home. A full run of both packages leaves no process behind (checked).
+- **Checks run:**
+  - `go test ./internal/hostaccess/... ./internal/operationworker/`: pass;
+  - lint: 0 issues.
+
 ## 2026-11-25 — The cause of an unexpected 500 is logged (Phase 20: F20-06; branch audit/ha)
 
 - **Found by the HA load profile:** 62 `POST /api/v1/managed/operations` requests failed with `500 request failed`, each after exactly 25 s (the request deadline). The API logs had only the status line: `httperr.FromError` turned unknown errors into a generic 500 without recording the cause anywhere.

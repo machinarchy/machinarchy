@@ -137,6 +137,7 @@ finish() {
 if command -v setsid >/dev/null 2>&1; then
 	(ulimit -f "$blocks" 2>/dev/null; exec setsid /bin/sh "$d/cmd") </dev/null >>"$d/stdout" 2>>"$d/stderr" &
 	child=$!
+	grouped=1
 	echo "$child" >"$d/pgid"
 else
 	set -m 2>/dev/null
@@ -144,20 +145,25 @@ else
 	child=$!
 	set +m 2>/dev/null
 	if [ "$(ps -o pgid= -p "$child" 2>/dev/null | tr -d ' ')" = "$child" ]; then
+		grouped=1
 		echo "$child" >"$d/pgid"
 	else
 		echo "$child" >"$d/child"
 	fi
 fi
+# The process group is remembered, not re-read from $d: the directory may be
+# gone. The tree walk stops when no pid is left; the list always carries a
+# separator, so testing it for emptiness looped forever (AUDIT/20 F20-07).
 signal() {
 	s=$1
-	if [ -f "$d/pgid" ]; then
+	if [ -n "${grouped:-}" ]; then
 		kill -"$s" -"$child" 2>/dev/null
 	else
 		todo=$child
 		all=
-		while [ -n "$todo" ]; do
+		while :; do
 			set -- $todo
+			[ "$#" -gt 0 ] || break
 			p=$1
 			shift
 			todo=$*
@@ -176,7 +182,9 @@ signal() {
 		waited=$((waited + step))
 		[ -e "$d/exit" ] && exit 0
 	done
-	: >"$d/timedout"
+	# printf, not ':': a failed redirection on a special built-in ends the
+	# shell, and the command would then never be signalled (F20-07).
+	printf '' >"$d/timedout" 2>/dev/null
 	signal TERM
 	sleep 10
 	[ -e "$d/exit" ] || signal KILL
