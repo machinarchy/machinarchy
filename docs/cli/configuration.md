@@ -28,7 +28,13 @@ This allows, for example, `local`, `staging`, and `production` contexts to use d
 
 ## Recommended setup
 
-Get a token by signing up or logging in through the API or Scalar, then put it in an environment variable without committing it to a file:
+With a username and password, `login` creates the cluster, user and context in one step and stores the session token:
+
+```sh
+go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
+```
+
+With an API token, put it in an environment variable without committing it to a file and configure the context by hand:
 
 ```sh
 export MACHINARCHY_USER_TOKEN='paste-the-JWT-here'

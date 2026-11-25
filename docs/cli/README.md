@@ -33,7 +33,14 @@ The CLI does not start the API. Start the API or monolith separately; the projec
 
 ## Quick setup
 
-Obtain a JWT from the API's signup or login endpoint. Then configure the CLI, sending the token through standard input so it does not appear in shell history or process arguments:
+Log in. The first login names the server and creates the context; the password prompt does not echo:
+
+```sh
+go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
+go run ./cmd/machinarchy get hosts
+```
+
+With an API token instead of a password (for example one from `machinarchy create token`), configure the context by hand, sending the token through standard input so it does not appear in shell history or process arguments:
 
 ```sh
 go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080

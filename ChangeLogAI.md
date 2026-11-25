@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-25 — Security status, dev-only Compose defaults, CLI setup docs (Phase 21: S-20, docs; branch audit/final)
+
+- **`docs/SECURITY.md` "Validation status":** rewritten. The old text said PostgreSQL, endpoint authorization and SSH policy were unproven; it now lists what the suite shows (the route authorization matrix, store contracts on both engines, SSH policy and host-key tests, the `test/ha` harness, govulncheck and gosec) and what is still not shown (production-like load, a penetration test, most alert paths).
+- **Compose (S-20):** `docker-compose.yml` and `deployments/infra.docker-compose.yml` start with a "development only" header naming the plain HTTP, the default database password, PostgreSQL without TLS and unauthenticated NATS. No setting changed; container hardening and digest pinning remain open (S-20).
+- **CLI docs:** `docs/cli/README.md` and `docs/cli/configuration.md` lead with `machinarchy login`; the token-by-hand setup stays for API tokens.
+- **Checks run:**
+  - `make vuln`: no unaccepted vulnerabilities in called code;
+  - `docker compose -f docker-compose.yml -f deployments/infra.docker-compose.yml config -q`: valid;
+  - `make gosec` could not run: the installed gosec binary was built with Go 1.26 and cannot load Go 1.27 packages. `make lint` runs gosec through golangci-lint (0 issues).
+
 ## 2026-11-25 — HA harness: the agent gateways share agent traffic (Phase 21: F20-09; branch audit/final)
 
 - `test/ha`: a new scenario, run right after the baseline while both Control Managers are fresh, counts the lease renewals each gateway answers over 2 minutes and fails if either answers less than a fifth. It settles F20-09 (the Phase 20 counts were skewed by restarts).

@@ -1,3 +1,7 @@
+# DEVELOPMENT ONLY. This file runs the monolith for local work: plain HTTP,
+# MACHINARCHY_ENVIRONMENT=development, a default database password and a
+# PostgreSQL connection without TLS. Do not use it as a production template;
+# see docs/operations.md and docs/SECURITY.md.
 name: machinarchy-apps
 
 services:

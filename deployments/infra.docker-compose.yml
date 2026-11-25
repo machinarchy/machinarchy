@@ -1,3 +1,7 @@
+# DEVELOPMENT ONLY. Local PostgreSQL and NATS for docker-compose.yml:
+# a default password (override with POSTGRES_PASSWORD), no TLS, and NATS
+# without authentication. Production needs TLS, real credentials and NATS
+# accounts (docs/operations.md).
 name: machinarchy-infra
 
 services:
@@ -5,7 +9,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: machinarchy
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinarchy_dev_only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinarchy_dev_only} # development default
       POSTGRES_DB: machinarchy_dev
     ports:
       - "127.0.0.1:5432:5432"
@@ -23,7 +27,7 @@ services:
 
   nats:
     image: nats:2.15.3-alpine
-    command: ["-js", "-sd", "/data"]
+    command: ["-js", "-sd", "/data"] # no auth: development only
     ports:
       - "127.0.0.1:4222:4222"
     volumes:

@@ -143,4 +143,12 @@ turned off and only the listed proxies trusted.
 
 ## Validation status
 
-SQLite integration coverage verifies fresh migrations, separate account workspaces, scoped environments/jobs/metrics, cross-workspace host-environment reference rejection, and API-token resolution/revocation. Role permission tests and an API-token HTTP middleware test verify least privilege and bearer-only use. These tests do not demonstrate PostgreSQL behavior, exhaustive endpoint authorization, SSH network policy, a full account lifecycle, or resilience under fleet load. See [the roadmap](ROADMAP.md) for follow-up evidence.
+What the test suite shows today (2026-11-25):
+
+- **Authorization:** `internal/bootstrap/authz_matrix_test.go` drives the fully wired API server and checks every documented route against every kind of principal (no credential, owner, operator, reader, and API tokens of each role). A route missing from the matrix fails the test.
+- **Both database engines:** the store contract tests run on SQLite and PostgreSQL. With `MACHINARCHY_REQUIRE_POSTGRES_TESTS=1` a missing PostgreSQL fails the run instead of skipping it.
+- **SSH policy:** the egress policy (loopback, private ranges, allowed ports), host-key trust (`tofu`, `approve`, `pinned`, `ca`) and the execution policy templates have unit and end-to-end tests against real SSH servers.
+- **Multiple replicas under failure:** `test/ha` (opt-in, see CONTRIBUTING) runs two API replicas and two Control Managers through a Control Manager crash, a PostgreSQL restart, a NATS partition, SIGTERM and SIGKILL during an outbox burst, and a short load profile, and checks that both agent gateways share agent traffic.
+- **Dependencies and static analysis:** `make vuln` (govulncheck) finds no vulnerability in called code with an empty allowlist, and `make lint` runs gosec with no issues.
+
+Not shown: load on production-like hardware (the `test/ha` numbers come from a laptop), an external penetration test, and the alerting paths other than readiness failures.
