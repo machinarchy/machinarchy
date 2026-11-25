@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI redesign specification (documentation only, branch docs/cli-spec)
+
+- **What:** `docs/cli/spec/01-10` describe the target state of a task-first, beginner-friendly `machinarchy` CLI: summary and decisions, command contracts, UX transcripts, threat model, architecture, API matrix, brand and voice, migration, acceptance tests, and milestones M1-M6. The existing user docs in `docs/cli/` are not changed and still describe the current CLI.
+- **Based on:** the Step 1 audit of the current CLI (code, `docs/api/swagger.json`, handlers, tests). Controller facts were read from the contract and the handler code; kubectl comparisons come from running kubectl v1.27.1 locally and are labelled as such.
+- **Decisions made in the spec:** bare `machinarchy` is the home screen (no `status`); `access` stays top-level; agent enrolment lives under `hosts`; `switch` selects servers; capabilities use `--do NAME key=value`; envs are created with `envs add`; `--on env=...` is **not** shipped (a tag may be called `env`), use `--env`; run exit codes 8 (partial) and 9 (all failed); runs are limited to the controller's 200 targets in V1. **At the owner's request tab completion is in V1**, which reverses fixed decision 11 for completion only (`doctor`/`fix` stay out).
+- **Controller work the design depends on** (listed in `06-api-matrix.md`, none done): environment on host create/update (C-01), protected envs (C-02), role and expiry on `/me` (C-03), agent install information (C-07), and others. Open questions that block implementation are at the end of `10-roadmap.md`.
+- **Not implemented:** no Go code, dependency, config or workflow was changed. No test was run; `09-acceptance-tests.md` is a plan.
+
 ## 2026-11-25 — Release image scan failed on UNKNOWN advisories (Trivy SARIF severity)
 
 - **First release run (v0.0.1, CI run 45686902170):** "Scan the exact published digest with Trivy" failed for the `api` image, which cancelled the other image jobs, so no image was signed. The step sets `severity: CRITICAL,HIGH` with `exit-code: "1"`, but in SARIF mode trivy-action ignores `severity` unless `limit-severities-for-sarif` is set ("Building SARIF report with all severities"), so any finding failed the job.
