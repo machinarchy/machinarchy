@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-25 — First CI run: smoke test, a timing test, Node 24 actions (branch release/initial)
+
+- **The smoke test failed in CI** (`scripts/smoke.sh`, "secret and Access Profile": `JSONDecodeError`). The script parsed the output of `secret create` as JSON, but since the CLI work of G-13C-03 that command prints a line for people by default. The script passes `-o json` now (the owner approved editing the script), and starts `machinarchy-monolith` instead of the deprecated alias. `make smoke` passes locally.
+- **A timing test could fail on a loaded runner.** `TestAttachedRunFansOutToConcurrency` asserted wall-clock time (300 ms waves plus 1.5 s) and failed under `make coverage` (`-race ./...`) on this laptop: 2.17 s against 0.3 s. It is deterministic now: the commands hold until the test releases them, and it asserts how many run at once (`min(targets, concurrency)`), that no further target starts while they are held, and that everything completes. No data race was involved.
+- **Node 20 deprecation warning:** `actions/upload-artifact` is v7.0.2 (was v4.6.2, which runs on Node 20) and `docker/setup-buildx-action` is v4.4.1 (was v3.11.0, Node 20; the agent repo already used it), both pinned by SHA. The upload step's inputs are unchanged.
+- **Checks run:** `make coverage` (the CI command: `go test -race -count=1 ./...` with PostgreSQL required and the end-to-end test required): pass, no race, 57.5 % statements; `make tidy-check fmt-check vet`: pass; `make smoke`: pass; the workflow YAML parses. Other actions were not checked for their Node runtime (no warning was reported for them).
+
 ## 2026-11-25 — CI before the first push: pinned actions, aligned scanners (branch release/initial)
 
 - **Every action is pinned by commit SHA** (the tag is in a comment): `actions/upload-artifact` v4.6.2, `actions/attest` v4.2.2, `docker/setup-qemu-action` v4.4.0, `docker/build-push-action` v7.4.0, `github/codeql-action/upload-sarif` v4.39.5 (an annotated tag: the SHA is the commit it points to). SHAs were read from the actions' public tags with `git ls-remote`; Dependabot (`github-actions`) proposes bumps.

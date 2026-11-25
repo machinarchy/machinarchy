@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the managed API through the CLI.
 #
-# Starts bin/machinarchy-monolit on a throwaway SQLite database, signs in as
+# Starts bin/machinarchy-monolith on a throwaway SQLite database, signs in as
 # the bootstrap owner, and drives the CLI: secret, Access Profile, host
 # create/label/delete, a bound run (expected to fail: the endpoint is closed),
 # operation listing, and the legacy-route 404. Build first with `make build`.
@@ -28,7 +28,7 @@ MACHINARCHY_ENVIRONMENT=development MACHINARCHY_LISTEN_ADDR="127.0.0.1:${port}" 
 	MACHINARCHY_ENCRYPTION_SECRET=smoke-encryption-secret-0123456789abcdef \
 	MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD=smoke-admin-password \
 	MACHINARCHY_EXECUTION_ENABLED=true MACHINARCHY_EXECUTION_ALLOWED_PROGRAMS=uptime \
-	"$root/bin/machinarchy-monolit" >"$work/server.log" 2>&1 &
+	"$root/bin/machinarchy-monolith" >"$work/server.log" 2>&1 &
 server_pid=$!
 for _ in $(seq 1 60); do curl -sf "$api/healthz/ready" >/dev/null && break; sleep 0.5; done
 curl -sf "$api/healthz/ready" >/dev/null || fail "server did not become ready"
@@ -44,7 +44,8 @@ cli config set-context smoke --cluster smoke --user smoke >/dev/null
 cli config use-context smoke >/dev/null
 
 step "secret and Access Profile"
-secret=$(printf 'not-a-real-password' | cli secret create smoke --value-stdin)
+# -o json: the default output is a line for people, not data for scripts.
+secret=$(printf 'not-a-real-password' | cli secret create smoke --value-stdin -o json)
 secret_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$secret")
 curl -sf "$api/api/v1/managed/access-profiles" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
 	-d "{\"name\":\"deploy\",\"spec\":{\"connectorKind\":\"ssh\",\"username\":\"deploy\",\"authenticationMethod\":\"password\",\"credential\":{\"id\":\"$secret_id\",\"version\":1},\"enabled\":true}}" >/dev/null ||

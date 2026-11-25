@@ -12,10 +12,11 @@ import (
 	"github.com/machinarchy/machinarchy/internal/hostaccess"
 )
 
-// timedConnector runs every command for a fixed time, or until it is
-// cancelled, and records how many ran at once.
+// timedConnector runs every command for a fixed time, or until release is
+// closed, or until it is cancelled, and records how many ran at once.
 type timedConnector struct {
 	each    time.Duration
+	release chan struct{} // when set, commands run until it is closed (no timer)
 	running atomic.Int32
 	peak    atomic.Int32
 	started atomic.Int32
@@ -35,8 +36,14 @@ func (c *timedConnector) Execute(ctx context.Context, _ *resource.Host, _ *resou
 			break
 		}
 	}
+	var done <-chan time.Time
+	if c.release == nil {
+		done = time.After(c.each)
+	}
 	select {
-	case <-time.After(c.each):
+	case <-done:
+		return hostaccess.Result{Stdout: "ok"}, nil
+	case <-c.release:
 		return hostaccess.Result{Stdout: "ok"}, nil
 	case <-ctx.Done():
 		return hostaccess.Result{}, ctx.Err()
@@ -88,36 +95,40 @@ func (e *capabilityEnv) submitAttached(profile resource.ID, revision uint64, con
 	return op.ID
 }
 
-// TestAttachedRunFansOutToConcurrency: N targets at concurrency C take about
-// N/C times one target, never with more than C at once (D-10).
+// TestAttachedRunFansOutToConcurrency: N targets at concurrency C run min(N, C)
+// at a time and never more (D-10). The commands hold until the test releases
+// them, so the check needs no wall-clock timing (a loaded runner under the
+// race detector made the earlier timed version fail).
 func TestAttachedRunFansOutToConcurrency(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ targets, concurrency int }{{12, 4}, {5, 1}, {3, 20}} {
 		t.Run(fmt.Sprintf("%d targets at %d", c.targets, c.concurrency), func(t *testing.T) {
 			t.Parallel()
 			e := newCapabilityEnv(t)
-			connector := &timedConnector{each: 300 * time.Millisecond}
+			connector := &timedConnector{release: make(chan struct{})}
 			e.connector = connector
 			profile, revision, hosts := e.sshHosts(c.targets)
 			id := e.submitAttached(profile, revision, c.concurrency, hosts)
-			began := time.Now()
+			want := min(c.concurrency, c.targets)
 			e.start()
+			// As many targets run at once as the concurrency allows...
+			e.waitFor(fmt.Sprintf("%d targets running at once", want), func() bool { return int(connector.running.Load()) == want })
+			// ...and, while they are held, no further target starts.
+			time.Sleep(300 * time.Millisecond)
+			if running, started := int(connector.running.Load()), int(connector.started.Load()); running != want || started != want {
+				t.Errorf("while held: %d running, %d started, want %d of each", running, started, want)
+			}
+			close(connector.release)
 			op := e.waitTerminal(id)
-			elapsed := time.Since(began)
-
-			waves := (c.targets + c.concurrency - 1) / c.concurrency
-			ideal := time.Duration(waves) * connector.each
 			if op.Status.State != resource.OperationSucceeded || targetStates(op)[resource.TargetSucceeded] != c.targets {
 				t.Fatalf("Operation %s, targets %v", op.Status.State, targetStates(op))
 			}
-			if peak, want := int(connector.peak.Load()), min(c.concurrency, c.targets); peak != want {
+			if peak := int(connector.peak.Load()); peak != want {
 				t.Errorf("peak concurrency %d, want %d", peak, want)
 			}
-			// The worker polls the queue every 500 ms; allow that and scheduling.
-			if elapsed < ideal || elapsed > ideal+1500*time.Millisecond {
-				t.Errorf("took %s, want about %s (%d waves of %s)", elapsed, ideal, waves, connector.each)
+			if started := int(connector.started.Load()); started != c.targets {
+				t.Errorf("%d targets started, want %d", started, c.targets)
 			}
-			t.Logf("%d targets at concurrency %d: %s (ideal %s)", c.targets, c.concurrency, elapsed.Round(10*time.Millisecond), ideal)
 		})
 	}
 }
