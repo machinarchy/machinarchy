@@ -1,0 +1,324 @@
+package bootstrap
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	httpserver "github.com/machinarchy/machinarchy/internal/transport/http"
+
+	"github.com/machinarchy/machinarchy/internal/config"
+	"github.com/machinarchy/machinarchy/internal/telemetry"
+)
+
+const (
+	// defaultShutdownTimeout matches config's MACHINARCHY_SHUTDOWN_TIMEOUT
+	// default and stays below Kubernetes' 30 s termination grace period.
+	defaultShutdownTimeout    = 25 * time.Second
+	apiServiceName            = "machinarchy-api"
+	controlManagerServiceName = "machinarchy-controlmanager"
+	monolithServiceName       = "machinarchy-monolith"
+)
+
+type httpLifecycle interface {
+	StartWithReady(address string, ready func()) error
+	Shutdown(context.Context) error
+}
+
+type workerLifecycle interface {
+	Start(context.Context) error
+}
+
+// RunAPI initializes and serves the standalone API process.
+func RunAPI(ctx context.Context, cfg config.Config) error {
+	return runWithOpener(ctx, cfg, apiServiceName, Open, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+		server, err := runtime.NewAPIServer(ctx, cfg)
+		return server, nil, err
+	})
+}
+
+// RunControlManager initializes the standalone Control Manager and its
+// operations-only health server.
+func RunControlManager(ctx context.Context, cfg config.Config) error {
+	return runWithOpener(ctx, cfg, controlManagerServiceName, OpenControlManager, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+		engine, err := runtime.NewControlManager()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct control manager: %w", err)
+		}
+		server, err := runtime.NewControlManagerOperationsServer(engine)
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct control manager operations server: %w", err)
+		}
+		operations, err := runtime.NewOperationWorker()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
+		}
+		return server, runtime.backgroundWorkers(engine, operations), nil
+	})
+}
+
+// RunMonolith composes the API and Control Manager over one Runtime. It does
+// not duplicate their service or worker construction.
+func RunMonolith(ctx context.Context, cfg config.Config) error {
+	return runWithOpener(ctx, cfg, monolithServiceName, Open, func(runtime *Runtime) (httpLifecycle, workerLifecycle, error) {
+		engine, err := runtime.NewControlManager()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct control manager: %w", err)
+		}
+		readiness := []httpserver.ReadinessChecker{engine}
+		if gateway := runtime.AgentGateway(); gateway != nil {
+			readiness = append(readiness, gateway)
+		}
+		server, err := runtime.NewAPIServer(ctx, cfg, readiness...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct API server: %w", err)
+		}
+		operations, err := runtime.NewOperationWorker()
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct Operation worker: %w", err)
+		}
+		return server, runtime.backgroundWorkers(engine, operations), nil
+	})
+}
+
+type combinedWorkers []workerLifecycle
+
+// backgroundWorkers is the Control Manager role's worker set: the engine, the
+// Operation worker and, when configured, the agent gateway.
+func (r *Runtime) backgroundWorkers(workers ...workerLifecycle) combinedWorkers {
+	if r.agentGateway != nil {
+		workers = append(workers, r.agentGateway)
+	}
+	return combinedWorkers(workers)
+}
+
+func (workers combinedWorkers) Start(ctx context.Context) error {
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errorsChannel := make(chan error, len(workers))
+	for _, worker := range workers {
+		go func(component workerLifecycle) { errorsChannel <- component.Start(childCtx) }(worker)
+	}
+	// Wait for every component, also after the context ends: each one drains
+	// and releases its leases before returning, and the caller bounds the
+	// wait with the shutdown budget (AUDIT/20 F20-04). The context only
+	// triggers the cancellation, once.
+	var firstErr error
+	done := ctx.Done()
+	for remaining := len(workers); remaining > 0; {
+		select {
+		case err := <-errorsChannel:
+			remaining--
+			if err != nil && firstErr == nil {
+				firstErr = err
+				cancel()
+			}
+		case <-done:
+			cancel()
+			done = nil
+		}
+	}
+
+	return firstErr
+}
+
+type componentFactory func(*Runtime) (httpLifecycle, workerLifecycle, error)
+
+type runtimeOpener func(context.Context, config.Config) (*Runtime, error)
+
+func runWithOpener(ctx context.Context, cfg config.Config, serviceName string, openRuntime runtimeOpener, factory componentFactory) (retErr error) {
+	if ctx == nil {
+		return errors.New("process context is required")
+	}
+	if factory == nil || openRuntime == nil {
+		return errors.New("process component factory is required")
+	}
+	if strings.TrimSpace(cfg.ListenAddr) == "" {
+		return errors.New("process listen address is required")
+	}
+
+	budget := newShutdownBudget(cfg.ShutdownTimeout)
+	shutdownTelemetry, err := initializeProcess(ctx, cfg, serviceName)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := budget.context()
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("shutdown telemetry: %w", err))
+		}
+	}()
+
+	runtime, err := openRuntime(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if errors.Is(retErr, errComponentsStillRunning) {
+			// Closing the datastore now would fail the worker's in-flight
+			// writes; leave it to process exit.
+			slog.Error("skipping runtime close because a background worker is still running")
+			return
+		}
+		if err := runtime.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close runtime: %w", err))
+		}
+	}()
+
+	server, worker, err := factory(runtime)
+	if err != nil {
+		return err
+	}
+	slog.Info("process components constructed", "service", serviceName,
+		"listen_addr", cfg.ListenAddr, "database_engine", cfg.Database.Engine)
+	return runComponents(ctx, cfg.ListenAddr, server, worker, budget)
+}
+
+func initializeProcess(ctx context.Context, cfg config.Config, serviceName string) (func(context.Context) error, error) {
+	if ctx == nil {
+		return nil, errors.New("process context is required")
+	}
+	if strings.TrimSpace(serviceName) == "" {
+		return nil, errors.New("telemetry service name is required")
+	}
+	ConfigureLogging(cfg.LogLevel)
+	shutdown, err := telemetry.Setup(ctx, serviceName)
+	if err != nil {
+		return nil, fmt.Errorf("configure telemetry: %w", err)
+	}
+	return shutdown, nil
+}
+
+func runComponents(ctx context.Context, address string, server httpLifecycle, worker workerLifecycle, budget *shutdownBudget) error {
+	if ctx == nil {
+		return errors.New("process context is required")
+	}
+	// Runtime process lifecycles must have an explicit cancellation owner. A
+	// Background/TODO context cannot shut down the listener or worker.
+	if ctx.Done() == nil {
+		return errors.New("process context must be cancellable")
+	}
+	if strings.TrimSpace(address) == "" {
+		return errors.New("process listen address is required")
+	}
+	if server == nil {
+		return errors.New("process HTTP server is required")
+	}
+	if budget == nil {
+		return errors.New("process shutdown budget is required")
+	}
+
+	processCtx, cancelProcess := context.WithCancel(ctx)
+	defer cancelProcess()
+
+	serverErrors := make(chan error, 1)
+	serverReady := make(chan struct{})
+	go func() { serverErrors <- server.StartWithReady(address, func() { close(serverReady) }) }()
+	serverFinished := false
+	workerFinished := false
+
+	select {
+	case <-serverReady:
+	case err := <-serverErrors:
+		if ctx.Err() == nil {
+			shutdownCtx, cancel := budget.context()
+			defer cancel()
+			return errors.Join(unexpectedComponentStop("HTTP server", err), server.Shutdown(shutdownCtx))
+		}
+		return nil
+	case <-ctx.Done():
+		// StartWithReady owns listener creation. Wait for it to either bind or
+		// fail before shutdown so a late listener cannot escape cleanup.
+		startupCtx, cancelStartup := budget.context()
+		defer cancelStartup()
+		select {
+		case <-serverReady:
+		case err := <-serverErrors:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("start HTTP server during shutdown: %w", err)
+			}
+			return nil
+		case <-startupCtx.Done():
+			return fmt.Errorf("wait for HTTP listener startup during shutdown: %w", startupCtx.Err())
+		}
+	}
+
+	var workerErrors chan error
+	if worker != nil && ctx.Err() == nil {
+		workerErrors = make(chan error, 1)
+		go func() { workerErrors <- worker.Start(processCtx) }()
+	}
+
+	var componentErr error
+	select {
+	case <-ctx.Done():
+	case err := <-serverErrors:
+		serverFinished = true
+		componentErr = unexpectedComponentStop("HTTP server", err)
+	case err := <-workerErrors:
+		workerFinished = true
+		if ctx.Err() == nil {
+			componentErr = unexpectedComponentStop("background worker", err)
+		}
+	}
+
+	shutdownCtx, cancelShutdown := budget.context()
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		componentErr = errors.Join(componentErr, fmt.Errorf("shutdown HTTP server: %w", err))
+	}
+	if !serverFinished {
+		if err := waitForServer(shutdownCtx, serverErrors); err != nil {
+			componentErr = errors.Join(componentErr, err)
+		}
+	}
+
+	cancelProcess()
+	if workerErrors != nil && !workerFinished {
+		// Wait inside the same budget; the runtime is closed only after this
+		// returns, so a worker that is still running is reported distinctly.
+		if err := waitForWorker(shutdownCtx, workerErrors); err != nil {
+			componentErr = errors.Join(componentErr, err)
+		}
+	}
+	return componentErr
+}
+
+func unexpectedComponentStop(name string, err error) error {
+	if err == nil {
+		return fmt.Errorf("%s stopped unexpectedly", name)
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("%s stopped unexpectedly", name)
+	}
+	return fmt.Errorf("%s stopped unexpectedly: %w", name, err)
+}
+
+func waitForServer(ctx context.Context, errorsCh <-chan error) error {
+	select {
+	case err := <-errorsCh:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("HTTP server stopped: %w", err)
+	case <-ctx.Done():
+		return fmt.Errorf("wait for HTTP server shutdown: %w", ctx.Err())
+	}
+}
+
+func waitForWorker(ctx context.Context, errorsCh <-chan error) error {
+	select {
+	case err := <-errorsCh:
+		if err != nil {
+			return fmt.Errorf("stop background worker: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: %w", errComponentsStillRunning, ctx.Err())
+	}
+}

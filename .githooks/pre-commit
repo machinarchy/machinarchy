@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Validate staged Go files using Bash features supported by macOS Bash 3.2.
+set -Eeuo pipefail
+
+info() { printf '→ %s\n' "$1"; }
+success() { printf '✓ %s\n' "$1"; }
+error() { printf '✗ %s\n' "$1" >&2; }
+
+info "Running pre-commit checks for staged Go files..."
+
+staged_go_files=()
+while IFS= read -r -d '' file; do
+  staged_go_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go')
+
+if [[ ${#staged_go_files[@]} -eq 0 ]]; then
+  success "No staged Go files; skipping Go checks."
+  exit 0
+fi
+
+info "Checking gofmt..."
+unformatted="$(gofmt -l "${staged_go_files[@]}")"
+if [[ -n "$unformatted" ]]; then
+  error "The following staged Go files are not formatted:"
+  printf '%s\n' "$unformatted" | sed 's/^/  /' >&2
+  error "Run make fmt, stage the changes, and retry."
+  exit 1
+fi
+
+# Collect package directories and remove duplicates without associative arrays.
+package_dirs=()
+for file in "${staged_go_files[@]}"; do
+  dir="${file%/*}"
+  [[ "$dir" == "$file" ]] && dir="."
+  found=false
+  # ${arr[@]+...}: an empty array is an unbound variable under set -u in
+  # macOS's Bash 3.2 (AUDIT H-13B-01).
+  for existing in ${package_dirs[@]+"${package_dirs[@]}"}; do
+    if [[ "$existing" == "$dir" ]]; then
+      found=true
+      break
+    fi
+  done
+  [[ "$found" == true ]] || package_dirs+=("$dir")
+done
+
+packages=()
+for dir in "${package_dirs[@]}"; do
+  packages+=("./$dir")
+done
+
+info "Running go vet for staged packages..."
+go vet "${packages[@]}"
+
+# 30 s was too short for the end-to-end and worker packages on a loaded machine
+# (AUDIT F16-05). Override with PRECOMMIT_TEST_TIMEOUT, for example 300s.
+test_timeout="${PRECOMMIT_TEST_TIMEOUT:-120s}"
+info "Running targeted tests for staged packages (timeout $test_timeout)..."
+go test -timeout="$test_timeout" -count=1 "${packages[@]}"
+
+success "Pre-commit checks passed."

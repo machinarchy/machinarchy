@@ -1,0 +1,97 @@
+// Package audit provides HTTP handlers and routes for audit-related API operations.
+package audit
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+
+	"github.com/labstack/echo/v4"
+	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
+)
+
+// Handler handles HTTP requests for audit-related operations.
+type Handler struct {
+	service domain.AuditService
+}
+
+// NewHandler creates an audit HTTP handler using the provided audit service.
+func NewHandler(service domain.AuditService) *Handler {
+	return &Handler{service: service}
+}
+
+// List returns audit events, newest first.
+// @Summary List audit events
+// @Description Requires a human workspace owner session; API tokens are refused. Events are append-only and never contain credentials. Page backwards by passing the smallest id received as before_id.
+// @Tags Audit
+// @Produce json
+// @Security BearerAuth
+// @Param action query string false "Only events with this action, for example member.role_changed"
+// @Param before_id query int false "Only events with a smaller id (paging cursor)"
+// @Param limit query int false "Page size (default 100, maximum 500)"
+// @Success 200 {array} domain.AuditEvent
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
+// @Router /api/v1/audit/events [get]
+func (h *Handler) List(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	filter := domain.AuditFilter{Action: c.QueryParam("action")}
+	if raw := c.QueryParam("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return httperr.Status(c, http.StatusBadRequest, "limit must be a number")
+		}
+		filter.Limit = limit
+	}
+	if raw := c.QueryParam("before_id"); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return httperr.Status(c, http.StatusBadRequest, "before_id must be a number")
+		}
+		filter.BeforeID = before
+	}
+	events, err := h.service.List(c.Request().Context(), principal, filter)
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(http.StatusOK, events)
+}
+
+// Verify walks the workspace's audit hash chain.
+// @Summary Verify the audit trail
+// @Description Requires a human workspace owner session. Recomputes every event's hash and link. A valid result proves no earlier event was edited, removed, or reordered; it cannot detect events removed from the end, so record headHash somewhere outside the database to detect that.
+// @Tags Audit
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} domain.AuditVerification
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
+// @Router /api/v1/audit/verify [get]
+func (h *Handler) Verify(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	result, err := h.service.Verify(c.Request().Context(), principal)
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
+// errorMappings turns the audit service's errors into responses; everything
+// else is the shared set in httperr.
+var errorMappings = []httperr.Mapping{}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
+}

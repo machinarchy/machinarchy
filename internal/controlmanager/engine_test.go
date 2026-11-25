@@ -1,0 +1,497 @@
+package controlmanager
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
+)
+
+type fakeHostKeys struct {
+	resource.HostRepository
+	keys []resource.HostKey
+}
+
+func (f *fakeHostKeys) ListHostKeys(_ context.Context, cursor resource.HostKeyCursor) ([]resource.HostKey, error) {
+	keys := append([]resource.HostKey(nil), f.keys...)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].WorkspaceID != keys[j].WorkspaceID {
+			return keys[i].WorkspaceID < keys[j].WorkspaceID
+		}
+		return keys[i].ID < keys[j].ID
+	})
+	filtered := make([]resource.HostKey, 0, cursor.Limit)
+	for _, key := range keys {
+		if key.WorkspaceID < cursor.AfterWorkspaceID || (key.WorkspaceID == cursor.AfterWorkspaceID && key.ID <= resource.ID(cursor.AfterID)) {
+			continue
+		}
+		filtered = append(filtered, key)
+		if len(filtered) >= cursor.Limit {
+			break
+		}
+	}
+	return filtered, nil
+}
+
+type fakeOutbox struct {
+	mu          sync.Mutex
+	deliveries  []eventing.ClaimedEvent
+	claimed     bool
+	acks        []resource.ID
+	retries     []resource.ID
+	quarantined []resource.ID
+}
+
+func (f *fakeOutbox) Claim(_ context.Context, _, _ string, _ time.Time, _ time.Duration, _ int) ([]eventing.ClaimedEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.claimed {
+		return nil, nil
+	}
+	f.claimed = true
+	return append([]eventing.ClaimedEvent(nil), f.deliveries...), nil
+}
+func (f *fakeOutbox) Acknowledge(_ context.Context, _, _ string, id resource.ID, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acks = append(f.acks, id)
+	return nil
+}
+func (f *fakeOutbox) Retry(_ context.Context, _, _ string, id resource.ID, _ time.Time, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retries = append(f.retries, id)
+	return nil
+}
+func (f *fakeOutbox) Quarantine(_ context.Context, _, _ string, id resource.ID, _ time.Time, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.quarantined = append(f.quarantined, id)
+	return nil
+}
+func (f *fakeOutbox) Prune(context.Context, time.Time) (int64, error) { return 0, nil }
+
+type controllerFunc struct {
+	name string
+	kind ResourceKind
+	run  func(context.Context, ResourceKey) (ReconcileResult, error)
+}
+
+func (c controllerFunc) Name() string       { return c.name }
+func (c controllerFunc) Kind() ResourceKind { return c.kind }
+func (c controllerFunc) Reconcile(ctx context.Context, key ResourceKey) (ReconcileResult, error) {
+	return c.run(ctx, key)
+}
+
+func newTestEngine(t *testing.T, hosts *fakeHostKeys, outbox *fakeOutbox, workerCount int) *Engine {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.Workers, cfg.QueueCapacity = workerCount, 8
+	cfg.OutboxPollInterval, cfg.ResyncInterval = 10*time.Millisecond, time.Hour
+	cfg.ReconcileTimeout, cfg.ShutdownTimeout = time.Second, 2*time.Second
+	engine, err := NewEngine(Dependencies{Hosts: hosts, Outbox: outbox}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Register(controllerFunc{name: "host-test", kind: HostResourceKind, run: func(context.Context, ResourceKey) (ReconcileResult, error) { return ReconcileResult{}, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+func TestEngineUsesLatestStateForDuplicateAndOutOfOrderEventsAndResyncsMisses(t *testing.T) {
+	id1, _ := resource.NewResourceID()
+	id2, _ := resource.NewResourceID()
+	keys := &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id1}, {WorkspaceID: 1, ID: id2}}}
+	gen2, _ := eventing.NewHostEvent(eventing.HostSpecChanged, 1, eventing.Subject{Kind: "host", ID: id1, Generation: 2, Revision: 2}, "spec-changed", time.Now(), "", "", nil)
+	gen1, _ := eventing.NewHostEvent(eventing.HostCreated, 1, eventing.Subject{Kind: "host", ID: id1, Generation: 1, Revision: 1}, "created", time.Now().Add(time.Second), "", "", nil)
+	outbox := &fakeOutbox{deliveries: []eventing.ClaimedEvent{{Envelope: gen2, Attempt: 1}, {Envelope: gen1, Attempt: 1}}}
+	var calls atomic.Int32
+	var observed sync.Map
+	engine := newTestEngine(t, keys, outbox, 2)
+	engine.controllers[HostResourceKind] = controllerFunc{name: "latest-state", kind: HostResourceKind, run: func(ctx context.Context, key ResourceKey) (ReconcileResult, error) {
+		_ = ctx
+		calls.Add(1)
+		// This represents the current-state database read; event generations are
+		// deliberately not part of the key passed to the controller.
+		observed.Store(key.ID, uint64(7))
+		return ReconcileResult{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan error, 1)
+	go func() { started <- engine.Start(ctx) }()
+	deadline := time.After(3 * time.Second)
+	for calls.Load() < 2 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("startup recovery and event notifications did not reconcile keys")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := engine.CheckReadiness(context.Background()); err != nil {
+		cancel()
+		t.Fatalf("manager readiness after initial scan = %v", err)
+	}
+	if _, ok := observed.Load(string(id2)); !ok {
+		cancel()
+		t.Fatal("startup scan did not recover a resource without an event")
+	}
+	outbox.mu.Lock()
+	ackCount := len(outbox.acks)
+	outbox.mu.Unlock()
+	if ackCount != 2 {
+		cancel()
+		t.Fatalf("outbox acknowledgments = %d, want duplicate/out-of-order events admitted", ackCount)
+	}
+	cancel()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not shut down")
+	}
+}
+
+func TestEngineRecoversWorkerPanicAndDrainsOnShutdown(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	keys := &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id}}}
+	engine := newTestEngine(t, keys, &fakeOutbox{}, 1)
+	var calls atomic.Int32
+	recovered := make(chan struct{}, 1)
+	engine.controllers[HostResourceKind] = controllerFunc{name: "panic-once", kind: HostResourceKind, run: func(context.Context, ResourceKey) (ReconcileResult, error) {
+		if calls.Add(1) == 1 {
+			panic("transient worker fault")
+		}
+		recovered <- struct{}{}
+		return ReconcileResult{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan error, 1)
+	go func() { started <- engine.Start(ctx) }()
+	select {
+	case <-recovered:
+	case <-time.After(4 * time.Second):
+		cancel()
+		t.Fatal("worker did not recover after panic retry")
+	}
+	if calls.Load() < 2 {
+		cancel()
+		t.Fatalf("controller calls = %d, want retry after worker panic", calls.Load())
+	}
+	cancel()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager failed to drain and stop")
+	}
+}
+
+func TestEngineSerializesConcurrentReconcileForSameKey(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	key := ResourceKey{Kind: HostResourceKind, WorkspaceID: 1, ID: string(id)}
+	engine := newTestEngine(t, &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id}}}, &fakeOutbox{}, 2)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls, active, maxActive atomic.Int32
+	engine.controllers[HostResourceKind] = controllerFunc{name: "serial", kind: HostResourceKind, run: func(ctx context.Context, _ ResourceKey) (ReconcileResult, error) {
+		call := calls.Add(1)
+		count := active.Add(1)
+		for {
+			current := maxActive.Load()
+			if count <= current || maxActive.CompareAndSwap(current, count) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		if call == 1 {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ReconcileResult{}, ctx.Err()
+			}
+		}
+		return ReconcileResult{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan error, 1)
+	go func() { started <- engine.Start(ctx) }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("first reconciliation did not start")
+	}
+	if got := engine.queue.Add(key); got != QueueAccepted {
+		cancel()
+		close(release)
+		t.Fatalf("event while processing = %v", got)
+	}
+	// While the key is processing, Add only marks it dirty: nothing runnable
+	// is queued, so no worker can pick it up concurrently. This is the
+	// guarantee itself, checked directly instead of waiting and hoping.
+	if queued := engine.queue.Len(); queued != 0 {
+		cancel()
+		close(release)
+		t.Fatalf("a key that is processing was queued again (%d runnable)", queued)
+	}
+	if maxActive.Load() != 1 || calls.Load() != 1 {
+		cancel()
+		close(release)
+		t.Fatalf("same key ran concurrently: calls=%d max_active=%d", calls.Load(), maxActive.Load())
+	}
+	close(release)
+	deadline := time.After(2 * time.Second)
+	for calls.Load() < 2 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("dirty key was not scheduled after processing")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not drain")
+	}
+	if maxActive.Load() != 1 {
+		t.Fatalf("maximum concurrent same-key reconciles = %d", maxActive.Load())
+	}
+}
+
+func TestEngineShutdownWaitsForActiveReconcile(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	engine := newTestEngine(t, &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id}}}, &fakeOutbox{}, 1)
+	entered, release := make(chan struct{}), make(chan struct{})
+	engine.controllers[HostResourceKind] = controllerFunc{name: "drain", kind: HostResourceKind, run: func(ctx context.Context, _ ResourceKey) (ReconcileResult, error) {
+		close(entered)
+		select {
+		case <-release:
+			return ReconcileResult{}, nil
+		case <-ctx.Done():
+			return ReconcileResult{}, ctx.Err()
+		}
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan error, 1)
+	go func() { started <- engine.Start(ctx) }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("reconciliation did not start")
+	}
+	cancel()
+	select {
+	case <-started:
+		t.Fatal("manager returned before active reconciliation drained")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not stop after reconciliation drain")
+	}
+}
+
+func TestEngineRejectsDuplicateRegistrationAndBadStartup(t *testing.T) {
+	keys := &fakeHostKeys{}
+	outbox := &fakeOutbox{}
+	cfg := DefaultConfig()
+	engine, err := NewEngine(Dependencies{Hosts: keys, Outbox: outbox}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl := controllerFunc{name: "one", kind: HostResourceKind, run: func(context.Context, ResourceKey) (ReconcileResult, error) { return ReconcileResult{}, nil }}
+	if err := engine.Register(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Register(ctrl); !errors.Is(err, ErrDuplicateController) {
+		t.Fatalf("duplicate registration error = %v", err)
+	}
+	noControllers, err := NewEngine(Dependencies{Hosts: keys, Outbox: outbox}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := noControllers.Start(context.Background()); !errors.Is(err, ErrNoControllers) {
+		t.Fatalf("empty registry startup error = %v", err)
+	}
+}
+
+func TestEngineQuarantinesUnsupportedVersion(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	envelope, err := eventing.NewHostEvent(eventing.HostCreated, 1, eventing.Subject{Kind: "host", ID: id, Generation: 1, Revision: 1}, "created", time.Now(), "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.SchemaVersion = 9
+	outbox := &fakeOutbox{deliveries: []eventing.ClaimedEvent{{Envelope: envelope, Attempt: 1}}}
+	engine := newTestEngine(t, &fakeHostKeys{}, outbox, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan error, 1)
+	go func() { started <- engine.Start(ctx) }()
+	deadline := time.After(2 * time.Second)
+	for {
+		outbox.mu.Lock()
+		count := len(outbox.quarantined)
+		outbox.mu.Unlock()
+		if count == 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("unsupported event version was not quarantined")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not stop")
+	}
+}
+
+type fakeProfileHosts struct{ hosts []resource.HostKey }
+
+func (f fakeProfileHosts) ListHostsByAccessProfile(context.Context, int, resource.ID) ([]resource.HostKey, error) {
+	return append([]resource.HostKey(nil), f.hosts...), nil
+}
+
+func TestEngineFansOutAccessProfileNotificationToHosts(t *testing.T) {
+	profileID, _ := resource.NewResourceID()
+	hostID, _ := resource.NewResourceID()
+	eventID, _ := resource.NewResourceID()
+	data, _ := json.Marshal(eventing.AccessProfileChange{Revision: 2})
+	envelope := eventing.Envelope{ID: eventID, Type: eventing.AccessProfileChanged, SchemaVersion: 1, OccurredAt: time.Now(),
+		Producer: "test", WorkspaceID: 8, Subject: eventing.Subject{Kind: "access-profile", ID: profileID, Generation: 2, Revision: 2}, Data: data}
+	outbox := &fakeOutbox{deliveries: []eventing.ClaimedEvent{{Envelope: envelope, Attempt: 1}}}
+	engine := newTestEngine(t, &fakeHostKeys{}, outbox, 1)
+	engine.deps.Profiles = fakeProfileHosts{hosts: []resource.HostKey{{WorkspaceID: 8, ID: hostID}}}
+	reconciled := make(chan ResourceKey, 1)
+	engine.controllers[HostResourceKind] = controllerFunc{name: "capture", kind: HostResourceKind, run: func(_ context.Context, key ResourceKey) (ReconcileResult, error) {
+		reconciled <- key
+		return ReconcileResult{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	go func() { finished <- engine.Start(ctx) }()
+	select {
+	case key := <-reconciled:
+		if key.WorkspaceID != 8 || key.ID != string(hostID) {
+			t.Fatalf("reconciled wrong key: %+v", key)
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Access Profile event did not schedule Host reconciliation")
+	}
+	outbox.mu.Lock()
+	acknowledged := len(outbox.acks)
+	outbox.mu.Unlock()
+	if acknowledged != 1 {
+		t.Fatalf("Access Profile event acknowledgements=%d", acknowledged)
+	}
+	cancel()
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buf.String() }
+
+// The startup scan finishes even when a listed Host's kind has no controller
+// (the cursor must advance past every Host, not only the ones it queues).
+func TestResyncAdvancesPastHostsWithoutAController(t *testing.T) {
+	first, _ := resource.NewResourceID()
+	second, _ := resource.NewResourceID()
+	keys := &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: first}, {WorkspaceID: 1, ID: second}}}
+	engine := newTestEngine(t, keys, &fakeOutbox{}, 1)
+	engine.cfg.PageSize = 1
+	engine.controllers = map[ResourceKind]Controller{"other": controllerFunc{name: "other", kind: "other",
+		run: func(context.Context, ResourceKey) (ReconcileResult, error) { return ReconcileResult{}, nil }}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- engine.Start(ctx) }()
+	waitReady := time.After(3 * time.Second)
+	for engine.CheckReadiness(ctx) != nil {
+		select {
+		case <-waitReady:
+			cancel()
+			t.Fatal("the startup scan never finished: it kept listing the same page")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+// A panic in a controller is recovered, and the log says what panicked and
+// where, so the cause can be found from the request-less background log.
+func TestControllerPanicIsLoggedWithItsCause(t *testing.T) {
+	id, _ := resource.NewResourceID()
+	engine := newTestEngine(t, &fakeHostKeys{keys: []resource.HostKey{{WorkspaceID: 1, ID: id}}}, &fakeOutbox{}, 1)
+	logs := &lockedBuffer{}
+	engine.deps.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	var calls atomic.Int32
+	engine.controllers[HostResourceKind] = controllerFunc{name: "panicky", kind: HostResourceKind, run: func(context.Context, ResourceKey) (ReconcileResult, error) {
+		calls.Add(1)
+		panic("the unique panic value")
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- engine.Start(ctx) }()
+	deadline := time.After(3 * time.Second)
+	for calls.Load() == 0 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("the controller never ran")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+	if out := logs.String(); !strings.Contains(out, "the unique panic value") || !strings.Contains(out, "goroutine") {
+		t.Fatalf("log lacks the panic value or stack:\n%s", out)
+	}
+}

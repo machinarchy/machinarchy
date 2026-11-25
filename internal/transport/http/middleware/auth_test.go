@@ -1,0 +1,165 @@
+package middleware_test
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/labstack/echo/v4"
+	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/service"
+	"github.com/machinarchy/machinarchy/internal/sessionkey"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
+)
+
+type accessStoreStub struct {
+	principal domain.Principal
+	gotHash   string
+}
+
+func (s *accessStoreStub) GetWorkspaceRole(context.Context, int, int) (domain.Role, error) {
+	return "", domain.ErrMembershipNotFound
+}
+func (s *accessStoreStub) ResolveAPIToken(_ context.Context, hash string) (*domain.Principal, error) {
+	s.gotHash = hash
+	return &s.principal, nil
+}
+func (*accessStoreStub) ListAPITokens(context.Context, int, int) ([]domain.APIToken, error) {
+	return nil, nil
+}
+func (*accessStoreStub) CreateAPIToken(context.Context, *domain.APIToken) error { return nil }
+func (*accessStoreStub) RevokeAPIToken(context.Context, int, int, int) error    { return nil }
+
+// sessionStoreStub refuses every session; embed it to override one method.
+type sessionStoreStub struct{}
+
+func (sessionStoreStub) CreateSession(context.Context, domain.Session) error { return nil }
+func (sessionStoreStub) GetSessionRole(context.Context, string, int, int, time.Time) (domain.Role, error) {
+	return "", domain.ErrSessionNotFound
+}
+func (sessionStoreStub) ListSessions(context.Context, int, time.Time) ([]domain.Session, error) {
+	return nil, nil
+}
+func (sessionStoreStub) RevokeSession(context.Context, string, int, string, time.Time) error {
+	return nil
+}
+func (sessionStoreStub) RevokeUserSessions(context.Context, int, string, time.Time) (int, error) {
+	return 0, nil
+}
+func (sessionStoreStub) ChangePassword(context.Context, int, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func patAuth(t *testing.T, access domain.AccessStore) echo.MiddlewareFunc {
+	t.Helper()
+	keys, err := sessionkey.New("unused-for-pat-0123456789abcdef0123", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return middleware.JWTAuth(keys, time.Hour, access, sessionStoreStub{})
+}
+
+func TestAPITokenAuthenticationUsesScopedPrincipalAndPermissions(t *testing.T) {
+	const rawToken = "mch_pat_example-secret"
+	access := &accessStoreStub{principal: domain.Principal{
+		UserID: 7, WorkspaceID: 11, Role: domain.RoleReader, APITokenID: 42, Username: "automation",
+	}}
+	e := echo.New()
+	endpoint := func(c echo.Context) error {
+		principal, ok := middleware.Principal(c)
+		if !ok {
+			return c.NoContent(http.StatusUnauthorized)
+		}
+		if principal.WorkspaceID != 11 || principal.APITokenID != 42 {
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+	e.GET("/read", endpoint,
+		patAuth(t, access),
+		middleware.RequirePermission(domain.PermissionOperationsRead),
+	)
+	e.GET("/write", endpoint,
+		patAuth(t, access),
+		middleware.RequirePermission(domain.PermissionInventoryWrite),
+	)
+	e.GET("/cookie", endpoint,
+		patAuth(t, access),
+	)
+
+	for _, tt := range []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{name: "reader permission allowed", path: "/read", wantStatus: http.StatusNoContent},
+		{name: "write denied", path: "/write", wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer "+rawToken)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
+	if want := service.HashAPIToken(rawToken); access.gotHash != want {
+		t.Fatalf("resolved token hash = %q, want SHA-256 digest %q", access.gotHash, want)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/cookie", nil)
+	req.AddCookie(&http.Cookie{
+		Name:     "auth_token",
+		Value:    rawToken,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("API token cookie status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAPITokenCannotUseHumanOnlyTokenManagement(t *testing.T) {
+	const rawToken = "mch_pat_owner-shaped-secret"
+	access := &accessStoreStub{principal: domain.Principal{
+		UserID: 7, WorkspaceID: 11, Role: domain.RoleOwner, APITokenID: 42, Username: "automation",
+	}}
+	e := echo.New()
+	e.POST("/tokens", func(c echo.Context) error { return c.NoContent(http.StatusNoContent) },
+		patAuth(t, access),
+		middleware.RequirePermission(domain.PermissionTokenManage),
+		middleware.RequireHuman(),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/tokens", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+rawToken)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("owner-shaped API token status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+// Without a principal the request is unauthenticated (401), not forbidden:
+// every permission middleware answers the same way.
+func TestPermissionMiddlewareWithoutPrincipalIs401(t *testing.T) {
+	for name, mw := range map[string]echo.MiddlewareFunc{
+		"permission": middleware.RequirePermission(domain.PermissionInventoryRead),
+		"human":      middleware.RequireHuman(),
+		"owner":      middleware.RequireOwner(),
+	} {
+		e := echo.New()
+		e.GET("/x", func(c echo.Context) error { return c.NoContent(http.StatusOK) }, mw)
+		recorder := httptest.NewRecorder()
+		e.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/x", nil))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a principal = %d, want 401", name, recorder.Code)
+		}
+	}
+}

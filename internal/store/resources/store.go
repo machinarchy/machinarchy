@@ -1,0 +1,1116 @@
+// Package resources implements the persistence shared by the SQLite and
+// PostgreSQL adapters for canonical managed resources. Engine-specific SQL
+// placeholders are selected by the adapter at construction time; lifecycle
+// rules remain in internal/domain/resource.
+package resources
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/store/sqlx"
+)
+
+type auditAppender func(context.Context, *sql.Tx, domain.AuditEvent) error
+
+type Store struct {
+	db          *sql.DB
+	dialect     sqlx.Dialect
+	cipher      *DataCipher
+	appendAudit auditAppender
+	logger      *slog.Logger
+}
+
+func New(db *sql.DB, dialect sqlx.Dialect, cipher *DataCipher, logger *slog.Logger,
+	appendAuditFn func(context.Context, *sql.Tx, domain.AuditEvent) error) (*Store, error) {
+	if db == nil || !dialect.Valid() || cipher == nil || appendAuditFn == nil {
+		return nil, errors.New("resource store requires a database, supported dialect, Operation data cipher, and audit appender")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{db: db, dialect: dialect, cipher: cipher, appendAudit: appendAuditFn, logger: logger}, nil
+}
+
+func (s *Store) bind(query string) string { return s.dialect.Bind(query) }
+
+func encodeJSON(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("encode resource data: %w", err)
+	}
+	return string(data), nil
+}
+
+func decodeJSON(text string, value any) error {
+	if err := json.Unmarshal([]byte(text), value); err != nil {
+		return fmt.Errorf("decode resource data: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) audit(ctx context.Context, tx *sql.Tx, workspaceID int, action, targetType string,
+	targetID string, details map[string]string) error {
+	return s.appendAudit(ctx, tx, domain.AuditEvent{WorkspaceID: workspaceID, Action: action,
+		TargetType: targetType, TargetID: targetID, Details: details})
+}
+
+func (s *Store) CreateHost(ctx context.Context, host *resource.Host) error {
+	if host == nil {
+		return fmt.Errorf("%w: Host is required", resource.ErrInvalidResource)
+	}
+	if err := host.Validate(); err != nil {
+		return err
+	}
+	if host.Spec.AccessProfileID != "" {
+		if err := s.validateHostAccessProfile(ctx, s.db, host.Metadata.WorkspaceID, host.Spec.AccessProfileID); err != nil {
+			return err
+		}
+	}
+	labels, err := encodeJSON(host.Metadata.Labels)
+	if err != nil {
+		return err
+	}
+	conditions, err := encodeJSON(host.Status.Conditions)
+	if err != nil {
+		return err
+	}
+	accessTarget, err := encodeJSON(host.Spec.AccessTarget)
+	if err != nil {
+		return err
+	}
+	if host.Spec.Presence == "" {
+		host.Spec.Presence = resource.PresenceManaged
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin managed Host creation: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "managed Host creation")
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO managed_hosts (
+		id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
+		access_profile_revision, generation, revision, observed_generation, phase, conditions,
+		last_observed_at, deletion_timestamp, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		string(host.Metadata.ID), host.Metadata.WorkspaceID, nullablePositiveID(host.Metadata.EnvironmentID), host.Metadata.Name,
+		labels, string(host.Spec.Presence), string(host.Spec.AccessProfileID), accessTarget, host.Spec.ProfileRevision,
+		host.Metadata.Generation, host.Metadata.Revision, host.Status.ObservedGeneration, string(host.Status.Phase),
+		conditions, nullableTimeText(host.Status.LastObservedAt), nullableTimeText(host.Metadata.DeletionTimestamp),
+		sqlx.Time(host.Metadata.CreatedAt), sqlx.Time(host.Metadata.UpdatedAt))
+	if err != nil {
+		if sqlx.IsUniqueViolation(err) {
+			return fmt.Errorf("%w: %w", resource.ErrAlreadyExists, err)
+		}
+		return fmt.Errorf("insert managed Host: %w", err)
+	}
+	if err := s.writeHostLabels(ctx, tx, host.Metadata.WorkspaceID, host.Metadata.ID, host.Metadata.Labels); err != nil {
+		return err
+	}
+	if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, domain.AuditResourceHostCreated,
+		domain.AuditTargetResourceHost, string(host.Metadata.ID), map[string]string{"name": host.Metadata.Name}); err != nil {
+		return err
+	}
+	if err := s.appendHostEvent(ctx, tx, host, eventing.HostCreated, "created"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit managed Host creation: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetHost(ctx context.Context, workspaceID int, id resource.ID) (*resource.Host, error) {
+	if workspaceID <= 0 || id.Validate() != nil {
+		return nil, fmt.Errorf("%w: workspace and canonical Host ID are required", resource.ErrInvalidResource)
+	}
+	return s.getHost(ctx, s.db, workspaceID, id)
+}
+
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const hostColumns = `id, workspace_id, environment_id, name, labels, desired_presence, access_profile_id, access_target,
+		access_profile_revision, generation, revision, observed_generation, phase, conditions,
+		last_observed_at, deletion_timestamp, created_at, updated_at, observed_host_keys`
+
+func (s *Store) getHost(ctx context.Context, q queryRower, workspaceID int, id resource.ID) (*resource.Host, error) {
+	host, err := scanHost(q.QueryRowContext(ctx, s.bind(`SELECT `+hostColumns+` FROM managed_hosts WHERE workspace_id = ? AND id = ?`), workspaceID, string(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, resource.ErrHostNotFound
+	}
+	return host, err
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanHost(row rowScanner) (*resource.Host, error) {
+	var host resource.Host
+	var labelsText, conditionsText, presence, profileID, accessTarget, phase, observedKeys string
+	var environmentID sql.NullInt64
+	var lastObserved, deletion sql.NullString
+	var created, updated string
+	err := row.Scan(
+		&host.Metadata.ID, &host.Metadata.WorkspaceID, &environmentID, &host.Metadata.Name,
+		&labelsText, &presence, &profileID, &accessTarget, &host.Spec.ProfileRevision, &host.Metadata.Generation,
+		&host.Metadata.Revision, &host.Status.ObservedGeneration, &phase, &conditionsText,
+		&lastObserved, &deletion, &created, &updated, &observedKeys)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read managed Host: %w", err)
+	}
+	if environmentID.Valid {
+		host.Metadata.EnvironmentID = int(environmentID.Int64)
+	}
+	host.Spec.Presence = resource.DesiredPresence(presence)
+	host.Spec.AccessProfileID = resource.ID(profileID)
+	if err := decodeJSON(accessTarget, &host.Spec.AccessTarget); err != nil {
+		return nil, err
+	}
+	host.Status.Phase = resource.HostPhase(phase)
+	if err := decodeJSON(labelsText, &host.Metadata.Labels); err != nil {
+		return nil, err
+	}
+	if err := decodeJSON(conditionsText, &host.Status.Conditions); err != nil {
+		return nil, err
+	}
+	if err := decodeJSON(observedKeys, &host.Status.ObservedHostKeys); err != nil {
+		return nil, err
+	}
+	if host.Status.LastObservedAt, err = sqlx.ParseNullTime(lastObserved); err != nil {
+		return nil, err
+	}
+	if host.Metadata.DeletionTimestamp, err = sqlx.ParseNullTime(deletion); err != nil {
+		return nil, err
+	}
+	if host.Metadata.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+		return nil, fmt.Errorf("parse managed Host creation time: %w", err)
+	}
+	if host.Metadata.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
+		return nil, fmt.Errorf("parse managed Host update time: %w", err)
+	}
+	if err := host.Validate(); err != nil {
+		return nil, fmt.Errorf("stored managed Host violates domain invariants: %w", err)
+	}
+	return &host, nil
+}
+
+// ListHosts returns one keyset page of Hosts ordered by ID, in a single query.
+func (s *Store) ListHosts(ctx context.Context, filter resource.HostListFilter) ([]resource.Host, error) {
+	if filter.WorkspaceID <= 0 {
+		return nil, fmt.Errorf("%w: workspace ID must be positive", resource.ErrInvalidResource)
+	}
+	query := `SELECT ` + hostColumns + ` FROM managed_hosts WHERE workspace_id = ?`
+	args := []any{filter.WorkspaceID}
+	if filter.EnvironmentID > 0 {
+		query += ` AND environment_id = ?`
+		args = append(args, filter.EnvironmentID)
+	}
+	if filter.Phase != "" {
+		query += ` AND phase = ?`
+		args = append(args, string(filter.Phase))
+	}
+	if filter.After != "" {
+		query += ` AND id > ?`
+		args = append(args, string(filter.After))
+	}
+	labelSQL, labelArgs := labelConditions(filter.WorkspaceID, filter.Labels)
+	query += labelSQL
+	args = append(args, labelArgs...)
+	if len(filter.Lookup) > 0 {
+		ids := make([]any, 0, len(filter.Lookup))
+		names := make([]any, 0, len(filter.Lookup))
+		for _, entry := range filter.Lookup {
+			entry = strings.TrimSpace(entry)
+			ids = append(ids, entry)
+			names = append(names, strings.ToLower(entry))
+		}
+		query += ` AND (id IN (` + placeholders(len(ids)) + `) OR LOWER(name) IN (` + placeholders(len(names)) + `))`
+		args = append(append(args, ids...), names...)
+	}
+	query += ` ORDER BY id LIMIT ?`
+	args = append(args, resource.PageLimit(filter.Limit))
+	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list managed Hosts: %w", err)
+	}
+	defer sqlx.CloseRows(rows, s.logger, "query list hosts")
+	hosts := make([]resource.Host, 0)
+	for rows.Next() {
+		host, err := scanHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, *host)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed Hosts: %w", err)
+	}
+	return hosts, nil
+}
+
+func (s *Store) UpdateHostSpec(ctx context.Context, workspaceID int, id resource.ID,
+	expectedRevision, expectedGeneration uint64, spec resource.HostSpec, now time.Time) error {
+	host, err := s.getHost(ctx, s.db, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	if host.Metadata.Revision != expectedRevision || host.Metadata.Generation != expectedGeneration {
+		return resource.ErrConflict
+	}
+	if err := host.UpdateSpec(expectedGeneration, spec, now); err != nil {
+		return err
+	}
+	if host.Spec.AccessProfileID != "" {
+		if err := s.validateHostAccessProfile(ctx, s.db, workspaceID, host.Spec.AccessProfileID); err != nil {
+			return err
+		}
+	}
+	if host.Metadata.Revision == expectedRevision {
+		return nil
+	}
+	eventType, change := eventing.HostSpecChanged, "spec-changed"
+	if host.Spec.Presence == resource.PresenceAbsent {
+		eventType, change = eventing.HostDeletionRequested, "deletion-requested"
+	}
+	return s.writeHost(ctx, host, expectedRevision, false, domain.AuditResourceHostUpdated, nil, eventType, change, nil)
+}
+
+// TrustHostKeys pins host key fingerprints (resource.Host.TrustHostKeys).
+// Trust is part of the spec: the generation changes and a spec-changed event
+// makes the Host controller verify the Host again. source names who trusted
+// the keys ("owner" or "tofu") in the audit event.
+func (s *Store) TrustHostKeys(ctx context.Context, workspaceID int, id resource.ID, expectedRevision uint64,
+	fingerprints []string, replace bool, source string, now time.Time) error {
+	host, err := s.getHost(ctx, s.db, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	previous := strings.Join(host.Spec.AccessTarget.Trust, " ")
+	if err := host.TrustHostKeys(expectedRevision, fingerprints, replace, now); err != nil {
+		return err
+	}
+	details := map[string]string{"source": source, "fingerprints": strings.Join(fingerprints, " ")}
+	if previous != "" {
+		details["replaced"] = previous
+	}
+	var fence *resource.LeaseFence
+	if value, ok := resource.LeaseFenceFromContext(ctx); ok {
+		fence = &value
+	}
+	return s.writeHost(ctx, host, expectedRevision, false, domain.AuditResourceHostKeyTrusted, details, eventing.HostSpecChanged, "host-keys-trusted", fence)
+}
+
+func (s *Store) UpdateHostMetadata(ctx context.Context, workspaceID int, id resource.ID,
+	expectedRevision uint64, name string, environmentID int, labels map[string]string, now time.Time) error {
+	host, err := s.getHost(ctx, s.db, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	if host.Metadata.Revision != expectedRevision {
+		return resource.ErrConflict
+	}
+	if err := host.UpdateMetadata(expectedRevision, name, environmentID, labels, now); err != nil {
+		return err
+	}
+	return s.writeHost(ctx, host, expectedRevision, true, domain.AuditResourceHostUpdated, nil, "", "", nil)
+}
+
+func (s *Store) ObserveHost(ctx context.Context, workspaceID int, id resource.ID,
+	expectedGeneration uint64, phase resource.HostPhase, conditions []resource.Condition, keys []resource.ObservedHostKey, now time.Time) error {
+	host, err := s.getHost(ctx, s.db, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	previousReason := resource.ReadyReason(host.Status.Conditions)
+	if err := host.Observe(expectedGeneration, phase, conditions, keys, now); err != nil {
+		return err
+	}
+	var fence *resource.LeaseFence
+	if value, ok := resource.LeaseFenceFromContext(ctx); ok {
+		fence = &value
+	}
+	if s.dialect == sqlx.PostgreSQL && fence == nil {
+		return resource.ErrLeaseRequired
+	}
+	// A reconcile's status is not audited (automatic, AUDIT/20 F20-05); a
+	// host newly presenting a different key is.
+	action, details := "", map[string]string(nil)
+	if reason := resource.ReadyReason(host.Status.Conditions); reason == "HostKeyChanged" && previousReason != reason {
+		presented := make([]string, 0, len(host.Status.ObservedHostKeys))
+		for _, key := range host.Status.ObservedHostKeys {
+			presented = append(presented, key.Fingerprint)
+		}
+		action = domain.AuditResourceHostKeyChanged
+		details = map[string]string{"presented": strings.Join(presented, " "), "trusted": strings.Join(host.Spec.AccessTarget.Trust, " ")}
+	}
+	return s.writeHost(ctx, host, host.Metadata.Revision-1, false, action, details, "", "", fence)
+}
+
+func (s *Store) writeHost(ctx context.Context, host *resource.Host, expectedRevision uint64, labelsChanged bool, auditAction string, auditDetails map[string]string,
+	eventType, eventChange string, fence *resource.LeaseFence) error {
+	labels, err := encodeJSON(host.Metadata.Labels)
+	if err != nil {
+		return err
+	}
+	conditions, err := encodeJSON(host.Status.Conditions)
+	if err != nil {
+		return err
+	}
+	accessTarget, err := encodeJSON(host.Spec.AccessTarget)
+	if err != nil {
+		return err
+	}
+	observedKeys, err := encodeJSON(host.Status.ObservedHostKeys)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin managed Host update: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "managed Host update")
+	if fence != nil {
+		if err := s.verifyLeaseFence(ctx, tx, *fence, host.Metadata.WorkspaceID, host.Metadata.ID); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, s.bind(`UPDATE managed_hosts SET environment_id = ?, name = ?, labels = ?,
+		desired_presence = ?, access_profile_id = ?, access_profile_revision = ?, access_target = ?, generation = ?, revision = ?,
+		observed_generation = ?, phase = ?, conditions = ?, last_observed_at = ?, deletion_timestamp = ?, updated_at = ?,
+		observed_host_keys = ?
+		WHERE workspace_id = ? AND id = ? AND revision = ?`), nullablePositiveID(host.Metadata.EnvironmentID), host.Metadata.Name, labels,
+		string(host.Spec.Presence), string(host.Spec.AccessProfileID), host.Spec.ProfileRevision, accessTarget,
+		host.Metadata.Generation, host.Metadata.Revision, host.Status.ObservedGeneration, string(host.Status.Phase),
+		conditions, nullableTimeText(host.Status.LastObservedAt), nullableTimeText(host.Metadata.DeletionTimestamp),
+		sqlx.Time(host.Metadata.UpdatedAt), observedKeys, host.Metadata.WorkspaceID, string(host.Metadata.ID), expectedRevision)
+	if err != nil {
+		return fmt.Errorf("update managed Host: %w", err)
+	}
+	if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
+		return err
+	}
+	if labelsChanged {
+		if err := s.writeHostLabels(ctx, tx, host.Metadata.WorkspaceID, host.Metadata.ID, host.Metadata.Labels); err != nil {
+			return err
+		}
+	}
+	// auditAction "" marks a write that is not audited: a reconcile's status
+	// update (AUDIT/20 F20-05). A host key change is still audited.
+	if auditAction != "" {
+		if auditDetails == nil {
+			auditDetails = map[string]string{}
+		}
+		auditDetails["generation"] = fmt.Sprint(host.Metadata.Generation)
+		if err := s.audit(ctx, tx, host.Metadata.WorkspaceID, auditAction, domain.AuditTargetResourceHost,
+			string(host.Metadata.ID), auditDetails); err != nil {
+			return err
+		}
+	}
+	if eventType != "" {
+		if err := s.appendHostEvent(ctx, tx, host, eventType, eventChange); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit managed Host update: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteHost(ctx context.Context, workspaceID int, id resource.ID, expectedRevision uint64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin managed Host deletion: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "managed Host deletion")
+	if s.dialect == sqlx.PostgreSQL {
+		var lockedID string
+		if err = tx.QueryRowContext(ctx, s.bind(`SELECT id FROM managed_hosts WHERE workspace_id=? AND id=? FOR UPDATE`), workspaceID, string(id)).Scan(&lockedID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrHostNotFound
+			}
+			return fmt.Errorf("lock managed Host for deletion: %w", err)
+		}
+	}
+	host, err := s.getHost(ctx, tx, workspaceID, id)
+	if err != nil {
+		return err
+	}
+	if host.Metadata.Revision != expectedRevision {
+		return resource.ErrConflict
+	}
+	var activeOperations int
+	if err = tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(DISTINCT o.id) FROM operations o JOIN operation_targets t ON t.operation_id=o.id
+		WHERE o.workspace_id=? AND t.host_id=? AND o.state IN (?,?,?)`), workspaceID, string(id), string(resource.OperationQueued),
+		string(resource.OperationRunning), string(resource.OperationCancelRequested)).Scan(&activeOperations); err != nil {
+		return fmt.Errorf("check active Operations before Host deletion: %w", err)
+	}
+	if activeOperations > 0 {
+		return resource.ErrConflict
+	}
+	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
+		if err := s.verifyLeaseFence(ctx, tx, fence, workspaceID, id); err != nil {
+			return err
+		}
+	}
+	if err := s.audit(ctx, tx, workspaceID, domain.AuditResourceHostDeleted,
+		domain.AuditTargetResourceHost, string(id), map[string]string{"name": host.Metadata.Name}); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, s.bind(`DELETE FROM managed_hosts WHERE workspace_id = ? AND id = ? AND revision = ?`),
+		workspaceID, string(id), expectedRevision)
+	if err != nil {
+		return fmt.Errorf("delete managed Host: %w", err)
+	}
+	if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
+		return err
+	}
+	deleted := *host
+	deleted.Metadata.Revision = expectedRevision + 1
+	if err := s.appendHostEvent(ctx, tx, &deleted, eventing.HostDeleted, "deleted"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit managed Host deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.Host, eventType, change string) error {
+	var correlationID string
+	var actor *eventing.Actor
+	if source, ok := domain.AuditActorFrom(ctx); ok {
+		correlationID = source.RequestID
+		if source.UserID > 0 || source.APITokenID > 0 {
+			actor = &eventing.Actor{UserID: source.UserID, APITokenID: source.APITokenID}
+		}
+	}
+	event, err := eventing.NewHostEvent(eventType, host.Metadata.WorkspaceID, eventing.Subject{
+		Kind: "host", ID: host.Metadata.ID, Generation: host.Metadata.Generation, Revision: host.Metadata.Revision,
+	}, change, host.Metadata.UpdatedAt, correlationID, correlationID, actor)
+	if err != nil {
+		return fmt.Errorf("construct Host integration event: %w", err)
+	}
+	return InsertHostEvent(ctx, tx, s.bind, event)
+}
+
+// RequestHostRecheck asks the Control Manager to reconcile a Host soon: a run
+// failed in a way that suggests its observed state is stale (a changed SSH
+// host key), so waiting for the next periodic scan would leave it Ready for
+// minutes (AUDIT G-13C-01). It changes no Host field. A Host that no longer
+// exists is not an error.
+func (s *Store) RequestHostRecheck(ctx context.Context, workspaceID int, id resource.ID, reason string) error {
+	if workspaceID <= 0 || id.Validate() != nil {
+		return fmt.Errorf("%w: workspace and canonical Host ID are required", resource.ErrInvalidResource)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Host recheck: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Host recheck")
+	host, err := s.getHost(ctx, tx, workspaceID, id)
+	if errors.Is(err, resource.ErrHostNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// The event is dated now: it is delivered at once, and retention counts
+	// from it.
+	host.Metadata.UpdatedAt = time.Now().UTC()
+	if err := s.appendHostEvent(ctx, tx, host, eventing.HostSpecChanged, reason); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Host recheck: %w", err)
+	}
+	return nil
+}
+
+// InsertHostEvent writes a Host event and its Control Manager delivery in
+// tx, so the Host is reconciled once tx commits. bind adapts placeholders to
+// the dialect. Other stores use it when a change of theirs affects a Host
+// (an agent binding, AUDIT F17-04).
+func InsertHostEvent(ctx context.Context, tx *sql.Tx, bind func(string) string, event eventing.Envelope) error {
+	actor := event.Actor
+	payload := string(event.Data)
+	var actorUserID, actorTokenID any
+	if actor != nil {
+		if actor.UserID > 0 {
+			actorUserID = actor.UserID
+		}
+		if actor.APITokenID > 0 {
+			actorTokenID = actor.APITokenID
+		}
+	}
+	_, err := tx.ExecContext(ctx, bind(`INSERT INTO outbox_events (
+		event_id, event_type, schema_version, occurred_at, producer, workspace_id,
+		subject_kind, subject_id, subject_generation, subject_revision, correlation_id,
+		causation_id, actor_user_id, actor_token_id, payload, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), string(event.ID), event.Type, event.SchemaVersion,
+		sqlx.Time(event.OccurredAt), event.Producer, event.WorkspaceID, event.Subject.Kind, string(event.Subject.ID),
+		event.Subject.Generation, event.Subject.Revision, event.CorrelationID, event.CausationID,
+		actorUserID, actorTokenID, payload, sqlx.Time(event.OccurredAt))
+	if err != nil {
+		return fmt.Errorf("insert Host outbox event: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, bind(`INSERT INTO outbox_deliveries (event_id, consumer_group, available_at_ns)
+		VALUES (?, ?, ?)`), string(event.ID), eventing.ConsumerControlManager, event.OccurredAt.UnixNano())
+	if err != nil {
+		return fmt.Errorf("create Host outbox delivery: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) CreateOperation(ctx context.Context, operation *resource.Operation) error {
+	if operation == nil {
+		return fmt.Errorf("%w: Operation is required", resource.ErrInvalidResource)
+	}
+	if err := operation.Validate(); err != nil {
+		return err
+	}
+	specJSON, err := json.Marshal(operation.Spec)
+	if err != nil {
+		return fmt.Errorf("encode Operation spec: %w", err)
+	}
+	encrypted, err := s.cipher.Seal(ctx, specJSON, dataAAD(columnSpec, operation.WorkspaceID, string(operation.ID), ""))
+	if err != nil {
+		return fmt.Errorf("encrypt Operation spec: %w", err)
+	}
+	conditionsJSON, err := encodeJSON(operation.Status.Conditions)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Operation creation: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Operation creation")
+	if err = s.validateOperationTargets(ctx, tx, operation); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO operations (
+		id, workspace_id, kind, state, revision, actor_user_id, actor_token_id, spec_encrypted,
+		cancel_asked, conditions, created_at, started_at, finished_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), string(operation.ID), operation.WorkspaceID,
+		string(operation.Kind), string(operation.Status.State), operation.Revision, operation.CreatedBy.UserID,
+		operation.CreatedBy.APITokenID, encrypted, s.dialect.Bool(operation.Status.CancelAsked),
+		conditionsJSON, sqlx.Time(operation.CreatedAt), nullableTimeText(operation.StartedAt), nullableTimeText(operation.FinishedAt))
+	if err != nil {
+		if sqlx.IsUniqueViolation(err) {
+			return fmt.Errorf("%w: %w", resource.ErrConflict, err)
+		}
+		return fmt.Errorf("insert Operation: %w", err)
+	}
+	for _, target := range operation.Status.Targets {
+		output, err := s.encryptTargetOutput(ctx, operation.WorkspaceID, operation.ID, target.Spec.HostID, target.Result)
+		if err != nil {
+			return fmt.Errorf("encrypt Operation target output: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO operation_targets (
+			operation_id, host_id, host_generation, display_name, access_profile_id,
+			access_profile_revision, state, exit_code, output, error_class
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), string(operation.ID), string(target.Spec.HostID),
+			target.Spec.HostGeneration, target.Spec.DisplayName, string(target.Spec.AccessProfileID),
+			target.Spec.AccessProfileRevision, string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
+			output, targetErrorClass(target.Result))
+		if err != nil {
+			return fmt.Errorf("insert Operation target: %w", err)
+		}
+	}
+	if err := s.audit(ctx, tx, operation.WorkspaceID, domain.AuditOperationCreated,
+		domain.AuditTargetOperation, string(operation.ID), map[string]string{"kind": string(operation.Kind)}); err != nil {
+		return err
+	}
+	eventID, err := resource.NewResourceID()
+	if err != nil {
+		return fmt.Errorf("generate Operation event identity: %w", err)
+	}
+	payload, err := json.Marshal(eventing.OperationChange{Revision: operation.Revision})
+	if err != nil {
+		return fmt.Errorf("encode Operation event: %w", err)
+	}
+	nowText := sqlx.Time(operation.CreatedAt)
+	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_events(event_id,event_type,schema_version,occurred_at,producer,workspace_id,subject_kind,subject_id,subject_generation,subject_revision,correlation_id,causation_id,actor_user_id,actor_token_id,payload,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+		string(eventID), eventing.OperationCreated, 1, nowText, "machinarchy.operations", operation.WorkspaceID,
+		"operation", string(operation.ID), operation.Revision, operation.Revision, "", "", operation.CreatedBy.UserID,
+		nullableActorToken(operation.CreatedBy.APITokenID), string(payload), nowText)
+	if err != nil {
+		return fmt.Errorf("append Operation outbox event: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_deliveries(event_id,consumer_group,attempts,available_at_ns) VALUES(?,?,0,?)`),
+		string(eventID), eventing.ConsumerOperationWorker, operation.CreatedAt.UTC().UnixNano()); err != nil {
+		return fmt.Errorf("schedule Operation worker notification: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Operation creation: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) validateOperationTargets(ctx context.Context, tx *sql.Tx, operation *resource.Operation) error {
+	for _, target := range operation.Spec.Targets {
+		query := `SELECT generation,desired_presence,access_profile_id FROM managed_hosts WHERE workspace_id=? AND id=?`
+		if s.dialect == sqlx.PostgreSQL {
+			query += ` FOR SHARE`
+		}
+		var generation uint64
+		var presence, profileID string
+		if err := tx.QueryRowContext(ctx, s.bind(query), operation.WorkspaceID, string(target.HostID)).Scan(&generation, &presence, &profileID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrHostNotFound
+			}
+			return fmt.Errorf("read Operation target Host: %w", err)
+		}
+		if generation != target.HostGeneration || resource.DesiredPresence(presence) != resource.PresenceManaged || resource.ID(profileID) != target.AccessProfileID || target.AccessProfileID == "" {
+			return fmt.Errorf("%w: Operation target Host snapshot is stale or unconfigured", resource.ErrInvalidResource)
+		}
+		profileQuery := `SELECT current_revision FROM access_profiles WHERE workspace_id=? AND id=? AND deleted_at IS NULL`
+		if s.dialect == sqlx.PostgreSQL {
+			profileQuery += ` FOR SHARE`
+		}
+		var current uint64
+		if err := tx.QueryRowContext(ctx, s.bind(profileQuery), operation.WorkspaceID, string(target.AccessProfileID)).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrAccessProfileNotFound
+			}
+			return fmt.Errorf("read Operation Access Profile head: %w", err)
+		}
+		if current != target.AccessProfileRevision {
+			return resource.ErrConflict
+		}
+		var document string
+		if err := tx.QueryRowContext(ctx, s.bind(`SELECT document FROM access_profile_revisions WHERE workspace_id=? AND profile_id=? AND revision=?`),
+			operation.WorkspaceID, string(target.AccessProfileID), target.AccessProfileRevision).Scan(&document); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return resource.ErrAccessProfileNotFound
+			}
+			return fmt.Errorf("read Operation Access Profile revision: %w", err)
+		}
+		var revision resource.AccessProfileRevision
+		if err := json.Unmarshal([]byte(document), &revision.Spec); err != nil {
+			return fmt.Errorf("decode Operation Access Profile revision: %w", err)
+		}
+		if !revision.Spec.Enabled {
+			return resource.ErrInvalidResource
+		}
+	}
+	return nil
+}
+
+func nullableActorToken(id int) any {
+	if id <= 0 {
+		return nil
+	}
+	return id
+}
+
+func (s *Store) ListQueuedOperations(ctx context.Context, limit int) ([]resource.OperationKey, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT workspace_id, id FROM operations WHERE state = ? ORDER BY created_at, id LIMIT ?`), string(resource.OperationQueued), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list queued Operations: %w", err)
+	}
+	defer sqlx.CloseRows(rows, s.logger, "query queued Operations")
+	keys := make([]resource.OperationKey, 0, limit)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err := rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, fmt.Errorf("scan queued Operation key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate queued Operation keys: %w", err)
+	}
+	return keys, nil
+}
+
+func (s *Store) ListRunningOperations(ctx context.Context, limit int) ([]resource.OperationKey, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT workspace_id,id FROM operations WHERE state IN (?,?) ORDER BY started_at,id LIMIT ?`),
+		string(resource.OperationRunning), string(resource.OperationCancelRequested), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list running Operations: %w", err)
+	}
+	defer sqlx.CloseRows(rows, s.logger, "query running Operations")
+	keys := make([]resource.OperationKey, 0, limit)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err = rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (s *Store) ListActiveOperationsForHost(ctx context.Context, workspace int, hostID resource.ID) ([]resource.OperationKey, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT DISTINCT o.workspace_id,o.id FROM operations o JOIN operation_targets t ON t.operation_id=o.id
+		WHERE o.workspace_id=? AND t.host_id=? AND o.state IN (?,?,?) ORDER BY o.id`), workspace, string(hostID),
+		string(resource.OperationQueued), string(resource.OperationRunning), string(resource.OperationCancelRequested))
+	if err != nil {
+		return nil, fmt.Errorf("list active Operations for Host: %w", err)
+	}
+	defer sqlx.CloseRows(rows, s.logger, "query active operations for host")
+	keys := make([]resource.OperationKey, 0)
+	for rows.Next() {
+		var key resource.OperationKey
+		if err = rows.Scan(&key.WorkspaceID, &key.ID); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (s *Store) GetOperation(ctx context.Context, workspaceID int, id resource.ID) (*resource.Operation, error) {
+	if workspaceID <= 0 || id.Validate() != nil {
+		return nil, fmt.Errorf("%w: workspace and Operation ID are required", resource.ErrInvalidResource)
+	}
+	// The Operation row and its target rows are read in one read-only
+	// transaction: separate reads could see the Operation still Queued and a
+	// target a worker has already moved, which fails validation (a torn view).
+	options := &sql.TxOptions{ReadOnly: true}
+	if s.dialect == sqlx.PostgreSQL {
+		options.Isolation = sql.LevelRepeatableRead
+	}
+	tx, err := s.db.BeginTx(ctx, options)
+	if err != nil {
+		return nil, fmt.Errorf("begin Operation read: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Operation read")
+	var operation resource.Operation
+	var kind, state, encrypted, conditionsText string
+	var cancelAsked bool
+	var created string
+	var started, finished sql.NullString
+	err = tx.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, kind, state, revision,
+		actor_user_id, actor_token_id, spec_encrypted, cancel_asked, conditions, created_at, started_at, finished_at
+		FROM operations WHERE workspace_id = ? AND id = ?`), workspaceID, string(id)).Scan(
+		&operation.ID, &operation.WorkspaceID, &kind, &state, &operation.Revision,
+		&operation.CreatedBy.UserID, &operation.CreatedBy.APITokenID, &encrypted, &cancelAsked, &conditionsText,
+		&created, &started, &finished)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, resource.ErrOperationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read Operation: %w", err)
+	}
+	plain, err := s.cipher.Open(ctx, encrypted, dataAAD(columnSpec, workspaceID, string(id), ""))
+	if err != nil {
+		return nil, fmt.Errorf("decrypt Operation spec: %w", err)
+	}
+	if err := json.Unmarshal(plain, &operation.Spec); err != nil {
+		return nil, fmt.Errorf("decode Operation spec: %w", err)
+	}
+	if err := decodeJSON(conditionsText, &operation.Status.Conditions); err != nil {
+		return nil, err
+	}
+	operation.Kind, operation.Status.State, operation.Status.CancelAsked = resource.OperationKind(kind), resource.OperationState(state), cancelAsked
+	if operation.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+		return nil, fmt.Errorf("parse Operation creation time: %w", err)
+	}
+	if operation.StartedAt, err = sqlx.ParseNullTime(started); err != nil {
+		return nil, err
+	}
+	if operation.FinishedAt, err = sqlx.ParseNullTime(finished); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, s.bind(`SELECT host_id, host_generation, display_name,
+		access_profile_id, access_profile_revision, state, exit_code, output, error_class, launch, live
+		FROM operation_targets WHERE operation_id = ? ORDER BY host_id`), string(id))
+	if err != nil {
+		return nil, fmt.Errorf("read Operation targets: %w", err)
+	}
+	defer sqlx.CloseRows(rows, s.logger, "query get operation")
+	byHost := make(map[resource.ID]resource.OperationTargetSpec, len(operation.Spec.Targets))
+	for _, target := range operation.Spec.Targets {
+		byHost[target.HostID] = target
+	}
+	targetsByHost := make(map[resource.ID]resource.OperationTarget, len(operation.Spec.Targets))
+	for rows.Next() {
+		var hostID, displayName, profileID, targetState, output, errorClass, launchText, liveText string
+		var generation, profileRevision uint64
+		var exitCode sql.NullInt64
+		if err := rows.Scan(&hostID, &generation, &displayName, &profileID, &profileRevision, &targetState, &exitCode, &output, &errorClass, &launchText, &liveText); err != nil {
+			return nil, fmt.Errorf("scan Operation target: %w", err)
+		}
+		launch, live, err := s.decodeDetached(ctx, workspaceID, string(id), hostID, launchText, liveText)
+		if err != nil {
+			return nil, err
+		}
+		if output != "" {
+			plainOutput, err := s.cipher.Open(ctx, output, dataAAD(columnOutput, workspaceID, string(id), hostID))
+			if err != nil {
+				return nil, fmt.Errorf("decrypt Operation target output: %w", err)
+			}
+			output = string(plainOutput)
+		}
+		spec, ok := byHost[resource.ID(hostID)]
+		if !ok || spec.HostGeneration != generation || spec.DisplayName != displayName || spec.AccessProfileID != resource.ID(profileID) || spec.AccessProfileRevision != profileRevision {
+			return nil, fmt.Errorf("stored Operation target does not match immutable spec")
+		}
+		target := resource.OperationTarget{Spec: spec, State: resource.TargetState(targetState), Launch: launch, Live: live}
+		if live != nil {
+			target.Progress = live.Summary()
+		}
+		if exitCode.Valid || output != "" || errorClass != "" {
+			target.Result = &resource.TargetResult{Output: output, ErrorClass: errorClass}
+			var streams storedStreams
+			if json.Unmarshal([]byte(output), &streams) == nil && (streams.Stdout != "" || streams.Stderr != "") {
+				target.Result.Output = ""
+				target.Result.Stdout, target.Result.Stderr = streams.Stdout, streams.Stderr
+				target.Result.StdoutBytes, target.Result.StderrBytes, target.Result.Truncated = streams.StdoutBytes, streams.StderrBytes, streams.Truncated
+			}
+			if exitCode.Valid {
+				value := int(exitCode.Int64)
+				target.Result.ExitCode = &value
+			}
+		}
+		targetsByHost[spec.HostID] = target
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Operation targets: %w", err)
+	}
+	for _, spec := range operation.Spec.Targets {
+		target, ok := targetsByHost[spec.HostID]
+		if !ok {
+			return nil, fmt.Errorf("stored Operation target %s is missing", spec.HostID)
+		}
+		operation.Status.Targets = append(operation.Status.Targets, target)
+	}
+	if err := operation.Validate(); err != nil {
+		return nil, fmt.Errorf("stored Operation violates domain invariants: %w", err)
+	}
+	return &operation, nil
+}
+
+func (s *Store) UpdateOperation(ctx context.Context, operation *resource.Operation, expectedRevision uint64) error {
+	if operation == nil {
+		return fmt.Errorf("%w: Operation is required", resource.ErrInvalidResource)
+	}
+	if err := operation.Validate(); err != nil {
+		return err
+	}
+	current, err := s.GetOperation(ctx, operation.WorkspaceID, operation.ID)
+	if err != nil {
+		return err
+	}
+	if current.Revision != expectedRevision || operation.Revision <= expectedRevision {
+		return resource.ErrConflict
+	}
+	if !sameOperationSpec(current.Spec, operation.Spec) {
+		return fmt.Errorf("%w: Operation spec and targets are immutable", resource.ErrInvalidResource)
+	}
+	conditionsJSON, err := encodeJSON(operation.Status.Conditions)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Operation update: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Operation update")
+	if fence, ok := resource.LeaseFenceFromContext(ctx); ok {
+		if err := s.verifyLeaseFence(ctx, tx, fence, operation.WorkspaceID, operation.ID); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, s.bind(`UPDATE operations SET state = ?, revision = ?, cancel_asked = ?, conditions = ?, started_at = ?, finished_at = ?
+		WHERE workspace_id = ? AND id = ? AND revision = ?`), string(operation.Status.State), operation.Revision,
+		s.dialect.Bool(operation.Status.CancelAsked), conditionsJSON, nullableTimeText(operation.StartedAt), nullableTimeText(operation.FinishedAt),
+		operation.WorkspaceID, string(operation.ID), expectedRevision)
+	if err != nil {
+		return fmt.Errorf("update Operation: %w", err)
+	}
+	if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
+		return err
+	}
+	stored := make(map[resource.ID]resource.OperationTarget, len(current.Status.Targets))
+	for _, target := range current.Status.Targets {
+		stored[target.Spec.HostID] = target
+	}
+	for _, target := range operation.Status.Targets {
+		before := stored[target.Spec.HostID]
+		if before.State == target.State && reflect.DeepEqual(before.Result, target.Result) {
+			continue // unchanged: no write, no re-encryption (AUDIT Q-03)
+		}
+		// Targets only move forward. A caller holding an older view (for example
+		// a cancellation racing a target completion recorded through
+		// UpdateOperationTarget) must not move a target back or overwrite a
+		// terminal result (AUDIT Q-02); it gets a conflict and reloads.
+		if resource.TargetProgress(target.State) <= resource.TargetProgress(before.State) {
+			return resource.ErrConflict
+		}
+		output, err := s.encryptTargetOutput(ctx, operation.WorkspaceID, operation.ID, target.Spec.HostID, target.Result)
+		if err != nil {
+			return fmt.Errorf("encrypt Operation target output: %w", err)
+		}
+		result, err := tx.ExecContext(ctx, s.bind(`UPDATE operation_targets SET state = ?, exit_code = ?, output = ?, error_class = ?
+			WHERE operation_id = ? AND host_id = ? AND state = ?`), string(target.State), nullableInt(target.Result, func(r *resource.TargetResult) *int { return r.ExitCode }),
+			output, targetErrorClass(target.Result), string(operation.ID), string(target.Spec.HostID), string(before.State))
+		if err != nil {
+			return fmt.Errorf("update Operation target: %w", err)
+		}
+		if err := sqlx.RowsAffected(result, resource.ErrConflict); err != nil {
+			return err
+		}
+	}
+	// Audited: a cancel request (an intent) and the final outcome. Starting
+	// is system progress and is not (AUDIT/20 F20-05).
+	if operation.Status.State == resource.OperationCancelRequested || operation.IsTerminal() {
+		if err := s.audit(ctx, tx, operation.WorkspaceID, domain.AuditOperationUpdated, domain.AuditTargetOperation,
+			string(operation.ID), map[string]string{"state": string(operation.Status.State)}); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Operation update: %w", err)
+	}
+	return nil
+}
+
+func sameOperationSpec(a, b resource.OperationSpec) bool {
+	x, errX := json.Marshal(a)
+	y, errY := json.Marshal(b)
+	return errX == nil && errY == nil && string(x) == string(y)
+}
+
+func nullableInt(result *resource.TargetResult, value func(*resource.TargetResult) *int) any {
+	if result == nil || value(result) == nil {
+		return nil
+	}
+	return *value(result)
+}
+func (s *Store) encryptTargetOutput(ctx context.Context, workspaceID int, operationID, hostID resource.ID, result *resource.TargetResult) (string, error) {
+	if result == nil || (result.Output == "" && result.Stdout == "" && result.Stderr == "") {
+		return "", nil
+	}
+	value := result.Output
+	if result.Stdout != "" || result.Stderr != "" {
+		data, err := json.Marshal(storedStreams{Stdout: result.Stdout, Stderr: result.Stderr,
+			StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes, Truncated: result.Truncated})
+		if err != nil {
+			return "", fmt.Errorf("encode Operation output streams: %w", err)
+		}
+		value = string(data)
+	}
+	return s.cipher.Seal(ctx, []byte(value), dataAAD(columnOutput, workspaceID, string(operationID), string(hostID)))
+}
+
+// storedStreams is the encrypted form of a target's output streams.
+type storedStreams struct {
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	StdoutBytes int64  `json:"stdoutBytes,omitempty"`
+	StderrBytes int64  `json:"stderrBytes,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+}
+
+func targetErrorClass(result *resource.TargetResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.ErrorClass
+}
+
+func nullableTimeText(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return sqlx.Time(*value)
+}
+
+func nullablePositiveID(value int) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
+var _ resource.HostRepository = (*Store)(nil)
+var _ resource.OperationRepository = (*Store)(nil)
+
+// labelConditions renders label constraints as SQL over managed_host_labels
+// (AUDIT A-12). Positive conditions select host IDs through the lookup index;
+// negative ones exclude hosts that have a matching row.
+func labelConditions(workspaceID int, constraints []domain.LabelConstraint) (string, []any) {
+	var sql strings.Builder
+	var args []any
+	for _, c := range constraints {
+		sub := `SELECT host_id FROM managed_host_labels WHERE workspace_id = ? AND label_key = ?`
+		subArgs := []any{workspaceID, c.Key}
+		if c.Op == domain.LabelIn || c.Op == domain.LabelNotIn {
+			sub += ` AND label_value IN (` + placeholders(len(c.Values)) + `)`
+			for _, value := range c.Values {
+				subArgs = append(subArgs, value)
+			}
+		}
+		switch c.Op {
+		case domain.LabelExists, domain.LabelIn:
+			sql.WriteString(` AND id IN (` + sub + `)`)
+		case domain.LabelNotExists, domain.LabelNotIn:
+			sql.WriteString(` AND id NOT IN (` + sub + `)`)
+		default:
+			continue
+		}
+		args = append(args, subArgs...)
+	}
+	return sql.String(), args
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// writeHostLabels mirrors a Host's labels into managed_host_labels in the
+// transaction that writes the Host.
+func (s *Store) writeHostLabels(ctx context.Context, tx *sql.Tx, workspaceID int, id resource.ID, labels map[string]string) error {
+	if _, err := tx.ExecContext(ctx, s.bind(`DELETE FROM managed_host_labels WHERE host_id = ?`), string(id)); err != nil {
+		return fmt.Errorf("clear Host labels: %w", err)
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	values := make([]string, 0, len(keys))
+	args := make([]any, 0, 4*len(keys))
+	for _, key := range keys {
+		values = append(values, "(?, ?, ?, ?)")
+		args = append(args, string(id), workspaceID, key, labels[key])
+	}
+	if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO managed_host_labels (host_id, workspace_id, label_key, label_value) VALUES `+
+		strings.Join(values, ", ")), args...); err != nil {
+		return fmt.Errorf("index Host labels: %w", err)
+	}
+	return nil
+}

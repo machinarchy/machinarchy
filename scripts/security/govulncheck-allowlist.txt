@@ -1,0 +1,4 @@
+# Reviewed govulncheck findings that have no fixed version yet.
+# Format: <OSV ID> <expires YYYY-MM-DD> <reason>
+# An entry stops applying when it expires or when a fixed version appears.
+# Review each one before extending it; see docs/SECURITY.md.

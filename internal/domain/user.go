@@ -1,0 +1,68 @@
+package domain
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// MaxWorkspaceMembers bounds a member listing.
+const MaxWorkspaceMembers = 1000
+
+// Various errors returned by the user store and service.
+var (
+	ErrUserAlreadyExists  = errors.New("username or email is already registered")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+)
+
+// User represents a user in the system.
+type User struct {
+	ID                int       `json:"id"`
+	WorkspaceID       int       `json:"-"`
+	Role              Role      `json:"-"`
+	Username          string    `json:"username"`
+	Email             string    `json:"email"`
+	PasswordHash      string    `json:"-"`
+	ResetToken        string    `json:"-"`
+	ResetTokenExpires time.Time `json:"-"`
+	CreatedAt         time.Time `json:"-"`
+}
+
+// JWTCustomClaims represents the custom claims used in JWT tokens for authentication.
+type JWTCustomClaims struct {
+	UserID      int    `json:"id"`
+	WorkspaceID int    `json:"workspace_id"`
+	Username    string `json:"username"`
+	// SessionID is the server-side session this token belongs to (S-08).
+	SessionID string `json:"sid"`
+	jwt.RegisteredClaims
+}
+
+// UserResponse represents the public-facing user information returned in API responses.
+type UserResponse struct {
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email,omitempty"`
+}
+
+// UserStore defines the interface for user-related data operations.
+type UserStore interface {
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByEmail(ctx context.Context, email string) (*User, error)
+	GetUserByIdentifier(ctx context.Context, identifier string) (*User, error)
+	CreateUser(ctx context.Context, username, email, passwordHash string) (*User, error)
+	SaveUserResetToken(ctx context.Context, username, token string, expiresAt time.Time) error
+	UpdateUserPassword(ctx context.Context, userID int, newPasswordHash string) error
+	// UpdateWorkspaceMemberRole changes an existing membership's role. It returns
+	// ErrUserNotFound when the user is not a member of the workspace and
+	// ErrLastOwner, without changing anything, when it would remove the
+	// workspace's only owner. The check is atomic with the update.
+	UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role Role) error
+	// ListWorkspaceMembers returns up to MaxWorkspaceMembers members ordered by user ID.
+	ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]WorkspaceMember, error)
+	// CountWorkspaceOwners returns how many members hold the owner role.
+	CountWorkspaceOwners(ctx context.Context, workspaceID int) (int, error)
+}

@@ -1,0 +1,49 @@
+# DEVELOPMENT ONLY. Local PostgreSQL and NATS for docker-compose.yml:
+# a default password (override with POSTGRES_PASSWORD), no TLS, and NATS
+# without authentication. Production needs TLS, real credentials and NATS
+# accounts (docs/operations.md).
+name: machinarchy-infra
+
+services:
+  postgres:
+    # Pinned by digest (the tag is kept for readers); Dependabot proposes bumps.
+    image: postgres:16-alpine@sha256:81e77a4833487b8132fe4b00bedd39dc3f74b8641e387f19312a48f7de218c2e
+    environment:
+      POSTGRES_USER: machinarchy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-machinarchy_dev_only} # development default
+      POSTGRES_DB: machinarchy_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U machinarchy -d machinarchy_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - machinarchy-network
+
+  nats:
+    image: nats:2.15.3-alpine@sha256:558394a23dd3c36f2d3a64b51865fd09908010e80a542cea5e75c2af543ed62a
+    command: ["-js", "-sd", "/data"] # no auth: development only
+    ports:
+      - "127.0.0.1:4222:4222"
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+    networks:
+      - machinarchy-network
+
+volumes:
+  pgdata:
+    name: machinarchy_pgdata
+  nats_data:
+    name: machinarchy_nats_data
+
+networks:
+  machinarchy-network:
+    name: machinarchy-network
+    driver: bridge

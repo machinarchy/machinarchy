@@ -1,0 +1,365 @@
+// Package sshtest provides an in-process SSH server for integration tests. It
+// listens on 127.0.0.1 only, uses a freshly generated ed25519 host key, and can
+// misbehave on purpose (never answering, or speaking something other than SSH)
+// so tests can exercise the failure paths of real SSH clients.
+//
+// It is test support code: import it only from _test.go files.
+package sshtest
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/pem"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"golang.org/x/crypto/ssh"
+)
+
+// Mode selects how the server treats incoming TCP connections.
+type Mode int
+
+const (
+	// ModeNormal performs a real SSH handshake.
+	ModeNormal Mode = iota
+	// ModeSilent accepts the TCP connection and then never sends or answers
+	// anything, like a firewalled or hung host.
+	ModeSilent
+	// ModeGarbage answers with an HTTP response instead of an SSH banner.
+	ModeGarbage
+)
+
+// Options configures a server. With neither Password nor AuthorizedKeys set the
+// server accepts no credentials, so every authentication attempt fails.
+type Options struct {
+	Mode           Mode
+	Username       string // defaults to "deploy"
+	Password       string // enables password authentication when non-empty
+	AuthorizedKeys []ssh.PublicKey
+	// Exec runs an "exec" request. It writes the command's output to out and
+	// returns the exit status. ctx is cancelled when the client disconnects or
+	// the server closes. A nil Exec succeeds without output.
+	Exec func(ctx context.Context, command string, out io.Writer) int
+	// ExecStreams can independently write ordinary output and SSH extended-data
+	// stderr for connector integration tests. When set, it takes precedence.
+	ExecStreams func(ctx context.Context, command string, stdout, stderr io.Writer) int
+	// ExtraECDSAHostKey adds an ECDSA P-256 host key next to the Ed25519 one,
+	// so clients can see more than one host key algorithm.
+	ExtraECDSAHostKey bool
+	// HostCertificateAuthority, when set, makes the server present an Ed25519
+	// host certificate for 127.0.0.1 signed by this CA.
+	HostCertificateAuthority ssh.Signer
+}
+
+// Server is a running test server.
+type Server struct {
+	// Host is always 127.0.0.1.
+	Host string
+	Port int
+	// HostKeyType is the host key algorithm, e.g. "ssh-ed25519".
+	HostKeyType string
+	// Fingerprint is the SHA-256 host key fingerprint in the format clients pin.
+	Fingerprint string
+	// Fingerprints lists every host key's fingerprint (Ed25519 first).
+	Fingerprints []string
+
+	opts     Options
+	listener net.Listener
+	cfg      *ssh.ServerConfig
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+
+	accepted     atomic.Int32
+	open         atomic.Int32
+	authAttempts atomic.Int32
+	execs        atomic.Int32
+}
+
+// Start launches a server and registers its shutdown with t.Cleanup.
+func Start(t testing.TB, opts Options) *Server {
+	t.Helper()
+	if opts.Username == "" {
+		opts.Username = "deploy"
+	}
+	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostPrivate)
+	if err != nil {
+		t.Fatalf("create host key signer: %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("cannot listen on loopback: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Server{
+		Host:        "127.0.0.1",
+		Port:        listener.Addr().(*net.TCPAddr).Port,
+		HostKeyType: hostSigner.PublicKey().Type(),
+		Fingerprint: ssh.FingerprintSHA256(hostSigner.PublicKey()),
+		opts:        opts,
+		listener:    listener,
+		ctx:         ctx,
+		cancel:      cancel,
+		conns:       make(map[net.Conn]struct{}),
+	}
+
+	s.Fingerprints = []string{s.Fingerprint}
+	s.cfg = &ssh.ServerConfig{}
+	s.cfg.AddHostKey(hostSigner)
+	if opts.ExtraECDSAHostKey {
+		ecdsaPrivate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate ECDSA host key: %v", err)
+		}
+		ecdsaSigner, err := ssh.NewSignerFromKey(ecdsaPrivate)
+		if err != nil {
+			t.Fatalf("create ECDSA host key signer: %v", err)
+		}
+		s.cfg.AddHostKey(ecdsaSigner)
+		s.Fingerprints = append(s.Fingerprints, ssh.FingerprintSHA256(ecdsaSigner.PublicKey()))
+	}
+	if opts.HostCertificateAuthority != nil {
+		certificate := &ssh.Certificate{Key: hostSigner.PublicKey(), CertType: ssh.HostCert, KeyId: "sshtest",
+			ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity}
+		if err := certificate.SignCert(rand.Reader, opts.HostCertificateAuthority); err != nil {
+			t.Fatalf("sign host certificate: %v", err)
+		}
+		certSigner, err := ssh.NewCertSigner(certificate, hostSigner)
+		if err != nil {
+			t.Fatalf("create host certificate signer: %v", err)
+		}
+		s.cfg.AddHostKey(certSigner)
+	}
+	if opts.Password != "" {
+		s.cfg.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			s.authAttempts.Add(1)
+			if meta.User() == opts.Username && subtle.ConstantTimeCompare(password, []byte(opts.Password)) == 1 {
+				return &ssh.Permissions{}, nil
+			}
+			return nil, errors.New("sshtest: password rejected")
+		}
+	}
+	if len(opts.AuthorizedKeys) > 0 {
+		s.cfg.PublicKeyCallback = func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			s.authAttempts.Add(1)
+			for _, authorized := range opts.AuthorizedKeys {
+				if meta.User() == opts.Username && subtle.ConstantTimeCompare(key.Marshal(), authorized.Marshal()) == 1 {
+					return &ssh.Permissions{}, nil
+				}
+			}
+			return nil, errors.New("sshtest: key rejected")
+		}
+	}
+
+	s.wg.Add(1)
+	go s.acceptLoop()
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Addr returns host:port.
+func (s *Server) Addr() string { return net.JoinHostPort(s.Host, strconv.Itoa(s.Port)) }
+
+// Accepted is the number of TCP connections accepted so far.
+func (s *Server) Accepted() int { return int(s.accepted.Load()) }
+
+// OpenConnections is the number of connections currently open on the server.
+func (s *Server) OpenConnections() int { return int(s.open.Load()) }
+
+// AuthAttempts counts credential checks. It stays zero when the client refuses
+// to authenticate, for example because the host key did not match.
+func (s *Server) AuthAttempts() int { return int(s.authAttempts.Load()) }
+
+// Execs counts "exec" requests received.
+func (s *Server) Execs() int { return int(s.execs.Load()) }
+
+// Close stops the server and drops every connection. It is idempotent.
+func (s *Server) Close() {
+	s.cancel()
+	_ = s.listener.Close()
+	s.mu.Lock()
+	for conn := range s.conns {
+		_ = conn.Close()
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
+}
+
+func (s *Server) track(conn net.Conn, add bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if add {
+		s.conns[conn] = struct{}{}
+	} else {
+		delete(s.conns, conn)
+	}
+}
+
+func (s *Server) acceptLoop() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			return
+		}
+		s.accepted.Add(1)
+		s.track(conn, true)
+		s.wg.Add(1)
+		go s.handle(conn)
+	}
+}
+
+func (s *Server) handle(conn net.Conn) {
+	s.open.Add(1)
+	defer s.wg.Done()
+	defer s.open.Add(-1)
+	defer s.track(conn, false)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			slog.Warn("failed to close network connection", "error", err)
+		}
+	}()
+	switch s.opts.Mode {
+	case ModeSilent:
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			slog.Debug("silent connection ended with error", "error", err)
+		}
+		return
+	case ModeGarbage:
+		if _, err := conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")); err != nil {
+			slog.Debug("failed to write invalid HTTP response", "error", err)
+		}
+		return
+	}
+
+	serverConn, channels, requests, err := ssh.NewServerConn(conn, s.cfg)
+	if err != nil {
+		return
+	}
+	connCtx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	go func() {
+		if err := serverConn.Wait(); err != nil {
+			slog.Debug("SSH server connection closed", "error", err)
+		}
+		cancel()
+	}()
+	go ssh.DiscardRequests(requests)
+
+	for newChannel := range channels {
+		channelType := newChannel.ChannelType()
+
+		if channelType != "session" {
+			if err := newChannel.Reject(ssh.UnknownChannelType, "only session channels are supported"); err != nil {
+				slog.Debug("failed to reject unsupported SSH channel",
+					"channel_type", channelType,
+					"error", err,
+				)
+				return
+			}
+			continue
+		}
+		channel, channelRequests, err := newChannel.Accept()
+		if err != nil {
+			continue
+		}
+		go s.session(connCtx, channel, channelRequests)
+	}
+}
+
+func (s *Server) session(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
+	defer func() {
+		if err := channel.Close(); err != nil {
+			slog.Warn("failed to close SSH channel", "error", err)
+		}
+	}()
+	for request := range requests {
+		if request.Type != "exec" {
+			if request.WantReply {
+				if err := request.Reply(false, nil); err != nil {
+					slog.Debug("failed to reject SSH request",
+						"request_type", request.Type,
+						"error", err,
+					)
+					return
+				}
+			}
+			continue
+		}
+		var payload struct{ Command string }
+		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
+			if request.WantReply {
+				if replyErr := request.Reply(false, nil); replyErr != nil {
+					slog.Debug("failed to reject malformed SSH exec request",
+						"error", replyErr,
+					)
+				}
+			}
+			return
+		}
+		if request.WantReply {
+			if err := request.Reply(true, nil); err != nil {
+				slog.Debug("failed to accept SSH exec request", "error", err)
+				return
+			}
+		}
+		s.execs.Add(1)
+		status := 0
+		if s.opts.ExecStreams != nil {
+			status = s.opts.ExecStreams(ctx, payload.Command, channel, channel.Stderr())
+		} else if s.opts.Exec != nil {
+			status = s.opts.Exec(ctx, payload.Command, channel)
+		}
+		if _, err := channel.SendRequest(
+			"exit-status",
+			false,
+			ssh.Marshal(struct{ Status uint32 }{uint32(status)}),
+		); err != nil {
+			slog.Debug("failed to send SSH exit status", "error", err)
+		}
+		return
+	}
+}
+
+// NewClientKey generates an ed25519 key pair for key-authentication tests. It
+// returns the PEM-encoded private key (encrypted when passphrase is non-empty)
+// and the public key to place in Options.AuthorizedKeys.
+func NewClientKey(t testing.TB, passphrase string) (privatePEM string, public ssh.PublicKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
+	var block *pem.Block
+	if passphrase == "" {
+		block, err = ssh.MarshalPrivateKey(privateKey, "sshtest")
+	} else {
+		block, err = ssh.MarshalPrivateKeyWithPassphrase(privateKey, "sshtest", []byte(passphrase))
+	}
+	if err != nil {
+		t.Fatalf("encode client key: %v", err)
+	}
+	public, err = ssh.NewPublicKey(publicKey)
+	if err != nil {
+		t.Fatalf("derive client public key: %v", err)
+	}
+	return string(pem.EncodeToMemory(block)), public
+}

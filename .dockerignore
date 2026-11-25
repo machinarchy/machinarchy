@@ -1,0 +1,13 @@
+# Allowlist: the build sees only what the Dockerfile copies. Local data
+# (data/, *.db), credentials, AUDIT notes and tooling never reach the
+# build context (AUDIT S-15).
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!pkg/
+!docs/embed.go
+!docs/api/swagger.json
+**/*_test.go
+**/testdata/

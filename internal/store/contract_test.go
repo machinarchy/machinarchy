@@ -1,0 +1,930 @@
+package store_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/machinarchy/machinarchy/internal/agentgateway"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/store"
+	_ "modernc.org/sqlite"
+)
+
+// The contract suite runs every behavior the application relies on against each
+// available engine. SQLite always runs. PostgreSQL runs when
+// MACHINARCHY_TEST_POSTGRES_URL points at a server (each test gets its own
+// schema, dropped afterwards); set MACHINARCHY_REQUIRE_POSTGRES_TESTS=1 to fail
+// instead of skipping when it is missing, as CI does.
+
+const testEncryptionSecret = "integration-test-secret-with-more-than-thirty-two-bytes"
+
+type fixture struct {
+	engine string
+	cfg    store.Config
+	stores *store.Stores
+}
+
+func availableEngines(t *testing.T) []string {
+	t.Helper()
+	engines := []string{store.EngineSQLite}
+	switch {
+	case os.Getenv("MACHINARCHY_TEST_POSTGRES_URL") != "":
+		engines = append(engines, store.EnginePostgres)
+	case os.Getenv("MACHINARCHY_REQUIRE_POSTGRES_TESTS") != "":
+		t.Fatal("MACHINARCHY_REQUIRE_POSTGRES_TESTS is set but MACHINARCHY_TEST_POSTGRES_URL is empty")
+	default:
+		t.Log("PostgreSQL contract tests skipped: set MACHINARCHY_TEST_POSTGRES_URL (see CONTRIBUTING.md)")
+	}
+	return engines
+}
+
+func newFixture(t *testing.T, engine string) *fixture {
+	t.Helper()
+	f := &fixture{engine: engine}
+	switch engine {
+	case store.EngineSQLite:
+		path := filepath.Join(t.TempDir(), "machinarchy.db")
+		// #nosec G302 -- Directories require execute permission for traversal.
+		if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("restrict test database directory: %v", err)
+		}
+		f.cfg = store.Config{Engine: engine, SQLitePath: path, EncryptionSecret: testEncryptionSecret}
+	case store.EnginePostgres:
+		base := os.Getenv("MACHINARCHY_TEST_POSTGRES_URL")
+		parsed, err := url.Parse(base)
+		if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+			t.Fatalf("MACHINARCHY_TEST_POSTGRES_URL must be a postgres:// URL")
+		}
+		suffix := make([]byte, 6)
+		if _, err := rand.Read(suffix); err != nil {
+			t.Fatal(err)
+		}
+		schema := "contract_" + hex.EncodeToString(suffix)
+		admin, err := sql.Open("pgx", base)
+		if err != nil {
+			t.Fatalf("open PostgreSQL admin connection: %v", err)
+		}
+		if _, err := admin.Exec(`CREATE SCHEMA ` + schema); err != nil {
+			_ = admin.Close()
+			t.Fatalf("create test schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = admin.Exec(`DROP SCHEMA ` + schema + ` CASCADE`)
+			_ = admin.Close()
+		})
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		f.cfg = store.Config{
+			Engine: engine, PostgresURL: parsed.String(), EncryptionSecret: testEncryptionSecret,
+			MaxOpenConns: 8, MaxIdleConns: 8, ConnectTimeout: 15 * time.Second,
+		}
+	default:
+		t.Fatalf("unknown engine %q", engine)
+	}
+	f.open(t)
+	t.Cleanup(func() { _ = f.stores.Close() })
+	return f
+}
+
+func (f *fixture) open(t *testing.T) {
+	t.Helper()
+	stores, err := store.Open(context.Background(), f.cfg)
+	if err != nil {
+		t.Fatalf("open %s store: %v", f.engine, err)
+	}
+	f.stores = stores
+}
+
+// raw opens a direct connection that bypasses migrations, for repairing or
+// inspecting data that store.Open would refuse to start on.
+func (f *fixture) raw(t *testing.T) *sql.DB {
+	t.Helper()
+	driver, dsn := "sqlite", f.cfg.SQLitePath
+	if f.engine == store.EnginePostgres {
+		driver, dsn = "pgx", f.cfg.PostgresURL
+	}
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		t.Fatalf("open raw connection: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// pick returns the statement for the fixture's engine (placeholders differ).
+func (f *fixture) pick(sqliteSQL, postgresSQL string) string {
+	if f.engine == store.EnginePostgres {
+		return postgresSQL
+	}
+	return sqliteSQL
+}
+
+func (f *fixture) newWorkspace(t *testing.T, name string) int {
+	t.Helper()
+	var id int
+	query := f.pick(`INSERT INTO workspaces (name, created_at) VALUES (?, ?) RETURNING id`,
+		`INSERT INTO workspaces (name, created_at) VALUES ($1, $2) RETURNING id`)
+	if err := f.stores.DB.QueryRowContext(context.Background(), query, name, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	return id
+}
+
+func (f *fixture) member(t *testing.T, name string, role domain.Role) *domain.User {
+	t.Helper()
+	ctx := context.Background()
+	user, err := f.stores.Users.CreateUser(ctx, name, name+"@example.test", "hash")
+	if err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	if role != domain.RoleReader {
+		if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, user.WorkspaceID, user.ID, role); err != nil {
+			t.Fatalf("set %s to %s: %v", name, role, err)
+		}
+	}
+	return user
+}
+
+func (f *fixture) roleOf(t *testing.T, username string) domain.Role {
+	t.Helper()
+	user, err := f.stores.Users.GetUserByUsername(context.Background(), username)
+	if err != nil {
+		t.Fatalf("load %s: %v", username, err)
+	}
+	return user.Role
+}
+
+var contractTests = []struct {
+	name string
+	run  func(*testing.T, *fixture)
+}{
+	{"signup", testSignup},
+	{"login sessions", testSessions},
+	{"login throttling", testLoginThrottle},
+	{"secret store key providers", testSecretStoreKeyProviders},
+	{"agent signing keys", testAgentSigningKeys},
+	{"operation data keys", testOperationDataKeys},
+	{"capability operations", testCapabilityOperations},
+	{"host recheck request", testHostRecheck},
+	{"host label selectors", testHostLabelSelectors},
+	{"host resync keyset uses an index", testHostKeysPlan},
+	{"audit records intents and outcomes", testAuditScope},
+	{"member roles", testMemberRoles},
+	{"concurrent demotion keeps an owner", testConcurrentDemotion},
+	{"audit trail", testAuditTrail},
+	{"audit events are append-only", testAuditAppendOnly},
+	{"audit detects a modified event", testAuditDetectsModification},
+	{"audit detects a removed event", testAuditDetectsRemoval},
+	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
+	{"environments", testEnvironments},
+	{"API tokens", testAPITokens},
+	{"migrations are idempotent", testMigrationsIdempotent},
+	{"agents", testAgents},
+}
+
+func TestStoreContract(t *testing.T) {
+	for _, engine := range availableEngines(t) {
+		t.Run(engine, func(t *testing.T) {
+			for _, tc := range contractTests {
+				t.Run(tc.name, func(t *testing.T) {
+					tc.run(t, newFixture(t, engine))
+				})
+			}
+		})
+	}
+}
+
+func testSignup(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	alice, err := f.stores.Users.CreateUser(ctx, "alice", "alice@example.test", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if alice.ID <= 0 || alice.Role != domain.RoleReader || alice.WorkspaceID != domain.DefaultWorkspaceID {
+		t.Fatalf("new user = %+v, want a reader in the default workspace", alice)
+	}
+	if _, err := f.stores.Users.CreateUser(ctx, "alice", "other@example.test", "hash"); !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Errorf("duplicate username error = %v, want ErrUserAlreadyExists", err)
+	}
+	if _, err := f.stores.Users.CreateUser(ctx, "alice2", "alice@example.test", "hash"); !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Errorf("duplicate email error = %v, want ErrUserAlreadyExists", err)
+	}
+	// Accounts without an email must not collide with each other.
+	for _, name := range []string{"noemail-1", "noemail-2"} {
+		if _, err := f.stores.Users.CreateUser(ctx, name, "", "hash"); err != nil {
+			t.Errorf("create %s without email: %v", name, err)
+		}
+	}
+	for label, lookup := range map[string]func() (*domain.User, error){
+		"username":   func() (*domain.User, error) { return f.stores.Users.GetUserByUsername(ctx, "alice") },
+		"email":      func() (*domain.User, error) { return f.stores.Users.GetUserByEmail(ctx, "alice@example.test") },
+		"identifier": func() (*domain.User, error) { return f.stores.Users.GetUserByIdentifier(ctx, "alice@example.test") },
+	} {
+		got, err := lookup()
+		if err != nil || got.ID != alice.ID || got.Role != domain.RoleReader || got.WorkspaceID != domain.DefaultWorkspaceID {
+			t.Errorf("lookup by %s = %+v, %v; want alice as a default-workspace reader", label, got, err)
+		}
+	}
+	if _, err := f.stores.Users.GetUserByUsername(ctx, "nobody"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("unknown user error = %v, want sql.ErrNoRows", err)
+	}
+	var workspaces int
+	if err := f.stores.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspaces`).Scan(&workspaces); err != nil || workspaces != 1 {
+		t.Errorf("workspace rows = %d, %v; signups must not create workspaces", workspaces, err)
+	}
+}
+
+func testMemberRoles(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	alice := f.member(t, "alice", domain.RoleOwner)
+	bob := f.member(t, "bob", domain.RoleOperator)
+	f.member(t, "carol", domain.RoleReader)
+
+	members, err := f.stores.Users.ListWorkspaceMembers(ctx, domain.DefaultWorkspaceID)
+	if err != nil || len(members) != 3 {
+		t.Fatalf("ListWorkspaceMembers() = %+v, %v; want 3 members", members, err)
+	}
+	for i, want := range []struct {
+		name string
+		role domain.Role
+	}{{"alice", domain.RoleOwner}, {"bob", domain.RoleOperator}, {"carol", domain.RoleReader}} {
+		if members[i].Username != want.name || members[i].Role != want.role || members[i].CreatedAt.IsZero() {
+			t.Errorf("member[%d] = %+v, want %s/%s with a creation time", i, members[i], want.name, want.role)
+		}
+	}
+	if other, err := f.stores.Users.ListWorkspaceMembers(ctx, 4242); err != nil || len(other) != 0 {
+		t.Errorf("another workspace's members = %v, %v; want none", other, err)
+	}
+
+	// Unknown member, and a member of a different workspace.
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, 9999, domain.RoleReader); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Errorf("unknown user error = %v, want ErrUserNotFound", err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, 4242, alice.ID, domain.RoleReader); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Errorf("wrong workspace error = %v, want ErrUserNotFound (no cross-workspace changes)", err)
+	}
+
+	// The last owner cannot be demoted; a second owner makes it legal.
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, alice.ID, domain.RoleOperator); !errors.Is(err, domain.ErrLastOwner) {
+		t.Fatalf("demote last owner error = %v, want ErrLastOwner", err)
+	}
+	if got := f.roleOf(t, "alice"); got != domain.RoleOwner {
+		t.Fatalf("alice role = %s after a refused demotion, want owner", got)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, alice.ID, domain.RoleOwner); err != nil {
+		t.Errorf("owner -> owner on the last owner: %v", err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, bob.ID, domain.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, alice.ID, domain.RoleOperator); err != nil {
+		t.Fatalf("demote with two owners: %v", err)
+	}
+	if owners, err := f.stores.Users.CountWorkspaceOwners(ctx, domain.DefaultWorkspaceID); err != nil || owners != 1 {
+		t.Fatalf("owners = %d, %v; want 1", owners, err)
+	}
+}
+
+func testConcurrentDemotion(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	alice := f.member(t, "alice", domain.RoleOwner)
+	bob := f.member(t, "bob", domain.RoleOwner)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []int{alice.ID, bob.ID} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = f.stores.Users.UpdateWorkspaceMemberRole(ctx, domain.DefaultWorkspaceID, id, domain.RoleReader)
+		}()
+	}
+	wg.Wait()
+
+	succeeded, refused := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, domain.ErrLastOwner):
+			refused++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if succeeded != 1 || refused != 1 {
+		t.Fatalf("succeeded=%d refused=%d; exactly one of two concurrent demotions may win", succeeded, refused)
+	}
+	if owners, err := f.stores.Users.CountWorkspaceOwners(ctx, domain.DefaultWorkspaceID); err != nil || owners != 1 {
+		t.Fatalf("owners = %d, %v; want exactly 1", owners, err)
+	}
+}
+
+func testEnvironments(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	other := f.newWorkspace(t, "other")
+
+	production := &domain.Environment{WorkspaceID: 1, Name: "production", Description: "prod"}
+	if err := f.stores.Environments.CreateEnvironment(ctx, production); err != nil || production.ID <= 0 {
+		t.Fatalf("CreateEnvironment() = %+v, %v", production, err)
+	}
+	if err := f.stores.Environments.CreateEnvironment(ctx, &domain.Environment{WorkspaceID: 1, Name: "production"}); !errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
+		t.Errorf("duplicate name error = %v, want ErrEnvironmentAlreadyExists", err)
+	}
+	foreign := &domain.Environment{WorkspaceID: other, Name: "production", Description: "same name elsewhere"}
+	if err := f.stores.Environments.CreateEnvironment(ctx, foreign); err != nil {
+		t.Fatalf("the same name in another workspace must be allowed: %v", err)
+	}
+
+	if list, err := f.stores.Environments.ListEnvironments(ctx, 1); err != nil || len(list) != 1 || list[0].Description != "prod" {
+		t.Errorf("workspace 1 environments = %+v, %v", list, err)
+	}
+	if _, err := f.stores.Environments.GetEnvironmentByID(ctx, other, production.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
+		t.Errorf("cross-workspace read error = %v, want ErrEnvironmentNotFound", err)
+	}
+	if err := f.stores.Environments.DeleteEnvironment(ctx, other, production.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
+		t.Errorf("cross-workspace delete error = %v, want ErrEnvironmentNotFound", err)
+	}
+
+	// Managed hosts may only reference environments of their own workspace.
+	crossHost, err := resource.NewHost(1, foreign.ID, "cross", nil, resource.HostSpec{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceHosts.CreateHost(ctx, crossHost); err == nil {
+		t.Error("a host referencing another workspace's environment was stored")
+	}
+	ownHost, err := resource.NewHost(1, production.ID, "own", nil, resource.HostSpec{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceHosts.CreateHost(ctx, ownHost); err != nil {
+		t.Errorf("host referencing its own environment: %v", err)
+	}
+
+	production.Description = "production systems"
+	if err := f.stores.Environments.UpdateEnvironment(ctx, production); err != nil {
+		t.Fatalf("UpdateEnvironment() error = %v", err)
+	}
+	if got, err := f.stores.Environments.GetEnvironmentByID(ctx, 1, production.ID); err != nil || got.Description != "production systems" {
+		t.Errorf("updated environment = %+v, %v", got, err)
+	}
+	staging := &domain.Environment{WorkspaceID: 1, Name: "staging"}
+	if err := f.stores.Environments.CreateEnvironment(ctx, staging); err != nil {
+		t.Fatal(err)
+	}
+	staging.Name = "production"
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); !errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
+		t.Errorf("rename onto an existing name error = %v, want ErrEnvironmentAlreadyExists", err)
+	}
+	if err := f.stores.Environments.DeleteEnvironment(ctx, 1, staging.ID); err != nil {
+		t.Errorf("DeleteEnvironment() error = %v", err)
+	}
+	if _, err := f.stores.Environments.GetEnvironmentByID(ctx, 1, staging.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
+		t.Errorf("read after delete error = %v, want ErrEnvironmentNotFound", err)
+	}
+}
+
+func testAPITokens(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	f.member(t, "alice", domain.RoleOwner)
+	bob := f.member(t, "bob", domain.RoleOperator)
+
+	newToken := func(name, hashChar string, expires time.Time) *domain.APIToken {
+		return &domain.APIToken{
+			UserID: bob.ID, WorkspaceID: 1, Name: name, Role: domain.RoleOperator,
+			TokenHash: strings.Repeat(hashChar, 64), CreatedAt: time.Now().UTC(), ExpiresAt: &expires,
+		}
+	}
+	active := newToken("ci", "a", time.Now().Add(time.Hour))
+	if err := f.stores.Access.CreateAPIToken(ctx, active); err != nil || active.ID <= 0 {
+		t.Fatalf("CreateAPIToken() = %+v, %v", active, err)
+	}
+	if err := f.stores.Access.CreateAPIToken(ctx, newToken("ci", "b", time.Now().Add(time.Hour))); !errors.Is(err, domain.ErrAPITokenAlreadyExists) {
+		t.Errorf("duplicate token name error = %v, want ErrAPITokenAlreadyExists", err)
+	}
+
+	principal, err := f.stores.Access.ResolveAPIToken(ctx, active.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveAPIToken() error = %v", err)
+	}
+	if principal.UserID != bob.ID || principal.WorkspaceID != 1 || principal.APITokenID != active.ID || principal.Role != domain.RoleOperator {
+		t.Fatalf("principal = %+v, want bob's operator token", principal)
+	}
+
+	// A token never exceeds the member's current role.
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(ctx, 1, bob.ID, domain.RoleReader); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := f.stores.Access.ResolveAPIToken(ctx, active.TokenHash); err != nil || principal.Role != domain.RoleReader {
+		t.Errorf("after a membership downgrade principal = %+v, %v; want reader", principal, err)
+	}
+
+	expired := newToken("old", "c", time.Now().Add(-time.Hour))
+	if err := f.stores.Access.CreateAPIToken(ctx, expired); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.stores.Access.ResolveAPIToken(ctx, expired.TokenHash); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Errorf("expired token error = %v, want ErrAPITokenNotFound", err)
+	}
+	// AUDIT F14-01: a token that expired a fraction of a second ago, at a whole
+	// second, must be refused (as text, "…:00Z" once sorted after "…:00.3Z").
+	justExpired := newToken("just-expired", "d", time.Now().Truncate(time.Second))
+	storedTokens := 2
+	if time.Since(justExpired.ExpiresAt.UTC()) > 0 {
+		storedTokens++
+		if err := f.stores.Access.CreateAPIToken(ctx, justExpired); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.stores.Access.ResolveAPIToken(ctx, justExpired.TokenHash); !errors.Is(err, domain.ErrAPITokenNotFound) {
+			t.Errorf("token expired %v ago at a whole second: error = %v, want ErrAPITokenNotFound", time.Since(*justExpired.ExpiresAt), err)
+		}
+	}
+	if _, err := f.stores.Access.ResolveAPIToken(ctx, "short"); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Errorf("malformed hash error = %v, want ErrAPITokenNotFound", err)
+	}
+
+	if tokens, err := f.stores.Access.ListAPITokens(ctx, bob.ID, 1); err != nil || len(tokens) != storedTokens {
+		t.Errorf("bob's tokens = %d, %v; want %d", len(tokens), err, storedTokens)
+	}
+	if err := f.stores.Access.RevokeAPIToken(ctx, active.ID, bob.ID+1000, 1); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Errorf("revoking another user's token error = %v, want ErrAPITokenNotFound", err)
+	}
+	if err := f.stores.Access.RevokeAPIToken(ctx, active.ID, bob.ID, 1); err != nil {
+		t.Fatalf("RevokeAPIToken() error = %v", err)
+	}
+	if _, err := f.stores.Access.ResolveAPIToken(ctx, active.TokenHash); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Errorf("revoked token error = %v, want ErrAPITokenNotFound", err)
+	}
+}
+
+func countMigrations(t *testing.T, f *fixture) int {
+	t.Helper()
+	var count int
+	if err := f.stores.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		t.Fatalf("count applied migrations: %v", err)
+	}
+	return count
+}
+
+func testMigrationsIdempotent(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	f.member(t, "alice", domain.RoleOwner)
+	before := countMigrations(t, f)
+	if before != 1 {
+		t.Fatalf("applied migrations = %d, want the single baseline", before)
+	}
+	if err := f.stores.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.open(t)
+	if after := countMigrations(t, f); after != before {
+		t.Errorf("reopening changed the applied migrations from %d to %d", before, after)
+	}
+	if user, err := f.stores.Users.GetUserByUsername(ctx, "alice"); err != nil || user.Role != domain.RoleOwner {
+		t.Errorf("data after reopen = %+v, %v", user, err)
+	}
+	if err := f.stores.Ping(ctx); err != nil {
+		t.Errorf("Ping() error = %v", err)
+	}
+}
+
+func auditEvents(t *testing.T, f *fixture, workspaceID int) []domain.AuditEvent {
+	t.Helper()
+	newest, err := f.stores.Audit.ListAuditEvents(context.Background(), workspaceID, domain.AuditFilter{Limit: domain.MaxAuditPageSize})
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	oldest := make([]domain.AuditEvent, len(newest))
+	for i, event := range newest {
+		oldest[len(newest)-1-i] = event
+	}
+	return oldest
+}
+
+func testAuditTrail(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	actor := domain.AuditActor{UserID: 99, Username: "ops", RequestID: "req-123", Source: "api"}
+	actx := domain.WithAuditActor(ctx, actor)
+	other := f.newWorkspace(t, "other")
+
+	// Self-registration: each account is its own actor.
+	alice, err := f.stores.Users.CreateUser(ctx, "alice", "alice@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := f.stores.Users.CreateUser(ctx, "bob", "bob@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	// Neither a no-op change nor a refused one is an event.
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, alice.ID, domain.RoleReader); !errors.Is(err, domain.ErrLastOwner) {
+		t.Fatalf("demoting the last owner error = %v, want ErrLastOwner", err)
+	}
+
+	// Operations that fail must leave no event behind.
+	before := len(auditEvents(t, f, 1))
+	if err := f.stores.Users.UpdateWorkspaceMemberRole(actx, 1, 9999, domain.RoleReader); !errors.Is(err, domain.ErrUserNotFound) {
+		t.Fatalf("unknown member error = %v", err)
+	}
+	if err := f.stores.Access.RevokeAPIToken(actx, 9999, bob.ID, 1); !errors.Is(err, domain.ErrAPITokenNotFound) {
+		t.Fatalf("unknown token revoke error = %v", err)
+	}
+	if _, err := f.stores.Users.CreateUser(ctx, "alice", "other@example.test", "hash"); !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Fatalf("duplicate user error = %v", err)
+	}
+	if after := len(auditEvents(t, f, 1)); after != before {
+		t.Fatalf("failed operations wrote %d audit events, want 0", after-before)
+	}
+
+	expires := time.Now().Add(time.Hour)
+	token := &domain.APIToken{
+		UserID: bob.ID, WorkspaceID: 1, Name: "ci", Role: domain.RoleOperator,
+		TokenHash: strings.Repeat("a", 64), CreatedAt: time.Now().UTC(), ExpiresAt: &expires,
+	}
+	if err := f.stores.Access.CreateAPIToken(actx, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Access.RevokeAPIToken(actx, token.ID, bob.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	events := auditEvents(t, f, 1)
+	wantActions := []string{
+		domain.AuditUserCreated, domain.AuditUserCreated, domain.AuditMemberRoleChanged,
+		domain.AuditAPITokenCreated, domain.AuditAPITokenRevoked,
+	}
+	if len(events) != len(wantActions) {
+		t.Fatalf("recorded %d events, want %d: %+v", len(events), len(wantActions), events)
+	}
+	for i, want := range wantActions {
+		if events[i].Action != want || events[i].Outcome != domain.AuditOutcomeSuccess ||
+			events[i].OccurredAt.IsZero() || len(events[i].Hash) != 64 {
+			t.Errorf("event[%d] = %+v, want a successful %s", i, events[i], want)
+		}
+	}
+
+	expectDetails := func(i int, want map[string]string) {
+		t.Helper()
+		got := events[i].Details
+		if len(got) != len(want) {
+			t.Errorf("event[%d] (%s) details = %v, want %v", i, events[i].Action, got, want)
+			return
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Errorf("event[%d] (%s) detail %s = %q, want %q", i, events[i].Action, key, got[key], value)
+			}
+		}
+	}
+	// Self-registration is attributed to the new account.
+	if e := events[0]; e.ActorUserID != alice.ID || e.ActorUsername != "alice" || e.Source != "signup" || e.TargetID != strconv.Itoa(alice.ID) {
+		t.Errorf("signup event = %+v", e)
+	}
+	expectDetails(0, map[string]string{"username": "alice", "role": "reader"})
+	// Mutations made with an actor carry it, including the request ID.
+	for i := 2; i < len(events); i++ {
+		if e := events[i]; e.ActorUserID != 99 || e.ActorUsername != "ops" || e.RequestID != "req-123" || e.Source != "api" {
+			t.Errorf("event[%d] actor = %d/%q/%q/%q, want the context actor", i, e.ActorUserID, e.ActorUsername, e.RequestID, e.Source)
+		}
+	}
+	expectDetails(2, map[string]string{"previous_role": "reader", "new_role": "owner"})
+	if events[2].TargetType != domain.AuditTargetUser || events[2].TargetID != strconv.Itoa(alice.ID) {
+		t.Errorf("role change target = %s/%s", events[2].TargetType, events[2].TargetID)
+	}
+	if e := events[3]; e.TargetType != domain.AuditTargetAPIToken || e.TargetID != strconv.Itoa(token.ID) || e.Details["name"] != "ci" ||
+		e.Details["role"] != "operator" || e.Details["expires_at"] == "" || len(e.Details) != 3 {
+		t.Errorf("token creation event = %+v", e)
+	}
+	expectDetails(4, map[string]string{"name": "ci"})
+
+	// No credential ever reaches the trail.
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"TOP-SECRET-PW", strings.Repeat("a", 64), "SHA256:test"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the audit trail contains %q", secret)
+		}
+	}
+
+	// The events form one valid chain.
+	if events[0].PrevHash != domain.AuditGenesisHash {
+		t.Errorf("first event links to %q, want the genesis hash", events[0].PrevHash)
+	}
+	for i := 1; i < len(events); i++ {
+		if events[i].PrevHash != events[i-1].Hash {
+			t.Errorf("event[%d] does not link to event[%d]", i, i-1)
+		}
+	}
+	verification, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil || !verification.Valid || verification.Events != len(events) || verification.HeadHash != events[len(events)-1].Hash {
+		t.Fatalf("VerifyAuditChain() = %+v, %v", verification, err)
+	}
+
+	// Paging and filtering, newest first.
+	page, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Limit: 2})
+	if err != nil || len(page) != 2 || page[0].Action != domain.AuditAPITokenRevoked || page[1].Action != domain.AuditAPITokenCreated {
+		t.Fatalf("first page = %+v, %v", page, err)
+	}
+	rest, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{BeforeID: page[1].ID})
+	if err != nil || len(rest) != len(events)-2 || rest[0].ID >= page[1].ID {
+		t.Fatalf("second page = %d events, %v", len(rest), err)
+	}
+	created, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditAPITokenCreated})
+	if err != nil || len(created) != 1 {
+		t.Fatalf("filtered events = %d, %v; want 1", len(created), err)
+	}
+
+	// Another workspace sees nothing of this and has its own, empty, valid chain.
+	if foreign := auditEvents(t, f, other); len(foreign) != 0 {
+		t.Errorf("another workspace sees %d events, want 0", len(foreign))
+	}
+	if empty, err := f.stores.Audit.VerifyAuditChain(ctx, other); err != nil || !empty.Valid || empty.Events != 0 || empty.HeadHash != domain.AuditGenesisHash {
+		t.Errorf("an empty chain should verify: %+v, %v", empty, err)
+	}
+}
+
+// seedAuditEvents creates an account and n API tokens, returning the events
+// oldest first.
+func seedAuditEvents(t *testing.T, f *fixture, tokens int) []domain.AuditEvent {
+	t.Helper()
+	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
+	user, err := f.stores.Users.CreateUser(ctx, "seed", "seed@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < tokens; i++ {
+		if err := f.stores.Access.CreateAPIToken(ctx, seedToken(user.ID, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return auditEvents(t, f, 1)
+}
+
+func seedToken(userID, i int) *domain.APIToken {
+	expires := time.Now().Add(time.Hour)
+	return &domain.APIToken{UserID: userID, WorkspaceID: 1, Name: "t" + strconv.Itoa(i), Role: domain.RoleReader,
+		TokenHash: fmt.Sprintf("%064x", i+1), CreatedAt: time.Now().UTC(), ExpiresAt: &expires}
+}
+
+func disableAuditTriggers(t *testing.T, f *fixture) {
+	t.Helper()
+	statements := []string{`DROP TRIGGER audit_events_no_update`, `DROP TRIGGER audit_events_no_delete`}
+	if f.engine == store.EnginePostgres {
+		statements = []string{
+			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update`,
+			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_delete`,
+		}
+	}
+	for _, statement := range statements {
+		if _, err := f.stores.DB.ExecContext(context.Background(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
+func testAuditAppendOnly(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 1)
+	id := events[0].ID
+
+	update := f.pick(`UPDATE audit_events SET outcome = 'tampered' WHERE id = ?`, `UPDATE audit_events SET outcome = 'tampered' WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, update, id); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Errorf("UPDATE error = %v, want an append-only refusal", err)
+	}
+	remove := f.pick(`DELETE FROM audit_events WHERE id = ?`, `DELETE FROM audit_events WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, remove, id); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Errorf("DELETE error = %v, want an append-only refusal", err)
+	}
+	if after := auditEvents(t, f, 1); len(after) != len(events) || after[0].Outcome != domain.AuditOutcomeSuccess {
+		t.Errorf("events changed despite the refusals: %+v", after)
+	}
+}
+
+func testAuditDetectsModification(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 4) // five events
+	disableAuditTriggers(t, f)
+
+	target := events[2]
+	update := f.pick(`UPDATE audit_events SET details = '{"name":"evil"}' WHERE id = ?`, `UPDATE audit_events SET details = '{"name":"evil"}' WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, update, target.ID); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.FirstInvalidID != target.ID || !strings.Contains(result.Reason, "modified") || result.Events != 2 {
+		t.Fatalf("verification = %+v, want the modification of event %d reported", result, target.ID)
+	}
+}
+
+func testAuditDetectsRemoval(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	events := seedAuditEvents(t, f, 4) // five events
+	disableAuditTriggers(t, f)
+
+	remove := f.pick(`DELETE FROM audit_events WHERE id = ?`, `DELETE FROM audit_events WHERE id = $1`)
+	if _, err := f.stores.DB.ExecContext(ctx, remove, events[2].ID); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.FirstInvalidID != events[3].ID || !strings.Contains(result.Reason, "link") {
+		t.Fatalf("verification = %+v, want the break reported at event %d", result, events[3].ID)
+	}
+}
+
+func testAuditConcurrentAppends(t *testing.T, f *fixture) {
+	ctx := domain.WithAuditActor(context.Background(), domain.AuditActor{UserID: 1, Username: "ops", Source: "api"})
+	user, err := f.stores.Users.CreateUser(ctx, "seed", "seed@example.test", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const patches = 20
+	var wg sync.WaitGroup
+	errs := make([]error, patches)
+	for i := 0; i < patches; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = f.stores.Access.CreateAPIToken(ctx, seedToken(user.ID, i))
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("patch %d: %v", i, err)
+		}
+	}
+
+	events := auditEvents(t, f, 1)
+	if len(events) != patches+1 {
+		t.Fatalf("recorded %d events, want %d (one per mutation, none lost or duplicated)", len(events), patches+1)
+	}
+	result, err := f.stores.Audit.VerifyAuditChain(context.Background(), 1)
+	if err != nil || !result.Valid || result.Events != patches+1 {
+		t.Fatalf("the chain forked or broke under concurrency: %+v, %v", result, err)
+	}
+}
+
+// testAgents covers the agent gateway store: registration authorised by an
+// enrolment (shared or a single-use per-host token, consumed atomically),
+// idempotent retries, lease renewal, revocation and the audit trail, on both
+// dialects.
+func testAgents(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	owner := f.member(t, "agent-owner", domain.RoleOwner)
+	agentKey := func(seed byte) ed25519.PublicKey {
+		return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, 32)).Public().(ed25519.PublicKey)
+	}
+	newAgent := func(id string, seed byte) agentgateway.Agent {
+		return agentgateway.Agent{ID: id, Hostname: "web-01", AgentVersion: "1.0.0", OS: "linux", Architecture: "amd64",
+			Capabilities: []string{"runtime.info"}, PublicKey: agentKey(seed), LeaseID: "lease-1", LeaseExpiresAt: now.Add(time.Minute),
+			RegisteredAt: now, LastSeenAt: now}
+	}
+	issue := func(hostname string, ttl time.Duration) (string, agentgateway.EnrollmentToken) {
+		t.Helper()
+		secret, token, err := agentgateway.NewEnrollmentToken(hostname, ttl, owner.ID, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.stores.Agents.CreateEnrollmentToken(ctx, token); err != nil {
+			t.Fatal(err)
+		}
+		return secret, token
+	}
+	withToken := func(secret, hostname string) agentgateway.Enrollment {
+		return agentgateway.Enrollment{TokenHash: agentgateway.HashEnrollmentToken(secret), Hostname: hostname}
+	}
+
+	// A per-host token enrols one agent; a retry needs no new token.
+	secret, token := issue("", time.Hour)
+	agent := newAgent("agent-1", 7)
+	first, err := f.stores.Agents.RegisterAgent(ctx, agent, "req-1", withToken(secret, "web-01"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := agent
+	retry.ID = "agent-2"
+	again, err := f.stores.Agents.RegisterAgent(ctx, retry, "req-1", agentgateway.Enrollment{})
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("retried registration = %+v, %v; want the first agent", again, err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 8), "req-x", withToken(secret, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a used token enrolled another agent: %v", err)
+	}
+	tokens, err := f.stores.Agents.ListEnrollmentTokens(ctx)
+	if err != nil || len(tokens) != 1 || tokens[0].ID != token.ID || tokens[0].UsedAt == nil || tokens[0].UsedByAgent != "agent-1" {
+		t.Fatalf("tokens after use = %+v, %v", tokens, err)
+	}
+
+	// Hostname binding, expiry and revocation; a refused registration
+	// leaves the token unused.
+	bound, _ := issue("db-01.example", time.Hour)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 8), "req-x", withToken(bound, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a token bound to another host was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-db", 8), "req-db", withToken(bound, "DB-01.example.")); err != nil {
+		t.Fatalf("the bound host was refused: %v", err)
+	}
+	expired, _ := issue("", time.Minute)
+	lateAgent := newAgent("agent-late", 9)
+	lateAgent.RegisteredAt = now.Add(2 * time.Minute)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, lateAgent, "req-late", withToken(expired, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("an expired token was accepted: %v", err)
+	}
+	revokedSecret, revoked := issue("", time.Hour)
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, revoked.ID, owner.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, revoked.ID, owner.ID, now); !errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
+		t.Fatalf("revoking twice = %v", err)
+	}
+	if err := f.stores.Agents.RevokeEnrollmentToken(ctx, token.ID, owner.ID, now); !errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
+		t.Fatalf("revoking a used token = %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 10), "req-r", withToken(revokedSecret, "web-01")); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a revoked token was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-x", 10), "req-n", agentgateway.Enrollment{}); !errors.Is(err, agentgateway.ErrEnrollmentRejected) {
+		t.Fatalf("a registration without an enrolment was accepted: %v", err)
+	}
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-shared", 11), "req-s", agentgateway.Enrollment{Shared: true}); err != nil {
+		t.Fatalf("the shared development token was refused: %v", err)
+	}
+
+	got, err := f.stores.Agents.GetAgent(ctx, "agent-1")
+	if err != nil || !got.PublicKey.Equal(agentKey(7)) || got.Capabilities[0] != "runtime.info" || !got.Connected(now) {
+		t.Fatalf("GetAgent = %+v, %v", got, err)
+	}
+	later := now.Add(30 * time.Second)
+	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-2", later.Add(time.Minute), later); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RenewAgentLease(ctx, "ghost", "lease-x", later, later); !errors.Is(err, agentgateway.ErrAgentNotFound) {
+		t.Fatalf("renew unknown agent = %v", err)
+	}
+	if err := f.stores.Agents.RevokeAgent(ctx, "agent-1", later); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Agents.RenewAgentLease(ctx, "agent-1", "lease-3", later, later); !errors.Is(err, agentgateway.ErrAgentRevoked) {
+		t.Fatalf("renew revoked agent = %v", err)
+	}
+	fresh, _ := issue("", time.Hour)
+	if _, err := f.stores.Agents.RegisterAgent(ctx, newAgent("agent-3", 7), "req-2", withToken(fresh, "web-01")); !errors.Is(err, agentgateway.ErrAgentRevoked) {
+		t.Fatalf("re-registering a revoked key = %v, want ErrAgentRevoked", err)
+	}
+	list, err := f.stores.Agents.ListAgents(ctx)
+	if err != nil || len(list) != 3 || list[0].RevokedAt == nil || list[0].Connected(later) {
+		t.Fatalf("ListAgents = %+v, %v", list, err)
+	}
+	actions := map[string]int{}
+	registrations := map[string]string{}
+	for _, event := range auditEvents(t, f, 1) {
+		actions[event.Action]++
+		if event.Action == domain.AuditAgentRegistered {
+			registrations[event.TargetID] = event.Details["enrollment"] + "/" + event.Details["token_id"]
+		}
+	}
+	if actions[domain.AuditAgentRegistered] != 3 || actions[domain.AuditAgentRevoked] != 1 ||
+		actions[domain.AuditAgentEnrollmentTokenIssued] != 5 || actions[domain.AuditAgentEnrollmentTokenRevoked] != 1 {
+		t.Fatalf("audit actions = %v", actions)
+	}
+	if registrations["agent-1"] != "token/"+token.ID || registrations["agent-shared"] != "shared_token/" {
+		t.Fatalf("registration audit details = %v", registrations)
+	}
+}

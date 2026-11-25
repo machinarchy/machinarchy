@@ -1,0 +1,46 @@
+# DEVELOPMENT ONLY. This file runs the monolith for local work: plain HTTP,
+# MACHINARCHY_ENVIRONMENT=development, a default database password and a
+# PostgreSQL connection without TLS. Do not use it as a production template;
+# see docs/operations.md and docs/SECURITY.md.
+name: machinarchy-apps
+
+services:
+  monolith:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server
+      # The agent wire contract comes from the sibling machinarchy-agent checkout.
+      additional_contexts:
+        agent-protocol: ${MACHINARCHY_AGENT_SOURCE:-../machinarchy-agent}/protocol
+      args:
+        MACHINARCHY_COMMAND: monolith
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      # Local stack only: plain HTTP and a non-TLS PostgreSQL connection.
+      MACHINARCHY_ENVIRONMENT: development
+      MACHINARCHY_LISTEN_ADDR: ":8080"
+      MACHINARCHY_DATABASE_ENGINE: postgres
+      MACHINARCHY_DATABASE_URL: postgres://machinarchy:${POSTGRES_PASSWORD:-machinarchy_dev_only}@postgres:5432/machinarchy_dev?sslmode=disable
+    restart: unless-stopped
+    # Must exceed MACHINARCHY_SHUTDOWN_TIMEOUT (default 25s); Docker's 10s
+    # default would SIGKILL the process mid-drain.
+    stop_grace_period: 30s
+    # Hardening that the dev stack keeps too (AUDIT S-20): the process needs
+    # no root filesystem writes, no capabilities and no privilege gain. With
+    # SQLite, mount a volume at /data.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - machinarchy-network
+
+networks:
+  machinarchy-network:
+    name: machinarchy-network
+    external: true

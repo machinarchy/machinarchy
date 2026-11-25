@@ -1,0 +1,3428 @@
+basePath: /
+definitions:
+  agents.SigningKeysResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.signingKeyView'
+        type: array
+    type: object
+  agents.controllerKeyResponse:
+    properties:
+      nextPublicKey:
+        description: NextPublicKey is announced for a rotation; empty otherwise.
+        type: string
+      publicKey:
+        description: PublicKey signs today.
+        type: string
+      publicKeys:
+        description: PublicKeys is the value for MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY.
+        items:
+          type: string
+        type: array
+    type: object
+  agents.createTokenRequest:
+    properties:
+      hostId:
+        description: |-
+          HostID binds the agent that enrols with this token to this managed
+          host (its Access Profile uses the agent connector), replacing any
+          earlier binding of the host (ADR-057).
+        type: string
+      hostname:
+        description: Hostname, when set, is the only hostname this token enrols.
+        type: string
+      ttlSeconds:
+        description: TTLSeconds defaults to 3600; 60 to 86400.
+        type: integer
+    type: object
+  agents.createTokenResponse:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      expiresAt:
+        type: string
+      hostId:
+        type: string
+      hostname:
+        type: string
+      id:
+        type: string
+      revokedAt:
+        type: string
+      token:
+        description: Token is the secret, shown only in this response.
+        type: string
+      usedAt:
+        type: string
+      usedByAgent:
+        type: string
+    type: object
+  agents.signingKeyView:
+    properties:
+      activatedAt:
+        type: string
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      id:
+        type: string
+      origin:
+        enum:
+        - generated
+        - imported
+        type: string
+      publicKey:
+        type: string
+      retiredAt:
+        type: string
+      state:
+        enum:
+        - next
+        - active
+        - retired
+        type: string
+    type: object
+  agents.tokenList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.tokenView'
+        type: array
+    type: object
+  agents.tokenView:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      expiresAt:
+        type: string
+      hostId:
+        type: string
+      hostname:
+        type: string
+      id:
+        type: string
+      revokedAt:
+        type: string
+      usedAt:
+        type: string
+      usedByAgent:
+        type: string
+    type: object
+  auth.LoginRequest:
+    properties:
+      email:
+        example: operator@example.com
+        type: string
+      password:
+        example: account-password
+        type: string
+      username:
+        example: operator
+        type: string
+    required:
+    - password
+    type: object
+  auth.MessageResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  auth.PasswordChangeRequest:
+    properties:
+      currentPassword:
+        type: string
+      newPassword:
+        type: string
+    type: object
+  auth.RevokedResponse:
+    properties:
+      revoked:
+        type: integer
+    type: object
+  auth.SessionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/domain.Session'
+        type: array
+    type: object
+  auth.SignUpRequest:
+    properties:
+      email:
+        example: operator@example.com
+        type: string
+      password:
+        example: use-a-secret-with-12+-bytes
+        type: string
+      username:
+        example: operator
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  domain.APIToken:
+    properties:
+      createdAt:
+        type: string
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      revokedAt:
+        type: string
+      role:
+        $ref: '#/definitions/domain.Role'
+    type: object
+  domain.AuditEvent:
+    properties:
+      action:
+        type: string
+      actorTokenId:
+        type: integer
+      actorUserId:
+        type: integer
+      actorUsername:
+        type: string
+      details:
+        additionalProperties:
+          type: string
+        type: object
+      hash:
+        type: string
+      id:
+        type: integer
+      occurredAt:
+        type: string
+      outcome:
+        type: string
+      prevHash:
+        type: string
+      requestId:
+        type: string
+      source:
+        type: string
+      targetId:
+        type: string
+      targetType:
+        type: string
+    type: object
+  domain.AuditVerification:
+    properties:
+      events:
+        type: integer
+      firstInvalidId:
+        type: integer
+      headHash:
+        description: |-
+          HeadHash is the hash of the newest event. Record it somewhere outside the
+          database (a ticket, a log line) to detect later truncation of the tail.
+        type: string
+      reason:
+        type: string
+      valid:
+        type: boolean
+    type: object
+  domain.AuthTokenResponse:
+    properties:
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/domain.UserResponse'
+    type: object
+  domain.Environment:
+    properties:
+      createdAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+    type: object
+  domain.IssuedAPIToken:
+    properties:
+      createdAt:
+        type: string
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      revokedAt:
+        type: string
+      role:
+        $ref: '#/definitions/domain.Role'
+      token:
+        type: string
+    type: object
+  domain.Role:
+    enum:
+    - owner
+    - operator
+    - reader
+    type: string
+    x-enum-varnames:
+    - RoleOwner
+    - RoleOperator
+    - RoleReader
+  domain.Session:
+    properties:
+      clientIp:
+        type: string
+      createdAt:
+        type: string
+      current:
+        description: Current marks the session the request was made with.
+        type: boolean
+      expiresAt:
+        type: string
+      id:
+        type: string
+      userAgent:
+        type: string
+    type: object
+  domain.TargetRule:
+    properties:
+      all:
+        type: boolean
+      exclude:
+        items:
+          type: string
+        type: array
+      include:
+        items:
+          type: string
+        type: array
+      selector:
+        type: string
+    type: object
+  domain.UserResponse:
+    properties:
+      email:
+        type: string
+      id:
+        type: integer
+      username:
+        type: string
+    type: object
+  domain.WorkspaceMember:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      id:
+        type: integer
+      role:
+        allOf:
+        - $ref: '#/definitions/domain.Role'
+        enum:
+        - owner
+        - operator
+        - reader
+      username:
+        type: string
+    type: object
+  environments.EnvSavePayload:
+    properties:
+      description:
+        example: Primary cluster management environment
+        type: string
+      name:
+        example: production
+        type: string
+    required:
+    - name
+    type: object
+  httperr.Body:
+    properties:
+      code:
+        type: string
+      error:
+        type: string
+    type: object
+  managedresource.hostRequest:
+    properties:
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      spec:
+        $ref: '#/definitions/resource.HostSpec'
+    type: object
+  managedresource.hostUpdateRequest:
+    properties:
+      generation:
+        type: integer
+      revision:
+        type: integer
+      spec:
+        $ref: '#/definitions/resource.HostSpec'
+    type: object
+  managedresource.labelsRequest:
+    properties:
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      revision:
+        type: integer
+    type: object
+  managedresource.operationRequest:
+    properties:
+      capability:
+        $ref: '#/definitions/resource.CapabilitySpec'
+      expectTargetsHash:
+        type: string
+      hostIds:
+        items:
+          type: string
+        type: array
+      run:
+        $ref: '#/definitions/resource.RunSpec'
+      targets:
+        $ref: '#/definitions/domain.TargetRule'
+    type: object
+  managedresource.previewRequest:
+    properties:
+      targets:
+        $ref: '#/definitions/domain.TargetRule'
+    type: object
+  managedresource.profileRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      spec:
+        $ref: '#/definitions/resource.AccessProfileSpec'
+    type: object
+  managedresource.profileUpdateRequest:
+    properties:
+      expectedRevision:
+        type: integer
+      spec:
+        $ref: '#/definitions/resource.AccessProfileSpec'
+    type: object
+  managedresource.trustRequest:
+    properties:
+      fingerprints:
+        description: |-
+          Fingerprints are the exact SHA256:… fingerprints to trust, normally the
+          Host's status.observedHostKeys as reviewed.
+        items:
+          type: string
+        type: array
+      generation:
+        description: Generation is the Host spec generation the caller reviewed.
+        type: integer
+      replace:
+        description: Replace must be set to change keys the Host already trusts.
+        type: boolean
+    type: object
+  members.SetRoleRequest:
+    properties:
+      role:
+        enum:
+        - owner
+        - operator
+        - reader
+        example: operator
+        type: string
+    type: object
+  resource.AccessProfile:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      currentRevision:
+        type: integer
+      deletedAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      updatedAt:
+        type: string
+      workspaceId:
+        type: integer
+    type: object
+  resource.AccessProfileRevision:
+    properties:
+      checksum:
+        type: string
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      profileId:
+        type: string
+      revision:
+        type: integer
+      spec:
+        $ref: '#/definitions/resource.AccessProfileSpec'
+      workspaceId:
+        type: integer
+    type: object
+  resource.AccessProfileSpec:
+    properties:
+      authenticationMethod:
+        $ref: '#/definitions/resource.AuthenticationMethod'
+      connectorKind:
+        $ref: '#/definitions/resource.ConnectorKind'
+      credential:
+        $ref: '#/definitions/resource.SecretReference'
+      enabled:
+        type: boolean
+      execution:
+        allOf:
+        - $ref: '#/definitions/resource.ExecutionSettings'
+        description: Execution configures detached runs on the profile's hosts.
+      hostCertificateAuthorities:
+        items:
+          type: string
+        type: array
+      hostKeyPolicy:
+        allOf:
+        - $ref: '#/definitions/resource.HostKeyPolicy'
+        description: |-
+          HostKeyPolicy and HostCertificateAuthorities decide how the hosts that
+          use this profile become trusted (see hostkeys.go).
+      username:
+        type: string
+    type: object
+  resource.ActorRef:
+    properties:
+      apiTokenId:
+        type: integer
+      userId:
+        type: integer
+    type: object
+  resource.AuthenticationMethod:
+    enum:
+    - password
+    - private-key
+    type: string
+    x-enum-varnames:
+    - AuthenticationPassword
+    - AuthenticationPrivateKey
+  resource.CapabilitySpec:
+    properties:
+      input:
+        description: Input is the capability's JSON input ({} when it takes none).
+        type: object
+      name:
+        description: Name is the capability, e.g. runtime.info or service.status.
+        type: string
+      timeoutSeconds:
+        description: TimeoutSeconds bounds the call on each agent.
+        type: integer
+    type: object
+  resource.Condition:
+    properties:
+      lastTransitionTime:
+        type: string
+      message:
+        type: string
+      observedGeneration:
+        type: integer
+      reason:
+        type: string
+      status:
+        $ref: '#/definitions/resource.ConditionStatus'
+      type:
+        type: string
+    type: object
+  resource.ConditionStatus:
+    enum:
+    - "True"
+    - "False"
+    - Unknown
+    type: string
+    x-enum-varnames:
+    - ConditionTrue
+    - ConditionFalse
+    - ConditionUnknown
+  resource.ConnectorKind:
+    enum:
+    - ssh
+    - agent
+    type: string
+    x-enum-varnames:
+    - ConnectorSSH
+    - ConnectorAgent
+  resource.DesiredPresence:
+    enum:
+    - Managed
+    - Absent
+    type: string
+    x-enum-varnames:
+    - PresenceManaged
+    - PresenceAbsent
+  resource.ExecutionSettings:
+    properties:
+      maxOutputFileBytes:
+        description: |-
+          MaxOutputFileBytes caps each output file on the host (ulimit -f);
+          0 means 100 MiB.
+        type: integer
+      stateRoot:
+        description: |-
+          StateRoot holds per-target directories on the host; the default is
+          $HOME/.local/state/machinarchy of the login user.
+        type: string
+      supervisor:
+        allOf:
+        - $ref: '#/definitions/resource.ExecutionSupervisor'
+        description: |-
+          Supervisor: auto (default; systemd-run when usable, else setsid),
+          systemd, setsid, or attached (detached runs are refused).
+    type: object
+  resource.ExecutionSupervisor:
+    enum:
+    - auto
+    - systemd
+    - setsid
+    - attached
+    type: string
+    x-enum-comments:
+      SupervisorAttached: no detached runs
+    x-enum-descriptions:
+    - ""
+    - ""
+    - ""
+    - no detached runs
+    x-enum-varnames:
+    - SupervisorAuto
+    - SupervisorSystemd
+    - SupervisorSetsid
+    - SupervisorAttached
+  resource.Host:
+    properties:
+      metadata:
+        $ref: '#/definitions/resource.HostMetadata'
+      spec:
+        $ref: '#/definitions/resource.HostSpec'
+      status:
+        $ref: '#/definitions/resource.HostStatus'
+    type: object
+  resource.HostAccessTarget:
+    properties:
+      endpoint:
+        type: string
+      trust:
+        items:
+          type: string
+        type: array
+    type: object
+  resource.HostKeyPolicy:
+    enum:
+    - ""
+    - tofu
+    - approve
+    - ca
+    - pinned
+    type: string
+    x-enum-varnames:
+    - HostKeyPolicyDefault
+    - HostKeyPolicyTOFU
+    - HostKeyPolicyApprove
+    - HostKeyPolicyCA
+    - HostKeyPolicyPinned
+  resource.HostMetadata:
+    properties:
+      createdAt:
+        type: string
+      deletionTimestamp:
+        type: string
+      environmentId:
+        type: integer
+      generation:
+        type: integer
+      id:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      revision:
+        type: integer
+      updatedAt:
+        type: string
+      workspaceId:
+        type: integer
+    type: object
+  resource.HostPhase:
+    enum:
+    - Pending
+    - Active
+    - Deleting
+    type: string
+    x-enum-varnames:
+    - HostPending
+    - HostActive
+    - HostDeleting
+  resource.HostSpec:
+    properties:
+      accessProfileId:
+        type: string
+      accessTarget:
+        allOf:
+        - $ref: '#/definitions/resource.HostAccessTarget'
+        description: |-
+          AccessTarget is host-owned connector-neutral location and trust material.
+          Its interpretation is restricted to the selected connector adapter.
+      presence:
+        $ref: '#/definitions/resource.DesiredPresence'
+      profileRevision:
+        type: integer
+    type: object
+  resource.HostStatus:
+    properties:
+      conditions:
+        items:
+          $ref: '#/definitions/resource.Condition'
+        type: array
+      lastObservedAt:
+        type: string
+      observedGeneration:
+        type: integer
+      observedHostKeys:
+        description: |-
+          ObservedHostKeys are the SSH host keys last seen on the network, kept
+          so an owner can approve them (or see what changed).
+        items:
+          $ref: '#/definitions/resource.ObservedHostKey'
+        type: array
+      phase:
+        $ref: '#/definitions/resource.HostPhase'
+    type: object
+  resource.HostTargetSet:
+    properties:
+      excluded:
+        items:
+          $ref: '#/definitions/resource.Host'
+        type: array
+      hosts:
+        items:
+          $ref: '#/definitions/resource.Host'
+        type: array
+      targetsHash:
+        description: |-
+          TargetsHash identifies the exact Host IDs and generations matched, so a
+          submission can require that it runs on what was reviewed.
+        type: string
+      unknownExcludes:
+        items:
+          type: string
+        type: array
+      unknownIncludes:
+        items:
+          type: string
+        type: array
+    type: object
+  resource.LaunchHandle:
+    properties:
+      attempt:
+        description: |-
+          Attempt counts launches of this target (1 for the first). A launch
+          proven never to have started is retried up to MaxLaunchAttempts.
+        type: integer
+      deadline:
+        description: |-
+          Deadline is when the command must have finished: launch time plus
+          the run's timeout, or the Operation deadline if earlier.
+        type: string
+      endpoint:
+        description: |-
+          Endpoint is the Host endpoint at launch; a poll of a moved Host is
+          treated as unreachable rather than sent to another machine.
+        type: string
+      launchedAt:
+        type: string
+      mode:
+        description: |-
+          Mode is systemd or setsid; empty means the launch reply never arrived
+          (the connection failed mid-launch), so the poller must find out
+          whether the command started.
+        type: string
+      pid:
+        type: integer
+      root:
+        description: Root is the state root used at launch ("" = the default).
+        type: string
+      unit:
+        type: string
+    type: object
+  resource.ObservedHostKey:
+    properties:
+      algorithm:
+        type: string
+      fingerprint:
+        type: string
+      firstSeenAt:
+        type: string
+      lastSeenAt:
+        description: |-
+          LastSeenAt is when a scan last saw the key. The reconciler reuses a
+          recent scan instead of connecting again (see HostReconciler).
+        type: string
+    type: object
+  resource.Operation:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        $ref: '#/definitions/resource.ActorRef'
+      finishedAt:
+        type: string
+      id:
+        type: string
+      kind:
+        $ref: '#/definitions/resource.OperationKind'
+      revision:
+        type: integer
+      spec:
+        $ref: '#/definitions/resource.OperationSpec'
+      startedAt:
+        type: string
+      status:
+        $ref: '#/definitions/resource.OperationStatus'
+      workspaceId:
+        type: integer
+    type: object
+  resource.OperationKind:
+    enum:
+    - Run
+    - Capability
+    type: string
+    x-enum-varnames:
+    - OperationKindRun
+    - OperationKindCapability
+  resource.OperationSpec:
+    properties:
+      capability:
+        $ref: '#/definitions/resource.CapabilitySpec'
+      deadline:
+        type: string
+      run:
+        allOf:
+        - $ref: '#/definitions/resource.RunSpec'
+        description: Run (SSH) and Capability (agent) are exclusive; Kind says which.
+      targets:
+        items:
+          $ref: '#/definitions/resource.OperationTargetSpec'
+        type: array
+    type: object
+  resource.OperationState:
+    enum:
+    - Queued
+    - Running
+    - CancelRequested
+    - Succeeded
+    - PartiallySucceeded
+    - Failed
+    - Cancelled
+    - TimedOut
+    - Interrupted
+    type: string
+    x-enum-varnames:
+    - OperationQueued
+    - OperationRunning
+    - OperationCancelRequested
+    - OperationSucceeded
+    - OperationPartiallySucceeded
+    - OperationFailed
+    - OperationCancelled
+    - OperationTimedOut
+    - OperationInterrupted
+  resource.OperationStatus:
+    properties:
+      cancelAsked:
+        type: boolean
+      conditions:
+        items:
+          $ref: '#/definitions/resource.Condition'
+        type: array
+      state:
+        $ref: '#/definitions/resource.OperationState'
+      targets:
+        items:
+          $ref: '#/definitions/resource.OperationTarget'
+        type: array
+    type: object
+  resource.OperationSummary:
+    properties:
+      cancelRequested:
+        type: boolean
+      createdAt:
+        type: string
+      createdBy:
+        $ref: '#/definitions/resource.ActorRef'
+      finishedAt:
+        type: string
+      id:
+        type: string
+      kind:
+        $ref: '#/definitions/resource.OperationKind'
+      startedAt:
+        type: string
+      state:
+        $ref: '#/definitions/resource.OperationState'
+      targets:
+        additionalProperties:
+          type: integer
+        type: object
+    type: object
+  resource.OperationTarget:
+    properties:
+      launch:
+        allOf:
+        - $ref: '#/definitions/resource.LaunchHandle'
+        description: |-
+          Launch and Live are set for detached runs: how to reach the command,
+          and its captured output (kept after it ends, so output can be read by
+          byte offset). Live is stored encrypted on its own and never serialized
+          with the target; the output endpoint serves it to callers allowed to
+          see output.
+      progress:
+        allOf:
+        - $ref: '#/definitions/resource.TargetProgressSummary'
+        description: 'Progress summarizes Live for API readers: sizes and timing,
+          no output.'
+      result:
+        $ref: '#/definitions/resource.TargetResult'
+      spec:
+        $ref: '#/definitions/resource.OperationTargetSpec'
+      state:
+        $ref: '#/definitions/resource.TargetState'
+    type: object
+  resource.OperationTargetSpec:
+    properties:
+      accessProfileId:
+        type: string
+      accessProfileRevision:
+        type: integer
+      displayName:
+        type: string
+      hostGeneration:
+        type: integer
+      hostId:
+        type: string
+    type: object
+  resource.OutputStream:
+    enum:
+    - stdout
+    - stderr
+    type: string
+    x-enum-varnames:
+    - StreamStdout
+    - StreamStderr
+  resource.Page-resource_AccessProfile:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/resource.AccessProfile'
+        type: array
+      nextCursor:
+        type: string
+    type: object
+  resource.Page-resource_Host:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/resource.Host'
+        type: array
+      nextCursor:
+        type: string
+    type: object
+  resource.Page-resource_OperationSummary:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/resource.OperationSummary'
+        type: array
+      nextCursor:
+        type: string
+    type: object
+  resource.RunSpec:
+    properties:
+      argv:
+        items:
+          type: string
+        type: array
+      concurrency:
+        type: integer
+      detach:
+        description: |-
+          Detach runs the command under a supervisor on each host and ends the
+          SSH session right after the launch (AUDIT/10b §1). The timeout may
+          then be up to MaxDetachedTimeoutSeconds; attached runs keep
+          MaxAttachedTimeoutSeconds.
+        type: boolean
+      timeoutSeconds:
+        type: integer
+    type: object
+  resource.SecretReference:
+    properties:
+      id:
+        type: string
+      version:
+        type: integer
+    type: object
+  resource.TargetOutput:
+    properties:
+      bytes:
+        description: Bytes is the stream's full size; Truncated means part of it is
+          gone.
+        type: integer
+      from:
+        description: |-
+          From and Next are stream byte offsets: Text covers the stream from
+          From on, and the next request should ask for Next. A detached target
+          keeps its first and last 15 KiB; a part of the stream that was not
+          kept appears in Text as one "[… N bytes omitted …]" line.
+        type: integer
+      hostId:
+        type: string
+      live:
+        description: |-
+          Live is true until the target is final (pending or running): more
+          output can follow, so a follower keeps asking.
+        type: boolean
+      next:
+        type: integer
+      operationId:
+        type: string
+      state:
+        $ref: '#/definitions/resource.TargetState'
+      stream:
+        $ref: '#/definitions/resource.OutputStream'
+      text:
+        type: string
+      truncated:
+        type: boolean
+    type: object
+  resource.TargetProgressSummary:
+    properties:
+      cancelReason:
+        type: string
+      cancelSentAt:
+        type: string
+      lastContactAt:
+        type: string
+      polls:
+        type: integer
+      stderrBytes:
+        type: integer
+      stdoutBytes:
+        type: integer
+    type: object
+  resource.TargetResult:
+    properties:
+      errorClass:
+        type: string
+      exitCode:
+        type: integer
+      output:
+        type: string
+      stderr:
+        type: string
+      stderrBytes:
+        type: integer
+      stdout:
+        type: string
+      stdoutBytes:
+        description: |-
+          StdoutBytes and StderrBytes are the streams' full sizes on the host;
+          Truncated means the stored text omits part of them (detached runs keep
+          a head and a tail of each stream).
+        type: integer
+      truncated:
+        type: boolean
+    type: object
+  resource.TargetState:
+    enum:
+    - Lost
+    - Pending
+    - Running
+    - Succeeded
+    - Failed
+    - TimedOut
+    - Cancelled
+    - Interrupted
+    type: string
+    x-enum-varnames:
+    - TargetLost
+    - TargetPending
+    - TargetRunning
+    - TargetSucceeded
+    - TargetFailed
+    - TargetTimedOut
+    - TargetCancelled
+    - TargetInterrupted
+  secret.RewrapCounts:
+    properties:
+      remaining:
+        type: integer
+      rewrapped:
+        type: integer
+    type: object
+  secret.RewrapResponse:
+    properties:
+      done:
+        description: |-
+          Done is true when nothing remains under the old key; it can then be
+          removed from the keyring.
+        type: boolean
+      keyId:
+        description: KeyID is the key secrets now use.
+        type: string
+      operationData:
+        allOf:
+        - $ref: '#/definitions/secret.RewrapCounts'
+        description: |-
+          OperationData covers Operation specs, output and progress, including
+          values written before key IDs existed (resealed by any rewrap).
+      remaining:
+        type: integer
+      rewrapped:
+        description: Rewrapped and Remaining count secret versions.
+        type: integer
+    type: object
+  service.AccessProfileView:
+    properties:
+      createdAt:
+        type: string
+      createdBy:
+        type: integer
+      currentRevision:
+        type: integer
+      deletedAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      spec:
+        $ref: '#/definitions/resource.AccessProfileSpec'
+      updatedAt:
+        type: string
+      workspaceId:
+        type: integer
+    type: object
+  tokens.CreateRequest:
+    properties:
+      expiresInHours:
+        example: 720
+        type: integer
+      name:
+        example: ci-deploy
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        example: reader
+        type: string
+    type: object
+info:
+  contact: {}
+  description: HTTP API for managing Machinarchy environments, SSH hosts, and operations.
+  termsOfService: https://github.com/machinarchy/machinarchy
+  title: Machinarchy API
+  version: "1.0"
+paths:
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates an account, returns a JWT, and sets the auth_token
+        cookie.
+      parameters:
+      - description: Credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.AuthTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      summary: Log in
+      tags:
+      - Authentication
+  /api/auth/logout:
+    post:
+      description: Revokes the session of the token sent (cookie or bearer) and clears
+        the cookie. Succeeds even without a valid session.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      summary: Log out
+      tags:
+      - Authentication
+  /api/auth/signup:
+    post:
+      consumes:
+      - application/json
+      description: Creates an account, returns a JWT, and sets the auth_token cookie.
+      parameters:
+      - description: Account details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.SignUpRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.AuthTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      summary: Create an account
+      tags:
+      - Authentication
+  /api/v1/agents:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List enrolled agents
+      tags:
+      - Agents
+  /api/v1/agents/{id}/revoke:
+    post:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke an agent
+      tags:
+      - Agents
+  /api/v1/agents/controller-key:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.controllerKeyResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get the controller public key agents must trust
+      tags:
+      - Agents
+  /api/v1/agents/enrollment-tokens:
+    get:
+      description: Owner only. Secrets are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.tokenList'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List agent enrolment tokens
+      tags:
+      - Agents
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Owner only. The secret is returned once and stored only as a hash. It enrols one agent before it expires
+        (default 1 hour), optionally only from the given hostname. Configure it on the host as
+        MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE.
+      parameters:
+      - description: Optional hostname binding and lifetime
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/agents.createTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/agents.createTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Issue a single-use agent enrolment token
+      tags:
+      - Agents
+  /api/v1/agents/enrollment-tokens/{id}:
+    delete:
+      parameters:
+      - description: Token ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke an unused agent enrolment token
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys:
+    get:
+      description: Active signs everything sent to agents; next is announced for a
+        rotation; retired keys are kept for the record. Private keys are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.SigningKeysResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List the controller signing keys (owner)
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys/next:
+    delete:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Discard the next controller signing key (owner)
+      tags:
+      - Agents
+    post:
+      description: Generates a key and announces it at /controller-key. Pin both keys
+        on every agent before activating it.
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Stage the next controller signing key (owner)
+      tags:
+      - Agents
+  /api/v1/agents/signing-keys/next/activate:
+    post:
+      description: The next key starts signing; the active key retires. Agents that
+        do not pin the next key reject every message after this.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agents.signingKeyView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Activate the next controller signing key (owner)
+      tags:
+      - Agents
+  /api/v1/audit/events:
+    get:
+      description: Requires a human workspace owner session; API tokens are refused.
+        Events are append-only and never contain credentials. Page backwards by passing
+        the smallest id received as before_id.
+      parameters:
+      - description: Only events with this action, for example member.role_changed
+        in: query
+        name: action
+        type: string
+      - description: Only events with a smaller id (paging cursor)
+        in: query
+        name: before_id
+        type: integer
+      - description: Page size (default 100, maximum 500)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.AuditEvent'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List audit events
+      tags:
+      - Audit
+  /api/v1/audit/verify:
+    get:
+      description: Requires a human workspace owner session. Recomputes every event's
+        hash and link. A valid result proves no earlier event was edited, removed,
+        or reordered; it cannot detect events removed from the end, so record headHash
+        somewhere outside the database to detect that.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.AuditVerification'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Verify the audit trail
+      tags:
+      - Audit
+  /api/v1/environments:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Environment'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List environments
+      tags:
+      - Environments
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Environment details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/environments.EnvSavePayload'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.Environment'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create an environment
+      tags:
+      - Environments
+  /api/v1/environments/{id}:
+    delete:
+      parameters:
+      - description: Environment ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Delete an environment
+      tags:
+      - Environments
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Environment ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated environment details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/environments.EnvSavePayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Environment'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Update an environment
+      tags:
+      - Environments
+  /api/v1/managed/access-profiles:
+    get:
+      description: Returns SecretRefs only, never secret values.
+      parameters:
+      - description: nextCursor of the previous page
+        in: query
+        name: cursor
+        type: string
+      - description: Page size, at most 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Page-resource_AccessProfile'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List Access Profiles
+      tags:
+      - Managed
+    post:
+      consumes:
+      - application/json
+      description: Workspace owner only.
+      parameters:
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.profileRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/resource.AccessProfile'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create an Access Profile
+      tags:
+      - Managed
+  /api/v1/managed/access-profiles/{id}:
+    delete:
+      description: Owner only; refused with 409 while a host is bound to it.
+      parameters:
+      - description: Access Profile ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Delete an Access Profile
+      tags:
+      - Managed
+    get:
+      parameters:
+      - description: Access Profile ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.AccessProfileView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get an Access Profile with its current spec
+      tags:
+      - Managed
+    put:
+      consumes:
+      - application/json
+      description: Workspace owner only.
+      parameters:
+      - description: Access Profile ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.profileUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/resource.AccessProfileRevision'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create a new Access Profile revision
+      tags:
+      - Managed
+  /api/v1/managed/hosts:
+    get:
+      description: Keyset-paginated; filter by selector, environment ID and phase.
+      parameters:
+      - description: Selector, for example tier=web
+        in: query
+        name: selector
+        type: string
+      - description: Environment ID
+        in: query
+        name: environment
+        type: integer
+      - description: Pending, Active or Deleting
+        in: query
+        name: phase
+        type: string
+      - description: nextCursor of the previous page
+        in: query
+        name: cursor
+        type: string
+      - description: Page size, at most 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Page-resource_Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List managed hosts
+      tags:
+      - Managed
+    post:
+      consumes:
+      - application/json
+      description: Binding an Access Profile needs the workspace owner.
+      parameters:
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.hostRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/resource.Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create a managed host
+      tags:
+      - Managed
+  /api/v1/managed/hosts/{id}:
+    delete:
+      description: Refused with 409 while an operation targets the host.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Current revision
+        in: query
+        name: revision
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Delete a managed host
+      tags:
+      - Managed
+    get:
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get a managed host
+      tags:
+      - Managed
+    put:
+      consumes:
+      - application/json
+      description: Changing the profile, endpoint or trust of a bound host needs the
+        owner.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.hostUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Replace a managed host spec
+      tags:
+      - Managed
+  /api/v1/managed/hosts/{id}/labels:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.labelsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Replace a host's labels
+      tags:
+      - Managed
+  /api/v1/managed/hosts/{id}/trust:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Workspace owner only. Name the exact fingerprints you reviewed (usually status.observedHostKeys) and the
+        spec generation you saw. A Host that already trusts keys needs replace=true, so a changed key is never
+        accepted by accident. The Host is then verified again with the trusted keys.
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Reviewed fingerprints
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.trustRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Host'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Trust a host's SSH host keys
+      tags:
+      - Managed
+  /api/v1/managed/operations:
+    get:
+      description: Newest first; summaries never contain argv or output.
+      parameters:
+      - description: Operation state
+        in: query
+        name: state
+        type: string
+      - description: Host ID
+        in: query
+        name: host
+        type: string
+      - description: RFC 3339 time
+        in: query
+        name: createdAfter
+        type: string
+      - description: RFC 3339 time
+        in: query
+        name: createdBefore
+        type: string
+      - description: nextCursor of the previous page
+        in: query
+        name: cursor
+        type: string
+      - description: Page size, at most 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Page-resource_OperationSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List operations
+      tags:
+      - Managed
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Target hostIds, or a rule; expectTargetsHash binds the run to a preview (409 targets_changed).
+        Give run (argv over SSH, hosts with an ssh Access Profile) or capability (an agent capability such as
+        runtime.info or service.status, hosts with an agent Access Profile), not both. Results arrive per target.
+      parameters:
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.operationRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/resource.Operation'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Submit an operation
+      tags:
+      - Managed
+  /api/v1/managed/operations/{id}:
+    get:
+      description: Readers see no argv or output.
+      parameters:
+      - description: Operation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.Operation'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get an operation
+      tags:
+      - Managed
+  /api/v1/managed/operations/{id}/cancel:
+    post:
+      parameters:
+      - description: Operation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/resource.Operation'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Request cancellation of an operation
+      tags:
+      - Managed
+  /api/v1/managed/operations/{id}/targets/{hostId}/output:
+    get:
+      description: 'One stream of one target''s output: live while a detached command
+        runs (poll it to follow), final afterwards. Long output keeps its first and
+        last 15 KiB; bytes is the full size. Only callers allowed to execute runs
+        may read output.'
+      parameters:
+      - description: Operation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Target Host ID
+        in: path
+        name: hostId
+        required: true
+        type: string
+      - description: stdout (default) or stderr
+        in: query
+        name: stream
+        type: string
+      - description: Stream byte offset to start from (the previous response's next)
+        in: query
+        name: from
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.TargetOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get one target's output
+      tags:
+      - Managed
+  /api/v1/managed/operations/preview:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.previewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/resource.HostTargetSet'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Preview the hosts a target rule selects
+      tags:
+      - Managed
+  /api/v1/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.UserResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get current user
+      tags:
+      - Authentication
+  /api/v1/me/password:
+    post:
+      consumes:
+      - application/json
+      description: 'Checks the current password, stores the new one (12–72 bytes)
+        and revokes every login session of the caller, including this one: log in
+        again. API tokens are not affected.'
+      parameters:
+      - description: Current and new password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.PasswordChangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Change my password
+      tags:
+      - Authentication
+  /api/v1/members:
+    get:
+      description: Requires a human workspace owner session. API tokens are refused.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.WorkspaceMember'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List workspace members
+      tags:
+      - Members
+  /api/v1/members/{id}/role:
+    put:
+      consumes:
+      - application/json
+      description: Requires a human workspace owner session. Takes effect on the member's
+        next request, including for API tokens, whose effective role never exceeds
+        the membership role. A workspace must always keep at least one owner. The
+        change is recorded in the structured server log.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: New role
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.SetRoleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.WorkspaceMember'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Change a member's role
+      tags:
+      - Members
+  /api/v1/runtime-config:
+    get:
+      description: Workspace owner, human session only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get the active runtime configuration
+      tags:
+      - Runtime configuration
+    put:
+      description: Workspace owner, human session only. Hot-reloadable settings apply
+        at once. A change to a restart-required setting (worker counts, resync interval,
+        ...) is stored too and applies when each process next starts; the response
+        lists those settings in `restartRequired`, and `GET /runtime-config/status`
+        shows `restartPending` for the processes that started without them.
+      parameters:
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Publish a new configuration revision
+      tags:
+      - Runtime configuration
+  /api/v1/runtime-config/revisions:
+    get:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Return revisions older than this
+        in: query
+        name: before
+        type: integer
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List configuration revisions
+      tags:
+      - Runtime configuration
+  /api/v1/runtime-config/revisions/{revision}:
+    get:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Revision
+        in: path
+        name: revision
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get one configuration revision
+      tags:
+      - Runtime configuration
+  /api/v1/runtime-config/rollback:
+    post:
+      description: Workspace owner, human session only. Like publish, it lists changed
+        restart-required settings in `restartRequired`.
+      parameters:
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Copy an earlier revision into a new one
+      tags:
+      - Runtime configuration
+  /api/v1/runtime-config/status:
+    get:
+      description: Workspace owner, human session only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Show applied revisions per process
+      tags:
+      - Runtime configuration
+  /api/v1/runtime-config/validate:
+    post:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Validate a configuration document
+      tags:
+      - Runtime configuration
+  /api/v1/secrets:
+    get:
+      description: Workspace owner, human session only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List secret metadata (never values)
+      tags:
+      - Secrets
+    post:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create a secret from a write-only value
+      tags:
+      - Secrets
+  /api/v1/secrets/{id}:
+    delete:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Secret ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Retire a secret
+      tags:
+      - Secrets
+    get:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Secret ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Get secret metadata
+      tags:
+      - Secrets
+  /api/v1/secrets/{id}/rotate:
+    post:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Secret ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Add a new secret version
+      tags:
+      - Secrets
+  /api/v1/secrets/{id}/versions:
+    get:
+      description: Workspace owner, human session only.
+      parameters:
+      - description: Secret ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List secret version metadata
+      tags:
+      - Secrets
+  /api/v1/secrets/rewrap:
+    post:
+      description: Moves secrets and Operation data off oldKeyId to the current key,
+        batchSize at a time per kind; repeat until done. Workspace owner, human session
+        only.
+      parameters:
+      - description: '{\'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/secret.RewrapResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Move secrets and Operation data off an old encryption key
+      tags:
+      - Secrets
+  /api/v1/sessions:
+    delete:
+      description: Revokes every login session of the caller, including the current
+        one. API tokens are not affected.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.RevokedResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Log out everywhere
+      tags:
+      - Authentication
+    get:
+      description: The caller's active login sessions, newest first; "current" marks
+        the one used for this request. Needs a login session (API tokens are refused).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.SessionsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List my sessions
+      tags:
+      - Authentication
+  /api/v1/sessions/{id}:
+    delete:
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.MessageResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke one of my sessions
+      tags:
+      - Authentication
+  /api/v1/tokens:
+    get:
+      description: Requires a human workspace owner session. Returns metadata for
+        tokens created by the current user; plaintext secrets are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.APIToken'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List API tokens
+      tags:
+      - API tokens
+    post:
+      consumes:
+      - application/json
+      description: Requires a human workspace owner session. Tokens are limited to
+        operator or reader and their effective access cannot exceed the owner's current
+        workspace membership role. Plaintext is returned only in this response.
+      parameters:
+      - description: Token name, role, and lifetime
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/tokens.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.IssuedAPIToken'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Create an API token
+      tags:
+      - API tokens
+  /api/v1/tokens/{id}:
+    delete:
+      description: Requires a human workspace owner session. The revoked token is
+        rejected on its next request.
+      parameters:
+      - description: API token ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke an API token
+      tags:
+      - API tokens
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness check
+      tags:
+      - Operations
+  /healthz/live:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness check
+      tags:
+      - Operations
+  /healthz/ready:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Readiness check
+      tags:
+      - Operations
+  /metrics:
+    get:
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Prometheus exposition format
+          schema:
+            type: string
+      summary: Prometheus metrics
+      tags:
+      - Operations
+securityDefinitions:
+  BearerAuth:
+    description: Supply a JWT as `Bearer <token>`. The API also accepts the auth_token
+      cookie.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
