@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-25 — Runner test waits long enough under load (Phase 20; branch audit/ha)
+
+- `TestTimeoutWithoutProcessGroupKillsTheTree` waited 5 s for the supervisor to record its branch. In the full suite, with every package running in parallel, that wasn't enough, and the test failed once. It now waits up to 20 s, like the file's other bounded waits.
+- **Checks run:**
+  - the runner F20-07 tests with `-count=3`: pass;
+  - full `go test ./...` with PostgreSQL required: pass, with no process left behind.
+
 ## 2026-11-25 — CONTRIBUTING: audit rule and HA harness (Phase 20; branch audit/ha)
 
 - The audit rule now matches F20-05: intents and Operation outcomes are audited; system-driven progress is not.
