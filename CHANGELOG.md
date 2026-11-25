@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.2](https://github.com/machinarchy/machinarchy/compare/v0.0.1...v0.0.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ci:** limit Trivy SARIF to HIGH/CRITICAL ([#14](https://github.com/machinarchy/machinarchy/issues/14)) ([989a022](https://github.com/machinarchy/machinarchy/commit/989a0221de34a6eb63738716ae18d05db75700b2))
+
 ## 0.0.1 (2026-11-25)
 
 
