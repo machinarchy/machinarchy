@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-25 — Lease owner IDs are logged at startup (Phase 20; branch audit/ha)
+
+- The Operation worker logs `operation worker started` with `owner_id`, and the Control Manager engine logs `control manager engine started` with `instance_id`. These are the `owner_id` values written to `resource_leases` and to outbox claims, so an operator, or the HA harness, can tell which process holds a lease. Before, they were random IDs that appeared nowhere else.
+- Checks run: `go build ./...`; the HA harness uses both lines to find the lease holder before killing it.
+
 ## 2026-11-25 — Detached-run supervisor always ends and enforces its timeout (Phase 20: F20-07; branch audit/ha)
 
 - **Found during the HA load profile:** the laptop's load average was about 860, with 75 % system CPU. Nineteen detached-run supervisors (`wrapper`) left by earlier test runs had been looping on `ps` and `awk` for up to 4 hours. On a real host, the same supervisor would burn CPU forever.

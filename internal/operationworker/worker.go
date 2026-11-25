@@ -99,6 +99,8 @@ func (w *Worker) Start(ctx context.Context) error {
 	if w == nil || ctx == nil {
 		return errors.New("operation worker and context are required")
 	}
+	// owner_id is what this worker writes as owner_id in resource_leases.
+	w.deps.Logger.Info("operation worker started", "owner_id", w.owner, "workers", w.workers)
 	if w.deps.Recovery != nil {
 		if err := w.recoverRunning(ctx); err != nil {
 			return fmt.Errorf("recover interrupted Operations: %w", err)

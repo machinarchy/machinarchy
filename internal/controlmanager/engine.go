@@ -190,6 +190,8 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// instance_id is this engine's owner_id in resource_leases and the outbox.
+	e.deps.Logger.Info("control manager engine started", "instance_id", e.ownerID)
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
