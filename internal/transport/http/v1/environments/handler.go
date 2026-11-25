@@ -56,7 +56,7 @@ func (h *Handler) Create(c echo.Context) error {
 	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.CreateEnvironment(c.Request().Context(), env); err != nil {
 		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return httperr.Status(c, http.StatusConflict, "an environment with this name already exists")
+			return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an environment with this name already exists")
 		}
 		return httperr.Status(c, http.StatusInternalServerError, "unable to create environment")
 	}
@@ -120,7 +120,7 @@ func (h *Handler) Update(c echo.Context) error {
 			return httperr.Status(c, http.StatusNotFound, "environment not found")
 		}
 		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return httperr.Status(c, http.StatusConflict, "an environment with this name already exists")
+			return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an environment with this name already exists")
 		}
 		return httperr.Status(c, http.StatusInternalServerError, "unable to update environment")
 	}

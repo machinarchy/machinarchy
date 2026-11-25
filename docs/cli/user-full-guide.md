@@ -30,7 +30,7 @@ server (step 2) and one for everything else.
 |---|---|
 | Docker with Compose | the three SSH servers |
 | Go 1.27 and `make` | builds `machinarchy` (CLI) and `machinarchy-monolith` (server) |
-| `curl`, `jq` | two steps use the HTTP API directly |
+| `curl`, `jq` | the readiness check and a few JSON filters |
 | `ssh` | a sanity check of the lab |
 
 Build both binaries and put them on your `PATH`:
@@ -181,47 +181,40 @@ $ curl -s http://127.0.0.1:8080/healthz/ready
 
 ## 3. Log in
 
-The CLI has no `login` command: you log in over HTTP and give the CLI the
-session token. Keep it in a shell variable, never in a file:
+`machinarchy login` asks the server for a session and stores it in the CLI
+configuration (`~/.config/machinarchy/config.yaml`, mode 0600). The first
+login names the server and the context to create:
 
 ```console
-$ TOKEN=$(curl -s http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"lab-admin-password-123\"}" | jq -r .token)
-
-$ echo "${TOKEN:0:12}…"
-eyJhbGciOiJI…
+$ machinarchy login --server http://127.0.0.1:8080 --context lab --username admin
+Password:
+Logged in to http://127.0.0.1:8080 as admin; the session is stored for user "lab" of context "lab".
 ```
 
-A session lasts 24 hours (the default `MACHINARCHY_SESSION_TTL`). For day-to-day use, create an API token instead
-(step 16).
+The password prompt does not echo. In a script, pass it on stdin instead:
+`… login --username admin --password-stdin < password-file`.
+
+A session lasts 24 hours (the default `MACHINARCHY_SESSION_TTL`). When it
+expires, run `machinarchy login --username admin` again: it renews the
+session of the current context. For day-to-day use, create an API token
+instead (step 16).
 
 ---
 
-## 4. Configure the CLI context
+## 4. Contexts
 
 A **context** is a server (*cluster*) plus a credential (*user*), like
-kubectl's:
+kubectl's. The first login created one called `lab` and made it current:
 
 ```console
-$ machinarchy config set-cluster lab --server http://127.0.0.1:8080
-Cluster "lab" configured.
-
-$ printf "%s" "$TOKEN" | machinarchy config set-credentials lab-admin --token-stdin
-Credentials "lab-admin" configured.
-
-$ machinarchy config set-context lab --cluster lab --user lab-admin
-Context "lab" configured.
-
-$ machinarchy config use-context lab
-Switched to context "lab".
-
 $ machinarchy config get-contexts
-CURRENT  NAME  CLUSTER  USER       ENVIRONMENT
-*        lab   lab      lab-admin  
+CURRENT  NAME  CLUSTER  USER  ENVIRONMENT
+*        lab   lab      lab   
 ```
 
-`--token-stdin` keeps the token out of your shell history and the process
-list. The CLI refuses to send a token over plain `http://` to anything but
-loopback; use `https://` for a real server.
+The CLI refuses to send a token over plain `http://` to anything but
+loopback; use `https://` for a real server. Step 16 adds a second context
+with an API token.
 
 ---
 
@@ -253,8 +246,8 @@ lab-key	ccf383fb-e59d-4ba3-8901-41b56200a018	1
 lab-password	ef1fadb4-6891-410d-95e8-45b8e6398aa7	1
 ```
 
-The secret commands print JSON. They need an owner's login session; an API
-token is refused (step 16).
+Without `-o json` the secret commands print a table, never a value. They
+need an owner's login session; an API token is refused (step 16).
 
 ---
 
@@ -264,29 +257,20 @@ An **Access Profile** says how to log in to a host: the user, the
 authentication method, which secret, and how to trust the host's SSH keys.
 Hosts point at a profile, so one secret rotation updates them all.
 
-Profiles are owner-only and are created through the API (the CLI lists them):
+Profiles are owner-only. `--secret` takes the secret's name and uses its
+current version:
 
-| Profile | Login | `hostKeyPolicy` | Effect |
+| Profile | Login | `--host-key-policy` | Effect |
 |---|---|---|---|
 | `lab-key` | private key | `tofu` | Keys seen on first contact are pinned automatically |
 | `lab-password` | password | not set | Needs an owner's approval: Machinarchy never trusts keys on first contact for a password login, because an impostor would receive the password |
 
 ```console
-$ KEY_SECRET=$(machinarchy secret list -o json | jq -r ".[] | select(.name==\"lab-key\") | .id"); PASSWORD_SECRET=$(machinarchy secret list -o json | jq -r ".[] | select(.name==\"lab-password\") | .id")
+$ machinarchy create profile lab-key --connector ssh --auth private-key --username testuser --secret lab-key --host-key-policy tofu --description "key login, keys pinned on first contact"
+Access Profile "lab-key" created: 933390bb-6c27-406e-bd6d-e7633309ae77.
 
-$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-key\",\"description\":\"key login, keys pinned on first contact\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"private-key\",\"username\":\"testuser\",\"enabled\":true,\"hostKeyPolicy\":\"tofu\",\"credential\":{\"id\":\"$KEY_SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
-{
-  "id": "933390bb-6c27-406e-bd6d-e7633309ae77",
-  "name": "lab-key",
-  "currentRevision": 1
-}
-
-$ curl -s -X POST http://127.0.0.1:8080/api/v1/managed/access-profiles -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-password\",\"description\":\"password login; keys need approval\",\"spec\":{\"connectorKind\":\"ssh\",\"authenticationMethod\":\"password\",\"username\":\"testuser\",\"enabled\":true,\"credential\":{\"id\":\"$PASSWORD_SECRET\",\"version\":1}}}" | jq "{id, name, currentRevision}"
-{
-  "id": "3bc2e785-f244-4a20-91a6-f07fcee56293",
-  "name": "lab-password",
-  "currentRevision": 1
-}
+$ machinarchy create profile lab-password --connector ssh --username testuser --secret lab-password --description "password login; keys need approval"
+Access Profile "lab-password" created: 3bc2e785-f244-4a20-91a6-f07fcee56293.
 
 $ machinarchy get profiles
 NAME          ID                                    REVISION  DESCRIPTION
@@ -294,8 +278,8 @@ lab-password  3bc2e785-f244-4a20-91a6-f07fcee56293  1         password login; ke
 lab-key       933390bb-6c27-406e-bd6d-e7633309ae77  1         key login, keys pinned on first contact
 ```
 
-Other profile options (`hostKeyPolicy: ca` with host certificates,
-`execution.supervisor`, `execution.maxOutputFileBytes`) are described in
+Other profile options (`--host-key-policy ca` with host certificates,
+`--supervisor`, and `execution.maxOutputFileBytes` through the API) are described in
 [operations](../operations.md#ssh-host-keys) and
 [detached execution](../operations.md#detached-execution).
 
@@ -742,20 +726,17 @@ Secrets, Access Profiles, host-key approval and runtime configuration stay
 with the owner's own login: API tokens are refused for them.
 
 ```console
-$ curl -s -X POST http://127.0.0.1:8080/api/v1/tokens -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"name\":\"lab-cli\",\"role\":\"operator\",\"expiresInHours\":720}" | jq "{name, role, expiresAt, token: (.token[0:12] + \"…\")}"
-{
-  "name": "lab-cli",
-  "role": "operator",
-  "expiresAt": "2026-12-19T13:22:48.659863Z",
-  "token": "mch_pat_seLK…"
-}
+$ machinarchy create token lab-cli --role operator --expires-hours 720
+API token "lab-cli" (id 1, role operator) created. It is shown only now:
+mch_pat_seLK…
 ```
 
-The token is shown **once**. Capture it straight into a variable (`OPTOKEN=$(curl
-… | jq -r .token)`) and store it as a second CLI user and context:
+The token is shown **once**. To store it without it ever reaching your
+screen, create it with `-q` (prints the token alone) and pipe it into a
+second CLI user, then add a context for that user:
 
 ```console
-$ printf "%s" "$OPTOKEN" | machinarchy config set-credentials lab-operator --token-stdin
+$ machinarchy create token lab-cli-2 --role operator --expires-hours 720 -q | machinarchy config set-credentials lab-operator --token-stdin
 Credentials "lab-operator" configured.
 
 $ machinarchy config set-context lab-ops --cluster lab --user lab-operator
@@ -766,7 +747,7 @@ Switched to context "lab-ops".
 
 $ machinarchy config get-contexts
 CURRENT  NAME     CLUSTER  USER          ENVIRONMENT
-         lab      lab      lab-admin     
+         lab      lab      lab           
 *        lab-ops  lab      lab-operator  
 
 $ machinarchy secret list
@@ -780,8 +761,10 @@ lab-password
 ```
 
 `--context NAME` runs one command with another context without switching: the
-owner context `lab` lists the two secrets from step 5 (without `jq` you get the
-full JSON for each, with no secret values).
+owner context `lab` lists the two secrets from step 5.
+
+`machinarchy get tokens` lists the tokens (never their values) and
+`machinarchy delete token ID` revokes one.
 
 ---
 
@@ -853,6 +836,7 @@ cancel it first.
 | Task | Command |
 |---|---|
 | Lab SSH servers | `make ssh-servers-up` / `ssh-servers-ps` / `ssh-servers-down` |
+| Log in / renew the session | `machinarchy login [--server URL --context NAME] --username USER` |
 | Switch context | `machinarchy config use-context NAME` |
 | List hosts / one host in full | `machinarchy get hosts [-l SELECTOR]` / `get hosts NAME -o yaml` |
 | Register a host | `machinarchy create host NAME --endpoint HOST:PORT --profile PROFILE --label K=V` |
@@ -863,6 +847,7 @@ cancel it first.
 | Status / history | `machinarchy get operation ID` / `get operations [--state S]` |
 | Cancel | `machinarchy cancel operation ID` |
 | Labels | `machinarchy label host NAME K=V K2-` |
+| Profiles / API tokens | `machinarchy create profile …` / `create token NAME --role operator` |
 
 More: [command reference](commands.md), [operations](../operations.md),
 [runbook](../runbook.md), [API reference](../api/README.md),

@@ -46,7 +46,9 @@ const (
 	// file: a confirmation bypass must be an explicit per-invocation choice.
 	flagYes = "yes"
 
-	setupHint = "Set up an API endpoint, token, and context first:\n" +
+	setupHint = "Log in to create a context:\n" +
+		"  machinarchy login --server http://localhost:8080 --context local --username admin\n" +
+		"or, with an API token, set one up by hand:\n" +
 		"  machinarchy config set-cluster local --server http://localhost:8080\n" +
 		"  printf '%s' \"$MACHINARCHY_USER_TOKEN\" | machinarchy config set-credentials local --token-stdin\n" +
 		"  machinarchy config set-context local --cluster local --user local\n" +
@@ -347,6 +349,72 @@ func (s *Store) Resolve() (Target, error) {
 		Environment:    environment,
 		RequestTimeout: timeout,
 	}, nil
+}
+
+// LoginTarget is where `machinarchy login` signs in and which user entry
+// receives the session token.
+type LoginTarget struct {
+	ContextName    string
+	Server         string
+	User           string
+	RequestTimeout time.Duration
+	// Create: the context does not exist yet; login creates a cluster, user
+	// and context named ContextName for Server.
+	Create bool
+}
+
+// ResolveLogin resolves the active context's server and user without
+// requiring a stored token, for `machinarchy login`.
+func (s *Store) ResolveLogin() (LoginTarget, error) {
+	if s == nil || s.v == nil {
+		return LoginTarget{}, errors.New("CLI config is not loaded")
+	}
+	contextName := s.ContextName()
+	override := strings.TrimSpace(s.v.GetString("server"))
+	selected, ok := s.doc.Contexts[contextName]
+	if !ok {
+		// A first login with --server creates the context.
+		if override == "" {
+			return LoginTarget{}, clierr.Wrap(clierr.ExitUsage, fmt.Errorf("context %q does not exist", contextName),
+				"For a first login, name the server and the context to create: machinarchy login --server URL --context NAME --username USER")
+		}
+		if contextName == "" {
+			contextName = "default"
+		}
+		if err := ValidateServer(override); err != nil {
+			return LoginTarget{}, err
+		}
+		if err := checkTransport(override, false); err != nil {
+			return LoginTarget{}, err
+		}
+		timeout, err := s.RequestTimeout()
+		if err != nil {
+			return LoginTarget{}, err
+		}
+		return LoginTarget{ContextName: contextName, Server: strings.TrimRight(override, "/"), User: contextName,
+			RequestTimeout: timeout, Create: true}, nil
+	}
+	cluster, ok := s.doc.Clusters[selected.Cluster]
+	if !ok {
+		return LoginTarget{}, clierr.Usagef("context %q references unknown cluster %q", contextName, selected.Cluster)
+	}
+	server := strings.TrimSpace(s.v.GetString("server"))
+	insecureAllowed := false
+	if server == "" {
+		server, insecureAllowed = cluster.Server, cluster.InsecureHTTP
+	}
+	if err := ValidateServer(server); err != nil {
+		return LoginTarget{}, err
+	}
+	// A password is sent here: the same transport rule as for tokens.
+	if err := checkTransport(server, insecureAllowed); err != nil {
+		return LoginTarget{}, err
+	}
+	timeout, err := s.RequestTimeout()
+	if err != nil {
+		return LoginTarget{}, err
+	}
+	return LoginTarget{ContextName: contextName, Server: strings.TrimRight(server, "/"), User: selected.User, RequestTimeout: timeout}, nil
 }
 
 // ContextName returns the active context name, including any --context override.

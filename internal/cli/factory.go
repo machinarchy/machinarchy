@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+	"golang.org/x/term"
 
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -260,4 +261,26 @@ func (f *Factory) NewManagementClient(ctx context.Context) (api.ManagementClient
 		return nil, errors.New("API client does not support configuration and Secret Store management")
 	}
 	return managementClient, nil
+}
+
+// ErrNoTerminal: ReadSecret has no interactive terminal to prompt on.
+var ErrNoTerminal = errors.New("no terminal to prompt on")
+
+// ReadSecret prompts on the terminal and reads a line without echo. It
+// returns ErrNoTerminal when input is not an interactive terminal or
+// --no-input is set; commands then offer a --*-stdin flag instead.
+func (f *Factory) ReadSecret(prompt string) (string, error) {
+	file, ok := f.Streams.In.(*os.File)
+	if !ok || !f.interactive() || f.config.NoInput() {
+		return "", ErrNoTerminal
+	}
+	if _, err := fmt.Fprint(f.Streams.ErrOut, prompt); err != nil {
+		return "", err
+	}
+	value, err := term.ReadPassword(int(file.Fd())) // #nosec G115 -- a file descriptor fits in int
+	_, _ = fmt.Fprintln(f.Streams.ErrOut)
+	if err != nil {
+		return "", fmt.Errorf("read from the terminal: %w", err)
+	}
+	return string(value), nil
 }

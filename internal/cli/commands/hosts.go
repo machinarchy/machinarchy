@@ -15,14 +15,16 @@ import (
 // NewCreateCommand registers resource creation commands.
 func NewCreateCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{Use: "create", Short: "Create a resource", Args: cobra.NoArgs}
-	command.AddCommand(newCreateHostCommand(factory))
+	command.AddCommand(newCreateHostCommand(factory), newCreateProfileCommand(factory), newCreateTokenCommand(factory),
+		newCreateAgentTokenCommand(factory))
 	return command
 }
 
 // NewDeleteCommand registers resource deletion commands.
 func NewDeleteCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{Use: "delete", Short: "Delete a resource", Args: cobra.NoArgs}
-	command.AddCommand(newDeleteHostCommand(factory))
+	command.AddCommand(newDeleteHostCommand(factory), newDeleteProfileCommand(factory), newDeleteTokenCommand(factory),
+		newDeleteAgentTokenCommand(factory))
 	return command
 }
 

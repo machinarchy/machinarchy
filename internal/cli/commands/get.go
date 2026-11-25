@@ -25,7 +25,8 @@ func NewGetCommand(factory *cli.Factory) *cobra.Command {
 		Short: "Display one or more resources",
 		Args:  cobra.NoArgs,
 	}
-	command.AddCommand(newGetHostsCommand(factory), newGetProfilesCommand(factory), newGetOperationsCommand(factory))
+	command.AddCommand(newGetHostsCommand(factory), newGetProfilesCommand(factory), newGetOperationsCommand(factory),
+		newGetTokensCommand(factory), newGetAgentTokensCommand(factory))
 	return command
 }
 

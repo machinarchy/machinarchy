@@ -26,6 +26,7 @@ func DefaultGroups() []cli.CommandGroup {
 			ID:    "configuration",
 			Title: "Configuration Commands",
 			Commands: []cli.CommandBuilder{
+				NewLoginCommand,
 				NewConfigCommand,
 				NewRuntimeConfigCommand,
 				NewSecretCommand,

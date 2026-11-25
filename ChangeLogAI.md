@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-25 — CLI login, Access Profile and token commands (Phase 21: G-13C-03, part 2; branch audit/final)
+
+- **`machinarchy login`:** prompts for the password without echo (`--password-stdin` for scripts; without a terminal it refuses to prompt) and stores the session token for the current context's user. A first login with `--server URL --context NAME` creates the cluster, user and context and makes it current when none is. The password is never stored or printed. The "no context" hint now starts with `login`.
+- **Owner commands that needed `curl` before:**
+  - `create profile NAME --connector ssh|agent` (`--username`, `--secret` by name or ID at its current version, `--auth`, `--host-key-policy`, `--supervisor`, `--description`) and `delete profile`;
+  - `create token NAME --role reader|operator [--expires-hours N]`, `get tokens`, `delete token ID`;
+  - `create agent-token --host NAME [--hostname H] [--ttl D]`, `get agent-tokens`, `delete agent-token ID`.
+  - A new token is printed once; `-q` prints it alone so it can be piped into `config set-credentials --token-stdin`. The `get` lists never show token values.
+- **Server:** a duplicate API token or environment name now returns code `already_exists` (it was `conflict`), so the CLI hint says to pick another name.
+- **Docs:** the full user guide's steps 3, 4, 6 and 16 use `login`, `create profile` and `create token` instead of `curl`; README quick start and `docs/cli/commands.md` updated.
+- **Checks run:**
+  - `go test ./internal/cli/... ./internal/transport/...`: pass, with new tests for login (stored token, wrong password, no terminal, first login creating the context) and for every new command;
+  - the guide's new commands, run against a scratch monolith (SQLite): login on an empty config, two profiles, token creation and the `-q` pipe, `get tokens`, re-login;
+  - `golangci-lint run ./...`: 0 issues.
+
 ## 2026-11-25 — CLI rough edges (Phase 21: G-13C-03, part 1; branch audit/final)
 
 - **Usage errors:** the hint now points at the help of the command that failed (`Run 'machinarchy logs operation --help' for its usage.`), not the list of all commands. Root-level errors keep the old hint.

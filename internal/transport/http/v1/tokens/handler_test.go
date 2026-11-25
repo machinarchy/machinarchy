@@ -95,5 +95,8 @@ func TestTokenEndpoints(t *testing.T) {
 		if got.Code != tc.want || strings.Contains(got.Body.String(), "db down") {
 			t.Errorf("%s: %d %s, want %d", name, got.Code, got.Body, tc.want)
 		}
+		if name == "duplicate" && !strings.Contains(got.Body.String(), `"code":"already_exists"`) {
+			t.Errorf("duplicate: body %s, want code already_exists", got.Body)
+		}
 	}
 }

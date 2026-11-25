@@ -50,6 +50,35 @@ For example, pipe JSON through `jq`:
 go run ./cmd/machinarchy get hosts -o json | jq '.[].metadata.name'
 ```
 
+## Logging in
+
+```sh
+go run ./cmd/machinarchy login --server https://machinarchy.example --context prod --username admin
+go run ./cmd/machinarchy login --username admin            # renew the current context's session
+go run ./cmd/machinarchy login --username admin --password-stdin < password-file
+```
+
+`login` prompts for the password without echo (or reads it from stdin with `--password-stdin`; without a terminal it refuses to prompt), signs in, and stores the session token for the current context's user. The first login with `--server` and `--context` creates the cluster, user and context, and makes the context current when none is. A session lasts the server's `MACHINARCHY_SESSION_TTL` (24 hours by default).
+
+## Access Profiles and tokens (owner)
+
+```sh
+go run ./cmd/machinarchy create profile deploy --connector ssh --username deploy --secret deploy-key --auth private-key --host-key-policy approve
+go run ./cmd/machinarchy create profile agents --connector agent
+go run ./cmd/machinarchy delete profile deploy
+
+go run ./cmd/machinarchy create token ci --role operator --expires-hours 720
+go run ./cmd/machinarchy create token ci-2 --role reader -q | go run ./cmd/machinarchy config set-credentials ci --token-stdin
+go run ./cmd/machinarchy get tokens
+go run ./cmd/machinarchy delete token 7
+
+go run ./cmd/machinarchy create agent-token --host web-02 --hostname web-02.internal --ttl 30m
+go run ./cmd/machinarchy get agent-tokens
+go run ./cmd/machinarchy delete agent-token 9b1c…
+```
+
+`create profile --secret` takes a secret's name or ID and binds its current version. A new token or enrolment token is printed once: `-q` prints it alone for a pipe, `-o json` prints the whole response. `get tokens` and `get agent-tokens` never show token values. These commands need an owner's login session; API tokens are refused.
+
 ## Managing hosts
 
 ```sh
@@ -108,7 +137,7 @@ go run ./cmd/machinarchy config set-context local --cluster local --user local -
 
 ## Command groups
 
-`get`, `config`, `runtime-config`, and `secret` are command groups. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
+`get`, `create`, `delete`, `config`, `runtime-config`, and `secret` are command groups. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
 
 ## Exit codes
 

@@ -321,9 +321,9 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 	root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
 
 	want := map[string][]string{
-		"get":            {"hosts", "operations", "profiles"},
-		"create":         {"host"},
-		"delete":         {"host"},
+		"get":            {"agent-tokens", "hosts", "operations", "profiles", "tokens"},
+		"create":         {"agent-token", "host", "profile", "token"},
+		"delete":         {"agent-token", "host", "profile", "token"},
 		"label":          {"host"},
 		"trust":          {"host"},
 		"run":            nil,
@@ -333,6 +333,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"runtime-config": {"get", "history", "publish", "rollback", "status", "validate"},
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
 		"version":        nil,
+		"login":          nil,
 	}
 
 	var top []string

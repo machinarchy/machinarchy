@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/buildinfo"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -410,4 +411,43 @@ func (c *HTTPClient) RewrapSecrets(ctx context.Context, oldKeyID string, batchSi
 }
 func (c *HTTPClient) DeleteSecret(ctx context.Context, id string) error {
 	return c.request(ctx, http.MethodDelete, "/api/v1/secrets/"+url.PathEscape(id), nil, nil)
+}
+
+// Login exchanges a username and password for a session token
+// (POST /api/auth/login). The password is sent only in the request body.
+func Login(ctx context.Context, server string, timeout time.Duration, username, password string) (string, error) {
+	if timeout <= 0 {
+		timeout = config.DefaultRequestTimeout
+	}
+	body, err := json.Marshal(map[string]string{"username": username, "password": password})
+	if err != nil {
+		return "", err
+	}
+	path := "/api/auth/login"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return "", clierr.Usage(fmt.Errorf("build login request: %w", err))
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", defaultUserAgent())
+	response, err := (&http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
+	if err != nil {
+		return "", clierr.Wrap(clierr.ExitUnavailable, fmt.Errorf("sign in: %w", err), "Check the server URL and that the server is running.")
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("read login response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", newError(response, http.MethodPost, path, data)
+	}
+	var reply struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil || reply.Token == "" {
+		return "", errors.New("the login response carries no token")
+	}
+	return reply.Token, nil
 }

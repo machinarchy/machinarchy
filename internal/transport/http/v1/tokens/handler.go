@@ -120,7 +120,7 @@ func tokenError(c echo.Context, err error) error {
 	case errors.Is(err, domain.ErrPermissionDenied):
 		return httperr.Status(c, http.StatusForbidden, "permission denied")
 	case errors.Is(err, domain.ErrAPITokenAlreadyExists):
-		return httperr.Status(c, http.StatusConflict, "an API token with that name already exists")
+		return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an API token with that name already exists")
 	case errors.Is(err, domain.ErrAPITokenNotFound):
 		return httperr.Status(c, http.StatusNotFound, "API token not found")
 	default:

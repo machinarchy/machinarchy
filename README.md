@@ -69,12 +69,7 @@ Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` for the first start to create the
 owner account (`admin`). Then, with the CLI:
 
 ```sh
-TOKEN=$(curl -s localhost:8080/api/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"..."}' | jq -r .token)
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local
-go run ./cmd/machinarchy config use-context local
+go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
 go run ./cmd/machinarchy get hosts
 ```
 
