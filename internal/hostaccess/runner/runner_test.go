@@ -508,12 +508,14 @@ func TestTimeoutWithoutProcessGroupKillsTheTree(t *testing.T) {
 		dir := h.dir(r)
 		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", dir).Run() })
 		// The supervisor records its branch just after the launch reply; on
-		// a loaded machine (the full suite in parallel) that can take seconds.
+		// a loaded machine (the full suite in parallel, dozens of processes
+		// per test) that took more than 20 s, so the bound is generous: it
+		// only fails when the supervisor never starts.
 		for waited := 0; ; waited++ {
 			if _, err := os.Stat(filepath.Join(dir, "child")); err == nil {
 				break
 			}
-			if _, err := os.Stat(filepath.Join(dir, "pgid")); err == nil || waited == 200 {
+			if _, err := os.Stat(filepath.Join(dir, "pgid")); err == nil || waited == 900 {
 				t.Fatalf("the supervisor did not take the tree-walk branch (pgid file: %v)", err == nil)
 			}
 			time.Sleep(100 * time.Millisecond) // poll interval of a bounded wait
