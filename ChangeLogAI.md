@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-25 — Release image scan failed on UNKNOWN advisories (Trivy SARIF severity)
+
+- **First release run (v0.0.1, CI run 45686902170):** "Scan the exact published digest with Trivy" failed for the `api` image, which cancelled the other image jobs, so no image was signed. The step sets `severity: CRITICAL,HIGH` with `exit-code: "1"`, but in SARIF mode trivy-action ignores `severity` unless `limit-severities-for-sarif` is set ("Building SARIF report with all severities"), so any finding failed the job.
+- **Findings:** a local Trivy 0.70.0 scan of the `api` image built from the release commit found 0 HIGH/CRITICAL (Go modules, Go binary and distroless packages clean) and 4 UNKNOWN Debian advisories in the distroless base: `tzdata` (DLA-4792-1, DLA-4854-1, DLA-4867-1) and `ca-certificates` (DLA-4845-1). The published GHCR image is private and was not scanned directly.
+- **Fix:** `template-docker.yml` sets `limit-severities-for-sarif: true`, so the SARIF report and the exit code cover only HIGH/CRITICAL, as intended. A newer distroless digest will clear the UNKNOWN advisories.
+- **Checks run:** the local Trivy scans above only; the workflow was not run. Re-running the failed run would use the old workflow; the images are built by the next release.
+
 ## 2026-11-25 — A capability test that failed on the CI runner (branch fix/capability-test-timing)
 
 - **First CI run on `main`:** `TestCapabilityTargetWithoutResultBecomesLost` failed ("timed out waiting for 1 published requests") in `make coverage` (`-race ./...` on a GitHub runner). The test gave each agent command a 200 ms lifetime. The capability relay publishes a command only while it is valid (`now < ExpiresAt`), so when the first relay pass came later than 200 ms the command expired unpublished and the target failed as `agent_command_undelivered`, which the test does not expect. The code is right; the lifetime was too short for a slow runner.
