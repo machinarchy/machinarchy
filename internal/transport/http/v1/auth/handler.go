@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/transport/http/httperr"
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -137,7 +138,7 @@ func (h *Handler) SignUp(c echo.Context) error {
 		if errors.Is(err, domain.ErrInvalidInput) {
 			return httperr.Status(c, http.StatusBadRequest, "Invalid account details")
 		}
-		return httperr.Status(c, http.StatusInternalServerError, "Unable to create account")
+		return httperr.FromError(c, err)
 	}
 
 	setAuthCookie(c, res.Token, h.secureCookie)
@@ -180,7 +181,7 @@ func (h *Handler) Login(c echo.Context) error {
 		if throttled(c, err) {
 			return httperr.Status(c, http.StatusTooManyRequests, err.Error())
 		}
-		return httperr.Status(c, http.StatusInternalServerError, "Unable to authenticate")
+		return httperr.FromError(c, err)
 	}
 
 	setAuthCookie(c, res.Token, h.secureCookie)
@@ -208,7 +209,7 @@ func (h *Handler) GetMe(c echo.Context) error {
 		if errors.Is(err, domain.ErrUserNotFound) {
 			return httperr.Status(c, http.StatusUnauthorized, "Session user is no longer active")
 		}
-		return httperr.Status(c, http.StatusInternalServerError, "Unable to verify session")
+		return httperr.FromError(c, err)
 	}
 
 	return c.JSON(http.StatusOK, userResp)
@@ -226,7 +227,7 @@ func (h *Handler) GetMe(c echo.Context) error {
 func (h *Handler) Logout(c echo.Context) error {
 	clearAuthCookie(c, h.secureCookie)
 	if err := h.authService.Logout(c.Request().Context(), sessionToken(c)); err != nil {
-		return httperr.Status(c, http.StatusInternalServerError, "Unable to end the session")
+		return httperr.FromError(c, err)
 	}
 	return c.JSON(http.StatusOK, MessageResponse{Message: "Operation completed successfully"})
 }
@@ -279,7 +280,7 @@ type PasswordChangeRequest struct {
 func (h *Handler) ListSessions(c echo.Context) error {
 	sessions, err := h.authService.ListSessions(c.Request().Context(), principalOf(c))
 	if err != nil {
-		return sessionError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, SessionsResponse{Items: sessions})
 }
@@ -299,7 +300,7 @@ func (h *Handler) RevokeSession(c echo.Context) error {
 	principal := principalOf(c)
 	id := c.Param("id")
 	if err := h.authService.RevokeSession(c.Request().Context(), principal, id); err != nil {
-		return sessionError(c, err)
+		return respondError(c, err)
 	}
 	if id == principal.SessionID {
 		clearAuthCookie(c, h.secureCookie)
@@ -320,7 +321,7 @@ func (h *Handler) RevokeSession(c echo.Context) error {
 func (h *Handler) RevokeAllSessions(c echo.Context) error {
 	revoked, err := h.authService.RevokeAllSessions(c.Request().Context(), principalOf(c))
 	if err != nil {
-		return sessionError(c, err)
+		return respondError(c, err)
 	}
 	clearAuthCookie(c, h.secureCookie)
 	return c.JSON(http.StatusOK, RevokedResponse{Revoked: revoked})
@@ -352,7 +353,7 @@ func (h *Handler) ChangePassword(c echo.Context) error {
 		return httperr.Status(c, http.StatusForbidden, "the current password is incorrect")
 	}
 	if err != nil {
-		return sessionError(c, err)
+		return respondError(c, err)
 	}
 	clearAuthCookie(c, h.secureCookie)
 	return c.JSON(http.StatusOK, MessageResponse{Message: "Password changed; every session was ended, log in again"})
@@ -369,27 +370,16 @@ func throttled(c echo.Context, err error) bool {
 }
 
 func principalOf(c echo.Context) domain.Principal {
-	principal, _ := c.Get("principal").(domain.Principal)
+	principal, _ := middleware.Principal(c)
 	return principal
 }
 
-func sessionError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, domain.ErrPermissionDenied):
-		return httperr.Status(c, http.StatusForbidden, "a login session is required; API tokens cannot manage sessions or passwords")
-	case errors.Is(err, domain.ErrSessionNotFound):
-		return httperr.Status(c, http.StatusNotFound, "session not found")
-	case errors.Is(err, domain.ErrInvalidInput):
-		return httperr.Status(c, http.StatusBadRequest, err.Error())
-	default:
-		return httperr.Status(c, http.StatusInternalServerError, "unable to manage sessions")
-	}
+var errorMappings = []httperr.Mapping{
+	httperr.Map(domain.ErrPermissionDenied, http.StatusForbidden, "a login session is required; API tokens cannot manage sessions or passwords"),
+	httperr.Map(domain.ErrSessionNotFound, http.StatusNotFound, "session not found"),
 }
 
-// RegisterSessionRoutes adds the authenticated self-service routes.
-func RegisterSessionRoutes(g *echo.Group, h *Handler) {
-	g.GET("/sessions", h.ListSessions)
-	g.DELETE("/sessions", h.RevokeAllSessions)
-	g.DELETE("/sessions/:id", h.RevokeSession)
-	g.POST("/me/password", h.ChangePassword)
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

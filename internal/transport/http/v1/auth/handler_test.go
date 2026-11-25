@@ -64,8 +64,7 @@ func (f *fakeAuth) ChangePassword(context.Context, domain.Principal, string, str
 
 func serve(h *Handler, method, path, body string, username string) *httptest.ResponseRecorder {
 	e := echo.New()
-	group := e.Group("/api/auth")
-	RegisterRoutes(group, h)
+	RegisterRoutes(e.Group("/api"), h)
 	e.GET("/api/v1/me", h.GetMe, func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if username != "" {
@@ -209,7 +208,7 @@ func TestLogoutRevokesTheSessionOfTheTokenSent(t *testing.T) {
 	auth := &fakeAuth{}
 	h := NewHandler(auth, false, false)
 	e := echo.New()
-	RegisterRoutes(e.Group("/api/auth"), h)
+	RegisterRoutes(e.Group("/api"), h)
 	for _, tc := range []struct {
 		name, bearer, cookie, want string
 	}{

@@ -42,7 +42,7 @@ var owner = domain.Principal{UserID: 4, WorkspaceID: 1, Role: domain.RoleOwner}
 
 func call(service *fakeTokens, principal *domain.Principal, method, path, body string) *httptest.ResponseRecorder {
 	e := echo.New()
-	group := e.Group("/api/v1/tokens", func(next echo.HandlerFunc) echo.HandlerFunc {
+	group := e.Group("/api/v1", func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if principal != nil {
 				c.Set("principal", *principal)

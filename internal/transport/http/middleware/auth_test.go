@@ -145,3 +145,21 @@ func TestAPITokenCannotUseHumanOnlyTokenManagement(t *testing.T) {
 		t.Fatalf("owner-shaped API token status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
+
+// Without a principal the request is unauthenticated (401), not forbidden:
+// every permission middleware answers the same way.
+func TestPermissionMiddlewareWithoutPrincipalIs401(t *testing.T) {
+	for name, mw := range map[string]echo.MiddlewareFunc{
+		"permission": middleware.RequirePermission(domain.PermissionInventoryRead),
+		"human":      middleware.RequireHuman(),
+		"owner":      middleware.RequireOwner(),
+	} {
+		e := echo.New()
+		e.GET("/x", func(c echo.Context) error { return c.NoContent(http.StatusOK) }, mw)
+		recorder := httptest.NewRecorder()
+		e.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/x", nil))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a principal = %d, want 401", name, recorder.Code)
+		}
+	}
+}

@@ -31,7 +31,7 @@ func NewHandler(s *runtimeconfig.Service) *Handler { return &Handler{service: s}
 func (h *Handler) Current(c echo.Context) error {
 	r, err := h.service.Current(c.Request().Context())
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"revision": r, "classifications": runtimeconfig.Classifications()})
 }
@@ -67,7 +67,7 @@ func (h *Handler) List(c echo.Context) error {
 	}
 	rows, err := h.service.List(c.Request().Context(), limit, before)
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, rows)
 }
@@ -91,7 +91,7 @@ func (h *Handler) Get(c echo.Context) error {
 	}
 	r, err := h.service.Get(c.Request().Context(), v)
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, r)
 }
@@ -154,7 +154,7 @@ func (h *Handler) Publish(c echo.Context) error {
 		return c.JSON(http.StatusAccepted, map[string]any{"revision": r, "applicationPending": true})
 	}
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, r)
 }
@@ -190,7 +190,7 @@ func (h *Handler) Rollback(c echo.Context) error {
 		return c.JSON(http.StatusAccepted, map[string]any{"revision": r, "applicationPending": true})
 	}
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, r)
 }
@@ -207,7 +207,7 @@ func (h *Handler) Rollback(c echo.Context) error {
 func (h *Handler) Status(c echo.Context) error {
 	rows, err := h.service.Status(c.Request().Context())
 	if err != nil {
-		return configError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, rows)
 }
@@ -223,17 +223,16 @@ func decode(c echo.Context, dst any) error {
 	}
 	return nil
 }
-func configError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, runtimeconfig.ErrConflict):
-		return httperr.Status(c, 409, "configuration revision conflict")
-	case errors.Is(err, runtimeconfig.ErrInvalid), errors.Is(err, runtimeconfig.ErrRestartRequired), errors.Is(err, domain.ErrInvalidInput):
-		return httperr.Status(c, 422, err.Error())
-	case errors.Is(err, domain.ErrPermissionDenied):
-		return httperr.Status(c, 403, "permission denied")
-	case errors.Is(err, runtimeconfig.ErrNotFound):
-		return httperr.Status(c, 404, "configuration revision not found")
-	default:
-		return httperr.Status(c, 500, "configuration operation failed")
-	}
+
+var errorMappings = []httperr.Mapping{
+	httperr.Map(runtimeconfig.ErrConflict, http.StatusConflict, "configuration revision conflict"),
+	httperr.Map(runtimeconfig.ErrInvalid, http.StatusUnprocessableEntity, ""),
+	httperr.Map(runtimeconfig.ErrRestartRequired, http.StatusUnprocessableEntity, ""),
+	httperr.Map(domain.ErrInvalidInput, http.StatusUnprocessableEntity, ""),
+	httperr.Map(runtimeconfig.ErrNotFound, http.StatusNotFound, "configuration revision not found"),
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

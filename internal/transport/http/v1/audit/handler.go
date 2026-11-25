@@ -2,7 +2,6 @@
 package audit
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -41,7 +40,7 @@ func NewHandler(service domain.AuditService) *Handler {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	filter := domain.AuditFilter{Action: c.QueryParam("action")}
 	if raw := c.QueryParam("limit"); raw != "" {
@@ -60,7 +59,7 @@ func (h *Handler) List(c echo.Context) error {
 	}
 	events, err := h.service.List(c.Request().Context(), principal, filter)
 	if err != nil {
-		return auditError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, events)
 }
@@ -79,22 +78,20 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Verify(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	result, err := h.service.Verify(c.Request().Context(), principal)
 	if err != nil {
-		return auditError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, result)
 }
 
-func auditError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, domain.ErrInvalidInput):
-		return httperr.Status(c, http.StatusBadRequest, err.Error())
-	case errors.Is(err, domain.ErrPermissionDenied):
-		return httperr.Status(c, http.StatusForbidden, "permission denied")
-	default:
-		return httperr.Status(c, http.StatusInternalServerError, "unable to read the audit trail")
-	}
+// errorMappings turns the audit service's errors into responses; everything
+// else is the shared set in httperr.
+var errorMappings = []httperr.Mapping{}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

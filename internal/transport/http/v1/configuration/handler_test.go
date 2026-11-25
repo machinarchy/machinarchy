@@ -42,7 +42,7 @@ func newRouter(t *testing.T) (func(principal *domain.Principal, method, path, bo
 	}
 	return func(principal *domain.Principal, method, path, body string) *httptest.ResponseRecorder {
 		e := echo.New()
-		group := e.Group("/api/v1/runtime-config", func(next echo.HandlerFunc) echo.HandlerFunc {
+		group := e.Group("/api/v1", func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c echo.Context) error {
 				if principal != nil {
 					c.Set("principal", *principal)

@@ -2,7 +2,6 @@
 package members
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,11 +41,11 @@ func NewHandler(service domain.MemberService) *Handler {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	members, err := h.service.List(c.Request().Context(), principal)
 	if err != nil {
-		return memberError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, members)
 }
@@ -70,7 +69,7 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) SetRole(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -83,22 +82,18 @@ func (h *Handler) SetRole(c echo.Context) error {
 	member, err := h.service.SetRole(c.Request().Context(), principal, id,
 		domain.Role(strings.ToLower(strings.TrimSpace(request.Role))))
 	if err != nil {
-		return memberError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, member)
 }
 
-func memberError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, domain.ErrInvalidInput):
-		return httperr.Status(c, http.StatusBadRequest, "role must be owner, operator, or reader")
-	case errors.Is(err, domain.ErrPermissionDenied):
-		return httperr.Status(c, http.StatusForbidden, "permission denied")
-	case errors.Is(err, domain.ErrUserNotFound):
-		return httperr.Status(c, http.StatusNotFound, "member not found")
-	case errors.Is(err, domain.ErrLastOwner):
-		return httperr.Status(c, http.StatusConflict, "a workspace must keep at least one owner")
-	default:
-		return httperr.Status(c, http.StatusInternalServerError, "unable to process member request")
-	}
+var errorMappings = []httperr.Mapping{
+	httperr.Map(domain.ErrInvalidInput, http.StatusBadRequest, "role must be owner, operator, or reader"),
+	httperr.Map(domain.ErrUserNotFound, http.StatusNotFound, "member not found"),
+	httperr.Map(domain.ErrLastOwner, http.StatusConflict, "a workspace must keep at least one owner"),
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

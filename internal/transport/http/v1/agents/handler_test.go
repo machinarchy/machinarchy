@@ -62,8 +62,7 @@ func router(store *fakeStore) *echo.Echo {
 			return next(c)
 		}
 	}
-	group := e.Group("/api/v1/agents", inject)
-	RegisterRoutes(group, group, NewHandler(store, nil, nil))
+	RegisterRoutes(e.Group("/api/v1", inject), NewHandler(store, nil, nil))
 	return e
 }
 
@@ -185,8 +184,12 @@ func TestControllerKeyListsTheNextKeyDuringARotation(t *testing.T) {
 		{&fakeKeys{pins: []string{"current", "next"}}, http.StatusOK, `{"publicKey":"current","nextPublicKey":"next","publicKeys":["current","next"]}`},
 	} {
 		e := echo.New()
-		group := e.Group("/api/v1/agents")
-		RegisterRoutes(group, group, NewHandler(&fakeStore{}, nil, tc.keys))
+		RegisterRoutes(e.Group("/api/v1", func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				c.Set("principal", domain.Principal{UserID: 42, WorkspaceID: 1, Role: domain.RoleOwner})
+				return next(c)
+			}
+		}), NewHandler(&fakeStore{}, nil, tc.keys))
 		recorder := call(e, http.MethodGet, "/api/v1/agents/controller-key", "")
 		if recorder.Code != tc.want || (tc.body != "" && strings.TrimSpace(recorder.Body.String()) != tc.body) {
 			t.Errorf("keys %v: %d %s", tc.keys, recorder.Code, recorder.Body)
@@ -205,8 +208,7 @@ func TestSigningKeyEndpoints(t *testing.T) {
 			return next(c)
 		}
 	}
-	group := e.Group("/api/v1/agents", inject)
-	RegisterRoutes(group, group, NewHandler(&fakeStore{}, nil, keys))
+	RegisterRoutes(e.Group("/api/v1", inject), NewHandler(&fakeStore{}, nil, keys))
 	for _, step := range []struct {
 		method, path string
 		want         int
@@ -231,8 +233,7 @@ func TestSigningKeyEndpoints(t *testing.T) {
 		t.Fatalf("list = %d %s", list.Code, list.Body)
 	}
 	off := echo.New()
-	offGroup := off.Group("/api/v1/agents", inject)
-	RegisterRoutes(offGroup, offGroup, NewHandler(&fakeStore{}, nil, nil))
+	RegisterRoutes(off.Group("/api/v1", inject), NewHandler(&fakeStore{}, nil, nil))
 	if got := call(off, http.MethodPost, "/api/v1/agents/signing-keys/next", ""); got.Code != http.StatusServiceUnavailable {
 		t.Fatalf("without a gateway = %d", got.Code)
 	}

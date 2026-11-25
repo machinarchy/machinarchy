@@ -85,8 +85,11 @@ func authenticateAPIToken(c echo.Context, next echo.HandlerFunc, access domain.A
 func RequirePermission(permission domain.Permission) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			principal, ok := c.Get("principal").(domain.Principal)
-			if !ok || !principal.Role.Allows(permission) {
+			principal, ok := Principal(c)
+			if !ok {
+				return httperr.Unauthorized(c)
+			}
+			if !principal.Role.Allows(permission) {
 				return httperr.Status(c, http.StatusForbidden, "permission denied")
 			}
 			return next(c)
@@ -99,8 +102,11 @@ func RequirePermission(permission domain.Permission) echo.MiddlewareFunc {
 func RequireHuman() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			principal, ok := c.Get("principal").(domain.Principal)
-			if !ok || principal.APITokenID != 0 {
+			principal, ok := Principal(c)
+			if !ok {
+				return httperr.Unauthorized(c)
+			}
+			if principal.APITokenID != 0 {
 				return httperr.Status(c, http.StatusForbidden, "a user session is required")
 			}
 			return next(c)
@@ -115,7 +121,7 @@ func RequireOwner() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			principal, ok := Principal(c)
 			if !ok {
-				return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+				return httperr.Unauthorized(c)
 			}
 			if principal.Role != domain.RoleOwner || principal.APITokenID != 0 {
 				return httperr.Status(c, http.StatusForbidden, "permission denied")

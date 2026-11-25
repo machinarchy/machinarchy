@@ -10,7 +10,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
-	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/members"
 )
 
@@ -47,8 +46,7 @@ func newRouter(svc domain.MemberService, principal domain.Principal) *echo.Echo 
 			return next(c)
 		}
 	}
-	g := e.Group("/members", inject,
-		middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
+	g := e.Group("", inject)
 	members.RegisterRoutes(g, members.NewHandler(svc))
 	return e
 }

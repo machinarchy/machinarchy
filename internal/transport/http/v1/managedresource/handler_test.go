@@ -86,7 +86,7 @@ func newAPI(t *testing.T) *apiFixture {
 			return next(c)
 		}
 	})
-	managedresource.RegisterRoutes(e.Group("/managed"), managedresource.NewHandler(application))
+	managedresource.RegisterRoutes(e.Group(""), managedresource.NewHandler(application))
 	f.server = e
 	return f
 }

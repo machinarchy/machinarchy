@@ -124,6 +124,12 @@ type Mapping struct {
 	Message string // empty: use the error text, which must then be safe to show
 }
 
+// Map builds a Mapping that answers with status and the default code for it.
+// An empty message uses the error text, which must then be safe to show.
+func Map(target error, status int, message string) Mapping {
+	return Mapping{Target: target, Status: status, Code: CodeFor(status), Message: message}
+}
+
 // common maps errors shared by every API surface. Their messages are fixed
 // so internal details never leak.
 var common = []Mapping{

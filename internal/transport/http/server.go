@@ -140,7 +140,7 @@ func NewServer(
 
 	api := e.Group("/api", limiter.Middleware(), requestDeadline(httpCfg.RequestTimeout))
 	v1.RegisterRoutes(api, repositories, authService,
-		repositories.SessionKeys, repositories.SessionTTL, cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
+		cfg.Environment == config.Production, cfg.SignupEnabled, tokenService, memberService, auditService)
 
 	s.httpServer = &http.Server{
 		Addr:              "",

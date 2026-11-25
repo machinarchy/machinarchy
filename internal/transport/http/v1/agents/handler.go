@@ -54,22 +54,6 @@ func NewHandler(lister Lister, gateway Gateway, keys SigningKeys) *Handler {
 	return &Handler{lister: lister, gateway: gateway, keys: keys}
 }
 
-// RegisterRoutes mounts the routes; read needs inventory:read, owner needs
-// the workspace owner. Agent work runs as capability Operations
-// (/api/v1/managed/operations), not here (ADR-057).
-func RegisterRoutes(read, owner *echo.Group, h *Handler) {
-	read.GET("", h.list)
-	read.GET("/controller-key", h.controllerKey)
-	owner.POST("/:id/revoke", h.revoke)
-	owner.POST("/enrollment-tokens", h.createToken)
-	owner.GET("/enrollment-tokens", h.listTokens)
-	owner.DELETE("/enrollment-tokens/:id", h.revokeToken)
-	owner.GET("/signing-keys", h.listSigningKeys)
-	owner.POST("/signing-keys/next", h.stageSigningKey)
-	owner.POST("/signing-keys/next/activate", h.activateSigningKey)
-	owner.DELETE("/signing-keys/next", h.discardSigningKey)
-}
-
 type createTokenRequest struct {
 	// Hostname, when set, is the only hostname this token enrols.
 	Hostname string `json:"hostname,omitempty"`
@@ -125,7 +109,7 @@ type tokenList struct {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/agents/enrollment-tokens [post]
-func (h *Handler) createToken(c echo.Context) error {
+func (h *Handler) CreateToken(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
 		return httperr.Unauthorized(c)
@@ -150,7 +134,7 @@ func (h *Handler) createToken(c echo.Context) error {
 		token.HostID = request.HostID
 	}
 	if err := h.lister.CreateEnrollmentToken(c.Request().Context(), token); err != nil {
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, createTokenResponse{tokenView: viewToken(token), Token: secret})
 }
@@ -165,10 +149,10 @@ func (h *Handler) createToken(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/agents/enrollment-tokens [get]
-func (h *Handler) listTokens(c echo.Context) error {
+func (h *Handler) ListTokens(c echo.Context) error {
 	tokens, err := h.lister.ListEnrollmentTokens(c.Request().Context())
 	if err != nil {
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	views := make([]tokenView, 0, len(tokens))
 	for _, token := range tokens {
@@ -187,7 +171,7 @@ func (h *Handler) listTokens(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Router /api/v1/agents/enrollment-tokens/{id} [delete]
-func (h *Handler) revokeToken(c echo.Context) error {
+func (h *Handler) RevokeToken(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
 		return httperr.Unauthorized(c)
@@ -196,7 +180,7 @@ func (h *Handler) revokeToken(c echo.Context) error {
 		if errors.Is(err, agentgateway.ErrEnrollmentTokenNotFound) {
 			return httperr.Status(c, http.StatusNotFound, "no unused enrolment token with this ID")
 		}
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -215,7 +199,7 @@ type agentView struct {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/agents [get]
-func (h *Handler) list(c echo.Context) error {
+func (h *Handler) List(c echo.Context) error {
 	agents, err := h.lister.ListAgents(c.Request().Context())
 	if err != nil {
 		return httperr.FromError(c, err)
@@ -237,7 +221,7 @@ func (h *Handler) list(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/controller-key [get]
-func (h *Handler) controllerKey(c echo.Context) error {
+func (h *Handler) ControllerKey(c echo.Context) error {
 	var keys []string
 	if h.keys != nil {
 		keys = h.keys.PublicKeys()
@@ -275,26 +259,25 @@ type controllerKeyResponse struct {
 // @Failure 404 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/{id}/revoke [post]
-func (h *Handler) revoke(c echo.Context) error {
+func (h *Handler) Revoke(c echo.Context) error {
 	if h.gateway == nil {
 		return httperr.Status(c, http.StatusServiceUnavailable, "this process does not run the agent gateway")
 	}
 	if err := h.gateway.Revoke(c.Request().Context(), c.Param("id")); err != nil {
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
 }
 
-func mapError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, agentgateway.ErrAgentNotFound):
-		return httperr.Status(c, http.StatusNotFound, "agent not found")
-	case errors.Is(err, agentgateway.ErrUnavailable):
-		return httperr.Status(c, http.StatusServiceUnavailable, err.Error())
-	case errors.Is(err, context.DeadlineExceeded):
-		return httperr.Status(c, http.StatusGatewayTimeout, "the agent did not answer in time")
-	}
-	return httperr.FromError(c, err, httperr.Mapping{Target: domain.ErrInvalidInput, Status: http.StatusBadRequest, Code: httperr.CodeInvalidRequest})
+var errorMappings = []httperr.Mapping{
+	httperr.Map(agentgateway.ErrAgentNotFound, http.StatusNotFound, "agent not found"),
+	httperr.Map(agentgateway.ErrUnavailable, http.StatusServiceUnavailable, ""),
+	httperr.Map(context.DeadlineExceeded, http.StatusGatewayTimeout, "the agent did not answer in time"),
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }
 
 // signingKeyView is a signing key as the API shows it: public data only,
@@ -335,7 +318,7 @@ func (h *Handler) signingKeyAction(c echo.Context, act func(context.Context, dom
 	case errors.Is(err, agentgateway.ErrNoStagedSigningKey):
 		return httperr.Status(c, http.StatusConflict, "no next signing key is staged")
 	case err != nil:
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(status, viewSigningKey(key))
 }
@@ -351,13 +334,13 @@ func (h *Handler) signingKeyAction(c echo.Context, act func(context.Context, dom
 // @Failure 403 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/signing-keys [get]
-func (h *Handler) listSigningKeys(c echo.Context) error {
+func (h *Handler) ListSigningKeys(c echo.Context) error {
 	if h.keys == nil {
 		return httperr.Status(c, http.StatusServiceUnavailable, "the agent gateway is not configured")
 	}
 	keys, err := h.keys.List(c.Request().Context())
 	if err != nil {
-		return mapError(c, err)
+		return respondError(c, err)
 	}
 	items := make([]signingKeyView, len(keys))
 	for i, key := range keys {
@@ -378,7 +361,7 @@ func (h *Handler) listSigningKeys(c echo.Context) error {
 // @Failure 409 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/signing-keys/next [post]
-func (h *Handler) stageSigningKey(c echo.Context) error {
+func (h *Handler) StageSigningKey(c echo.Context) error {
 	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
 		return h.keys.Stage(ctx, p)
 	}, http.StatusCreated)
@@ -396,7 +379,7 @@ func (h *Handler) stageSigningKey(c echo.Context) error {
 // @Failure 409 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/signing-keys/next/activate [post]
-func (h *Handler) activateSigningKey(c echo.Context) error {
+func (h *Handler) ActivateSigningKey(c echo.Context) error {
 	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
 		return h.keys.Activate(ctx, p)
 	}, http.StatusOK)
@@ -413,7 +396,7 @@ func (h *Handler) activateSigningKey(c echo.Context) error {
 // @Failure 409 {object} httperr.Body
 // @Failure 503 {object} httperr.Body
 // @Router /api/v1/agents/signing-keys/next [delete]
-func (h *Handler) discardSigningKey(c echo.Context) error {
+func (h *Handler) DiscardSigningKey(c echo.Context) error {
 	return h.signingKeyAction(c, func(ctx context.Context, p domain.Principal) (agentgateway.SigningKey, error) {
 		return h.keys.Discard(ctx, p)
 	}, http.StatusOK)

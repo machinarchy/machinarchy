@@ -2,7 +2,6 @@
 package environments
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +16,16 @@ import (
 // Handler handles HTTP requests for environment management operations.
 type Handler struct {
 	repo domain.EnvironmentStore
+}
+
+var errorMappings = []httperr.Mapping{
+	httperr.Map(domain.ErrEnvironmentNotFound, http.StatusNotFound, "environment not found"),
+	{Target: domain.ErrEnvironmentAlreadyExists, Status: http.StatusConflict, Code: httperr.CodeAlreadyExists, Message: "an environment with this name already exists"},
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }
 
 // NewHandler creates an environment HTTP handler using the provided environment store.
@@ -46,7 +55,7 @@ type EnvSavePayload struct {
 func (h *Handler) Create(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	var body EnvSavePayload
 	if err := c.Bind(&body); err != nil || strings.TrimSpace(body.Name) == "" {
@@ -55,10 +64,7 @@ func (h *Handler) Create(c echo.Context) error {
 
 	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.CreateEnvironment(c.Request().Context(), env); err != nil {
-		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an environment with this name already exists")
-		}
-		return httperr.Status(c, http.StatusInternalServerError, "unable to create environment")
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, env)
 }
@@ -75,11 +81,11 @@ func (h *Handler) Create(c echo.Context) error {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	list, err := h.repo.ListEnvironments(c.Request().Context(), principal.WorkspaceID)
 	if err != nil {
-		return httperr.Status(c, http.StatusInternalServerError, "unable to list environments")
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, list)
 }
@@ -102,7 +108,7 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Update(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
@@ -116,13 +122,7 @@ func (h *Handler) Update(c echo.Context) error {
 
 	env := &domain.Environment{ID: id, WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
 	if err := h.repo.UpdateEnvironment(c.Request().Context(), env); err != nil {
-		if errors.Is(err, domain.ErrEnvironmentNotFound) {
-			return httperr.Status(c, http.StatusNotFound, "environment not found")
-		}
-		if errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
-			return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an environment with this name already exists")
-		}
-		return httperr.Status(c, http.StatusInternalServerError, "unable to update environment")
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, env)
 }
@@ -142,7 +142,7 @@ func (h *Handler) Update(c echo.Context) error {
 func (h *Handler) Delete(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {
@@ -150,10 +150,7 @@ func (h *Handler) Delete(c echo.Context) error {
 	}
 
 	if err := h.repo.DeleteEnvironment(c.Request().Context(), principal.WorkspaceID, id); err != nil {
-		if errors.Is(err, domain.ErrEnvironmentNotFound) {
-			return httperr.Status(c, http.StatusNotFound, "environment not found")
-		}
-		return httperr.Status(c, http.StatusInternalServerError, "unable to delete environment")
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Environment structure removed successfully"})
 }

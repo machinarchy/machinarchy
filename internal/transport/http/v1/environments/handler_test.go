@@ -50,8 +50,7 @@ func call(store *fakeEnvironments, principal *domain.Principal, method, path, bo
 			return next(c)
 		}
 	}
-	group := e.Group("/api/v1/environments", inject)
-	RegisterRoutes(group, group, NewHandler(store))
+	RegisterRoutes(e.Group("/api/v1", inject), NewHandler(store))
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()

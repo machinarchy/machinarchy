@@ -49,81 +49,48 @@ type Repositories struct {
 	SignupEnabled func() bool
 }
 
-// RegisterRoutes sets up all v1 domain routes on the Echo instance with proper dependency injection.
+// RegisterRoutes mounts the public /auth routes and the authenticated /v1
+// routes on the API group. Each package's routes.go owns its prefix and its
+// access rule (permission, owner, human session); this function only builds
+// the handlers and mounts the packages in one place. The session keys and TTL
+// come from repos. Optional packages are mounted only when their dependency is
+// configured.
 func RegisterRoutes(
-	g *echo.Group,
+	api *echo.Group,
 	repos Repositories,
 	authServ domain.AuthService,
-	sessionKeys *sessionkey.Keyring,
-	sessionTTL time.Duration,
 	secureCookies bool,
 	signupEnabled bool,
 	tokenService domain.APITokenService,
 	memberService domain.MemberService,
 	auditService domain.AuditService,
 ) {
-	// 2. Initialize Sub-Domain Handlers
 	authHandler := auth.NewHandler(authServ, secureCookies, signupEnabled)
 	if repos.SignupEnabled != nil {
 		authHandler.SetSignupEnabledProvider(repos.SignupEnabled)
 	}
-	envHandler := environments.NewHandler(repos.Environments)
-	tokenHandler := tokens.NewHandler(tokenService)
-	memberHandler := members.NewHandler(memberService)
-	auditHandler := audit.NewHandler(auditService)
 
-	// ==========================================
-	// PUBLIC ROUTES (No Auth Middleware)
-	// ==========================================
-	authGroup := g.Group("/auth")
-	auth.RegisterRoutes(authGroup, authHandler)
+	// Public: no authentication middleware.
+	auth.RegisterRoutes(api, authHandler)
 
-	// ==========================================
-	// PROTECTED API ROUTES
-	// ==========================================
-	apiv1 := g.Group("/v1", middleware.JWTAuth(sessionKeys, sessionTTL, repos.Access, repos.Sessions), middleware.AuditActor())
-	{
-		auth.RegisterSessionRoutes(apiv1, authHandler)
-		// User Profile
-		apiv1.GET("/me", authHandler.GetMe)
-
-		// Environment Sub-domain Group
-		readRoutes := apiv1.Group("", middleware.RequirePermission(domain.PermissionInventoryRead))
-		writeRoutes := apiv1.Group("", middleware.RequirePermission(domain.PermissionInventoryWrite))
-		envReadGroup := readRoutes.Group("/environments")
-		envWriteGroup := writeRoutes.Group("/environments")
-		environments.RegisterRoutes(envReadGroup, envWriteGroup, envHandler)
-
-		tokenGroup := apiv1.Group("/tokens",
-			middleware.RequirePermission(domain.PermissionTokenManage), middleware.RequireHuman())
-		tokens.RegisterRoutes(tokenGroup, tokenHandler)
-
-		// Owner-only member administration; API tokens are refused.
-		memberGroup := apiv1.Group("/members",
-			middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
-		members.RegisterRoutes(memberGroup, memberHandler)
-
-		// Owner-only audit trail; API tokens are refused.
-		auditGroup := apiv1.Group("/audit",
-			middleware.RequirePermission(domain.PermissionAuditRead), middleware.RequireHuman())
-		audit.RegisterRoutes(auditGroup, auditHandler)
-
-		// Configuration and Secret Store changes require a human workspace owner.
-		if repos.Configuration != nil {
-			configuration.RegisterRoutes(apiv1.Group("/runtime-config", middleware.RequireOwner(), middleware.RequireHuman()), configuration.NewHandler(repos.Configuration))
-		}
-		if repos.Secrets != nil {
-			secretapi.RegisterRoutes(apiv1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman()), secretapi.NewHandler(repos.Secrets, repos.OperationData))
-		}
-		if repos.Agents != nil {
-			agents.RegisterRoutes(
-				apiv1.Group("/agents", middleware.RequirePermission(domain.PermissionInventoryRead)),
-				apiv1.Group("/agents", middleware.RequireOwner(), middleware.RequireHuman()),
-				agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentKeys))
-		}
-		if repos.ManagedResources != nil {
-			managedresource.RegisterRoutes(apiv1.Group("/managed"), managedresource.NewHandler(repos.ManagedResources))
-		}
-
+	// Everything else needs a valid session or API token.
+	v1 := api.Group("/v1",
+		middleware.JWTAuth(repos.SessionKeys, repos.SessionTTL, repos.Access, repos.Sessions), middleware.AuditActor())
+	auth.RegisterSessionRoutes(v1, authHandler)
+	environments.RegisterRoutes(v1, environments.NewHandler(repos.Environments))
+	tokens.RegisterRoutes(v1, tokens.NewHandler(tokenService))
+	members.RegisterRoutes(v1, members.NewHandler(memberService))
+	audit.RegisterRoutes(v1, audit.NewHandler(auditService))
+	if repos.Configuration != nil {
+		configuration.RegisterRoutes(v1, configuration.NewHandler(repos.Configuration))
+	}
+	if repos.Secrets != nil {
+		secretapi.RegisterRoutes(v1, secretapi.NewHandler(repos.Secrets, repos.OperationData))
+	}
+	if repos.Agents != nil {
+		agents.RegisterRoutes(v1, agents.NewHandler(repos.Agents, repos.AgentGateway, repos.AgentKeys))
+	}
+	if repos.ManagedResources != nil {
+		managedresource.RegisterRoutes(v1, managedresource.NewHandler(repos.ManagedResources))
 	}
 }

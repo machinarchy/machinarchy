@@ -42,7 +42,7 @@ func newRouter(t *testing.T, principal domain.Principal) (*echo.Echo, *secrets.S
 		t.Fatal(err)
 	}
 	e := echo.New()
-	group := e.Group("/api/v1/secrets", func(next echo.HandlerFunc) echo.HandlerFunc {
+	group := e.Group("/api/v1", func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			c.Set("principal", principal)
 			return next(c)
@@ -184,7 +184,7 @@ func TestRewrapCoversOperationData(t *testing.T) {
 	}
 	data := &fakeOperationData{remaining: []int64{3, 0}}
 	e := echo.New()
-	group := e.Group("/api/v1/secrets", func(next echo.HandlerFunc) echo.HandlerFunc {
+	group := e.Group("/api/v1", func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			c.Set("principal", domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner})
 			return next(c)

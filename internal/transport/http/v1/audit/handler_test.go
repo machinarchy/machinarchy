@@ -11,7 +11,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/machinarchy/machinarchy/internal/domain"
-	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
 	"github.com/machinarchy/machinarchy/internal/transport/http/v1/audit"
 )
 
@@ -49,7 +48,7 @@ func router(svc domain.AuditService, principal domain.Principal) *echo.Echo {
 			return next(c)
 		}
 	}
-	g := e.Group("/audit", inject, middleware.RequirePermission(domain.PermissionAuditRead), middleware.RequireHuman())
+	g := e.Group("", inject)
 	audit.RegisterRoutes(g, audit.NewHandler(svc))
 	return e
 }

@@ -2,7 +2,6 @@
 package tokens
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,7 +48,7 @@ func NewHandler(service domain.APITokenService) *Handler {
 func (h *Handler) Create(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	var request CreateRequest
 	if err := c.Bind(&request); err != nil {
@@ -58,7 +57,7 @@ func (h *Handler) Create(c echo.Context) error {
 	token, err := h.service.Create(c.Request().Context(), principal,
 		request.Name, domain.Role(strings.ToLower(strings.TrimSpace(request.Role))), request.ExpiresInHours)
 	if err != nil {
-		return tokenError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, token)
 }
@@ -76,11 +75,11 @@ func (h *Handler) Create(c echo.Context) error {
 func (h *Handler) List(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	tokens, err := h.service.List(c.Request().Context(), principal)
 	if err != nil {
-		return tokenError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, tokens)
 }
@@ -101,29 +100,25 @@ func (h *Handler) List(c echo.Context) error {
 func (h *Handler) Revoke(c echo.Context) error {
 	principal, ok := middleware.Principal(c)
 	if !ok {
-		return httperr.Status(c, http.StatusUnauthorized, "unauthorized")
+		return httperr.Unauthorized(c)
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		return httperr.Status(c, http.StatusBadRequest, "invalid token ID")
 	}
 	if err := h.service.Revoke(c.Request().Context(), principal, id); err != nil {
-		return tokenError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "API token revoked"})
 }
 
-func tokenError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, domain.ErrInvalidInput):
-		return httperr.Status(c, http.StatusBadRequest, "invalid API token request")
-	case errors.Is(err, domain.ErrPermissionDenied):
-		return httperr.Status(c, http.StatusForbidden, "permission denied")
-	case errors.Is(err, domain.ErrAPITokenAlreadyExists):
-		return httperr.Write(c, http.StatusConflict, httperr.CodeAlreadyExists, "an API token with that name already exists")
-	case errors.Is(err, domain.ErrAPITokenNotFound):
-		return httperr.Status(c, http.StatusNotFound, "API token not found")
-	default:
-		return httperr.Status(c, http.StatusInternalServerError, "unable to process API token request")
-	}
+var errorMappings = []httperr.Mapping{
+	httperr.Map(domain.ErrInvalidInput, http.StatusBadRequest, "invalid API token request"),
+	{Target: domain.ErrAPITokenAlreadyExists, Status: http.StatusConflict, Code: httperr.CodeAlreadyExists, Message: "an API token with that name already exists"},
+	httperr.Map(domain.ErrAPITokenNotFound, http.StatusNotFound, "API token not found"),
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

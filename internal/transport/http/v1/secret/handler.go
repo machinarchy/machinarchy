@@ -2,7 +2,6 @@ package secret
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -63,7 +62,7 @@ func (h *Handler) List(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	rows, err := h.service.List(c.Request().Context(), p, 100)
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, rows)
 }
@@ -88,7 +87,7 @@ func (h *Handler) Create(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	m, err := h.service.Create(c.Request().Context(), p, in)
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(http.StatusCreated, m)
 }
@@ -108,7 +107,7 @@ func (h *Handler) Describe(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	m, err := h.service.Describe(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, m)
 }
@@ -128,7 +127,7 @@ func (h *Handler) Versions(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	rows, err := h.service.Versions(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(200, rows)
 }
@@ -162,7 +161,7 @@ func (h *Handler) Rotate(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	m, err := h.service.Rotate(c.Request().Context(), p, c.Param("id"), v, secrets.Input{Value: in.Value})
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.JSON(201, m)
 }
@@ -181,7 +180,7 @@ func (h *Handler) Rotate(c echo.Context) error {
 func (h *Handler) Delete(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	if err := h.service.Delete(c.Request().Context(), p, c.Param("id")); err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	return c.NoContent(204)
 }
@@ -209,7 +208,7 @@ func (h *Handler) Rewrap(c echo.Context) error {
 	p, _ := middleware.Principal(c)
 	result, err := h.service.RewrapKey(c.Request().Context(), p, in.OldKeyID, in.BatchSize)
 	if err != nil {
-		return secretError(c, err)
+		return respondError(c, err)
 	}
 	response := RewrapResponse{KeyID: result.KeyID, Rewrapped: result.Rewrapped, Remaining: result.Remaining, Done: result.Remaining == 0}
 	if h.operations != nil {
@@ -222,19 +221,16 @@ func (h *Handler) Rewrap(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, response)
 }
-func secretError(c echo.Context, err error) error {
-	switch {
-	case errors.Is(err, secrets.ErrUnauthorized):
-		return httperr.Status(c, 403, "permission denied")
-	case errors.Is(err, secrets.ErrNotFound):
-		return httperr.Status(c, 404, "secret not found")
-	case errors.Is(err, secrets.ErrConflict):
-		return httperr.Status(c, 409, "secret version conflict")
-	case errors.Is(err, secrets.ErrInvalid):
-		return httperr.Status(c, 400, "invalid secret request")
-	case errors.Is(err, secrets.ErrKeyUnavailable):
-		return httperr.Status(c, 503, "configured secret key is unavailable")
-	default:
-		return httperr.Status(c, 500, "secret operation failed")
-	}
+
+var errorMappings = []httperr.Mapping{
+	httperr.Map(secrets.ErrUnauthorized, http.StatusForbidden, "permission denied"),
+	httperr.Map(secrets.ErrNotFound, http.StatusNotFound, "secret not found"),
+	httperr.Map(secrets.ErrConflict, http.StatusConflict, "secret version conflict"),
+	httperr.Map(secrets.ErrInvalid, http.StatusBadRequest, "invalid secret request"),
+	httperr.Map(secrets.ErrKeyUnavailable, http.StatusServiceUnavailable, "configured secret key is unavailable"),
+}
+
+// respondError writes err as an API error and logs unexpected ones.
+func respondError(c echo.Context, err error) error {
+	return httperr.FromError(c, err, errorMappings...)
 }

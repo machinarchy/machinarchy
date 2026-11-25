@@ -1,8 +1,15 @@
 package secret
 
-import "github.com/labstack/echo/v4"
+import (
+	"github.com/labstack/echo/v4"
 
-func RegisterRoutes(g *echo.Group, h *Handler) {
+	"github.com/machinarchy/machinarchy/internal/transport/http/middleware"
+)
+
+// RegisterRoutes mounts /secrets on the authenticated v1 group. The Secret
+// Store needs a human workspace owner.
+func RegisterRoutes(v1 *echo.Group, h *Handler) {
+	g := v1.Group("/secrets", middleware.RequireOwner(), middleware.RequireHuman())
 	g.GET("", h.List)
 	g.POST("", h.Create)
 	g.POST("/rewrap", h.Rewrap)

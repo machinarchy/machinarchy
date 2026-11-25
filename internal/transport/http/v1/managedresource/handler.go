@@ -76,27 +76,6 @@ type previewRequest struct {
 	Targets domain.TargetRule `json:"targets"`
 }
 
-func RegisterRoutes(group *echo.Group, handler *Handler) {
-	group.GET("/hosts", handler.listHosts)
-	group.POST("/hosts", handler.createHost)
-	group.GET("/hosts/:id", handler.getHost)
-	group.PUT("/hosts/:id", handler.updateHost)
-	group.DELETE("/hosts/:id", handler.deleteHost)
-	group.PATCH("/hosts/:id/labels", handler.setHostLabels)
-	group.POST("/hosts/:id/trust", handler.trustHostKeys)
-	group.GET("/access-profiles", handler.listProfiles)
-	group.POST("/access-profiles", handler.createProfile)
-	group.GET("/access-profiles/:id", handler.getProfile)
-	group.PUT("/access-profiles/:id", handler.updateProfile)
-	group.DELETE("/access-profiles/:id", handler.deleteProfile)
-	group.GET("/operations", handler.listOperations)
-	group.POST("/operations", handler.submitOperation)
-	group.POST("/operations/preview", handler.previewOperation)
-	group.GET("/operations/:id", handler.getOperation)
-	group.POST("/operations/:id/cancel", handler.cancelOperation)
-	group.GET("/operations/:id/targets/:hostId/output", handler.targetOutput)
-}
-
 // call runs one use case: it resolves the principal, lets parse read the
 // request, and writes either the result with status or a mapped error.
 func call[T any](c echo.Context, status int, parse func() error, run func(context.Context, domain.Principal) (T, error)) error {
@@ -179,7 +158,7 @@ func queryTime(c echo.Context, name string, target *time.Time) func() error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/managed/hosts [get]
-func (h *Handler) listHosts(c echo.Context) error {
+func (h *Handler) ListHosts(c echo.Context) error {
 	query := service.HostQuery{Selector: c.QueryParam("selector"), Phase: resource.HostPhase(c.QueryParam("phase")),
 		After: resource.ID(c.QueryParam("cursor"))}
 	return call(c, http.StatusOK, all(queryInt(c, "environment", &query.EnvironmentID), queryInt(c, "limit", &query.Limit)),
@@ -201,7 +180,7 @@ func (h *Handler) listHosts(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/hosts [post]
-func (h *Handler) createHost(c echo.Context) error {
+func (h *Handler) CreateHost(c echo.Context) error {
 	var request hostRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
 		return h.service.CreateHost(ctx, p, request.Name, request.Labels, request.Spec)
@@ -219,7 +198,7 @@ func (h *Handler) createHost(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id} [get]
-func (h *Handler) getHost(c echo.Context) error {
+func (h *Handler) GetHost(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
 		return h.service.GetHost(ctx, p, id)
@@ -241,7 +220,7 @@ func (h *Handler) getHost(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id} [put]
-func (h *Handler) updateHost(c echo.Context) error {
+func (h *Handler) UpdateHost(c echo.Context) error {
 	var id resource.ID
 	var request hostUpdateRequest
 	return call(c, http.StatusNoContent, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (any, error) {
@@ -263,7 +242,7 @@ func (h *Handler) updateHost(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id} [delete]
-func (h *Handler) deleteHost(c echo.Context) error {
+func (h *Handler) DeleteHost(c echo.Context) error {
 	var id resource.ID
 	var revision int
 	return call(c, http.StatusNoContent, all(pathID(c, &id), queryInt(c, "revision", &revision)), func(ctx context.Context, p domain.Principal) (any, error) {
@@ -288,7 +267,7 @@ func (h *Handler) deleteHost(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id}/labels [patch]
-func (h *Handler) setHostLabels(c echo.Context) error {
+func (h *Handler) SetHostLabels(c echo.Context) error {
 	var id resource.ID
 	var request labelsRequest
 	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
@@ -313,7 +292,7 @@ func (h *Handler) setHostLabels(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id}/trust [post]
-func (h *Handler) trustHostKeys(c echo.Context) error {
+func (h *Handler) TrustHostKeys(c echo.Context) error {
 	var id resource.ID
 	var request trustRequest
 	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
@@ -332,7 +311,7 @@ func (h *Handler) trustHostKeys(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/managed/access-profiles [get]
-func (h *Handler) listProfiles(c echo.Context) error {
+func (h *Handler) ListProfiles(c echo.Context) error {
 	var limit int
 	return call(c, http.StatusOK, queryInt(c, "limit", &limit), func(ctx context.Context, p domain.Principal) (*resource.Page[resource.AccessProfile], error) {
 		return h.service.ListAccessProfiles(ctx, p, resource.ID(c.QueryParam("cursor")), limit)
@@ -352,7 +331,7 @@ func (h *Handler) listProfiles(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/access-profiles [post]
-func (h *Handler) createProfile(c echo.Context) error {
+func (h *Handler) CreateProfile(c echo.Context) error {
 	var request profileRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.AccessProfile, error) {
 		return h.service.CreateAccessProfile(ctx, p, request.Name, request.Description, request.Spec)
@@ -370,7 +349,7 @@ func (h *Handler) createProfile(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Router /api/v1/managed/access-profiles/{id} [get]
-func (h *Handler) getProfile(c echo.Context) error {
+func (h *Handler) GetProfile(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*service.AccessProfileView, error) {
 		return h.service.GetAccessProfile(ctx, p, id)
@@ -392,7 +371,7 @@ func (h *Handler) getProfile(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/access-profiles/{id} [put]
-func (h *Handler) updateProfile(c echo.Context) error {
+func (h *Handler) UpdateProfile(c echo.Context) error {
 	var id resource.ID
 	var request profileUpdateRequest
 	return call(c, http.StatusCreated, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.AccessProfileRevision, error) {
@@ -413,7 +392,7 @@ func (h *Handler) updateProfile(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/access-profiles/{id} [delete]
-func (h *Handler) deleteProfile(c echo.Context) error {
+func (h *Handler) DeleteProfile(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusNoContent, pathID(c, &id), func(ctx context.Context, p domain.Principal) (any, error) {
 		return nil, h.service.DeleteAccessProfile(ctx, p, id)
@@ -436,7 +415,7 @@ func (h *Handler) deleteProfile(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/managed/operations [get]
-func (h *Handler) listOperations(c echo.Context) error {
+func (h *Handler) ListOperations(c echo.Context) error {
 	filter := resource.OperationListFilter{State: resource.OperationState(c.QueryParam("state")),
 		HostID: resource.ID(c.QueryParam("host")), After: c.QueryParam("cursor")}
 	parse := all(queryInt(c, "limit", &filter.Limit), queryTime(c, "createdAfter", &filter.CreatedAfter),
@@ -462,7 +441,7 @@ func (h *Handler) listOperations(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/operations [post]
-func (h *Handler) submitOperation(c echo.Context) error {
+func (h *Handler) SubmitOperation(c echo.Context) error {
 	var request operationRequest
 	return call(c, http.StatusAccepted, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
 		// Permission first: a reader learns nothing about the request's shape.
@@ -499,7 +478,7 @@ func (h *Handler) submitOperation(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/managed/operations/preview [post]
-func (h *Handler) previewOperation(c echo.Context) error {
+func (h *Handler) PreviewOperation(c echo.Context) error {
 	var request previewRequest
 	return call(c, http.StatusOK, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.HostTargetSet, error) {
 		return h.service.PreviewTargets(ctx, p, request.Targets)
@@ -518,7 +497,7 @@ func (h *Handler) previewOperation(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Router /api/v1/managed/operations/{id} [get]
-func (h *Handler) getOperation(c echo.Context) error {
+func (h *Handler) GetOperation(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusOK, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
 		return h.service.GetOperation(ctx, p, id)
@@ -540,7 +519,7 @@ func (h *Handler) getOperation(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Router /api/v1/managed/operations/{id}/targets/{hostId}/output [get]
-func (h *Handler) targetOutput(c echo.Context) error {
+func (h *Handler) TargetOutput(c echo.Context) error {
 	var id, hostID resource.ID
 	stream := resource.OutputStream(c.QueryParam("stream"))
 	if stream == "" {
@@ -573,7 +552,7 @@ func (h *Handler) targetOutput(c echo.Context) error {
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
 // @Router /api/v1/managed/operations/{id}/cancel [post]
-func (h *Handler) cancelOperation(c echo.Context) error {
+func (h *Handler) CancelOperation(c echo.Context) error {
 	var id resource.ID
 	return call(c, http.StatusAccepted, pathID(c, &id), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
 		return h.service.CancelOperation(ctx, p, id)
