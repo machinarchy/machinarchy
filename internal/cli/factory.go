@@ -18,6 +18,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
+	"github.com/machinarchy/machinarchy/internal/cli/deprecate"
 	"github.com/machinarchy/machinarchy/internal/cli/msg"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/machinarchy/machinarchy/internal/cli/ui"
@@ -206,6 +207,19 @@ func (f *Factory) checkDryRun(command *cobra.Command) error {
 
 	return clierr.Newf(clierr.ExitUsage, "Run it without --dry-run, or read the command's help.",
 		"%q does not support --dry-run yet, so it would make the change for real", command.CommandPath())
+}
+
+// printDeprecation tells the user, on stderr, that the selected command has a
+// replacement. It does not change what the command does.
+func (f *Factory) printDeprecation(command *cobra.Command) error {
+	notice, deprecated := deprecate.For(command)
+	if !deprecated || deprecationWarningsOff(f.getenv) {
+		return nil
+	}
+
+	_, err := fmt.Fprint(f.Streams.ErrOut, ui.Render(notice.Message(), f.style))
+
+	return err
 }
 
 // Config returns the loaded context configuration.
