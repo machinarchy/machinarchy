@@ -33,7 +33,9 @@ for file in "${staged_go_files[@]}"; do
   dir="${file%/*}"
   [[ "$dir" == "$file" ]] && dir="."
   found=false
-  for existing in "${package_dirs[@]}"; do
+  # ${arr[@]+...}: an empty array is an unbound variable under set -u in
+  # macOS's Bash 3.2 (AUDIT H-13B-01).
+  for existing in ${package_dirs[@]+"${package_dirs[@]}"}; do
     if [[ "$existing" == "$dir" ]]; then
       found=true
       break
@@ -50,7 +52,10 @@ done
 info "Running go vet for staged packages..."
 go vet "${packages[@]}"
 
-info "Running targeted tests for staged packages..."
-go test -timeout=30s -count=1 "${packages[@]}"
+# 30 s was too short for the end-to-end and worker packages on a loaded machine
+# (AUDIT F16-05). Override with PRECOMMIT_TEST_TIMEOUT, for example 300s.
+test_timeout="${PRECOMMIT_TEST_TIMEOUT:-120s}"
+info "Running targeted tests for staged packages (timeout $test_timeout)..."
+go test -timeout="$test_timeout" -count=1 "${packages[@]}"
 
 success "Pre-commit checks passed."
