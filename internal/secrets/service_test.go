@@ -208,6 +208,28 @@ func TestSystemSecretsAreOnlyForTheController(t *testing.T) {
 	if _, err := s.Create(ctx, owner, secrets.Input{Name: "fake", Purpose: secrets.PurposeAgentSigning, Value: "x"}); !errors.Is(err, secrets.ErrInvalid) {
 		t.Fatalf("owner created a system-purpose secret: %v", err)
 	}
+	// AUDIT F16-06: an unused system secret can be retired, and an owner's
+	// secret cannot be retired through the system path.
+	orphan, err := s.CreateSystem(ctx, "agent-gateway-signing-key-orphan", secrets.PurposeAgentSigning, []byte("unused-seed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RetireSystem(ctx, orphan, secrets.PurposeAgentSigning); err != nil {
+		t.Fatalf("RetireSystem = %v", err)
+	}
+	if err := s.RetireSystem(ctx, orphan, secrets.PurposeAgentSigning); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("retiring twice = %v, want ErrNotFound", err)
+	}
+	if err := s.RetireSystem(ctx, ref, secrets.PurposeSSHCredential); !errors.Is(err, secrets.ErrInvalid) {
+		t.Fatalf("RetireSystem with an owner purpose = %v", err)
+	}
+	ownerSecret, err := s.Create(ctx, owner, secrets.Input{Name: "keep-me", Purpose: secrets.PurposeSSHCredential, Value: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RetireSystem(ctx, secrets.Ref{ID: ownerSecret.ID, Version: 1}, secrets.PurposeAgentSigning); !errors.Is(err, secrets.ErrUnauthorized) {
+		t.Fatalf("retiring an owner's secret through the system path = %v", err)
+	}
 	if _, err := s.CreateSystem(ctx, "x", secrets.PurposeSSHCredential, []byte("x")); !errors.Is(err, secrets.ErrInvalid) {
 		t.Fatalf("CreateSystem with an owner purpose = %v", err)
 	}

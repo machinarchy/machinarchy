@@ -32,6 +32,8 @@ import (
 // SecretStore is the part of the Secret Store the manager uses.
 type SecretStore interface {
 	CreateSystem(ctx context.Context, name string, purpose secrets.Purpose, value []byte) (secrets.Ref, error)
+	// RetireSystem retires a system secret that no key refers to.
+	RetireSystem(ctx context.Context, ref secrets.Ref, purpose secrets.Purpose) error
 	ResolveSystem(ctx context.Context, ref secrets.Ref, purpose secrets.Purpose) ([]byte, error)
 }
 
@@ -282,10 +284,22 @@ func (m *Manager) create(ctx context.Context, seed []byte, state agentgateway.Si
 	if err != nil {
 		return fmt.Errorf("store agent signing key: %w", err)
 	}
-	return m.store.CreateSigningKey(ctx, agentgateway.SigningKey{
+	err = m.store.CreateSigningKey(ctx, agentgateway.SigningKey{
 		ID: string(id), State: state, PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey),
 		SecretID: ref.ID, SecretVersion: ref.Version, Origin: origin, CreatedBy: actor.UserID, CreatedAt: m.now().UTC(),
 	}, actor)
+	if err != nil {
+		// No key refers to the secret (another replica won the first-start
+		// race, or the row could not be written): retire it rather than leave
+		// an unused encrypted seed behind (AUDIT F16-06). Not the caller's
+		// context, which may be the reason for the failure.
+		retireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if retireErr := m.secrets.RetireSystem(retireCtx, ref, secrets.PurposeAgentSigning); retireErr != nil {
+			m.logger.Warn("retire the unused agent signing-key secret failed", "secret_id", ref.ID, "error", retireErr)
+		}
+	}
+	return err
 }
 
 func newSeed() ([]byte, error) {

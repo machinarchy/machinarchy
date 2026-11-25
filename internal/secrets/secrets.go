@@ -393,6 +393,23 @@ func (s *Service) CreateSystem(ctx context.Context, name string, purpose Purpose
 	return Ref{ID: meta.ID, Version: 1}, nil
 }
 
+// RetireSystem retires a system secret created by CreateSystem that nothing
+// refers to (for example after the record that was to point at it could not
+// be written). It checks the purpose, so it cannot retire an owner's secret.
+func (s *Service) RetireSystem(ctx context.Context, ref Ref, purpose Purpose) error {
+	if ctx == nil || ref.ID == "" || !systemPurpose(purpose) {
+		return ErrInvalid
+	}
+	meta, err := s.repo.GetSecret(ctx, ref.ID)
+	if err != nil {
+		return err
+	}
+	if meta.Purpose != purpose {
+		return ErrUnauthorized
+	}
+	return s.repo.RetireSecret(ctx, ref.ID, 0)
+}
+
 // ResolveSystem reads a system secret created by CreateSystem.
 func (s *Service) ResolveSystem(ctx context.Context, ref Ref, purpose Purpose) ([]byte, error) {
 	if ctx == nil || ref.ID == "" || ref.Version == 0 || !systemPurpose(purpose) {

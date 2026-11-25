@@ -104,6 +104,13 @@ func (s *memSecrets) CreateSystem(_ context.Context, name string, purpose secret
 	return secrets.Ref{ID: name, Version: 1}, nil
 }
 
+func (s *memSecrets) RetireSystem(_ context.Context, ref secrets.Ref, _ secrets.Purpose) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.values, ref.ID)
+	return nil
+}
+
 func (s *memSecrets) ResolveSystem(_ context.Context, ref secrets.Ref, _ secrets.Purpose) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -192,6 +199,36 @@ func TestConcurrentReplicasAgreeOnOneKey(t *testing.T) {
 	}
 	if len(store.keys) != 1 {
 		t.Fatalf("%d keys recorded", len(store.keys))
+	}
+	// AUDIT F16-06: a replica that lost the race retired the secret it had
+	// written, so only the winner's seed stays stored.
+	sec.mu.Lock()
+	defer sec.mu.Unlock()
+	if len(sec.values) != 1 {
+		t.Fatalf("%d signing-key secrets stored after the race, want only the winner's", len(sec.values))
+	}
+}
+
+// failingStore refuses to record a key, as after a lost connection.
+type failingStore struct{ *memStore }
+
+func (failingStore) CreateSigningKey(context.Context, agentgateway.SigningKey, domain.Principal) error {
+	return errors.New("database unavailable")
+}
+
+// AUDIT F16-06: when the key row cannot be written, the secret written just
+// before it is retired instead of left behind.
+func TestFailedKeyRecordLeavesNoSecret(t *testing.T) {
+	sec := &memSecrets{}
+	m := newManager(t, &memStore{}, sec)
+	m.store = failingStore{&memStore{}}
+	if err := m.Ensure(context.Background(), nil); err == nil {
+		t.Fatal("Ensure succeeded although the key could not be recorded")
+	}
+	sec.mu.Lock()
+	defer sec.mu.Unlock()
+	if len(sec.values) != 0 {
+		t.Fatalf("%d secrets left behind", len(sec.values))
 	}
 }
 
