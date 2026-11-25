@@ -168,3 +168,85 @@ func BenchmarkCleanClean15KiB(b *testing.B) {
 		Clean(in)
 	}
 }
+
+// A sequence split across two pieces is removed whole.
+func TestStreamJoinsSplitSequences(t *testing.T) {
+	t.Parallel()
+
+	corpus := []string{
+		"a\x1b[31mred\x1b[0mb",
+		"x\x1b]52;c;Zm9v\x07y",
+		"x\x1b]0;title\x1b\\y",
+		"x\x1bPq#0\x1b\\y",
+		"café 日本 done",
+		"\x1b[2J\x1b[Hscreen",
+		"a\x1b(Bb\x1b=c",
+	}
+	for _, text := range corpus {
+		want := Text(text)
+		for cut := 0; cut <= len(text); cut++ {
+			var s Stream
+			got := s.Clean(text[:cut]) + s.Clean(text[cut:]) + s.Flush()
+			if got != want {
+				t.Fatalf("split %q at %d: got %q, want %q", text, cut, got, want)
+			}
+		}
+	}
+}
+
+func TestStreamByteByByte(t *testing.T) {
+	t.Parallel()
+
+	text := "ok\x1b[1;31mred\x1b[0m \x1b]52;c;ZXZpbA==\x07 café 日本\n"
+	var s Stream
+	var got strings.Builder
+	for i := 0; i < len(text); i++ {
+		got.WriteString(s.Clean(text[i : i+1]))
+	}
+	got.WriteString(s.Flush())
+	if got.String() != Text(text) {
+		t.Fatalf("got %q, want %q", got.String(), Text(text))
+	}
+}
+
+func TestStreamFlushesAnUnfinishedSequence(t *testing.T) {
+	t.Parallel()
+
+	var s Stream
+	if out := s.Clean("keep\x1b]52;c;never ended"); out != "keep" {
+		t.Fatalf("Clean = %q", out)
+	}
+	if out := s.Flush(); out != "" {
+		t.Fatalf("Flush must drop the unterminated sequence, got %q", out)
+	}
+}
+
+func TestStreamDoesNotHoldBackForever(t *testing.T) {
+	t.Parallel()
+
+	var s Stream
+	s.Clean("\x1b]52;" + strings.Repeat("A", maxPending+10))
+	if got := s.Clean("visible"); got != "visible" {
+		t.Fatalf("an over-long sequence must be dropped, then text flows: %q", got)
+	}
+}
+
+func FuzzStream(f *testing.F) {
+	for _, seed := range []string{"", "plain", "a\x1b[31mb", "\x1b]52;c;Zm9v\x07", "café", "\x1b"} {
+		f.Add(seed, 1)
+	}
+
+	f.Fuzz(func(t *testing.T, in string, size int) {
+		size = size%7 + 1
+		if size < 1 {
+			size = 1
+		}
+		var s Stream
+		var out strings.Builder
+		for i := 0; i < len(in); i += size {
+			out.WriteString(s.Clean(in[i:min(i+size, len(in))]))
+		}
+		out.WriteString(s.Flush())
+		assertTerminalSafe(t, out.String())
+	})
+}

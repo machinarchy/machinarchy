@@ -11,6 +11,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
+	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 	"github.com/spf13/cobra"
 )
 
@@ -110,7 +111,7 @@ func NewRunCommand(factory *cli.Factory) *cobra.Command {
 				return fmt.Errorf("submit operation: %w", err)
 			}
 			if !wait {
-				_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted (detached).\nFollow it with:  machinarchy logs operation %s --follow\nStatus:          machinarchy get operation %s\n", op.ID, op.ID, op.ID)
+				_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted (detached).\nFollow it with:  machinarchy logs operation %s --follow\nStatus:          machinarchy get operation %s\n", sanitize.Line(op.ID), sanitize.Line(op.ID), sanitize.Line(op.ID))
 				return err
 			}
 			if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
@@ -189,7 +190,7 @@ func runCapability(command *cobra.Command, factory *cli.Factory, rule api.Target
 		return fmt.Errorf("submit operation: %w", err)
 	}
 	if !wait {
-		_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted.\nStatus: machinarchy get operation %s\n", op.ID, op.ID)
+		_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted.\nStatus: machinarchy get operation %s\n", sanitize.Line(op.ID), sanitize.Line(op.ID))
 		return err
 	}
 	if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
@@ -221,7 +222,11 @@ func waitForOperation(ctx context.Context, client api.Client, id string) (*api.O
 	}
 }
 
-func summarize(names []string, limit int) string {
+func summarize(rawNames []string, limit int) string {
+	names := make([]string, len(rawNames))
+	for i, name := range rawNames {
+		names[i] = sanitize.Line(name)
+	}
 	if len(names) <= limit {
 		return strings.Join(names, ", ")
 	}
@@ -245,7 +250,7 @@ func NewCancelCommand(factory *cli.Factory) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("cancel operation: %w", err)
 			}
-			_, err = fmt.Fprintf(command.OutOrStdout(), "Cancellation requested for operation %s (%s).\n", op.ID, op.Status.State)
+			_, err = fmt.Fprintf(command.OutOrStdout(), "Cancellation requested for operation %s (%s).\n", sanitize.Line(op.ID), sanitize.Line(op.Status.State))
 			return err
 		},
 	})

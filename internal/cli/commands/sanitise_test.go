@@ -1,0 +1,96 @@
+package commands_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/machinarchy/machinarchy/internal/cli/api"
+	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+)
+
+const (
+	hostileName   = "web-01\x1b[2J\x1b]52;c;ZXZpbA==\x07"
+	hostileOutput = "start \x1b[31mred\x1b[0m \x1b]52;c;Zm9v\x07 end\n"
+)
+
+func noControlBytes(t *testing.T, name, text string) {
+	t.Helper()
+
+	for _, r := range text {
+		if r == 0x1b || r == 0x07 || (r >= 0x80 && r <= 0x9f) || r == 0x7f {
+			t.Fatalf("%s contains control character %U:\n%q", name, r, text)
+		}
+	}
+}
+
+// S-13 / S-14: nothing a server or a remote host sends reaches the terminal
+// as a control sequence.
+func TestRemoteTextCannotDriveTheTerminal(t *testing.T) {
+	cfg := writeConfig(t, "http://127.0.0.1:1", "tok")
+	run := func(t *testing.T, client *fakeClient, args ...string) result {
+		t.Helper()
+
+		return execute(t, fake(client), "", append([]string{"--config", cfg}, args...)...)
+	}
+
+	t.Run("host names in a table", func(t *testing.T) {
+		client := fixtures()
+		client.hosts[0].Metadata.Name = hostileName
+		got := run(t, client, "get", "hosts")
+		if got.code != 0 {
+			t.Fatalf("result = %+v", got)
+		}
+		noControlBytes(t, "get hosts", got.stdout+got.stderr)
+		if !strings.Contains(got.stdout, "web-01") {
+			t.Fatalf("the name must survive, cleaned:\n%s", got.stdout)
+		}
+	})
+
+	t.Run("followed command output split across polls", func(t *testing.T) {
+		client := fixtures()
+		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "Running", Targets: []api.OperationTarget{
+			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: hostileName}, State: "Running"},
+		}}}}
+		// The fake serves 6 bytes per poll, so every escape sequence is split.
+		client.outputs = map[string]string{"op-7/h1/stdout": hostileOutput}
+
+		got := run(t, client, "logs", "operation", "op-7", "--host", "h1", "--follow")
+		if got.code != 0 {
+			t.Fatalf("result = %+v", got)
+		}
+		noControlBytes(t, "logs --follow", got.stdout+got.stderr)
+		if got.stdout != "start red  end\n" {
+			t.Fatalf("stdout = %q, want the text without the sequences", got.stdout)
+		}
+	})
+
+	t.Run("output headers of every target", func(t *testing.T) {
+		client := fixtures()
+		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "Succeeded", Targets: []api.OperationTarget{
+			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: hostileName}, State: "Succeeded"},
+			{Spec: api.OperationTargetSpec{HostID: "h2", DisplayName: "web-02"}, State: "Succeeded"},
+		}}}}
+		client.outputs = map[string]string{"op-7/h1/stdout": hostileOutput, "op-7/h2/stdout": "ok\n"}
+
+		got := run(t, client, "logs", "operation", "op-7")
+		noControlBytes(t, "logs", got.stdout+got.stderr)
+		if got.code != 0 || !strings.Contains(got.stdout, "==> web-01 (Succeeded) <==") {
+			t.Fatalf("result = %+v", got)
+		}
+	})
+
+	t.Run("the trust prompt", func(t *testing.T) {
+		client := fixtures()
+		client.hosts[0].Metadata.Name = hostileName
+		client.hosts[0].Metadata.Generation = 4
+		client.hosts[0].Spec.AccessTarget.Endpoint = "10.0.0.1:22\x1b[2J"
+		client.hosts[0].Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
+		client.hosts[0].Status.ObservedHostKeys = []api.ObservedHostKey{{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:abc\x1b[31m"}}
+
+		got := run(t, client, "trust", "host", "--all-pending")
+		noControlBytes(t, "trust prompt", got.stdout+got.stderr)
+		if got.code != clierr.ExitUsage || !strings.Contains(got.stdout, "SHA256:abc") {
+			t.Fatalf("result = %+v", got)
+		}
+	})
+}

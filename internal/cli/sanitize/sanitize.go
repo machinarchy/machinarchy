@@ -232,3 +232,90 @@ func skipString(s string, k int) int {
 
 	return len(s)
 }
+
+// maxPending bounds how much of an unfinished escape sequence a Stream holds
+// back; a longer one is treated as finished and removed.
+const maxPending = 4096
+
+// Stream cleans text that arrives in pieces, such as the output of a command
+// that is followed live. A piece may end in the middle of an escape sequence
+// or of a multi-byte character; the unfinished tail is held back and joined to
+// the next piece, so a sequence split across two pieces is still removed
+// whole instead of leaking its second half.
+//
+// The zero value is ready to use. It is not safe for concurrent use.
+type Stream struct{ pending string }
+
+// Clean returns the safe text of the piece, without the unfinished tail.
+func (s *Stream) Clean(piece string) string {
+	text := s.pending + piece
+	cut := holdBack(text)
+	s.pending = text[cut:]
+
+	return Text(text[:cut])
+}
+
+// Flush returns the safe text of whatever is held back. Call it when the
+// stream has ended.
+func (s *Stream) Flush() string {
+	text := s.pending
+	s.pending = ""
+
+	return Text(text)
+}
+
+// holdBack returns the index where an unfinished escape sequence or character
+// begins at the end of text, or len(text) when the text ends cleanly.
+func holdBack(text string) int {
+	cut := len(text)
+
+	if i := strings.LastIndexByte(text, esc); i >= 0 && len(text)-i <= maxPending && !escapeFinished(text[i+1:]) {
+		cut = i
+	}
+
+	// An incomplete multi-byte character at the end.
+	for back := 1; back <= utf8.UTFMax-1 && back <= cut; back++ {
+		c := text[cut-back]
+		if c < utf8.RuneSelf {
+			break
+		}
+		if c >= 0xc0 { // a lead byte
+			if !utf8.FullRuneInString(text[cut-back : cut]) {
+				cut -= back
+			}
+
+			break
+		}
+	}
+
+	return cut
+}
+
+// escapeFinished reports whether the bytes after an ESC hold a complete
+// sequence.
+func escapeFinished(rest string) bool {
+	if rest == "" {
+		return false
+	}
+
+	switch rest[0] {
+	case '[': // CSI: parameters, then a final byte
+		j := 1
+		for j < len(rest) && rest[j] >= 0x20 && rest[j] <= 0x3f {
+			j++
+		}
+
+		return j < len(rest)
+	case ']', 'P', 'X', '^', '_': // strings end at BEL or ST
+		body := rest[1:]
+
+		return strings.IndexByte(body, bel) >= 0 || strings.Contains(body, "\x1b\\") || strings.Contains(body, "\xc2\x9c")
+	}
+
+	j := 0
+	for j < len(rest) && rest[j] >= 0x20 && rest[j] <= 0x2f {
+		j++
+	}
+
+	return j < len(rest)
+}

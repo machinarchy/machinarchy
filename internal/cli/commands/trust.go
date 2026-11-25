@@ -9,6 +9,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 )
 
 // NewTrustCommand registers host-key trust commands.
@@ -81,12 +82,12 @@ func newTrustHostCommand(factory *cli.Factory) *cobra.Command {
 						"host %q already trusts %s", host.Metadata.Name, strings.Join(host.Spec.AccessTarget.Trust, ", "))
 				}
 				plan[i] = keys
-				fmt.Fprintf(&prompt, "  %s (%s):\n", host.Metadata.Name, host.Spec.AccessTarget.Endpoint)
+				fmt.Fprintf(&prompt, "  %s (%s):\n", sanitize.Line(host.Metadata.Name), sanitize.Line(host.Spec.AccessTarget.Endpoint))
 				for _, key := range keys {
-					fmt.Fprintf(&prompt, "    %s\n", key)
+					fmt.Fprintf(&prompt, "    %s\n", sanitize.Line(key))
 				}
 				if len(host.Spec.AccessTarget.Trust) > 0 {
-					fmt.Fprintf(&prompt, "    replacing %s\n", strings.Join(host.Spec.AccessTarget.Trust, ", "))
+					fmt.Fprintf(&prompt, "    replacing %s\n", sanitize.Line(strings.Join(host.Spec.AccessTarget.Trust, ", ")))
 				}
 			}
 			// Always show what will be trusted, also with --yes and when a

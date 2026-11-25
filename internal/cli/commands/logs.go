@@ -10,6 +10,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 	"github.com/spf13/cobra"
 )
 
@@ -57,7 +58,7 @@ func NewLogsCommand(factory *cli.Factory) *cobra.Command {
 					if i > 0 {
 						fmt.Fprintln(out)
 					}
-					fmt.Fprintf(out, "==> %s (%s) <==\n", target.Spec.DisplayName, target.State)
+					fmt.Fprintf(out, "==> %s (%s) <==\n", sanitize.Line(target.Spec.DisplayName), sanitize.Line(target.State))
 				}
 				if err := printOutput(command.Context(), client, out, op.ID, target.Spec.HostID, stream, follow); err != nil {
 					return err
@@ -92,17 +93,24 @@ func selectTargets(op *api.Operation, host string) ([]api.OperationTarget, error
 // printOutput prints a target's stream from the start; with follow it keeps
 // asking from the last offset until the command has ended.
 func printOutput(ctx context.Context, client api.Client, out io.Writer, operationID, hostID, stream string, follow bool) error {
+	// Output is untrusted: a remote command can print escape sequences. A
+	// sequence may be split between two polls, so the stream sanitiser holds
+	// back an unfinished tail.
 	var from int64
+	var clean sanitize.Stream
 	for {
 		chunk, err := client.TargetOutput(ctx, operationID, hostID, stream, from)
 		if err != nil {
 			return fmt.Errorf("read output: %w", err)
 		}
-		if _, err := io.WriteString(out, chunk.Text); err != nil {
+		if _, err := io.WriteString(out, clean.Clean(chunk.Text)); err != nil {
 			return err
 		}
 		from = chunk.Next
 		if !follow || !chunk.Live {
+			if _, err := io.WriteString(out, clean.Flush()); err != nil {
+				return err
+			}
 			if chunk.Text != "" && !strings.HasSuffix(chunk.Text, "\n") {
 				fmt.Fprintln(out)
 			}
