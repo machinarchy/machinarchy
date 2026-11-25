@@ -1,0 +1,10 @@
+OK 14 of 14 hosts succeeded
+  OK web-[01-02,04-09,11-12,14]  exit 0  (11 hosts)
+    nginx version: nginx/1.24.0
+  WARN web-[10,13]  exit 0  different output  (2 hosts)
+    nginx version: nginx/1.22.1
+  WARN web-03  exit 0  different output
+    nginx version: nginx/1.24.0 (Debian)
+
+  WARN 3 hosts printed something different from the other 11.
+  Next:  machinarchy run r-4k2p9x1a --host web-01

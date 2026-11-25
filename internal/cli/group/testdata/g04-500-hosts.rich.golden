@@ -1,0 +1,12 @@
+⚠ 480 of 500 hosts succeeded, 20 did not
+  ✖ app-[050-052,200-202,350-351]  could not connect (unreachable)  (8 hosts)
+  ✖ app-[017-018,100-102]  exit 1  (5 hosts)
+    write error: disk full
+  ✖ app-[300-303]  exit 1  (4 hosts)
+    permission denied
+  ✖ app-[480-482]  exit 2  (3 hosts)
+    no such file or directory
+  ✔ app-[001-016,019-049,053-099,103-199,203-299,304-349,352-479,483-500]  exit 0  (480 hosts)
+    ok
+
+  Next:  machinarchy run r-4k2p9x1a --retry-failed

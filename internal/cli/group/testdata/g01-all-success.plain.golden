@@ -1,0 +1,5 @@
+OK 14 of 14 hosts succeeded
+  OK web-[01-14]  exit 0
+    active
+
+  Next:  machinarchy run r-4k2p9x1a --host web-01

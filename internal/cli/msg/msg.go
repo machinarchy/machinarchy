@@ -190,6 +190,8 @@ func init() {
 		Primary: "{deviant} hosts printed something different from the other {majority}."})
 	register(Message{ID: "run.drift_none", Kind: KindInfo,
 		Primary: "every host printed something different (normal for time-dependent output)"})
+	register(Message{ID: "run.drift_mixed", Kind: KindInfo,
+		Primary: "{groups} different outputs among {hosts} hosts; none is the majority."})
 	register(Message{ID: "run.more_groups", Kind: KindInfo,
 		Primary: "and {groups} more groups, {hosts} hosts"})
 }

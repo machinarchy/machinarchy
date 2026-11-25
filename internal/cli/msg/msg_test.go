@@ -148,3 +148,32 @@ func TestAllIsSorted(t *testing.T) {
 		}
 	}
 }
+
+func TestKindNames(t *testing.T) {
+	t.Parallel()
+
+	want := map[Kind]string{KindInfo: "info", KindSuccess: "success", KindWarning: "warning", KindFailure: "failure",
+		KindError: "error", KindSecurity: "security", KindPrompt: "prompt", Kind(99): "unknown"}
+	for kind, name := range want {
+		if got := kind.String(); got != name {
+			t.Errorf("Kind(%d).String() = %q, want %q", kind, got, name)
+		}
+	}
+}
+
+func TestWithNextAndWithWhyReplaceOnlyTheirField(t *testing.T) {
+	t.Parallel()
+
+	base := Get("run.partial")
+	next := base.WithNext("machinarchy run r-1 --retry-failed")
+	why := base.WithWhy("two hosts were unreachable")
+	if next.Next != "machinarchy run r-1 --retry-failed" || next.Primary != base.Primary || next.Why != base.Why {
+		t.Fatalf("WithNext changed more than Next: %+v", next)
+	}
+	if why.Why != "two hosts were unreachable" || why.Next != base.Next || why.Primary != base.Primary {
+		t.Fatalf("WithWhy changed more than Why: %+v", why)
+	}
+	if base.Why != "" {
+		t.Fatal("the catalogue entry was modified")
+	}
+}
