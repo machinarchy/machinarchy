@@ -27,6 +27,16 @@ services:
     # Must exceed MACHINARCHY_SHUTDOWN_TIMEOUT (default 25s); Docker's 10s
     # default would SIGKILL the process mid-drain.
     stop_grace_period: 30s
+    # Hardening that the dev stack keeps too (AUDIT S-20): the process needs
+    # no root filesystem writes, no capabilities and no privilege gain. With
+    # SQLite, mount a volume at /data.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - machinarchy-network
 
