@@ -55,14 +55,14 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       -o /out/machinarchy ./cmd/machinarchy
 
 # gcr.io/distroless/static-debian12:nonroot
-FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS cli
+FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS cli
 COPY --from=build-cli /out/machinarchy /machinarchy
 USER 65532:65532
 ENTRYPOINT ["/machinarchy"]
 
 # Default target: the server process selected by MACHINARCHY_COMMAND.
 # gcr.io/distroless/static-debian12:nonroot
-FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS server
+FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS server
 COPY --from=build-server /out/machinarchy /machinarchy
 # Copy the parent so /data keeps its 0700 mode (the SQLite store requires it).
 COPY --from=build-server --chown=65532:65532 /out/rootfs/ /
