@@ -217,3 +217,47 @@ func TestNewFlagsAreDocumentedOrHidden(t *testing.T) {
 		}
 	}
 }
+
+// How output looks follows the environment: the locale decides symbols, the
+// terminal decides colour, COLUMNS decides the width, and --plain overrides
+// all of it.
+func TestOutputStyleFollowsTheEnvironmentAndPlain(t *testing.T) {
+	none := filepath.Join(t.TempDir(), "absent.yaml")
+	probe := command("style", func(c *cobra.Command, f *cli.Factory) error {
+		var buffer bytes.Buffer // not a terminal: no colour in any case
+		style := f.StyleFor(&buffer)
+		_, err := fmt.Fprintf(c.OutOrStdout(), "unicode=%t color=%t plain=%t width=%d stderr-unicode=%t\n",
+			style.Unicode, style.Color, style.Plain, f.Width(&buffer), f.Style().Unicode)
+
+		return err
+	})
+
+	env := func(values map[string]string) cli.Options {
+		options := testOptions(probe)
+		options.Getenv = func(key string) string { return values[key] }
+
+		return options
+	}
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{"utf-8 locale and COLUMNS", map[string]string{"LANG": "en_US.UTF-8", "COLUMNS": "100"}, nil,
+			"unicode=true color=false plain=false width=100 stderr-unicode=true\n"},
+		{"C locale is ASCII", map[string]string{"LANG": "C"}, nil,
+			"unicode=false color=false plain=false width=80 stderr-unicode=false\n"},
+		{"--plain wins over a UTF-8 locale", map[string]string{"LANG": "en_US.UTF-8"}, []string{"--plain"},
+			"unicode=false color=false plain=true width=80 stderr-unicode=false\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runWithEnv(t, nil, env(tc.env), append([]string{"--config", none}, append(tc.args, "style")...)...)
+			if got.code != 0 || got.stdout != tc.want {
+				t.Fatalf("result = %+v, want stdout %q", got, tc.want)
+			}
+		})
+	}
+}

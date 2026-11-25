@@ -237,8 +237,8 @@ func sample(text string, opts Options) (string, int) {
 	return out, left
 }
 
-// GroupView is one group of hosts with identical results.
-type GroupView struct {
+// View is one group of hosts with identical results.
+type View struct {
 	// Hosts are the host names in natural order.
 	Hosts []string
 	// Count is len(Hosts).
@@ -259,7 +259,7 @@ type GroupView struct {
 type ClassView struct {
 	Class  Class
 	Hosts  int
-	Groups []GroupView
+	Groups []View
 }
 
 // DriftKind says how the succeeded hosts compare with each other.
@@ -371,7 +371,7 @@ func ExitFor(s Summary) int {
 // can be called repeatedly while results are still arriving. The result is
 // identical for any order in which the same results were added.
 func (a *Aggregator) Summary() Summary {
-	byClass := make([][]GroupView, classCount)
+	byClass := make([][]View, classCount)
 
 	for _, b := range a.buckets {
 		hosts := make([]string, len(b.hosts))
@@ -380,7 +380,7 @@ func (a *Aggregator) Summary() Summary {
 		}
 		sort.Slice(hosts, func(i, j int) bool { return NaturalLess(hosts[i], hosts[j]) })
 
-		byClass[b.class] = append(byClass[b.class], GroupView{
+		byClass[b.class] = append(byClass[b.class], View{
 			Hosts: hosts, Count: len(hosts), ExitCode: b.exit, ErrorClass: b.errClass,
 			Stdout: b.stdout, Stderr: b.stderr, StdoutMore: b.stdoutMore, StderrMore: b.stderrMore,
 		})
@@ -408,7 +408,7 @@ func (a *Aggregator) Summary() Summary {
 
 // lessGroup orders groups: larger first, then by their first host, then by the
 // shared result so the order is total.
-func lessGroup(a, b GroupView) bool {
+func lessGroup(a, b View) bool {
 	if a.Count != b.Count {
 		return a.Count > b.Count
 	}

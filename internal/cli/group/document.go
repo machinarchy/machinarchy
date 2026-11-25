@@ -75,10 +75,7 @@ func (s Summary) Document() Document {
 	for _, view := range s.Classes {
 		class := DocumentClass{Class: view.Class.String(), Hosts: view.Hosts, Groups: make([]DocumentGroup, 0, len(view.Groups))}
 		for _, g := range view.Groups {
-			class.Groups = append(class.Groups, DocumentGroup{
-				Hosts: g.Hosts, Count: g.Count, ExitCode: g.ExitCode, ErrorClass: g.ErrorClass,
-				Stdout: g.Stdout, Stderr: g.Stderr, StdoutMore: g.StdoutMore, StderrMore: g.StderrMore, Differs: g.Differs,
-			})
+			class.Groups = append(class.Groups, DocumentGroup(g))
 		}
 		doc.Classes = append(doc.Classes, class)
 	}

@@ -323,7 +323,7 @@ func (c *HTTPClient) transportError(ctx context.Context, method, endpoint string
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		return clierr.Wrap(clierr.ExitUnavailable,
 			fmt.Errorf("%s %s timed out after %s", method, endpoint, c.http.Timeout),
-			"The server did not respond in time. Increase --request-timeout (or MACHINARCHY_CLI_REQUEST_TIMEOUT), or check that the server is healthy.")
+			"The server did not respond in time. Increase --request-timeout (or MACHINARCHY_REQUEST_TIMEOUT), or check that the server is healthy.")
 	}
 
 	// The URL error repeats the full request URL; report only the cause.

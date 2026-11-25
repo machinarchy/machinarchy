@@ -123,7 +123,7 @@ func reportError(w io.Writer, err error, started bool, path string, p presentati
 
 		return code
 	}
-	_, _ = io.WriteString(w, ui.Render(m, p.style))
+	_, _ = fmt.Fprint(w, ui.Render(m, p.style))
 
 	return code
 }
@@ -150,5 +150,5 @@ func writeJSONError(w io.Writer, code int, m msg.Message) {
 
 		return
 	}
-	_, _ = w.Write(append(encoded, '\n'))
+	_, _ = fmt.Fprintf(w, "%s\n", encoded)
 }

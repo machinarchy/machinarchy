@@ -40,6 +40,9 @@ type Options struct {
 	// Aliases lists the old commands that have been replaced. Each is hidden
 	// and prints its replacement when it runs; its behaviour is unchanged.
 	Aliases []deprecate.Alias
+	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
+	// locale, COLUMNS). Nil selects os.Getenv; tests inject one.
+	Getenv func(string) string
 }
 
 // NewRootCommand creates a Cobra root and binds shared configuration flags.
@@ -58,6 +61,7 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	factory := &Factory{
 		Streams:       streams,
 		ClientBuilder: options.ClientBuilder,
+		Getenv:        options.Getenv,
 		Logger: slog.New(slog.NewJSONHandler(streams.ErrOut,
 			&slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
@@ -97,7 +101,9 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	flags.String("confirm", "", "Answer a type-the-name confirmation without a prompt")
 	flags.String("confirm-env", "", "Answer a protected-environment confirmation without a prompt")
 	for _, name := range []string{"dry-run", "confirm", "confirm-env"} {
-		_ = flags.MarkHidden(name)
+		if err := flags.MarkHidden(name); err != nil {
+			panic(err.Error()) // the flag was defined just above
+		}
 	}
 
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {

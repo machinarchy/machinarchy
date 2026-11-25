@@ -88,7 +88,7 @@ func (r *renderer) render(s Summary) {
 	for _, view := range s.Classes {
 		groups, extra := view.Groups, ""
 		if collapsible(view, s.Drift) {
-			groups, extra = []GroupView{merge(view)}, "  each printed different output"
+			groups, extra = []View{merge(view)}, "  each printed different output"
 		}
 
 		for _, g := range groups {
@@ -159,10 +159,10 @@ func (r *renderer) header(s Summary) (string, []string) {
 	}
 
 	var m msg.Message
-	switch {
-	case ok == s.Total:
+	switch ok {
+	case s.Total:
 		m = msg.Get("run.all_ok")
-	case ok == 0:
+	case 0:
 		m = msg.Get("run.all_failed")
 	default:
 		m = msg.Get("run.partial")
@@ -194,16 +194,16 @@ func collapsible(view ClassView, d Drift) bool {
 }
 
 // merge joins the groups of a class into one, without samples.
-func merge(view ClassView) GroupView {
+func merge(view ClassView) View {
 	hosts := make([]string, 0, view.Hosts)
 	for _, g := range view.Groups {
 		hosts = append(hosts, g.Hosts...)
 	}
 
-	return GroupView{Hosts: SortNatural(hosts), Count: view.Hosts, ExitCode: view.Groups[0].ExitCode}
+	return View{Hosts: SortNatural(hosts), Count: view.Hosts, ExitCode: view.Groups[0].ExitCode}
 }
 
-func (r *renderer) group(class Class, g GroupView, multi bool, extra string) {
+func (r *renderer) group(class Class, g View, multi bool, extra string) {
 	sym := symbolFor(class)
 	if g.Differs {
 		sym = ui.SymWarn
@@ -356,7 +356,7 @@ func symbolFor(c Class) ui.Symbol {
 }
 
 // describe is the short statement of what happened to a group.
-func describe(c Class, g GroupView, timeout string) string {
+func describe(c Class, g View, timeout string) string {
 	exit := ""
 	if g.ExitCode != nil {
 		exit = "exit " + strconv.Itoa(*g.ExitCode)

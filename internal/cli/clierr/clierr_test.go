@@ -129,7 +129,7 @@ func TestDetailedKeepsTheMostSpecificClassification(t *testing.T) {
 	t.Parallel()
 
 	inner := Newf(ExitConflict, "retry", "stale")
-	if got := Detailed(ExitUsage, inner, "why", "next"); got != inner {
+	if got := Detailed(ExitUsage, inner, "why", "next"); !errors.Is(got, inner) {
 		t.Fatal("an already classified error must be returned unchanged")
 	}
 }

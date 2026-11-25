@@ -236,7 +236,7 @@ func (f *Factory) Yes() bool {
 }
 
 // OutputFormat returns the format the user selected with --output or
-// MACHINARCHY_CLI_OUTPUT, or defaultFormat when the user made no choice. A
+// MACHINARCHY_OUTPUT, or defaultFormat when the user made no choice. A
 // command picks its own default (a list is a table, a document is JSON).
 func (f *Factory) OutputFormat(defaultFormat output.Format) (output.Format, error) {
 	explicit := f.Config().OutputExplicit()
