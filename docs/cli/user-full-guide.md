@@ -752,8 +752,8 @@ CURRENT  NAME     CLUSTER  USER          ENVIRONMENT
 
 $ machinarchy secret list
 Error: API returned HTTP 403: permission denied (request ID IssupaPSPGpSdQQHnNwQiQzDPmCnovif)
-Hint: The credential is valid but is not permitted to do this.
-Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them.
+Why:   The credential is valid but is not permitted to do this.
+Next:  Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them.
 
 $ machinarchy --context lab secret list -o json | jq -r ".[].name"
 lab-key
@@ -792,8 +792,9 @@ Real errors from this lab and what they mean:
   ```console
   $ machinarchy run --host ssh-key --wait --yes -- whoami
   Error: submit operation: API returned HTTP 403: command execution is not permitted: program "whoami" is not on the allowed list (request ID …)
-  Hint: The server's execution policy does not allow this command. An owner can add a matching entry,
-  such as "systemctl is-active {unit}", to operations.allowedPrograms with PUT /api/v1/runtime-config.
+  Why:   The server's execution policy does not allow this command.
+  Next:  An owner can add a matching entry, such as "systemctl is-active {unit}",
+         to operations.allowedPrograms with PUT /api/v1/runtime-config.
   ```
 - **A host whose keys changed** shows `READY False` / `HostKeyChanged` soon
   after the first command to it fails on its keys (`remote_execution_failed`

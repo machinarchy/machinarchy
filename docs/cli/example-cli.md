@@ -91,12 +91,12 @@ Add config files containing credentials to `.gitignore` before creating them.
 
 ```sh
 MACHINARCHY_CLI_CONTEXT=staging go run ./cmd/machinarchy get hosts
-MACHINARCHY_CLI_ENV=production go run ./cmd/machinarchy get hosts
-MACHINARCHY_CLI_OUTPUT=json go run ./cmd/machinarchy get hosts
-MACHINARCHY_CLI_VERBOSE=true go run ./cmd/machinarchy get hosts
+MACHINARCHY_ENV=production go run ./cmd/machinarchy get hosts
+MACHINARCHY_OUTPUT=json go run ./cmd/machinarchy get hosts
+MACHINARCHY_VERBOSE=true go run ./cmd/machinarchy get hosts
 ```
 
-`MACHINARCHY_CLI_SERVER` and `MACHINARCHY_CLI_TOKEN` can temporarily override the endpoint and bearer token selected by the context. Avoid exporting long-lived credentials into shared or logged environments.
+`MACHINARCHY_SERVER` and `MACHINARCHY_TOKEN` can temporarily override the endpoint and bearer token selected by the context. Avoid exporting long-lived credentials into shared or logged environments.
 
 ## Troubleshooting and quality commands
 

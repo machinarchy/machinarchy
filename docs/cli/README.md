@@ -90,7 +90,7 @@ The CLI refuses to send its token over plain `http://` to a host that is not
 loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`): use `https://`.
 For a trusted lab network, opt in per cluster with `--insecure-http`. The
 opt-in does not cover a server given with `--server` or
-`MACHINARCHY_CLI_SERVER`.
+`MACHINARCHY_SERVER`.
 
 **New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login and CLI context to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
 
@@ -101,6 +101,7 @@ See [commands and flags](commands.md) for details and [example-cli.md](example-c
 - Prefer `config set-credentials NAME --token-stdin`; `--token TOKEN` is available but may expose secrets through shell history or process inspection.
 - The config file contains bearer tokens in plaintext. The CLI creates its parent directory with owner-only permissions and writes the config with mode `0600`; protect backups and any copied config files accordingly.
 - Use HTTPS for remote API servers. HTTP is useful for local development but sends the bearer token without transport encryption.
+- Text that comes from a server or a remote host (host names, command output, error messages) is cleaned of terminal escape sequences and control characters before it is printed, so a remote command cannot clear your screen or write to your clipboard. `-o json` and `-o yaml` escape control characters instead.
 - Treat `--verbose` output as operational logs. Current debug logging records the selected context and environment, not the token.
 
 ## Extending the command tree

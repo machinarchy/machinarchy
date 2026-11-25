@@ -71,31 +71,51 @@ Prefer the commands over editing the token field directly. The config file store
 
 ## Environment variables and precedence
 
-Settings are resolved in this order, highest priority first:
+Global options are resolved in this order, highest priority first:
 
-1. Command-line flags
-2. `MACHINARCHY_CLI_*` environment variables
-3. The selected context in the config file (server, token, default environment)
-4. Built-in defaults
+1. A flag on the command line
+2. The environment variable `MACHINARCHY_<NAME>`
+3. The old environment variable `MACHINARCHY_CLI_<NAME>` (deprecated; it still works and prints one warning line on stderr)
+4. A saved default under `defaults:` in the config file (below)
+5. The option's built-in default
 
-The config file is read as plain YAML, so context, cluster, and user names are preserved exactly as written (`Prod.EU` stays `Prod.EU`). Each environment variable is the upper-cased flag name with `-` replaced by `_`:
+The selected context in the config file (server, token, default environment) supplies the server, token and environment when no flag or variable overrides them.
+
+The config file is read as plain YAML, so context, cluster, and user names are preserved exactly as written (`Prod.EU` stays `Prod.EU`). Each environment variable is the upper-cased flag name with `-` replaced by `_`. A variable that is set but empty counts as not set.
 
 | Variable | Purpose |
 | --- | --- |
-| `MACHINARCHY_CLI_CONTEXT` | Select a context for the process |
-| `MACHINARCHY_CLI_ENV` | Override the context's default environment filter |
-| `MACHINARCHY_CLI_OUTPUT` | Set output format (`table`, `json`, or `yaml`) |
-| `MACHINARCHY_CLI_VERBOSE` | Enable debug logging (`true` or `false`) |
-| `MACHINARCHY_CLI_SERVER` | Override the selected context's server for this process |
-| `MACHINARCHY_CLI_TOKEN` | Override the selected context's token for this process |
-| `MACHINARCHY_CLI_REQUEST_TIMEOUT` | Per-request HTTP timeout, for example `10s` or `2m` (default `30s`) |
-| `MACHINARCHY_CLI_QUIET` | Suppress status output (`true` or `false`) |
-| `MACHINARCHY_CLI_NO_HEADERS` | Omit table headers (`true` or `false`) |
-| `MACHINARCHY_CLI_NO_INPUT` | Never prompt (`true` or `false`) |
+| `MACHINARCHY_ENV` | Override the context's default environment filter |
+| `MACHINARCHY_OUTPUT` | Set output format (`table`, `json`, or `yaml`) |
+| `MACHINARCHY_VERBOSE` | Enable debug logging (`true` or `false`) |
+| `MACHINARCHY_SERVER` | Override the selected context's server for this process |
+| `MACHINARCHY_TOKEN` | Override the selected context's token for this process |
+| `MACHINARCHY_REQUEST_TIMEOUT` | Per-request HTTP timeout, for example `10s` or `2m` (default `30s`) |
+| `MACHINARCHY_QUIET` | Suppress status output (`true` or `false`) |
+| `MACHINARCHY_NO_HEADERS` | Omit table headers (`true` or `false`) |
+| `MACHINARCHY_NO_INPUT` | Never prompt (`true` or `false`) |
+| `MACHINARCHY_PLAIN` | Plain output: no colour, symbols or flavour text (`true` or `false`) |
+| `MACHINARCHY_NO_DEPRECATION_WARNINGS` | Set to `1` to silence the warning lines about old command and variable names |
+| `MACHINARCHY_CLI_CONTEXT` | Select a context for the process (it has no new name yet) |
+
+Every `MACHINARCHY_CLI_*` name above, except `MACHINARCHY_CLI_CONTEXT`, still works for now; when it is used, one line on stderr names its replacement. If both the old and the new name are set, the new one is used and nothing is printed.
 
 The config path has its separate `MACHINARCHY_CONFIG` variable. For API server and token, the process environment overrides the current context's stored values.
 
-`--yes` is deliberately **not** available as an environment variable or config setting. Skipping a confirmation must be an explicit choice on each command line.
+`--yes`, `--confirm`, `--confirm-env` and `--dry-run` are deliberately **not** available as environment variables or saved defaults. Each is an answer to one invocation, and a standing "yes" would defeat the confirmation it answers.
+
+### Saved defaults
+
+A few options can be saved in the config file so they apply when neither a flag nor a variable is given:
+
+```yaml
+defaults:
+  output: json
+  plain: true
+  request-timeout: 60s
+```
+
+Allowed keys: `no-headers`, `no-input`, `output`, `plain`, `quiet`, `request-timeout`, `verbose`. Anything else (including `server`, `token`, `env`, `yes`) is refused when the file is read, with exit code 2 and the list of allowed keys; a boolean that is not `true` or `false` is refused too.
 
 A value that cannot be used (for example `--output xml` or `--request-timeout banana`) fails immediately with exit code 2, before any command runs.
 
@@ -114,6 +134,11 @@ Global flags:
 | `--no-headers` | Omit table headers |
 | `--no-input` | Never prompt; fail with exit code 2 if input or confirmation would be needed |
 | `--yes`, `-y` | Pre-confirm destructive or sensitive actions (flag only) |
+| `--plain` | Plain output: no colour, symbols or flavour text. Also on when `MACHINARCHY_PLAIN` is true or `defaults.plain` is true. |
+
+`--dry-run`, `--confirm NAME` and `--confirm-env ENV` are accepted but hidden: they belong to commands that do not exist yet. A command that does not support `--dry-run` refuses it (exit 2) instead of ignoring it, so a "dry run" can never change anything.
+
+Colour is used only on a terminal, and not when `NO_COLOR` is set or `TERM=dumb`. Symbols such as ✔ and ✖ are used only when the locale is UTF-8 (`LC_ALL`, `LC_CTYPE` or `LANG`); otherwise the words `OK` and `FAILED` are printed. `--plain` turns all of it off.
 
 `secret delete`, `secret rewrap` and `runtime-config rollback` ask for confirmation; `--yes` skips the prompt and `--no-input` makes them fail instead of prompting.
 

@@ -141,7 +141,21 @@ go run ./cmd/machinarchy config set-context local --cluster local --user local -
 
 ## Exit codes
 
-Every failure prints `Error: <what happened>` and, when there is advice, `Hint: <how to fix it>` to stderr. The process exit code identifies the kind of failure so scripts can react to it:
+Every failure prints up to three lines to stderr, in this order, and the process exit code identifies the kind of failure so scripts can react to it:
+
+```text
+Error: <what happened>
+Why:   <the cause, when it is known>
+Next:  <the exact command or action>
+```
+
+`Next:` was called `Hint:` before; the text is the same kind of advice. With `-o json` (or `MACHINARCHY_OUTPUT=json`) the same parts are written to stderr as one JSON object, and stdout stays empty:
+
+```json
+{"error":{"code":"auth","exit":3,"message":"...","why":"...","next":"..."}}
+```
+
+`code` is one of `usage`, `auth`, `unavailable`, `waitTimeout`, `notFound`, `conflict`, `partial`, `allFailed` or `failure`. `-o json` and `--plain` apply to the error even when the config file could not be loaded. Text that came from a server or a host is cleaned of terminal escape sequences before it is printed.
 
 | Code | Meaning |
 | ---: | --- |
@@ -150,9 +164,11 @@ Every failure prints `Error: <what happened>` and, when there is advice, `Hint: 
 | 2 | Usage error: unknown command or flag, invalid argument, bad value, unusable config file, missing confirmation, or input the API rejected as invalid (HTTP 400, 422) |
 | 3 | Authentication or authorization failure (HTTP 401, 403) |
 | 4 | API server, network, or timeout failure (HTTP 5xx, 408, 429, connection refused, request timeout, response that is not Machinarchy API JSON) |
-| 5 | Reserved: a local wait deadline elapsed while work is still running |
+| 5 | A local wait deadline (`--wait-timeout`) elapsed while the work it was watching is still running. No command uses it yet. |
 | 6 | Not found (HTTP 404, or a named host or environment that does not exist) |
 | 7 | Conflict or failed precondition (HTTP 409, 412), for example a stale `--expected-revision` |
+| 8 | A run finished with some hosts failed. No command uses it yet; it is for the grouped run result. |
+| 9 | A run finished with every host failed. No command uses it yet. |
 | 130 | Interrupted (Ctrl-C or SIGTERM) |
 
 Ctrl-C now exits 130; it previously exited 0. Interrupting a command stops only the local process: it does not cancel work already accepted by the server.

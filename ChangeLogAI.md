@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M1: foundations (branch feat/cli-m1)
+
+- **New packages under `internal/cli`:** `sanitize` (terminal-safe text, with a stream form for followed output), `msg` (message catalogue: plain primary line, why, next, optional lore), `ui` (style detection, message rendering, `--plain`, progress line), `group` (grouped-output aggregator and renderer), `deprecate` (deprecated-alias mechanism). No new third-party dependency; a test checks that the CLI binary links only cobra, pflag, yaml, `x/term` and `x/sys`.
+- **Errors:** every error prints `Error:` / `Why:` / `Next:` (the old `Hint:` label is now `Next:`); with `-o json` the same parts are one JSON object on stderr. Exit codes 5, 8 and 9 exist (wait timeout, some hosts failed, every host failed); no command returns them yet. API errors split their advice into a cause and a next step.
+- **Options:** one precedence for global options: flag, `MACHINARCHY_<NAME>`, the deprecated `MACHINARCHY_CLI_<NAME>` (still works, one warning line), saved `defaults:` in the config file, default. Empty variables count as unset. New `--plain` / `MACHINARCHY_PLAIN`. `--yes`, `--confirm`, `--confirm-env`, `--dry-run` stay flag-only; `--dry-run` is refused by commands that do not support it.
+- **Security fix:** table cells, followed command output, output headers, the trust prompt and operation messages are sanitised, so remote text cannot send terminal escape sequences (audit F-04).
+- **Not changed:** no old command is registered as a deprecated alias yet (their replacements do not exist); no command uses the grouped renderer yet (M4). Deviations from the spec are in `docs/cli/spec/M1-notes.md`.
+- **Checks run:** `gofmt -l` (clean), `go build ./...`, `go vet ./...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; coverage cli 87.7 %, api 75.9 %, clierr 91.4 %, commands 81.1 %, config 72.8 %, output 92.0 %, sanitize 98.3 %, msg 98.0 %, ui 91.3 %, group 93.4 %, deprecate 100 %), and `go test ./...` for the whole repository (all pass, including test/e2e and test/ha). The 5,000-host x 15 KiB memory test runs only in a plain `go test` (measured about 0.5 s and no retained output). Fuzzing of the sanitiser ran for 20 s with no finding. Not run: `make smoke`, the Postgres store tests, a manual check in a real terminal.
+
 ## 2026-11-26 — CLI redesign specification (documentation only, branch docs/cli-spec)
 
 - **What:** `docs/cli/spec/01-10` describe the target state of a task-first, beginner-friendly `machinarchy` CLI: summary and decisions, command contracts, UX transcripts, threat model, architecture, API matrix, brand and voice, migration, acceptance tests, and milestones M1-M6. The existing user docs in `docs/cli/` are not changed and still describe the current CLI.

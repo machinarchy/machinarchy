@@ -54,7 +54,7 @@ curl -i http://localhost:8080/healthz/ready
 go run ./cmd/machinarchy --verbose get hosts
 ```
 
-Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_CLI_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
+Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
 
 If the error says the server did not return JSON, or reports a redirect, the configured URL probably points at a proxy, a login page, or an `http://` address that forwards to `https://`. The CLI does not follow redirects so that it never sends your token somewhere unexpected.
 
