@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-25 — Echo v4.16.6; Echo is kept (Phase 21: D-14; branch audit/final)
+
+- `github.com/labstack/echo/v4` v4.16.4 → v4.16.6, which fixes GO-2026-6875 and GO-2026-6872. Both had been allowlisted as not exploitable here.
+- ADR-058 (owner decision): keep Echo and upgrade when fixes appear; migrate to `net/http` only if Echo stops shipping security fixes.
+- `make vuln` reports both allowlist entries as no longer reported. They are not removed yet: the file is under `scripts/` and needs the owner's go-ahead.
+- **Checks run:**
+  - `govulncheck ./...`: no vulnerabilities found;
+  - `make vuln`: no unaccepted vulnerabilities;
+  - `go test` for transport, bootstrap and e2e: pass.
+
 ## 2026-11-25 — Runner test waits long enough under load (Phase 20; branch audit/ha)
 
 - `TestTimeoutWithoutProcessGroupKillsTheTree` waited 5 s for the supervisor to record its branch. In the full suite, with every package running in parallel, that wasn't enough, and the test failed once. It now waits up to 20 s, like the file's other bounded waits.

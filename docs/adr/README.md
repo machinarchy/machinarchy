@@ -61,3 +61,4 @@ All ADRs live in this directory; the two earlier directories (`docs/DECISIONS`, 
 | [ADR-055: The managed resource model is the only host model; the schema is one baseline](ADR-055-managed-model-only-and-schema-baseline.md) | Implemented |  |
 | [ADR-056: One root of trust behind a key-provider interface, built-in by default](ADR-056-key-providers-built-in-default.md) | Implemented | `local` provider; KMS providers optional (AUDIT/10 K1–K4); signing key and Operation data in the same envelope. |
 | [ADR-057: Agent capabilities run as Operations](ADR-057-capability-operations.md) | Accepted | Phase 17: `OperationKind=Capability`, `agent` connector, per-host enrolment binding, durable dispatch and results; `invoke` removed. |
+| [ADR-058: Keep Echo; track its fixes instead of migrating](ADR-058-keep-echo.md) | Accepted | D-14: Echo v4.16.6 fixes GO-2026-6875 and GO-2026-6872; no migration to `net/http`. |

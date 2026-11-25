@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/labstack/echo/v4 v4.16.4
+	github.com/labstack/echo/v4 v4.16.6
 	github.com/machinarchy/machinarchy-agent/protocol v0.0.0
 	github.com/nats-io/jwt/v2 v2.8.3
 	github.com/nats-io/nats-server/v2 v2.15.3
