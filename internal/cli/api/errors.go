@@ -19,10 +19,10 @@ const (
 	maxRetryAfter     = 24 * time.Hour
 )
 
-// APIError is a non-2xx response from the Machinarchy API. It carries the HTTP
+// Error is a non-2xx response from the Machinarchy API. It carries the HTTP
 // status so the CLI can pick an exit code and a remediation hint without
 // parsing message text.
-type APIError struct {
+type Error struct {
 	// Status is the HTTP status code.
 	Status int
 	// Message is the server's explanation, sanitised for terminal output.
@@ -42,7 +42,7 @@ type APIError struct {
 }
 
 // Error returns a one-line description. It never includes the credential.
-func (e *APIError) Error() string {
+func (e *Error) Error() string {
 	message := fmt.Sprintf("API returned HTTP %d: %s", e.Status, e.Message)
 	if e.RequestID != "" {
 		message += " (request ID " + e.RequestID + ")"
@@ -52,7 +52,7 @@ func (e *APIError) Error() string {
 }
 
 // ExitCode maps the HTTP status to a CLI exit code.
-func (e *APIError) ExitCode() int {
+func (e *Error) ExitCode() int {
 	switch {
 	case e.Status == http.StatusUnauthorized, e.Status == http.StatusForbidden:
 		return clierr.ExitAuth
@@ -72,7 +72,7 @@ func (e *APIError) ExitCode() int {
 }
 
 // ErrorHint suggests how the user can resolve the failure.
-func (e *APIError) ErrorHint() string {
+func (e *Error) ErrorHint() string {
 	switch {
 	case e.Status == http.StatusUnauthorized:
 		return "The server did not accept the stored credential; it may be expired or revoked.\n" +
@@ -112,14 +112,14 @@ func (e *APIError) ErrorHint() string {
 }
 
 // Field returns a top-level string field of the JSON error body.
-func (e *APIError) Field(name string) string {
+func (e *Error) Field(name string) string {
 	return e.Fields[name]
 }
 
-// newAPIError builds an APIError from a non-2xx response and its (possibly
+// newError builds an Error from a non-2xx response and its (possibly
 // truncated) body.
-func newAPIError(response *http.Response, method, path string, body []byte) *APIError {
-	apiErr := &APIError{
+func newError(response *http.Response, method, path string, body []byte) *Error {
+	apiErr := &Error{
 		Status:    response.StatusCode,
 		RequestID: sanitize(response.Header.Get("X-Request-Id")),
 		Location:  sanitize(response.Header.Get("Location")),

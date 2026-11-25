@@ -137,7 +137,7 @@ func (f *fakeClient) GetHost(_ context.Context, id string) (*api.Host, error) {
 			return &host, nil
 		}
 	}
-	return nil, &api.APIError{Status: 404, Message: "resource not found"}
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) CreateHost(_ context.Context, input api.HostInput) (*api.Host, error) {
@@ -155,10 +155,10 @@ func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint
 	for i := range f.hosts {
 		if f.hosts[i].Metadata.ID == id {
 			if f.hosts[i].Metadata.Generation != generation {
-				return nil, &api.APIError{Status: 409, Message: "resource revision conflict"}
+				return nil, &api.Error{Status: 409, Message: "resource revision conflict"}
 			}
 			if len(f.hosts[i].Spec.AccessTarget.Trust) > 0 && !replace {
-				return nil, &api.APIError{Status: 409, Message: "the Host already trusts host keys"}
+				return nil, &api.Error{Status: 409, Message: "the Host already trusts host keys"}
 			}
 			f.hosts[i].Spec.AccessTarget.Trust = fingerprints
 			f.hosts[i].Metadata.Generation++
@@ -166,21 +166,21 @@ func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint
 			return &f.hosts[i], nil
 		}
 	}
-	return nil, &api.APIError{Status: 404, Message: "resource not found"}
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) SetHostLabels(_ context.Context, id string, revision uint64, labels map[string]string) (*api.Host, error) {
 	for i := range f.hosts {
 		if f.hosts[i].Metadata.ID == id {
 			if f.hosts[i].Metadata.Revision != revision {
-				return nil, &api.APIError{Status: 409, Message: "resource revision conflict"}
+				return nil, &api.Error{Status: 409, Message: "resource revision conflict"}
 			}
 			f.hosts[i].Metadata.Labels = labels
 			f.hosts[i].Metadata.Revision++
 			return &f.hosts[i], nil
 		}
 	}
-	return nil, &api.APIError{Status: 404, Message: "resource not found"}
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) ListEnvironments(context.Context) ([]api.Environment, error) {
@@ -235,7 +235,7 @@ func (f *fakeClient) SubmitOperation(_ context.Context, input api.OperationInput
 func (f *fakeClient) GetOperation(_ context.Context, id string) (*api.Operation, error) {
 	op, ok := f.ops[id]
 	if !ok {
-		return nil, &api.APIError{Status: 404, Message: "resource not found"}
+		return nil, &api.Error{Status: 404, Message: "resource not found"}
 	}
 	// Each poll moves the operation along: Queued -> Running -> Succeeded.
 	next := map[string]string{"Queued": "Running", "Running": "Succeeded"}
@@ -256,7 +256,7 @@ func (f *fakeClient) TargetOutput(_ context.Context, operationID, hostID, stream
 	f.calls++
 	text, ok := f.outputs[operationID+"/"+hostID+"/"+stream]
 	if !ok {
-		return nil, &api.APIError{Status: 404, Message: "resource not found"}
+		return nil, &api.Error{Status: 404, Message: "resource not found"}
 	}
 	end := min(int(from)+6, len(text))
 	return &api.TargetOutput{OperationID: operationID, HostID: hostID, Stream: stream, Text: text[from:end],
@@ -661,9 +661,9 @@ func TestGetHosts(t *testing.T) {
 			wantCode int
 			wantHint string
 		}{
-			{"unauthorized", &api.APIError{Status: 401, Message: "expired"}, clierr.ExitAuth, "set-credentials"},
-			{"forbidden", &api.APIError{Status: 403, Message: "no"}, clierr.ExitAuth, "permitted"},
-			{"server error", &api.APIError{Status: 502, Message: "bad gateway"}, clierr.ExitUnavailable, "Retry later"},
+			{"unauthorized", &api.Error{Status: 401, Message: "expired"}, clierr.ExitAuth, "set-credentials"},
+			{"forbidden", &api.Error{Status: 403, Message: "no"}, clierr.ExitAuth, "permitted"},
+			{"server error", &api.Error{Status: 502, Message: "bad gateway"}, clierr.ExitUnavailable, "Retry later"},
 			{"unreachable", clierr.Newf(clierr.ExitUnavailable, "check the URL", "cannot reach the API server"), clierr.ExitUnavailable, "check the URL"},
 		}
 

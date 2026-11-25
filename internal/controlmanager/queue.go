@@ -26,18 +26,6 @@ const (
 	QueueShuttingDown
 )
 
-type Queue interface {
-	Add(ResourceKey) Admission
-	AddAfter(ResourceKey, time.Duration) Admission
-	AddRateLimited(ResourceKey) Admission
-	Get(context.Context) (ResourceKey, bool)
-	Done(ResourceKey)
-	Forget(ResourceKey)
-	NumRequeues(ResourceKey) int
-	Len() int
-	Shutdown()
-}
-
 type ResourceQueue struct {
 	mu          sync.Mutex
 	capacity    int

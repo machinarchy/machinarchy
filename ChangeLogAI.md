@@ -1,5 +1,27 @@
 # ChangeLogAI
 
+## 2026-11-25 — Lint 0, duplication cut, dead interface removed (Phase 21: D-15, Q-22, Q-23; branch audit/final)
+
+- **Full `golangci-lint run ./...`: 15 issues → 0.**
+  - 13 test uses of the deprecated `secrets.StaticKeyProvider` now use `LocalProvider`, and the alias is removed (no production user).
+  - `api.APIError` is renamed `api.Error` (revive stutter). The package is internal, so no alias is needed.
+  - One unused test parameter fixed.
+- **Duplication** (the Phase 5 method: golangci-lint with `dupl` threshold 60): production fragments 26 → 20. The real duplications are extracted:
+  - the gateway's two registration refusals → one `refuse` closure;
+  - the poller's two live-output writes → `storeLive`;
+  - the expired-Operation check in the run and capability paths → `Worker.expireIfPastDeadline`;
+  - the agent store's row-scanning loops → generic `collect`.
+- **The 20 remaining fragments are justified:**
+  - Swagger annotation blocks around one-line handlers that already share `call`/`bind` (managed-resource handler 8, secret handler 2);
+  - Cobra command declarations over the existing `managementRead` helper (CLI 6);
+  - two typed `Submit…ForRule` entry points (2);
+  - two 8-line queries of different tables (2).
+- **Q-23:** `controlmanager.Queue` was declared and never used (the engine uses `*ResourceQueue`) and is removed.
+- **Not run:** the `deadcode` tool (not installed, and downloading it was not approved). The `unused` linter reports nothing. `unparam` reports 6 test-helper parameters only.
+- **Checks run:**
+  - `golangci-lint run ./...`: 0 issues;
+  - `go test` for secrets, cli, controlmanager, agentgateway, operationworker, store, hostaccess, service and transport: 31 packages pass.
+
 ## 2026-11-25 — ADR-034 amended to the implemented API design (Phase 21: D-15; branch audit/final)
 
 - **Owner decision: amend rather than implement.** ADR-034 now records what the API does:

@@ -69,11 +69,6 @@ type LocalProvider struct {
 	Previous map[string][]byte
 }
 
-// StaticKeyProvider is the former name of LocalProvider.
-//
-// Deprecated: use LocalProvider.
-type StaticKeyProvider = LocalProvider
-
 var _ KeyProvider = (*LocalProvider)(nil)
 
 // Name implements KeyProvider.

@@ -417,13 +417,7 @@ func (w *Worker) execute(parent context.Context, key resource.OperationKey) {
 	if op.Status.State != resource.OperationQueued {
 		return
 	}
-	if op.Spec.Deadline != nil && !time.Now().Before(*op.Spec.Deadline) {
-		expected := op.Revision
-		if op.Finish(resource.OperationTimedOut, time.Now()) == nil {
-			if err := w.deps.Operations.UpdateOperation(ctx, op, expected); err != nil {
-				w.deps.Logger.Warn("persist expired Operation failed", "error", err)
-			}
-		}
+	if w.expireIfPastDeadline(ctx, op) {
 		return
 	}
 	expected := op.Revision
@@ -589,6 +583,21 @@ func (w *Worker) runAttachedTarget(ctx context.Context, key resource.OperationKe
 		stored = &resource.TargetResult{ErrorClass: "cancelled"}
 	}
 	w.completeTarget(context.WithoutCancel(ctx), key, targetSpec.HostID, state, stored)
+}
+
+// expireIfPastDeadline finishes a queued Operation as TimedOut when its
+// deadline passed before it started, and reports whether it did.
+func (w *Worker) expireIfPastDeadline(ctx context.Context, op *resource.Operation) bool {
+	if op.Spec.Deadline == nil || time.Now().Before(*op.Spec.Deadline) {
+		return false
+	}
+	expected := op.Revision
+	if op.Finish(resource.OperationTimedOut, time.Now()) == nil {
+		if err := w.deps.Operations.UpdateOperation(ctx, op, expected); err != nil {
+			w.deps.Logger.Warn("persist expired Operation failed", "error", err)
+		}
+	}
+	return true
 }
 
 // markSettled records that a detached Operation has no target left to

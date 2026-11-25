@@ -57,7 +57,7 @@ func newTrustEnv(t *testing.T, deploymentDefault resource.HostKeyPolicy, servers
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretService, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "k", Key: []byte("0123456789abcdef0123456789abcdef")}, authorizer)
+	secretService, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "k", Key: []byte("0123456789abcdef0123456789abcdef")}, authorizer)
 	if err != nil {
 		t.Fatal(err)
 	}

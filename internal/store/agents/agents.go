@@ -184,15 +184,20 @@ func (s *Store) ListAgents(ctx context.Context) ([]agentgateway.Agent, error) {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
 	defer sqlx.CloseRows(rows, s.logger, "list agents")
-	agents := make([]agentgateway.Agent, 0)
+	return collect(rows, scanAgent)
+}
+
+// collect scans every row with scan.
+func collect[T any](rows *sql.Rows, scan func(interface{ Scan(...any) error }) (*T, error)) ([]T, error) {
+	out := make([]T, 0)
 	for rows.Next() {
-		agent, err := scanAgent(rows)
+		item, err := scan(rows)
 		if err != nil {
 			return nil, err
 		}
-		agents = append(agents, *agent)
+		out = append(out, *item)
 	}
-	return agents, rows.Err()
+	return out, rows.Err()
 }
 
 // RevokeAgent stops an agent's lease renewals and command delivery.
@@ -394,15 +399,7 @@ func (s *Store) ListEnrollmentTokens(ctx context.Context) ([]agentgateway.Enroll
 		return nil, fmt.Errorf("list enrollment tokens: %w", err)
 	}
 	defer sqlx.CloseRows(rows, s.logger, "list enrollment tokens")
-	tokens := make([]agentgateway.EnrollmentToken, 0)
-	for rows.Next() {
-		token, err := scanToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, *token)
-	}
-	return tokens, rows.Err()
+	return collect(rows, scanToken)
 }
 
 // RevokeEnrollmentToken revokes an unused, unrevoked token.

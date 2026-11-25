@@ -196,7 +196,7 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 	path := filepath.Join(t.TempDir(), "secrets.db")
 	f := openFixture(t, path)
 	root := []byte("0123456789abcdef0123456789abcdef")
-	provider := &secrets.StaticKeyProvider{KeyID: "external-v1", Key: root}
+	provider := &secrets.LocalProvider{KeyID: "external-v1", Key: root}
 	svc, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestSecretEncryptionAuthorizationRotationAndDatabaseRecovery(t *testing.T) 
 	if err != nil || len(versions) != 2 {
 		t.Fatalf("secret versions=%d err=%v", len(versions), err)
 	}
-	wrong, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "external-v1", Key: []byte("abcdef0123456789abcdef0123456789")}, allowSecretResolution{})
+	wrong, err := secrets.New(f.repo, &secrets.LocalProvider{KeyID: "external-v1", Key: []byte("abcdef0123456789abcdef0123456789")}, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 	defer f.db.Close()
 	oldKey := []byte("0123456789abcdef0123456789abcdef")
 	newKey := []byte("abcdef0123456789abcdef0123456789")
-	oldService, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "kek-v1", Key: oldKey}, allowSecretResolution{})
+	oldService, err := secrets.New(f.repo, &secrets.LocalProvider{KeyID: "kek-v1", Key: oldKey}, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestSecretKEKRewrapResumesInBoundedBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs = append(refs, legacyRef)
-	provider := &secrets.StaticKeyProvider{KeyID: "kek-v2", Key: newKey, Previous: map[string][]byte{"kek-v1": oldKey}}
+	provider := &secrets.LocalProvider{KeyID: "kek-v2", Key: newKey, Previous: map[string][]byte{"kek-v1": oldKey}}
 	service, err := secrets.New(f.repo, provider, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +383,7 @@ func TestSecretResolutionRequiresScopedWorkloadAuthorization(t *testing.T) {
 	f := openFixture(t, filepath.Join(t.TempDir(), "resolution-auth.db"))
 	defer f.db.Close()
 	owner := domain.Principal{UserID: 9, WorkspaceID: 1, Role: domain.RoleOwner}
-	creator, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, allowSecretResolution{})
+	creator, err := secrets.New(f.repo, &secrets.LocalProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, allowSecretResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestSecretResolutionRequiresScopedWorkloadAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := secrets.New(f.repo, &secrets.StaticKeyProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, secrets.DenyAllResolutionAuthorizer{})
+	service, err := secrets.New(f.repo, &secrets.LocalProvider{KeyID: "k1", Key: []byte("0123456789abcdef0123456789abcdef")}, secrets.DenyAllResolutionAuthorizer{})
 	if err != nil {
 		t.Fatal(err)
 	}

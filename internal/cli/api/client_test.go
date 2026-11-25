@@ -99,12 +99,12 @@ func newClient(t *testing.T, handler http.Handler, opts ...Option) *HTTPClient {
 	return client
 }
 
-func asAPIError(t *testing.T, err error) *APIError {
+func asAPIError(t *testing.T, err error) *Error {
 	t.Helper()
 
-	var apiErr *APIError
+	var apiErr *Error
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("error %T (%v) is not an *APIError", err, err)
+		t.Fatalf("error %T (%v) is not an *Error", err, err)
 	}
 
 	return apiErr
@@ -450,7 +450,7 @@ func TestRedirectsAreNotFollowed(t *testing.T) {
 	mux.HandleFunc("/api/v1/environments", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/elsewhere", http.StatusFound)
 	})
-	mux.HandleFunc("/elsewhere", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/elsewhere", func(http.ResponseWriter, *http.Request) {
 		followed.Store(true)
 	})
 	client := newClient(t, mux)
@@ -898,7 +898,7 @@ func TestAPIErrorExitCodes(t *testing.T) {
 	}
 
 	for status, want := range tests {
-		if got := (&APIError{Status: status}).ExitCode(); got != want {
+		if got := (&Error{Status: status}).ExitCode(); got != want {
 			t.Errorf("status %d: exit code = %d, want %d", status, got, want)
 		}
 	}

@@ -76,11 +76,11 @@ func TestManagedHostAndOperationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmSecrets, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "test-key", Key: key}, cmAuth)
+	cmSecrets, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "test-key", Key: key}, cmAuth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opSecrets, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "test-key", Key: key}, opAuth)
+	opSecrets, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "test-key", Key: key}, opAuth)
 	if err != nil {
 		t.Fatal(err)
 	}

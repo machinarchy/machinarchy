@@ -44,7 +44,7 @@ func newAPI(t *testing.T) *apiFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stores.Close() })
-	secretService, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "k", Key: []byte("0123456789abcdef0123456789abcdef")}, secrets.DenyAllResolutionAuthorizer{})
+	secretService, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "k", Key: []byte("0123456789abcdef0123456789abcdef")}, secrets.DenyAllResolutionAuthorizer{})
 	if err != nil {
 		t.Fatal(err)
 	}

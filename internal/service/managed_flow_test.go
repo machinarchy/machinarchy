@@ -57,7 +57,7 @@ func newManagedFixture(t *testing.T) *managedFixture {
 		return domain.Principal{UserID: user.ID, WorkspaceID: user.WorkspaceID, Role: role}
 	}
 	f.owner, f.operator, f.reader = member("owner", domain.RoleOwner), member("operator", domain.RoleOperator), member("reader", domain.RoleReader)
-	if f.secrets, err = secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "k1", Key: bytes.Repeat([]byte{3}, 32)}, denyResolution{}); err != nil {
+	if f.secrets, err = secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "k1", Key: bytes.Repeat([]byte{3}, 32)}, denyResolution{}); err != nil {
 		t.Fatal(err)
 	}
 	f.execution.Store(&domain.ExecutionPolicy{})

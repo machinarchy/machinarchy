@@ -72,7 +72,7 @@ func resolveAs(s *secrets.Service, ref secrets.Ref, purpose secrets.Purpose) ([]
 func TestSecretLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo := repository(t)
-	keys := &secrets.StaticKeyProvider{KeyID: "kek-a", Key: keyA}
+	keys := &secrets.LocalProvider{KeyID: "kek-a", Key: keyA}
 	s := service(t, repo, keys, allowAll{})
 
 	if _, err := s.Create(ctx, reader, secrets.Input{Name: "x", Purpose: secrets.PurposeSSHCredential, Value: "v"}); !errors.Is(err, secrets.ErrUnauthorized) {
@@ -105,17 +105,17 @@ func TestSecretLifecycle(t *testing.T) {
 
 	// Rotate the key-encryption key: new writes use kek-b, old DEKs are
 	// rewrapped, and nothing decrypts once kek-a is gone.
-	keys2 := &secrets.StaticKeyProvider{KeyID: "kek-b", Key: keyB, Previous: map[string][]byte{"kek-a": keyA}}
+	keys2 := &secrets.LocalProvider{KeyID: "kek-b", Key: keyB, Previous: map[string][]byte{"kek-a": keyA}}
 	s2 := service(t, repo, keys2, allowAll{})
 	result, err := s2.RewrapKey(ctx, owner, "kek-a", 100)
 	if err != nil || result.Rewrapped != 2 || result.Remaining != 0 {
 		t.Fatalf("rewrap = %+v, %v", result, err)
 	}
-	s3 := service(t, repo, &secrets.StaticKeyProvider{KeyID: "kek-b", Key: keyB}, allowAll{})
+	s3 := service(t, repo, &secrets.LocalProvider{KeyID: "kek-b", Key: keyB}, allowAll{})
 	if value, err := resolve(s3, secrets.Ref{ID: created.ID, Version: 2}); err != nil || string(value) != "second-password" {
 		t.Fatalf("resolve after rewrap without the old key = %q, %v", value, err)
 	}
-	wrongKey := service(t, repo, &secrets.StaticKeyProvider{KeyID: "kek-b", Key: keyA}, allowAll{})
+	wrongKey := service(t, repo, &secrets.LocalProvider{KeyID: "kek-b", Key: keyA}, allowAll{})
 	if _, err := resolve(wrongKey, secrets.Ref{ID: created.ID, Version: 2}); err == nil {
 		t.Fatal("a wrong key decrypted the secret")
 	}
@@ -130,7 +130,7 @@ func TestSecretLifecycle(t *testing.T) {
 
 func TestResolutionNeedsTheAuthorizer(t *testing.T) {
 	ctx := context.Background()
-	s := service(t, repository(t), &secrets.StaticKeyProvider{KeyID: "k", Key: keyA}, secrets.DenyAllResolutionAuthorizer{})
+	s := service(t, repository(t), &secrets.LocalProvider{KeyID: "k", Key: keyA}, secrets.DenyAllResolutionAuthorizer{})
 	created, err := s.Create(ctx, owner, secrets.Input{Name: "deploy", Purpose: secrets.PurposeSSHCredential, Value: "pw"})
 	if err != nil {
 		t.Fatal(err)

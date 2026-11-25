@@ -1,7 +1,7 @@
 // Package api contains the HTTP client used by CLI commands. It is the only
 // place in the CLI that speaks HTTP: it applies authentication, bounds every
 // request, closes every response body, and converts failures into classified
-// errors (see APIError and the clierr package).
+// errors (see Error and the clierr package).
 package api
 
 import (
@@ -241,7 +241,7 @@ func (c *HTTPClient) request(ctx context.Context, method, endpoint string, paylo
 			body = body[:limit]
 		}
 
-		return newAPIError(response, method, displayPath, body)
+		return newError(response, method, displayPath, body)
 	}
 	if readErr != nil {
 		return c.transportError(ctx, method, displayPath, readErr)

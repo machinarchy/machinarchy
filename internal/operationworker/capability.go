@@ -49,13 +49,7 @@ func (w *Worker) capabilityReady() bool {
 // what is still pending.
 func (w *Worker) executeCapability(ctx context.Context, key resource.OperationKey, op *resource.Operation) {
 	if op.Status.State == resource.OperationQueued {
-		if op.Spec.Deadline != nil && !time.Now().Before(*op.Spec.Deadline) {
-			expected := op.Revision
-			if op.Finish(resource.OperationTimedOut, time.Now()) == nil {
-				if err := w.deps.Operations.UpdateOperation(ctx, op, expected); err != nil {
-					w.deps.Logger.Warn("persist expired Operation failed", "error", err)
-				}
-			}
+		if w.expireIfPastDeadline(ctx, op) {
 			return
 		}
 		expected := op.Revision

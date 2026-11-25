@@ -37,7 +37,7 @@ func newRouter(t *testing.T, principal domain.Principal) (*echo.Echo, *secrets.S
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stores.Close() })
-	service, err := secrets.New(stores.Management, &secrets.StaticKeyProvider{KeyID: "k1", Key: bytes.Repeat([]byte{7}, 32)}, denyAll{})
+	service, err := secrets.New(stores.Management, &secrets.LocalProvider{KeyID: "k1", Key: bytes.Repeat([]byte{7}, 32)}, denyAll{})
 	if err != nil {
 		t.Fatal(err)
 	}

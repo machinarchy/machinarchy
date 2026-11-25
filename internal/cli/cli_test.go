@@ -142,7 +142,7 @@ func testOptions(extra ...cli.CommandBuilder) cli.Options {
 			return err
 		}),
 		command("fail-api", func(*cobra.Command, *cli.Factory) error {
-			return fmt.Errorf("list hosts: %w", &api.APIError{Status: 401, Message: "nope", Method: "GET", Path: "/api/v1/hosts"})
+			return fmt.Errorf("list hosts: %w", &api.Error{Status: 401, Message: "nope", Method: "GET", Path: "/api/v1/hosts"})
 		}),
 		command("fail-plain", func(*cobra.Command, *cli.Factory) error { return errors.New("boom") }),
 		command("fail-conflict", func(*cobra.Command, *cli.Factory) error {

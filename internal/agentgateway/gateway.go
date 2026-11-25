@@ -305,20 +305,21 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 			}
 		}
 	}
-	if errors.Is(err, ErrEnrollmentRejected) {
-		g.metrics.registrations.WithLabelValues("rejected").Inc()
-		g.logger.Warn("agent enrollment rejected", "hostname", request.Hostname)
+	// Both refusals look the same to the agent, so a client cannot tell a
+	// bad token from a revoked identity; the log and metric tell them apart.
+	refuse := func(outcome, message string) {
+		g.metrics.registrations.WithLabelValues(outcome).Inc()
+		g.logger.Warn(message, "hostname", request.Hostname)
 		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
 		g.reply(msg, agentv1.KindRegisterResponse, response)
+	}
+	if errors.Is(err, ErrEnrollmentRejected) {
+		refuse("rejected", "agent enrollment rejected")
 		return
 	}
 	if errors.Is(err, ErrAgentRevoked) {
-		g.metrics.registrations.WithLabelValues("revoked").Inc()
-		g.logger.Warn("revoked agent tried to enrol again", "hostname", request.Hostname)
-		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
-		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
-		g.reply(msg, agentv1.KindRegisterResponse, response)
+		refuse("revoked", "revoked agent tried to enrol again")
 		return
 	}
 	if err != nil {
