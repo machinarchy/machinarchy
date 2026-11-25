@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-25 — Agent host Ready follows enrolment and revocation at once (Phase 21: F17-04; branch audit/final)
+
+- `store/agents`: binding a host (enrolment with a host-bound token) and revoking an agent each write a host event and its Control Manager delivery, in the same transaction, for every affected host. The host is reconciled within seconds, and its `Ready` condition (`AgentConnected`, `AgentNotEnrolled`) follows. Before, it waited for the next host resync, up to 5 minutes.
+- `store/resources`: the outbox insert is shared as `InsertHostEvent` instead of being copied.
+- A lease lapse is still noticed at the next resync; documented in `docs/operations.md`.
+- **Test:** the store contract "capability operations" now checks one queued reconcile per binding and per revocation, on both engines. Before the fix: 0.
+- **Checks run:**
+  - `go test` for store, agentgateway, controlmanager and e2e: pass;
+  - `golangci-lint run ./...`: 0 issues.
+
 ## 2026-11-25 — No accepted vulnerabilities left (Phase 21: D-14; branch audit/final)
 
 - `scripts/security/govulncheck-allowlist.txt`: the entries for GO-2026-6875 and GO-2026-6872 are removed (owner approved), since Echo v4.16.6 fixes both. The file keeps its header; the script reads it.

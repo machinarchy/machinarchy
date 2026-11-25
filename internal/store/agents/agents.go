@@ -15,6 +15,9 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
 	"github.com/machinarchy/machinarchy/internal/domain"
+	"github.com/machinarchy/machinarchy/internal/domain/resource"
+	"github.com/machinarchy/machinarchy/internal/eventing"
+	"github.com/machinarchy/machinarchy/internal/store/resources"
 	"github.com/machinarchy/machinarchy/internal/store/sqlx"
 )
 
@@ -214,6 +217,27 @@ func (s *Store) RevokeAgent(ctx context.Context, id string, now time.Time) error
 	if err := sqlx.RowsAffected(result, agentgateway.ErrAgentNotFound); err != nil {
 		return err
 	}
+	rows, err := tx.QueryContext(ctx, s.dialect.Bind(`SELECT host_id FROM agent_host_bindings WHERE agent_id = ?`), id)
+	if err != nil {
+		return fmt.Errorf("read the revoked agent's hosts: %w", err)
+	}
+	var hosts []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read the revoked agent's hosts: %w", err)
+		}
+		hosts = append(hosts, host)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("read the revoked agent's hosts: %w", err)
+	}
+	for _, host := range hosts {
+		if err := s.queueHostReconcile(ctx, tx, host, "agent-revoked", now); err != nil {
+			return err
+		}
+	}
 	if err := s.audit(ctx, tx, domain.AuditEvent{WorkspaceID: domain.DefaultWorkspaceID, Action: domain.AuditAgentRevoked,
 		TargetType: domain.AuditTargetAgent, TargetID: id}); err != nil {
 		return err
@@ -285,6 +309,9 @@ func (s *Store) bindHost(ctx context.Context, tx *sql.Tx, consumed consumedEnrol
 	if _, err := tx.ExecContext(ctx, s.dialect.Bind(`INSERT INTO agent_host_bindings (host_id, workspace_id, agent_id, token_id, bound_at_ns)
 		VALUES (?, ?, ?, ?, ?)`), consumed.hostID, workspaceID, agentID, consumed.tokenID, now.UnixNano()); err != nil {
 		return fmt.Errorf("bind host: %w", err)
+	}
+	if err := s.queueHostReconcile(ctx, tx, consumed.hostID, "agent-bound", now); err != nil {
+		return err
 	}
 	return s.audit(ctx, tx, domain.AuditEvent{WorkspaceID: workspaceID, Action: domain.AuditAgentHostBound,
 		TargetType: domain.AuditTargetAgent, TargetID: agentID,
@@ -422,4 +449,26 @@ func (s *Store) RevokeEnrollmentToken(ctx context.Context, id string, actorID in
 		return err
 	}
 	return tx.Commit()
+}
+
+// queueHostReconcile asks the Control Manager to reconcile a host whose agent
+// binding changed, so its Ready condition follows at once rather than at the
+// next periodic resync (AUDIT F17-04).
+func (s *Store) queueHostReconcile(ctx context.Context, tx *sql.Tx, hostID, change string, now time.Time) error {
+	var workspaceID int
+	var generation, revision uint64
+	err := tx.QueryRowContext(ctx, s.dialect.Bind(`SELECT workspace_id, generation, revision FROM managed_hosts WHERE id = ?`), hostID).
+		Scan(&workspaceID, &generation, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // the host is gone; nothing to reconcile
+	}
+	if err != nil {
+		return fmt.Errorf("read host to reconcile: %w", err)
+	}
+	event, err := eventing.NewHostEvent(eventing.HostSpecChanged, workspaceID, eventing.Subject{Kind: "host",
+		ID: resource.ID(hostID), Generation: generation, Revision: revision}, change, now, "", "", nil)
+	if err != nil {
+		return fmt.Errorf("construct host reconcile event: %w", err)
+	}
+	return resources.InsertHostEvent(ctx, tx, s.dialect.Bind, event)
 }

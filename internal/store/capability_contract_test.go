@@ -69,8 +69,24 @@ func testCapabilityOperations(t *testing.T, f *fixture) {
 	if _, err := f.stores.Agents.HostAgent(ctx, ws, string(hosts[0].Metadata.ID)); !errors.Is(err, agentgateway.ErrHostNotBound) {
 		t.Fatalf("unbound host = %v", err)
 	}
+	// Binding and revocation queue the host for reconciliation, so its Ready
+	// condition follows at once instead of at the next resync (F17-04).
+	hostEvents := func(host *resource.Host) int {
+		t.Helper()
+		var n int
+		if err := f.raw(t).QueryRowContext(ctx, f.pick(`SELECT count(*) FROM outbox_events e JOIN outbox_deliveries d ON d.event_id = e.event_id
+			WHERE e.subject_id = ? AND d.consumer_group = 'control-manager'`, `SELECT count(*) FROM outbox_events e JOIN outbox_deliveries d ON d.event_id = e.event_id
+			WHERE e.subject_id = $1 AND d.consumer_group = 'control-manager'`), string(host.Metadata.ID)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	beforeBind := hostEvents(hosts[1])
 	first := enrol(hosts[0], 1, "req-1")
 	second := enrol(hosts[1], 2, "req-2")
+	if got := hostEvents(hosts[1]); got != beforeBind+1 {
+		t.Fatalf("binding queued %d reconcile events for the host, want 1", got-beforeBind)
+	}
 	if bound, err := f.stores.Agents.HostAgent(ctx, ws, string(hosts[0].Metadata.ID)); err != nil || bound.ID != first.ID {
 		t.Fatalf("host 0 bound to %+v, %v", bound, err)
 	}
@@ -80,8 +96,12 @@ func testCapabilityOperations(t *testing.T, f *fixture) {
 		t.Fatalf("after re-enrolment host 0 bound to %+v, %v", bound, err)
 	}
 	// A revoked agent no longer serves its host.
+	beforeRevoke := hostEvents(hosts[1])
 	if err := f.stores.Agents.RevokeAgent(ctx, second.ID, now); err != nil {
 		t.Fatal(err)
+	}
+	if got := hostEvents(hosts[1]); got != beforeRevoke+1 {
+		t.Fatalf("revoking the agent queued %d reconcile events for its host, want 1", got-beforeRevoke)
 	}
 	if _, err := f.stores.Agents.HostAgent(ctx, ws, string(hosts[1].Metadata.ID)); !errors.Is(err, agentgateway.ErrHostNotBound) {
 		t.Fatalf("host of a revoked agent = %v", err)

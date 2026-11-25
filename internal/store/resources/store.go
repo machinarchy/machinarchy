@@ -505,6 +505,15 @@ func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.
 	if err != nil {
 		return fmt.Errorf("construct Host integration event: %w", err)
 	}
+	return InsertHostEvent(ctx, tx, s.bind, event)
+}
+
+// InsertHostEvent writes a Host event and its Control Manager delivery in
+// tx, so the Host is reconciled once tx commits. bind adapts placeholders to
+// the dialect. Other stores use it when a change of theirs affects a Host
+// (an agent binding, AUDIT F17-04).
+func InsertHostEvent(ctx context.Context, tx *sql.Tx, bind func(string) string, event eventing.Envelope) error {
+	actor := event.Actor
 	payload := string(event.Data)
 	var actorUserID, actorTokenID any
 	if actor != nil {
@@ -515,7 +524,7 @@ func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.
 			actorTokenID = actor.APITokenID
 		}
 	}
-	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_events (
+	_, err := tx.ExecContext(ctx, bind(`INSERT INTO outbox_events (
 		event_id, event_type, schema_version, occurred_at, producer, workspace_id,
 		subject_kind, subject_id, subject_generation, subject_revision, correlation_id,
 		causation_id, actor_user_id, actor_token_id, payload, created_at
@@ -526,7 +535,7 @@ func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.
 	if err != nil {
 		return fmt.Errorf("insert Host outbox event: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, s.bind(`INSERT INTO outbox_deliveries (event_id, consumer_group, available_at_ns)
+	_, err = tx.ExecContext(ctx, bind(`INSERT INTO outbox_deliveries (event_id, consumer_group, available_at_ns)
 		VALUES (?, ?, ?)`), string(event.ID), eventing.ConsumerControlManager, event.OccurredAt.UnixNano())
 	if err != nil {
 		return fmt.Errorf("create Host outbox delivery: %w", err)

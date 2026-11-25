@@ -337,9 +337,10 @@ Targets that cannot be dispatched fail with these error classes:
 
 An agent host's `Ready` condition reports `AgentConnected`,
 `AgentDisconnected`, `AgentNotEnrolled` or `AgentGatewayDisabled`.
-Machinarchy never contacts such a host over SSH. After an agent enrols,
-`Ready` updates at the next host resync (5 minutes by default). Dispatch does
-not wait for it.
+Machinarchy never contacts such a host over SSH. Enrolling or revoking its
+agent queues the host for reconciliation, so `Ready` follows within seconds.
+An agent losing its lease is noticed at the next host resync (5 minutes by
+default). Dispatch does not wait for `Ready`.
 
 ## Key management
 
