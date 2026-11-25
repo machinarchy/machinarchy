@@ -135,11 +135,11 @@ advisory and no fixed version exists. To accept an advisory:
 3. Remove the entry once a fixed version is adopted. The script notes entries
    that no longer match anything.
 
-Accepted today: the Echo advisories GO-2026-6875 and GO-2026-6872, which have
-no fix yet. The proxy middleware and Echo's rate limiter are not used. Client
-IPs come from `echo.ExtractIPDirect`, or, when `MACHINARCHY_TRUSTED_PROXIES`
-is set, from `echo.ExtractIPFromXFFHeader` with loopback, link-local and
-private trust turned off and only the listed proxies trusted.
+Accepted today: none. The Echo advisories GO-2026-6875 and GO-2026-6872 were
+accepted until Echo v4.16.6 fixed them (ADR-058). Client IPs come from
+`echo.ExtractIPDirect`, or, when `MACHINARCHY_TRUSTED_PROXIES` is set, from
+`echo.ExtractIPFromXFFHeader` with loopback, link-local and private trust
+turned off and only the listed proxies trusted.
 
 ## Validation status
 

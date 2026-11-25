@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-25 — No accepted vulnerabilities left (Phase 21: D-14; branch audit/final)
+
+- `scripts/security/govulncheck-allowlist.txt`: the entries for GO-2026-6875 and GO-2026-6872 are removed (owner approved), since Echo v4.16.6 fixes both. The file keeps its header; the script reads it.
+- `docs/SECURITY.md`: "Accepted today: none".
+- **Checks run:** `make vuln`: no unaccepted vulnerabilities in called code.
+
 ## 2026-11-25 — Faster resync takeover after a crash; recovery times documented (Phase 21: F20-08, F20-10; branch audit/final)
 
 - **`controlmanager.Engine`:**
