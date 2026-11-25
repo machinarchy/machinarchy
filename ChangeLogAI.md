@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-25 — CI before the first push: pinned actions, aligned scanners (branch release/initial)
+
+- **Every action is pinned by commit SHA** (the tag is in a comment): `actions/upload-artifact` v4.6.2, `actions/attest` v4.2.2, `docker/setup-qemu-action` v4.4.0, `docker/build-push-action` v7.4.0, `github/codeql-action/upload-sarif` v4.39.5 (an annotated tag: the SHA is the commit it points to). SHAs were read from the actions' public tags with `git ls-remote`; Dependabot (`github-actions`) proposes bumps.
+- **Scanner versions (F9-03):** govulncheck v1.9.0 (was v1.1.4; it is the version the audit verified with and reads the current Go vulnerability database); golangci-lint stays v2.15.0, which is what runs locally. The separate gosec step is removed: golangci-lint already runs the gosec rules (`.golangci.yml`), and the pinned standalone gosec (v2.22.4) could not load Go 1.27 packages, as the locally installed one could not. `make gosec` stays for local use. `.github/WORKFLOWS.md` says so.
+- **Checks run:** workflow YAML parses; every `uses:` is pinned; the cross-reference script from the `.github` review still reports nothing. The workflows were not run (they have never run on GitHub).
+- **Not done here (needs GitHub):** tagging the agent protocol module and removing the `replace` (D-4); see AUDIT/push-plan.md for the order.
+
 ## 2026-11-25 — .github review (branch audit/open-issues)
 
 - **The release binary attestation would have failed.** `release.yml` attests the release binaries with `actions/attest`, which signs with the job's OIDC token and stores the attestation, so it needs `id-token: write` and `attestations: write`. The job had only `contents: read`, and the calling job in `ci.yml` too (a reusable workflow cannot exceed its caller's permissions). Both grant them now. Not run on GitHub; the permission names follow the action's documented requirements.

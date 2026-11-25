@@ -41,10 +41,13 @@ this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
     coverage artifact, PostgreSQL contract suites, OpenAPI route coverage and
     the real agent end-to-end test, which must not skip), `make smoke`, and
     golangci-lint (v2.15.0, includes gosec rules).
-  - `security`: govulncheck v1.1.4 through `make vuln` (fails on called
+  - `security`: govulncheck v1.9.0 through `make vuln` (fails on called
     vulnerabilities unless a reviewed, unexpired entry in
-    `scripts/security/govulncheck-allowlist.txt` accepts one with no fix),
-    gosec v2.22.4 and a 15s run of each fuzz target.
+    `scripts/security/govulncheck-allowlist.txt` accepts one with no fix; the
+    list is empty) and a 15s run of each fuzz target. gosec runs inside
+    golangci-lint (`make lint`, same rules), so there is no separate gosec
+    step; `make gosec` stays for local use with a gosec built by the current
+    Go.
   - `images`: builds the api, controlmanager, monolith, CLI and agent images;
     the monolith must turn healthy and exit 0 on `docker stop`.
   - On `main`, `beta` and `alpha`, after all three: Release Please for that
@@ -135,11 +138,8 @@ should be reviewed against the actual workflow run before enforcement.
 - Release builds are pure Go (`CGO_ENABLED=0`; the SQLite driver is
   `modernc.org/sqlite`) and set the version through
   `internal/buildinfo` (`Version`, `Commit`, `BuildTime`).
-- The pinned scanner versions in `ci.yml` (govulncheck, gosec) are older than
-  the Go toolchain in `go.mod` and must be aligned before CI is relied on
-  (AUDIT/10, F9-03).
-- `actions/upload-artifact` and `actions/attest` are pinned by tag, not by SHA
-  (AUDIT/10, Phase 10).
+- Every action is pinned by commit SHA (the tag is in a comment); Dependabot
+  (`github-actions`) proposes bumps.
 
 ## Local hooks
 

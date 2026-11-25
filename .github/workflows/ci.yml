@@ -16,9 +16,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # The versions the audit verified with (golangci-lint v2.15.0 includes the
+  # gosec rules, so no separate gosec run is needed; govulncheck v1.9.0 reads
+  # the current Go vulnerability database and Go 1.27).
   GOLANGCI_LINT_VERSION: v2.15.0
-  GOVULNCHECK_VERSION: v1.1.4
-  GOSEC_VERSION: v2.22.4
+  GOVULNCHECK_VERSION: v1.9.0
   # machinarchy imports github.com/machinarchy/machinarchy-agent/protocol
   # through `replace ../machinarchy-agent/protocol`, so every job checks out
   # both repositories side by side. Set the repository variable
@@ -93,7 +95,7 @@ jobs:
         run: make coverage
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4 # tag: no verified SHA available offline; pin with Dependabot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: machinarchy-coverage
           path: machinarchy/coverage.out
@@ -112,7 +114,7 @@ jobs:
         run: make lint
 
   security:
-    name: govulncheck, gosec, fuzz smoke
+    name: govulncheck, fuzz smoke
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -140,18 +142,13 @@ jobs:
           cache: true
           cache-dependency-path: machinarchy/go.sum
 
-      - name: Install scanners
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
-          go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
       # Fails on called vulnerabilities unless a reviewed, unexpired entry in
       # scripts/security/govulncheck-allowlist.txt accepts one with no fix.
       - name: govulncheck
         run: make vuln
-
-      - name: gosec
-        run: gosec -quiet -exclude-generated ./...
 
       - name: Fuzz parsers (short)
         run: make fuzz FUZZTIME=15s
