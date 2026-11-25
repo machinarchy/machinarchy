@@ -508,6 +508,39 @@ func (s *Store) appendHostEvent(ctx context.Context, tx *sql.Tx, host *resource.
 	return InsertHostEvent(ctx, tx, s.bind, event)
 }
 
+// RequestHostRecheck asks the Control Manager to reconcile a Host soon: a run
+// failed in a way that suggests its observed state is stale (a changed SSH
+// host key), so waiting for the next periodic scan would leave it Ready for
+// minutes (AUDIT G-13C-01). It changes no Host field. A Host that no longer
+// exists is not an error.
+func (s *Store) RequestHostRecheck(ctx context.Context, workspaceID int, id resource.ID, reason string) error {
+	if workspaceID <= 0 || id.Validate() != nil {
+		return fmt.Errorf("%w: workspace and canonical Host ID are required", resource.ErrInvalidResource)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Host recheck: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "Host recheck")
+	host, err := s.getHost(ctx, tx, workspaceID, id)
+	if errors.Is(err, resource.ErrHostNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// The event is dated now: it is delivered at once, and retention counts
+	// from it.
+	host.Metadata.UpdatedAt = time.Now().UTC()
+	if err := s.appendHostEvent(ctx, tx, host, eventing.HostSpecChanged, reason); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Host recheck: %w", err)
+	}
+	return nil
+}
+
 // InsertHostEvent writes a Host event and its Control Manager delivery in
 // tx, so the Host is reconciled once tx commits. bind adapts placeholders to
 // the dialect. Other stores use it when a change of theirs affects a Host

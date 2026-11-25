@@ -214,3 +214,57 @@ func testCapabilityOperations(t *testing.T, f *fixture) {
 		t.Fatalf("a finished target is overdue: %+v", overdue)
 	}
 }
+
+// AUDIT G-13C-01: RequestHostRecheck queues one reconcile event for the Host
+// without changing the Host, and ignores a Host that no longer exists.
+func testHostRecheck(t *testing.T, f *fixture) {
+	ctx := context.Background()
+	ws := domain.DefaultWorkspaceID
+	owner := f.member(t, "recheck-owner", domain.RoleOwner)
+	now := time.Now().UTC()
+	profile, revision, err := resource.NewAccessProfile(ws, "recheck", "", resource.AccessProfileSpec{Connector: resource.ConnectorAgent, Enabled: true}, owner.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceProfiles.CreateAccessProfile(ctx, profile, revision); err != nil {
+		t.Fatal(err)
+	}
+	host, err := resource.NewHost(ws, 0, "recheck-host", nil, resource.HostSpec{AccessProfileID: profile.ID}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.ResourceHosts.CreateHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	events := func() int {
+		t.Helper()
+		var n int
+		if err := f.raw(t).QueryRowContext(ctx, f.pick(`SELECT count(*) FROM outbox_events e JOIN outbox_deliveries d ON d.event_id = e.event_id
+			WHERE e.subject_id = ? AND d.consumer_group = 'control-manager'`, `SELECT count(*) FROM outbox_events e JOIN outbox_deliveries d ON d.event_id = e.event_id
+			WHERE e.subject_id = $1 AND d.consumer_group = 'control-manager'`), string(host.Metadata.ID)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	rechecker, ok := f.stores.ResourceHosts.(interface {
+		RequestHostRecheck(context.Context, int, resource.ID, string) error
+	})
+	if !ok {
+		t.Fatal("the Host store does not implement RequestHostRecheck")
+	}
+	before := events()
+	if err := rechecker.RequestHostRecheck(ctx, ws, host.Metadata.ID, "host-key-rejected"); err != nil {
+		t.Fatal(err)
+	}
+	if got := events(); got != before+1 {
+		t.Fatalf("a recheck queued %d events, want 1", got-before)
+	}
+	after, err := f.stores.ResourceHosts.GetHost(ctx, ws, host.Metadata.ID)
+	if err != nil || after.Metadata.Revision != host.Metadata.Revision || after.Metadata.Generation != host.Metadata.Generation {
+		t.Fatalf("the Host changed: %+v, %v", after, err)
+	}
+	missing, _ := resource.NewResourceID()
+	if err := rechecker.RequestHostRecheck(ctx, ws, missing, "host-key-rejected"); err != nil {
+		t.Fatalf("recheck of a missing Host = %v, want nil", err)
+	}
+}

@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-25 — F14-01, F14-02, G-13C-01 (branch audit/small-fixes)
+
+- **F14-01, timestamps compared wrongly within a second.** `sqlx.Time` wrote RFC 3339 text without trailing zeros, so a whole second (`…:00Z`) sorted after the half second following it (`…:00.5Z`, since `Z` sorts after `.`). A SQL comparison such as `expires_at > now` was wrong for up to a second: an API token stayed valid up to 1 s past its expiry (224 ms in the regression test). Times are now fixed-width (`2006-01-02T15:04:05.000000000Z`); `ParseTime` still reads both forms. Tests: text order equals time order; a token that expired at a whole second is refused on both engines (it was accepted before the fix).
+- **F14-02, the health check ignored flags and the bootstrap file.** `healthcheck` read only `MACHINARCHY_LISTEN_ADDR`, so a server started with `--listen-addr` or `--config` was probed on `:8080`. It now resolves the address as the server does (flag, environment, bootstrap file, default; `config.ListenAddr`, sharing the argument parser with `LoadCommandLine`), taking the flags after `healthcheck`. With only the environment variable nothing changes. `Run` takes the arguments now.
+- **G-13C-01, a changed host key stayed Ready.** A run that failed on a host key (attached, or a detached launch) did not trigger a re-check, so the host showed `READY True` for up to a resync interval while every command to it failed. The worker now asks the Control Manager to reconcile that host (`Store.RequestHostRecheck` writes the same event a spec change does, changes no host field), at most once a minute per host so a bulk run writes one event, never one per target. Tests: the worker queues a recheck for a host-key failure and not for other errors (attached and detached), the throttle, and the store writes one event and ignores a missing host (both engines).
+- **Docs:** the guide's note on the five-minute delay, and the health-check flags in `docs/operations.md`.
+- **Checks run:** `go test ./...` with PostgreSQL required: pass (44 packages); `go test -race ./internal/operationworker/`: pass; `golangci-lint run ./...`: 0 issues.
+- **Not run:** a live check with a real host whose keys change (the lab SSH servers were left alone) and the HA harness. Existing development databases keep working: old-format times are still read, but mix with the new format until rewritten, so on a long-lived development database the first-second comparison error can persist for old rows; new databases are exact.
+
 ## 2026-11-25 — Control Manager review: queue and resync fixes (branch audit/controlmanager)
 
 Reviewed `internal/controlmanager` (engine, queue, host controller, metrics) and how bootstrap runs it. Five defects, each found by a failing test first:

@@ -152,6 +152,7 @@ func (w *Worker) launchTarget(ctx context.Context, connector RunnerConnector, ke
 	w.metrics.duration.Observe(time.Since(started).Seconds())
 	if err != nil {
 		if class, definite := notLaunched(err); definite {
+			w.recheckAfterHostKeyFailure(ctx, key.WorkspaceID, spec.HostID, err)
 			fail(class)
 			return
 		}

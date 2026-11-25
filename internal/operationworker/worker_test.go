@@ -2,6 +2,7 @@ package operationworker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -103,5 +104,34 @@ func TestPanicInOneOperationIsIsolated(t *testing.T) {
 	worker.mu.Unlock()
 	if active != 0 {
 		t.Fatalf("panicking Operation left %d active entries", active)
+	}
+}
+
+type countingRechecker struct{ calls []resource.ID }
+
+func (c *countingRechecker) RequestHostRecheck(_ context.Context, _ int, id resource.ID, _ string) error {
+	c.calls = append(c.calls, id)
+	return nil
+}
+
+// A bulk run against a rekeyed host queues one recheck, not one per target;
+// other errors never do; each Host has its own interval.
+func TestHostRecheckIsThrottledPerHost(t *testing.T) {
+	rechecker := &countingRechecker{}
+	w := &Worker{deps: Dependencies{HostRechecker: rechecker, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	first, _ := resource.NewResourceID()
+	second, _ := resource.NewResourceID()
+	for range 5 {
+		w.recheckAfterHostKeyFailure(context.Background(), 1, first, hostaccess.ErrHostKey)
+	}
+	w.recheckAfterHostKeyFailure(context.Background(), 1, second, fmt.Errorf("wrapped: %w", hostaccess.ErrHostKey))
+	w.recheckAfterHostKeyFailure(context.Background(), 1, second, hostaccess.ErrAuth)
+	if len(rechecker.calls) != 2 || rechecker.calls[0] != first || rechecker.calls[1] != second {
+		t.Fatalf("rechecks = %v, want one for each of the two Hosts", rechecker.calls)
+	}
+	w.rechecked[first] = time.Now().Add(-2 * recheckInterval)
+	w.recheckAfterHostKeyFailure(context.Background(), 1, first, hostaccess.ErrHostKey)
+	if len(rechecker.calls) != 3 {
+		t.Fatalf("after the interval: %v, want a third recheck", rechecker.calls)
 	}
 }

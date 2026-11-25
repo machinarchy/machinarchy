@@ -44,11 +44,47 @@ type Dependencies struct {
 	// CapabilityResultGrace is added to a command's lifetime and timeout
 	// before a target without a result becomes Lost (default 2 minutes).
 	CapabilityResultGrace time.Duration
+	// HostRechecker, when set, is asked to reconcile a Host soon after a run
+	// on it fails because its SSH host keys no longer match (AUDIT G-13C-01),
+	// so Ready follows at once instead of at the next periodic scan.
+	HostRechecker HostRechecker
 	// Poll tunes the detached-target poller (zero values take defaults).
 	// Detached runs need Operations to implement
 	// resource.DetachedTargetRepository and Connector to implement
 	// RunnerConnector.
 	Poll PollConfig
+}
+
+// HostRechecker queues a reconcile of one Host.
+type HostRechecker interface {
+	RequestHostRecheck(ctx context.Context, workspaceID int, id resource.ID, reason string) error
+}
+
+// recheckInterval is the least time between two rechecks of the same Host:
+// a bulk run against a changed host would otherwise write one event per
+// target, and one pending reconcile is enough.
+const recheckInterval = time.Minute
+
+// recheckAfterHostKeyFailure asks for a reconcile of the Host when err is a
+// host-key verification failure. It never fails the run.
+func (w *Worker) recheckAfterHostKeyFailure(ctx context.Context, workspaceID int, hostID resource.ID, err error) {
+	if w.deps.HostRechecker == nil || !errors.Is(err, hostaccess.ErrHostKey) {
+		return
+	}
+	now := time.Now()
+	w.mu.Lock()
+	if last, ok := w.rechecked[hostID]; ok && now.Sub(last) < recheckInterval {
+		w.mu.Unlock()
+		return
+	}
+	if w.rechecked == nil {
+		w.rechecked = map[resource.ID]time.Time{}
+	}
+	w.rechecked[hostID] = now
+	w.mu.Unlock()
+	if recheckErr := w.deps.HostRechecker.RequestHostRecheck(context.WithoutCancel(ctx), workspaceID, hostID, "host-key-rejected"); recheckErr != nil {
+		w.deps.Logger.Warn("queue Host recheck after a host-key failure failed", "host_id", hostID, "error", recheckErr)
+	}
 }
 
 type Worker struct {
@@ -58,8 +94,10 @@ type Worker struct {
 	queue   chan resource.OperationKey
 	mu      sync.Mutex
 	pending map[resource.OperationKey]struct{}
-	active  map[resource.OperationKey]context.CancelFunc
-	owner   string
+	// rechecked is when each Host was last queued for a recheck.
+	rechecked map[resource.ID]time.Time
+	active    map[resource.OperationKey]context.CancelFunc
+	owner     string
 	// detached persists detached-execution progress; nil disables it.
 	detached resource.DetachedTargetRepository
 	// settled lists detached Operations with every target launched, so the
@@ -574,6 +612,7 @@ func (w *Worker) runAttachedTarget(ctx context.Context, key resource.OperationKe
 	case runErr != nil:
 		state = resource.TargetFailed
 		stored = &resource.TargetResult{ErrorClass: "remote_execution_failed"}
+		w.recheckAfterHostKeyFailure(ctx, key.WorkspaceID, targetSpec.HostID, runErr)
 	}
 	if runErr == nil && result.ExitCode != 0 {
 		state = resource.TargetFailed

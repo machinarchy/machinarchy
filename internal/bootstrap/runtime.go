@@ -351,6 +351,9 @@ func (r *Runtime) NewOperationWorker() (*operationworker.Worker, error) {
 		Profiles: r.stores.ResourceProfiles, Outbox: r.stores.Outbox, Connector: connector,
 		ExecutionPolicy: r.executionPolicyProvider(domain.ExecutionPolicy{}), Logger: slog.Default(), Leases: operationLeases,
 		Recovery: recovery, Registerer: r.metrics}
+	if rechecker, ok := any(r.stores.ResourceHosts).(operationworker.HostRechecker); ok {
+		deps.HostRechecker = rechecker
+	}
 	if r.agentGateway != nil {
 		// Capability Operations go through the gateway (ADR-057); it hands
 		// every agent result to the worker before acknowledging it.

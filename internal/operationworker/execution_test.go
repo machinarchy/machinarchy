@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,8 @@ func (scriptedConnector) Execute(ctx context.Context, host *resource.Host, _ *re
 		return hostaccess.Result{Stderr: "boom", ExitCode: 2}, nil
 	case strings.HasPrefix(host.Metadata.Name, "broken"):
 		return hostaccess.Result{}, errors.New("connection refused")
+	case strings.HasPrefix(host.Metadata.Name, "rekeyed"):
+		return hostaccess.Result{}, hostaccess.ErrHostKey
 	default:
 		<-ctx.Done()
 		return hostaccess.Result{}, ctx.Err()
@@ -46,6 +49,8 @@ type env struct {
 	profile *resource.AccessProfile
 	rev     resource.AccessProfileRevision
 	policy  domain.ExecutionPolicy
+	// rechecker, when set, receives the worker's Host recheck requests.
+	rechecker operationworker.HostRechecker
 }
 
 func newEnv(t *testing.T) *env {
@@ -102,7 +107,8 @@ func (e *env) run() (*operationworker.Worker, func()) {
 	queue := e.stores.Operations.(resource.OperationQueueRepository)
 	worker, err := operationworker.New(operationworker.Dependencies{Operations: e.stores.Operations, Queue: queue,
 		Hosts: e.stores.ResourceHosts, Profiles: e.stores.ResourceProfiles, Outbox: e.stores.Outbox, Connector: scriptedConnector{},
-		ExecutionPolicy: func() domain.ExecutionPolicy { return e.policy }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, 2)
+		ExecutionPolicy: func() domain.ExecutionPolicy { return e.policy }, HostRechecker: e.rechecker,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, 2)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -193,5 +199,44 @@ func TestExecutionPolicyIsCheckedAtRunTime(t *testing.T) {
 	failed := e.await(op.ID, resource.OperationFailed)
 	if failed.Status.Targets[0].State == resource.TargetSucceeded {
 		t.Fatalf("a target ran with execution disabled: %+v", failed.Status.Targets[0])
+	}
+}
+
+type recheckRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *recheckRecorder) RequestHostRecheck(_ context.Context, _ int, id resource.ID, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, string(id)+" "+reason)
+	return nil
+}
+
+// AUDIT G-13C-01: a run that fails because the host's SSH keys changed asks
+// for the Host to be reconciled, so it stops showing Ready; other failures do
+// not.
+func TestHostKeyFailureQueuesAHostRecheck(t *testing.T) {
+	e := newEnv(t)
+	recorder := &recheckRecorder{}
+	e.rechecker = recorder
+	op := e.submit(30, "rekeyed-1", "broken-1", "ok-1")
+	_, stop := e.run()
+	defer stop()
+	done := e.await(op.ID, resource.OperationPartiallySucceeded)
+	var rekeyed string
+	for _, target := range done.Status.Targets {
+		if target.Spec.DisplayName == "rekeyed-1" {
+			rekeyed = string(target.Spec.HostID)
+			if target.State != resource.TargetFailed {
+				t.Fatalf("rekeyed target = %+v", target)
+			}
+		}
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.calls) != 1 || recorder.calls[0] != rekeyed+" host-key-rejected" {
+		t.Fatalf("rechecks = %v, want one for %s", recorder.calls, rekeyed)
 	}
 }

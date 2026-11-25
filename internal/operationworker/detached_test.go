@@ -58,6 +58,7 @@ var fastPolls = operationworker.PollConfig{MinInterval: 300 * time.Millisecond, 
 	CallTimeout: 15 * time.Second, LaunchConfirmGrace: 2 * time.Second, TimeoutGrace: time.Second, UnreachableGrace: time.Second}
 
 type detachedEnv struct {
+	rechecker operationworker.HostRechecker
 	t         *testing.T
 	ctx       context.Context
 	stores    *store.Stores
@@ -195,7 +196,7 @@ func (e *detachedEnv) start(connector hostaccess.HostConnector) {
 	worker, err := operationworker.New(operationworker.Dependencies{Operations: e.stores.Operations, Queue: queue, Hosts: e.stores.ResourceHosts,
 		Profiles: e.stores.ResourceProfiles, Outbox: e.stores.Outbox, Connector: connector, Recovery: recovery, Leases: leases,
 		ExecutionPolicy: func() domain.ExecutionPolicy { return domain.ExecutionPolicy{Enabled: true, AllowAny: true} },
-		Logger:          testLogger(), Poll: e.poll, Registerer: e.metrics}, 4)
+		Logger:          testLogger(), Poll: e.poll, Registerer: e.metrics, HostRechecker: e.rechecker}, 4)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -630,5 +631,33 @@ func TestBenchmark200TargetsFiveMinutes(t *testing.T) {
 	}
 	if total > 7*time.Minute {
 		t.Fatalf("200 × 5 min took %v, want about 5 minutes", total)
+	}
+}
+
+// rekeyedConnector fails every launch the way a host whose SSH keys changed does.
+type rekeyedConnector struct{ *hostaccess.SSHConnector }
+
+func (rekeyedConnector) RunRunner(context.Context, *resource.Host, *resource.AccessProfileRevision, string, string) (string, error) {
+	return "", hostaccess.ErrHostKey
+}
+
+// AUDIT G-13C-01, detached launches: a launch refused for its host key fails
+// the target at once and queues the Host for a recheck.
+func TestDetachedHostKeyFailureQueuesAHostRecheck(t *testing.T) {
+	t.Parallel()
+	e := newDetachedEnv(t)
+	recorder := &recheckRecorder{}
+	e.rechecker = recorder
+	e.start(rekeyedConnector{SSHConnector: e.connector.(*hostaccess.SSHConnector)})
+	host := e.hosts(1)[0]
+	id := e.submit([]*resource.Host{host}, 600, 1, "true")
+	op := e.waitTerminal(id, 90*time.Second)
+	if target := op.Status.Targets[0]; target.State != resource.TargetFailed || target.Result.ErrorClass != "launch_host_key_rejected" {
+		t.Fatalf("target = %s %+v", target.State, target.Result)
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.calls) != 1 || recorder.calls[0] != string(host.Metadata.ID)+" host-key-rejected" {
+		t.Fatalf("rechecks = %v", recorder.calls)
 	}
 }

@@ -795,11 +795,13 @@ Real errors from this lab and what they mean:
   Hint: The server's execution policy does not allow this command. An owner can add a matching entry,
   such as "systemctl is-active {unit}", to operations.allowedPrograms with PUT /api/v1/runtime-config.
   ```
-- **A trusted host whose keys change keeps `READY True` for up to 5 minutes**,
-  until the controller's next periodic check. Commands to it fail safely
-  meanwhile (`remote_execution_failed`), and `trust host --replace` reports
-  that no new keys were observed yet. Restarting the server checks every host
-  at once.
+- **A host whose keys changed** shows `READY False` / `HostKeyChanged` soon
+  after the first command to it fails on its keys (`remote_execution_failed`
+  or `launch_host_key_rejected`): that failure queues a check of the host,
+  at most once a minute. Until that check runs, `trust host --replace` can
+  report that no new keys were observed yet; run it again after a few seconds.
+  A host nobody runs commands on is found by the periodic check (5 minutes by
+  default).
 
 ---
 
