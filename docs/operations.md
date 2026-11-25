@@ -518,7 +518,11 @@ make images AGENT_SOURCE=../machinarchy-agent   # api, controlmanager, monolith,
 - Reproducible: `-trimpath -buildvcs=false`, version, commit and commit time
   through ldflags (`machinarchy version`, and `buildinfo` in logs).
 - `HEALTHCHECK` runs `/machinarchy healthcheck`, which probes the process's
-  own `/healthz/ready`.
+  own `/healthz/ready`. It finds the port the way the server does: the
+  `--listen-addr` flag, `MACHINARCHY_LISTEN_ADDR`, the `--config` bootstrap
+  file, then `:8080`. A container started with flags needs the same flags on
+  the health check (`healthcheck --listen-addr :9090`, or `--config FILE`);
+  with only the environment variable nothing changes.
 - `/data` is created `0700` and owned by the runtime user; the SQLite store
   refuses looser permissions. Mount a volume there for SQLite.
 - The build needs the agent protocol as a named context:

@@ -221,26 +221,42 @@ type LoadOptions struct {
 }
 
 func LoadWithOptions(options LoadOptions) (Config, error) {
+	fileValues, err := readBootstrapFile(options.FilePath)
+	if err != nil {
+		return Config{}, err
+	}
+	return loadWithGetter(optionGetter(options, fileValues))
+}
+
+// readBootstrapFile reads the JSON bootstrap file (an empty path is no file).
+func readBootstrapFile(path string) (map[string]string, error) {
 	fileValues := map[string]string{}
-	if options.FilePath != "" {
-		f, err := os.Open(options.FilePath)
-		if err != nil {
-			return Config{}, errors.New("unable to open bootstrap configuration file")
-		}
-		defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
-		dec := json.NewDecoder(io.LimitReader(f, 1<<20))
-		dec.DisallowUnknownFields()
-		if err = dec.Decode(&fileValues); err != nil {
-			return Config{}, errors.New("bootstrap configuration file must be a JSON object of string values")
-		}
-		for key := range fileValues {
-			u := strings.ToUpper(key)
-			if strings.Contains(u, "_SECRET") || strings.Contains(u, "_PASSWORD") || strings.Contains(u, "_TOKEN") {
-				return Config{}, fmt.Errorf("bootstrap file must refer to secret files instead of containing %s values", key)
-			}
+	if path == "" {
+		return fileValues, nil
+	}
+	f, err := os.Open(path) // #nosec G304 -- the operator names their own bootstrap file
+	if err != nil {
+		return nil, errors.New("unable to open bootstrap configuration file")
+	}
+	defer func() { _ = f.Close() }() // read-only: a close error cannot lose data
+	dec := json.NewDecoder(io.LimitReader(f, 1<<20))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&fileValues); err != nil {
+		return nil, errors.New("bootstrap configuration file must be a JSON object of string values")
+	}
+	for key := range fileValues {
+		u := strings.ToUpper(key)
+		if strings.Contains(u, "_SECRET") || strings.Contains(u, "_PASSWORD") || strings.Contains(u, "_TOKEN") {
+			return nil, fmt.Errorf("bootstrap file must refer to secret files instead of containing %s values", key)
 		}
 	}
-	get := func(key string, defaults ...string) string {
+	return fileValues, nil
+}
+
+// optionGetter resolves a setting: command-line flag, then environment, then
+// the bootstrap file, then the default.
+func optionGetter(options LoadOptions, fileValues map[string]string) func(string, ...string) string {
+	return func(key string, defaults ...string) string {
 		if v, ok := options.Flags[key]; ok && strings.TrimSpace(v) != "" {
 			return v
 		}
@@ -255,11 +271,36 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		}
 		return ""
 	}
-	return loadWithGetter(get)
+}
+
+// ListenAddr returns the address the server started with these arguments
+// would listen on, resolved like the full configuration (flag, environment,
+// bootstrap file, default) but without validating or requiring anything else.
+// The health check uses it so that it probes the port the process really uses
+// (AUDIT F14-02).
+func ListenAddr(args []string) (string, error) {
+	options, err := parseCommandLine(args)
+	if err != nil {
+		return "", err
+	}
+	fileValues, err := readBootstrapFile(options.FilePath)
+	if err != nil {
+		return "", err
+	}
+	return optionGetter(options, fileValues)("MACHINARCHY_LISTEN_ADDR", ":8080"), nil
 }
 
 // LoadCommandLine supports non-secret startup flags and a JSON bootstrap file.
 func LoadCommandLine(args []string) (Config, error) {
+	options, err := parseCommandLine(args)
+	if err != nil {
+		return Config{}, err
+	}
+	return LoadWithOptions(options)
+}
+
+// parseCommandLine reads the startup flags into load options.
+func parseCommandLine(args []string) (LoadOptions, error) {
 	flags := map[string]string{}
 	file := ""
 	allowed := map[string]string{
@@ -312,7 +353,7 @@ func LoadCommandLine(args []string) (Config, error) {
 
 		if arg == "--config" {
 			if len(args) == 0 {
-				return Config{}, errors.New("--config requires a file path")
+				return LoadOptions{}, errors.New("--config requires a file path")
 			}
 
 			file = args[0]
@@ -328,12 +369,12 @@ func LoadCommandLine(args []string) (Config, error) {
 		name, value, has := strings.Cut(arg, "=")
 		envKey, ok := allowed[name]
 		if !ok {
-			return Config{}, fmt.Errorf("unknown startup flag %q", name)
+			return LoadOptions{}, fmt.Errorf("unknown startup flag %q", name)
 		}
 
 		if !has {
 			if len(args) == 0 {
-				return Config{}, fmt.Errorf("%s requires a value", name)
+				return LoadOptions{}, fmt.Errorf("%s requires a value", name)
 			}
 
 			value = args[0]
@@ -342,7 +383,7 @@ func LoadCommandLine(args []string) (Config, error) {
 
 		flags[envKey] = value
 	}
-	return LoadWithOptions(LoadOptions{FilePath: file, Flags: flags})
+	return LoadOptions{FilePath: file, Flags: flags}, nil
 }
 
 func load() (Config, error) {

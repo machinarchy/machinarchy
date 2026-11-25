@@ -11,22 +11,31 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/machinarchy/machinarchy/internal/config"
 )
 
 // Requested reports whether args ask for the health check.
 func Requested(args []string) bool { return len(args) > 0 && args[0] == "healthcheck" }
 
-// Run probes the process listening on MACHINARCHY_LISTEN_ADDR (default
-// :8080) and returns the exit code.
-func Run(stderr io.Writer) int {
-	address := strings.TrimSpace(os.Getenv("MACHINARCHY_LISTEN_ADDR"))
-	if address == "" {
-		address = ":8080"
+// Run probes the process listening on its configured address and returns the
+// exit code. args is the command line as the server gets it ("healthcheck"
+// first); the address is resolved like the server does: the --listen-addr
+// flag, MACHINARCHY_LISTEN_ADDR, the --config bootstrap file, then :8080. To
+// probe a server started with flags, pass the same flags after "healthcheck".
+func Run(args []string, stderr io.Writer) int {
+	if len(args) > 0 {
+		args = args[1:]
 	}
+	address, err := config.ListenAddr(args)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "unhealthy:", err)
+		return 1
+	}
+	address = strings.TrimSpace(address)
 	if err := Probe(context.Background(), address, 3*time.Second); err != nil {
 		_, _ = fmt.Fprintln(stderr, "unhealthy:", err)
 		return 1

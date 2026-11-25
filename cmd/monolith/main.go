@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if healthcheck.Requested(os.Args[1:]) {
-		os.Exit(healthcheck.Run(os.Stderr))
+		os.Exit(healthcheck.Run(os.Args[1:], os.Stderr))
 	}
 	if err := run(); err != nil {
 		slog.Error("Machinarchy monolith stopped", "error", err)
