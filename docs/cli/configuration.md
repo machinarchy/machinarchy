@@ -75,9 +75,8 @@ Global options are resolved in this order, highest priority first:
 
 1. A flag on the command line
 2. The environment variable `MACHINARCHY_<NAME>`
-3. The old environment variable `MACHINARCHY_CLI_<NAME>` (deprecated; it still works and prints one warning line on stderr)
-4. A saved default under `defaults:` in the config file (below)
-5. The option's built-in default
+3. A saved default under `defaults:` in the config file (below)
+4. The option's built-in default
 
 The selected context in the config file (server, token, default environment) supplies the server, token and environment when no flag or variable overrides them.
 
@@ -95,10 +94,6 @@ The config file is read as plain YAML, so context, cluster, and user names are p
 | `MACHINARCHY_NO_HEADERS` | Omit table headers (`true` or `false`) |
 | `MACHINARCHY_NO_INPUT` | Never prompt (`true` or `false`) |
 | `MACHINARCHY_PLAIN` | Plain output: no colour, symbols or flavour text (`true` or `false`) |
-| `MACHINARCHY_NO_DEPRECATION_WARNINGS` | Set to `1` to silence the warning lines about old command and variable names |
-| `MACHINARCHY_CLI_CONTEXT` | Select a context for the process (it has no new name yet) |
-
-Every `MACHINARCHY_CLI_*` name above, except `MACHINARCHY_CLI_CONTEXT`, still works for now; when it is used, one line on stderr names its replacement. If both the old and the new name are set, the new one is used and nothing is printed.
 
 The config path has its separate `MACHINARCHY_CONFIG` variable. For API server and token, the process environment overrides the current context's stored values.
 

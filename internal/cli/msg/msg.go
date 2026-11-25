@@ -158,12 +158,6 @@ func All() []Message {
 }
 
 func init() {
-	// Deprecation (docs/cli/spec/08-migration.md).
-	register(Message{ID: "deprecate.alias", Kind: KindWarning,
-		Primary: `Deprecated: "{old}" is now "{new}". It will be removed in {version}.`})
-	register(Message{ID: "deprecate.env_var", Kind: KindWarning,
-		Primary: "Deprecated: the environment variable {old} is now {new}. The old name will stop working in {version}."})
-
 	// Input and confirmation (docs/cli/spec/02-commands.md section 2).
 	register(Message{ID: "input.required", Kind: KindError,
 		Primary: "{flag} is required when nothing can be asked.",

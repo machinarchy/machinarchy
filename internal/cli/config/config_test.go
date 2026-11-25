@@ -36,17 +36,17 @@ func isolateEnvironment(t *testing.T) {
 
 	for _, name := range []string{
 		"MACHINARCHY_CONFIG",
-		"MACHINARCHY_CLI_CONTEXT",
-		"MACHINARCHY_CLI_ENV",
-		"MACHINARCHY_CLI_OUTPUT",
-		"MACHINARCHY_CLI_VERBOSE",
-		"MACHINARCHY_CLI_SERVER",
-		"MACHINARCHY_CLI_TOKEN",
-		"MACHINARCHY_CLI_REQUEST_TIMEOUT",
-		"MACHINARCHY_CLI_QUIET",
-		"MACHINARCHY_CLI_NO_HEADERS",
-		"MACHINARCHY_CLI_NO_INPUT",
-		"MACHINARCHY_CLI_YES",
+		"MACHINARCHY_CONTEXT",
+		"MACHINARCHY_ENV",
+		"MACHINARCHY_OUTPUT",
+		"MACHINARCHY_VERBOSE",
+		"MACHINARCHY_SERVER",
+		"MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT",
+		"MACHINARCHY_QUIET",
+		"MACHINARCHY_NO_HEADERS",
+		"MACHINARCHY_NO_INPUT",
+		"MACHINARCHY_YES",
 	} {
 		t.Setenv(name, "")
 	}
@@ -180,14 +180,14 @@ func TestResolvePrecedence(t *testing.T) {
 		},
 		{
 			name:       "environment beats file",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_TOKEN": "env-token", "MACHINARCHY_CLI_ENV": "prod"},
+			env:        map[string]string{"MACHINARCHY_SERVER": "https://env.example", "MACHINARCHY_TOKEN": "env-token", "MACHINARCHY_ENV": "prod"},
 			wantServer: "https://env.example",
 			wantToken:  "env-token",
 			wantEnv:    "prod",
 		},
 		{
 			name:       "flag beats environment",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_ENV": "prod"},
+			env:        map[string]string{"MACHINARCHY_SERVER": "https://env.example", "MACHINARCHY_ENV": "prod"},
 			args:       []string{"--server", "https://flag.example/", "--env", "dev"},
 			wantServer: "https://flag.example",
 			wantToken:  "file-token",
@@ -282,7 +282,7 @@ func TestResolveErrorsAreClassifiedAndHelpful(t *testing.T) {
 
 	t.Run("invalid token is never echoed", func(t *testing.T) {
 		isolateEnvironment(t)
-		t.Setenv("MACHINARCHY_CLI_TOKEN", "secret part two")
+		t.Setenv("MACHINARCHY_TOKEN", "secret part two")
 
 		_, err := loadSample(t).Resolve()
 		if err == nil {
@@ -327,7 +327,7 @@ func TestRequestTimeout(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			isolateEnvironment(t)
 			if test.env != "" {
-				t.Setenv("MACHINARCHY_CLI_REQUEST_TIMEOUT", test.env)
+				t.Setenv("MACHINARCHY_REQUEST_TIMEOUT", test.env)
 			}
 
 			got, err := loadSample(t, test.args...).RequestTimeout()
@@ -364,9 +364,9 @@ func TestOutputAndBooleanSettings(t *testing.T) {
 		t.Fatal("boolean settings should default to false")
 	}
 
-	t.Setenv("MACHINARCHY_CLI_OUTPUT", "JSON")
-	t.Setenv("MACHINARCHY_CLI_QUIET", "true")
-	t.Setenv("MACHINARCHY_CLI_NO_INPUT", "true")
+	t.Setenv("MACHINARCHY_OUTPUT", "JSON")
+	t.Setenv("MACHINARCHY_QUIET", "true")
+	t.Setenv("MACHINARCHY_NO_INPUT", "true")
 
 	store = loadSample(t, "--no-headers")
 	if got := store.OutputExplicit(); got != "json" {
@@ -414,7 +414,7 @@ func TestLoadRejectsDamagedFiles(t *testing.T) {
 func TestLoadSettingsIgnoresDamagedFile(t *testing.T) {
 	isolateEnvironment(t)
 	t.Setenv("MACHINARCHY_CONFIG", writeConfig(t, "contexts: [unterminated"))
-	t.Setenv("MACHINARCHY_CLI_OUTPUT", "yaml")
+	t.Setenv("MACHINARCHY_OUTPUT", "yaml")
 
 	store, err := LoadSettings(newFlags(t))
 	if err != nil {
@@ -574,7 +574,7 @@ contexts:
 		{name: "remote http refused", wantErr: true},
 		{name: "remote http with cluster opt-in", cluster: "    insecure-http: true"},
 		{name: "opt-in does not cover an overriding server", cluster: "    insecure-http: true", args: []string{"--server", "http://other.example.test"}, wantErr: true},
-		{name: "environment override to remote http refused", env: map[string]string{"MACHINARCHY_CLI_SERVER": "http://env.example.test"}, wantErr: true},
+		{name: "environment override to remote http refused", env: map[string]string{"MACHINARCHY_SERVER": "http://env.example.test"}, wantErr: true},
 		{name: "loopback IP over http", args: []string{"--server", "http://127.0.0.1:8080"}},
 		{name: "IPv6 loopback over http", args: []string{"--server", "http://[::1]:8080"}},
 		{name: "localhost over http", args: []string{"--server", "http://localhost:8080"}},

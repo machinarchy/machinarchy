@@ -21,10 +21,10 @@ func clearEnvironment(t *testing.T) {
 
 	t.Setenv("MACHINARCHY_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
 	for _, name := range []string{
-		"MACHINARCHY_CLI_CONTEXT", "MACHINARCHY_CLI_ENV", "MACHINARCHY_CLI_OUTPUT",
-		"MACHINARCHY_CLI_VERBOSE", "MACHINARCHY_CLI_SERVER", "MACHINARCHY_CLI_TOKEN",
-		"MACHINARCHY_CLI_REQUEST_TIMEOUT", "MACHINARCHY_CLI_QUIET", "MACHINARCHY_CLI_NO_HEADERS",
-		"MACHINARCHY_CLI_NO_INPUT", "MACHINARCHY_CLI_YES",
+		"MACHINARCHY_CONTEXT", "MACHINARCHY_ENV", "MACHINARCHY_OUTPUT",
+		"MACHINARCHY_VERBOSE", "MACHINARCHY_SERVER", "MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT", "MACHINARCHY_QUIET", "MACHINARCHY_NO_HEADERS",
+		"MACHINARCHY_NO_INPUT", "MACHINARCHY_YES",
 	} {
 		t.Setenv(name, "")
 	}
@@ -161,7 +161,7 @@ func TestRequireConfirmation(t *testing.T) {
 
 func TestEnvironmentCannotSupplyConfirmation(t *testing.T) {
 	clearEnvironment(t)
-	t.Setenv("MACHINARCHY_CLI_YES", "true")
+	t.Setenv("MACHINARCHY_YES", "true")
 
 	factory := &Factory{
 		Streams:    IOStreams{In: strings.NewReader(""), Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
@@ -172,7 +172,7 @@ func TestEnvironmentCannotSupplyConfirmation(t *testing.T) {
 	}
 
 	if factory.Yes() {
-		t.Fatal("MACHINARCHY_CLI_YES must not enable --yes")
+		t.Fatal("MACHINARCHY_YES must not enable --yes")
 	}
 	if _, err := factory.Confirm("Proceed?"); err == nil {
 		t.Fatal("Confirm succeeded without an explicit --yes")

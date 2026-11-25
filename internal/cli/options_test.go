@@ -72,20 +72,6 @@ func TestOptionPrecedence(t *testing.T) {
 			"output=json output-source=environment plain=false quiet=true dry-run=false confirm=\"\" confirm-env=\"\"\n", ""},
 		{"flag beats environment", map[string]string{"MACHINARCHY_OUTPUT": "json"}, []string{"--config", saved, "-o", "table", "options"},
 			"output=table output-source=flag plain=false quiet=true dry-run=false confirm=\"\" confirm-env=\"\"\n", ""},
-		{"deprecated name still works and warns", map[string]string{"MACHINARCHY_CLI_OUTPUT": "json"}, []string{"--config", none, "options"},
-			"output=json output-source=environment (deprecated name) plain=false quiet=false dry-run=false confirm=\"\" confirm-env=\"\"\n",
-			"WARN Deprecated: the environment variable MACHINARCHY_CLI_OUTPUT is now MACHINARCHY_OUTPUT. The old name will stop working in the next release.\n"},
-		{"new name beats deprecated name without a warning", map[string]string{"MACHINARCHY_CLI_OUTPUT": "json", "MACHINARCHY_OUTPUT": "yaml"},
-			[]string{"--config", none, "options"},
-			"output=yaml output-source=environment plain=false quiet=false dry-run=false confirm=\"\" confirm-env=\"\"\n", ""},
-		{"deprecated name beats saved default", map[string]string{"MACHINARCHY_CLI_OUTPUT": "json"}, []string{"--config", saved, "options"},
-			"output=json output-source=environment (deprecated name) plain=false quiet=true dry-run=false confirm=\"\" confirm-env=\"\"\n",
-			"WARN Deprecated: the environment variable MACHINARCHY_CLI_OUTPUT is now MACHINARCHY_OUTPUT. The old name will stop working in the next release.\n"},
-		{"warning can be silenced", map[string]string{"MACHINARCHY_CLI_OUTPUT": "json", "MACHINARCHY_NO_DEPRECATION_WARNINGS": "1"},
-			[]string{"--config", none, "options"},
-			"output=json output-source=environment (deprecated name) plain=false quiet=false dry-run=false confirm=\"\" confirm-env=\"\"\n", ""},
-		{"context keeps its old name without a warning", map[string]string{"MACHINARCHY_CLI_CONTEXT": "x"}, []string{"--config", none, "options"},
-			"output= output-source=default plain=false quiet=false dry-run=false confirm=\"\" confirm-env=\"\"\n", ""},
 	}
 
 	for _, tc := range tests {
@@ -129,7 +115,7 @@ func TestFlagOnlyOptionsIgnoreEnvironmentAndConfig(t *testing.T) {
 	none := filepath.Join(t.TempDir(), "absent.yaml")
 
 	got := runWithEnv(t, map[string]string{
-		"MACHINARCHY_YES": "1", "MACHINARCHY_CLI_YES": "1", "MACHINARCHY_DRY_RUN": "1", "MACHINARCHY_CLI_DRY_RUN": "1",
+		"MACHINARCHY_YES": "1", "MACHINARCHY_DRY_RUN": "1",
 		"MACHINARCHY_CONFIRM": "web-01", "MACHINARCHY_CONFIRM_ENV": "production",
 	}, testOptions(optionsCommand()), "--config", none, "options")
 	want := "output= output-source=default plain=false quiet=false dry-run=false confirm=\"\" confirm-env=\"\"\n"

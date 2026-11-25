@@ -5,7 +5,7 @@
 // and user names are preserved exactly (Viper would case-fold map keys and
 // split them on dots). Global options resolve with one precedence, in
 // settings.go: flag, MACHINARCHY_<NAME> environment variable, the deprecated
-// MACHINARCHY_CLI_<NAME> variable, saved "defaults:", flag default.
+// MACHINARCHY_<NAME> variable, saved "defaults:", flag default.
 package config
 
 import (

@@ -20,16 +20,14 @@ const modulePath = "github.com/machinarchy/machinarchy/internal/cli/"
 // third-party packages named.
 func TestPackageDependencyRules(t *testing.T) {
 	allowed := map[string][]string{
-		"sanitize":  {},
-		"msg":       {},
-		"ui":        {"msg", "sanitize"},
-		"group":     {"msg", "sanitize", "ui"},
-		"deprecate": {"msg"},
-		"clierr":    {},
+		"sanitize": {},
+		"msg":      {},
+		"ui":       {"msg", "sanitize"},
+		"group":    {"msg", "sanitize", "ui"},
+		"clierr":   {},
 	}
 	thirdParty := map[string]map[string]bool{
-		"ui":        {"golang.org/x/term": true},
-		"deprecate": {"github.com/spf13/cobra": true},
+		"ui": {"golang.org/x/term": true},
 	}
 
 	for pkg, cliImports := range allowed {

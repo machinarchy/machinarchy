@@ -16,7 +16,6 @@ import (
 //
 //	flag given on the command line
 //	> environment variable MACHINARCHY_<NAME>
-//	> the old environment variable MACHINARCHY_CLI_<NAME> (deprecated, warned)
 //	> saved value in the config file ("defaults:")
 //	> the flag's own default
 //
@@ -28,10 +27,7 @@ import (
 // deliberate answer to one invocation and a standing "yes" would defeat the
 // confirmation it answers.
 
-const (
-	envPrefix       = "MACHINARCHY"
-	legacyEnvPrefix = "MACHINARCHY_CLI"
-)
+const envPrefix = "MACHINARCHY"
 
 // flagOnly lists the options that only a flag on the command line can set.
 var flagOnly = map[string]bool{"yes": true, "confirm": true, "confirm-env": true, "dry-run": true}
@@ -57,7 +53,6 @@ type Source int
 const (
 	SourceFlag Source = iota
 	SourceEnv
-	SourceLegacyEnv
 	SourceConfig
 	SourceDefault
 )
@@ -69,8 +64,6 @@ func (s Source) String() string {
 		return "flag"
 	case SourceEnv:
 		return "environment"
-	case SourceLegacyEnv:
-		return "environment (deprecated name)"
 	case SourceConfig:
 		return "config file"
 	case SourceDefault:
@@ -78,12 +71,6 @@ func (s Source) String() string {
 	}
 
 	return "unknown"
-}
-
-// LegacyEnv is a deprecated environment variable that was used because its
-// replacement was not set.
-type LegacyEnv struct {
-	Old, New string
 }
 
 // settings resolves a global setting. It replaces viper, which the CLI used
@@ -99,20 +86,14 @@ func newSettings(flags *pflag.FlagSet, defaults map[string]string) *settings {
 	return &settings{flags: flags, defaults: defaults, lookup: os.LookupEnv}
 }
 
-// envNames returns the variable that sets key and the deprecated one it
-// replaces. The context option predates the new names and keeps only the old
-// one until servers replace contexts.
-func envNames(key string) (current, legacy string) {
+// envNames returns the variable that sets key, or "" for a flag-only option or
+// an option that has no variable.
+func envNames(key string) string {
 	if flagOnly[key] {
-		return "", ""
+		return ""
 	}
 
-	suffix := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(key))
-	if key == "context" {
-		return "", legacyEnvPrefix + "_" + suffix
-	}
-
-	return envPrefix + "_" + suffix, legacyEnvPrefix + "_" + suffix
+	return envPrefix + "_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(key))
 }
 
 // resolve returns the value of key and where it came from.
@@ -128,16 +109,9 @@ func (s *settings) resolve(key string) (string, Source) {
 		return "", SourceDefault
 	}
 
-	if current, legacy := envNames(key); current != "" || legacy != "" {
-		if current != "" {
-			if value, ok := s.lookup(current); ok && value != "" {
-				return value, SourceEnv
-			}
-		}
-		if legacy != "" {
-			if value, ok := s.lookup(legacy); ok && value != "" {
-				return value, SourceLegacyEnv
-			}
+	if name := envNames(key); name != "" {
+		if value, ok := s.lookup(name); ok && value != "" {
+			return value, SourceEnv
 		}
 	}
 	if !flagOnly[key] {
@@ -165,27 +139,6 @@ func (s *settings) GetBool(key string) bool {
 	value, err := strconv.ParseBool(strings.TrimSpace(s.GetString(key)))
 
 	return err == nil && value
-}
-
-// legacyUsed lists the deprecated variables that are in effect: set while the
-// new name is not.
-func (s *settings) legacyUsed() []LegacyEnv {
-	if s == nil {
-		return nil
-	}
-
-	var used []LegacyEnv
-	for _, key := range envKeys {
-		current, legacy := envNames(key)
-		if value, newSet := s.lookup(current); newSet && value != "" {
-			continue
-		}
-		if value, oldSet := s.lookup(legacy); oldSet && value != "" {
-			used = append(used, LegacyEnv{Old: legacy, New: current})
-		}
-	}
-
-	return used
 }
 
 // validateDefaults checks the "defaults:" section of the config file.
@@ -254,15 +207,6 @@ func (s *Store) ConfirmEnv() string {
 	}
 
 	return strings.TrimSpace(s.v.GetString("confirm-env"))
-}
-
-// LegacyEnv returns the deprecated environment variables in effect.
-func (s *Store) LegacyEnv() []LegacyEnv {
-	if s == nil {
-		return nil
-	}
-
-	return s.v.legacyUsed()
 }
 
 // Source reports where the effective value of the option key came from.

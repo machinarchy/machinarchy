@@ -7,8 +7,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-
-	"github.com/machinarchy/machinarchy/internal/cli/deprecate"
 )
 
 // AnnotationSkipConfig marks a command that must run without reading the CLI
@@ -37,9 +35,6 @@ type Options struct {
 	Streams       IOStreams
 	ClientBuilder APIClientBuilder
 	Groups        []CommandGroup
-	// Aliases lists the old commands that have been replaced. Each is hidden
-	// and prints its replacement when it runs; its behaviour is unchanged.
-	Aliases []deprecate.Alias
 	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
 	// locale, COLUMNS). Nil selects os.Getenv; tests inject one.
 	Getenv func(string) string
@@ -79,7 +74,7 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 
 	// Global flags. Every flag except --config, --yes, --confirm, --confirm-env
 	// and --dry-run resolves with the precedence flag > MACHINARCHY_<NAME> >
-	// MACHINARCHY_CLI_<NAME> (deprecated) > saved defaults > default
+	// saved defaults > default
 	// (config/settings.go). The four exceptions are flag-only on purpose.
 	flags := root.PersistentFlags()
 	flags.StringVar(&configPath, "config", "", "CLI config file (default: user config directory)")
@@ -122,11 +117,7 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 			return err
 		}
 
-		if err := factory.checkDryRun(command); err != nil {
-			return err
-		}
-
-		return factory.printDeprecation(command)
+		return factory.checkDryRun(command)
 	}
 
 	registered := map[string]string{"help": "cobra", "completion": "cobra"}
@@ -162,10 +153,6 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	}
 
 	normalizeGroupCommands(root)
-
-	if err := deprecate.Apply(root, options.Aliases); err != nil {
-		panic(err.Error()) // the alias table names a command that does not exist
-	}
 
 	return root, factory
 }

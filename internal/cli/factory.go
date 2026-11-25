@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,8 +17,6 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/config"
-	"github.com/machinarchy/machinarchy/internal/cli/deprecate"
-	"github.com/machinarchy/machinarchy/internal/cli/msg"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/machinarchy/machinarchy/internal/cli/ui"
 )
@@ -113,15 +110,6 @@ func (f *Factory) install(store *config.Store, flags *pflag.FlagSet) error {
 		&slog.HandlerOptions{Level: level}))
 
 	f.style = ui.DetectStyle(f.getenv, f.Streams.ErrOut, store.Plain())
-	if !deprecationWarningsOff(f.getenv) {
-		for _, legacy := range store.LegacyEnv() {
-			text := ui.Render(msg.Get("deprecate.env_var").With(msg.Vars{
-				"old": legacy.Old, "new": legacy.New, "version": "the next release"}), f.style)
-			if _, err := fmt.Fprint(f.Streams.ErrOut, text); err != nil {
-				return err
-			}
-		}
-	}
 
 	for _, warning := range store.Warnings() {
 		if _, err := fmt.Fprintf(f.Streams.ErrOut, "Warning: %s\n", warning); err != nil {
@@ -138,14 +126,6 @@ func (f *Factory) getenv(key string) string {
 	}
 
 	return os.Getenv(key)
-}
-
-// deprecationWarningsOff reports MACHINARCHY_NO_DEPRECATION_WARNINGS=1, the
-// stop-gap for scripts that cannot change yet.
-func deprecationWarningsOff(getenv func(string) string) bool {
-	value, err := strconv.ParseBool(strings.TrimSpace(getenv("MACHINARCHY_NO_DEPRECATION_WARNINGS")))
-
-	return err == nil && value
 }
 
 // Style returns how output to the diagnostics stream (stderr) looks: symbols,
@@ -207,19 +187,6 @@ func (f *Factory) checkDryRun(command *cobra.Command) error {
 
 	return clierr.Newf(clierr.ExitUsage, "Run it without --dry-run, or read the command's help.",
 		"%q does not support --dry-run yet, so it would make the change for real", command.CommandPath())
-}
-
-// printDeprecation tells the user, on stderr, that the selected command has a
-// replacement. It does not change what the command does.
-func (f *Factory) printDeprecation(command *cobra.Command) error {
-	notice, deprecated := deprecate.For(command)
-	if !deprecated || deprecationWarningsOff(f.getenv) {
-		return nil
-	}
-
-	_, err := fmt.Fprint(f.Streams.ErrOut, ui.Render(notice.Message(), f.style))
-
-	return err
 }
 
 // Config returns the loaded context configuration.

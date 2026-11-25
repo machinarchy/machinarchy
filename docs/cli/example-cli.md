@@ -90,7 +90,7 @@ Add config files containing credentials to `.gitignore` before creating them.
 ## Use environment overrides
 
 ```sh
-MACHINARCHY_CLI_CONTEXT=staging go run ./cmd/machinarchy get hosts
+MACHINARCHY_CONTEXT=staging go run ./cmd/machinarchy get hosts
 MACHINARCHY_ENV=production go run ./cmd/machinarchy get hosts
 MACHINARCHY_OUTPUT=json go run ./cmd/machinarchy get hosts
 MACHINARCHY_VERBOSE=true go run ./cmd/machinarchy get hosts

@@ -93,9 +93,9 @@ func TestNoForbiddenVocabulary(t *testing.T) {
 func TestWithReplacesPlaceholders(t *testing.T) {
 	t.Parallel()
 
-	got := Get("deprecate.alias").With(Vars{"old": "machinarchy get hosts", "new": "machinarchy hosts", "version": "0.2.0"})
-	want := `Deprecated: "machinarchy get hosts" is now "machinarchy hosts". It will be removed in 0.2.0.`
-	if got.Primary != want {
+	got := Get("input.required").With(Vars{"flag": "--email", "why": "no terminal", "next": "machinarchy login --email x"})
+	want := "--email is required when nothing can be asked."
+	if got.Primary != want || got.Why != "no terminal" || got.Next != "machinarchy login --email x" {
 		t.Fatalf("Primary = %q, want %q", got.Primary, want)
 	}
 }
