@@ -320,17 +320,17 @@ func TestReportError(t *testing.T) {
 		{
 			name: "classified usage error keeps its own hint", err: clierr.Newf(clierr.ExitUsage, "custom hint", "bad value"),
 			started: true, wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Error: bad value\n", "Hint: custom hint\n"}, wantAbsent: []string{"--help"},
+			wantPresent: []string{"Error: bad value\n", "Next:  custom hint\n"}, wantAbsent: []string{"--help"},
 		},
 		{
 			name: "usage error without a hint points at help", err: clierr.Usagef("bad value"),
 			started: true, wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Error: bad value\n", "Hint: Run 'machinarchy --help'"},
+			wantPresent: []string{"Error: bad value\n", "Next:  machinarchy --help\n"},
 		},
 		{
 			name: "usage error in a subcommand points at that command's help", err: clierr.Usagef("pick one with --host"),
 			started: true, path: "machinarchy logs operation", wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Hint: Run 'machinarchy logs operation --help' for its usage."}, wantAbsent: []string{"available commands"},
+			wantPresent: []string{"Next:  machinarchy logs operation --help\n"}, wantAbsent: []string{"available commands"},
 		},
 		{
 			name: "unclassified error before the command ran is a usage error", err: errors.New("unknown flag: --x"),
@@ -340,7 +340,7 @@ func TestReportError(t *testing.T) {
 		{
 			name: "unclassified error while running is a plain failure", err: errors.New("boom"),
 			started: true, wantCode: clierr.ExitFailure,
-			wantPresent: []string{"Error: boom\n"}, wantAbsent: []string{"Hint:", "--help"},
+			wantPresent: []string{"Error: boom\n"}, wantAbsent: []string{"Next:", "--help"},
 		},
 		{
 			name: "interrupt", err: context.Canceled, started: true, wantCode: clierr.ExitInterrupted,
@@ -353,7 +353,7 @@ func TestReportError(t *testing.T) {
 		{
 			name: "multi-line hints are preserved", err: clierr.Newf(clierr.ExitAuth, "line one\nline two", "denied"),
 			started: true, wantCode: clierr.ExitAuth,
-			wantPresent: []string{"Hint: line one\nline two\n"},
+			wantPresent: []string{"Next:  line one\n       line two\n"},
 		},
 		{
 			name: "percent signs in messages are not treated as formats", err: clierr.Newf(clierr.ExitFailure, "use 100%s", "%s", "50%d done"),
@@ -366,7 +366,7 @@ func TestReportError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var buffer bytes.Buffer
 
-			code := reportError(&buffer, test.err, test.started, test.path)
+			code := reportError(&buffer, test.err, test.started, test.path, presentation{})
 
 			if code != test.wantCode {
 				t.Fatalf("exit code = %d, want %d", code, test.wantCode)

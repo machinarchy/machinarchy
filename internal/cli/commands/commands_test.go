@@ -999,7 +999,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		got := execute(t, nil, `{"a":1}`, "--config", writeConfig(t, server.URL, "tok"),
 			"runtime-config", "publish", "--expected-revision", "1")
 
-		if got.code != clierr.ExitConflict || !strings.Contains(got.stderr, "revision conflict") || !strings.Contains(got.stderr, "Hint: ") {
+		if got.code != clierr.ExitConflict || !strings.Contains(got.stderr, "revision conflict") || !strings.Contains(got.stderr, "Next:  ") {
 			t.Fatalf("result = %+v", got)
 		}
 	})

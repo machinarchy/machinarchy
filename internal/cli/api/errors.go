@@ -71,45 +71,65 @@ func (e *Error) ExitCode() int {
 	}
 }
 
+// ErrorWhy explains the cause of the failure in a sentence.
+func (e *Error) ErrorWhy() string {
+	why, _ := e.advice()
+
+	return why
+}
+
 // ErrorHint suggests how the user can resolve the failure.
 func (e *Error) ErrorHint() string {
+	_, next := e.advice()
+
+	return next
+}
+
+// advice returns the explanation and the next step for the status. The two
+// are printed as the "Why:" and "Next:" lines of the unified error format.
+func (e *Error) advice() (why, next string) {
 	switch {
 	case e.Status == http.StatusUnauthorized:
-		return "The server did not accept the stored credential; it may be expired or revoked.\n" +
-			"Store a new token with: printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin"
+		return "The server did not accept the stored credential; it may be expired or revoked.",
+			"printf '%s' \"$TOKEN\" | machinarchy config set-credentials NAME --token-stdin"
 	case e.Status == http.StatusForbidden && e.Fields["code"] == "execution_not_allowed":
-		return "The server's execution policy does not allow this command. An owner can add a matching entry,\n" +
-			"such as \"systemctl is-active {unit}\", to operations.allowedPrograms with PUT /api/v1/runtime-config."
+		return "The server's execution policy does not allow this command.",
+			"An owner can add a matching entry, such as \"systemctl is-active {unit}\",\n" +
+				"to operations.allowedPrograms with PUT /api/v1/runtime-config."
 	case e.Status == http.StatusForbidden:
-		return "The credential is valid but is not permitted to do this.\n" +
+		return "The credential is valid but is not permitted to do this.",
 			"Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them."
 	case e.Status == http.StatusNotFound:
-		return "Check the identifier. If the whole feature is missing, the server may not have it enabled, or --server may point at the wrong address."
+		return "The server has no resource with that identifier.",
+			"Check the identifier. If the whole feature is missing, the server may not have it enabled, or --server may point at the wrong address."
 	case e.Status == http.StatusConflict && e.Fields["code"] == "already_exists":
-		return "A resource with that name already exists. Choose another name, or look at it with 'machinarchy get'."
+		return "A resource with that name already exists.",
+			"Choose another name, or look at it with 'machinarchy get'."
 	case e.Status == http.StatusConflict, e.Status == http.StatusPreconditionFailed:
-		return "The resource changed or a precondition failed. Read the current state and retry with an up-to-date revision."
+		return "The resource changed or a precondition failed.",
+			"Read the current state and retry with an up-to-date revision."
 	case e.Status == http.StatusTooManyRequests, e.Status == http.StatusServiceUnavailable:
 		if e.RetryAfter > 0 {
-			return fmt.Sprintf("The server asked for a pause. Retry in %s.", e.RetryAfter)
+			return "The server is rate limiting or temporarily unavailable.", fmt.Sprintf("Retry in %s.", e.RetryAfter)
 		}
 
-		return "The server is rate limiting or temporarily unavailable. Wait a moment and retry."
+		return "The server is rate limiting or temporarily unavailable.", "Wait a moment and retry."
 	case e.Status >= 500:
-		hint := "The server reported an internal error. Retry later."
+		next = "Retry later."
 		if e.RequestID != "" {
-			hint += " Include the request ID when reporting the problem."
+			next += " Include the request ID when reporting the problem."
 		}
 
-		return hint
+		return "The server reported an internal error.", next
 	case e.Status >= 300 && e.Status < 400:
+		why = "The server redirected the request and the CLI does not follow redirects."
 		if e.Location != "" {
-			return fmt.Sprintf("The server redirected the request to %q and the CLI does not follow redirects. Check that the server URL is correct (for example, use https://).", e.Location)
+			return why, fmt.Sprintf("Check that the server URL is correct (for example, use https://). It redirected to %q.", e.Location)
 		}
 
-		return "The server redirected the request and the CLI does not follow redirects. Check that the server URL is correct."
+		return why, "Check that the server URL is correct (for example, use https://)."
 	default:
-		return ""
+		return "", ""
 	}
 }
 

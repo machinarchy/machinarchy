@@ -240,7 +240,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 				t.Errorf("stderr = %q, want an error mentioning %q", got.stderr, test.message)
 			}
 			// The hint points at the help of the command that failed.
-			if !strings.Contains(got.stderr, "Hint: Run 'machinarchy") || !strings.Contains(got.stderr, " --help'") {
+			if !strings.Contains(got.stderr, "Next:  machinarchy") || !strings.Contains(got.stderr, " --help") {
 				t.Errorf("stderr = %q, want a help hint", got.stderr)
 			}
 			if got.stdout != "" {
@@ -257,9 +257,9 @@ func TestRuntimeFailuresMapToExitCodes(t *testing.T) {
 		wantStderr   []string
 		wantNoStderr []string
 	}{
-		{"fail-api", clierr.ExitAuth, []string{"Error: list hosts: API returned HTTP 401: nope", "Hint: ", "set-credentials"}, nil},
-		{"fail-plain", clierr.ExitFailure, []string{"Error: boom"}, []string{"Hint:", "--help"}},
-		{"fail-conflict", clierr.ExitConflict, []string{"Error: stale revision", "Hint: retry with a newer revision"}, nil},
+		{"fail-api", clierr.ExitAuth, []string{"Error: list hosts: API returned HTTP 401: nope", "Why:   The server did not accept the stored credential", "Next:  ", "set-credentials"}, nil},
+		{"fail-plain", clierr.ExitFailure, []string{"Error: boom"}, []string{"Next:", "--help"}},
+		{"fail-conflict", clierr.ExitConflict, []string{"Error: stale revision", "Next:  retry with a newer revision"}, nil},
 		{"fail-deadline", clierr.ExitUnavailable, []string{"Error: wait: context deadline exceeded"}, nil},
 		{"fail-canceled", clierr.ExitInterrupted, []string{"Interrupted."}, []string{"Error:"}},
 	}

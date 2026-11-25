@@ -387,7 +387,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 			if apiErr.Method != http.MethodGet || apiErr.Path != "/api/v1/environments" {
 				t.Errorf("request = %s %s", apiErr.Method, apiErr.Path)
 			}
-			hint := clierr.Hint(err)
+			hint := strings.TrimSpace(clierr.Why(err) + " " + clierr.Hint(err))
 			if test.wantHintPart != "" && !strings.Contains(hint, test.wantHintPart) {
 				t.Errorf("hint = %q, want it to contain %q", hint, test.wantHintPart)
 			}
