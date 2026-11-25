@@ -25,7 +25,7 @@ runs shell-free commands on them as audited Operations, and talks to
 |---|---|
 | `cmd/api` | HTTP API: accounts, inventory, Operations, configuration, secrets, agents. Writes intent; never runs SSH. |
 | `cmd/controlmanager` | Background work: Host reconcilers driven by a transactional outbox, the operation worker (SSH execution) and the agent gateway. Serves health and metrics only. |
-| `cmd/monolit` | Both roles in one process (the easiest way to run it). |
+| `cmd/monolith` | Both roles in one process (the easiest way to run it). |
 | `cmd/machinarchy` | CLI; uses only the public HTTP API. |
 
 Code layout: `internal/domain` (entities, rules), `internal/service` (use
@@ -49,7 +49,7 @@ More in [docs/architecture.md](docs/architecture.md) and the
 ## Build
 
 ```sh
-make build          # bin/machinarchy{,-api,-controlmanager,-monolit}
+make build          # bin/machinarchy{,-api,-controlmanager,-monolith}
 make images         # container images (needs ../machinarchy-agent)
 ```
 
@@ -62,7 +62,7 @@ Binaries carry their version (`machinarchy version`). Builds are reproducible:
 cp .env.example .env            # set MACHINARCHY_OPERATOR_TOKEN (32+ chars)
 set -a; . ./.env; set +a
 mkdir -m 700 -p data
-go run ./cmd/monolit            # http://localhost:8080, API reference at /scalar
+go run ./cmd/monolith            # http://localhost:8080, API reference at /scalar
 ```
 
 Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` for the first start to create the
@@ -78,7 +78,7 @@ go run ./cmd/machinarchy config use-context local
 go run ./cmd/machinarchy get hosts
 ```
 
-The same through `make`: `make run-monolit` and `make run-cli ARGS="get hosts"`.
+The same through `make`: `make run-monolith` and `make run-cli ARGS="get hosts"`.
 These targets load `.env` (or `ENV_FILE=…`) themselves and ignore settings
 exported in your shell.
 
@@ -91,8 +91,8 @@ With Docker: `docker compose up` (`docker-compose.yml`, PostgreSQL from
 `deployments/infra.docker-compose.yml`), or run an image directly:
 
 ```sh
-make image-monolit IMAGE_TAG=dev
-docker run -p 8080:8080 -v machinarchy-data:/data --env-file .env machinarchy-monolit:dev
+make image-monolith IMAGE_TAG=dev
+docker run -p 8080:8080 -v machinarchy-data:/data --env-file .env machinarchy-monolith:dev
 ```
 
 ## Test
@@ -150,7 +150,7 @@ immutable revisions: `machinarchy runtime-config get|publish|rollback`.
 
 - Images: distroless, non-root, digest-pinned bases, `HEALTHCHECK` built in,
   `/data` volume for SQLite. One image per process (`api`, `controlmanager`,
-  `monolit`) plus `cli`. Releases publish signed images to GHCR.
+  `monolith`) plus `cli`. Releases publish signed images to GHCR.
 - Single node: the monolith with SQLite on a volume.
 - Scaled: several API replicas and one or more Control Managers against
   PostgreSQL (`sslmode=verify-full`).

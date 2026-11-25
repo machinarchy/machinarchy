@@ -45,7 +45,7 @@ this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
     vulnerabilities unless a reviewed, unexpired entry in
     `scripts/security/govulncheck-allowlist.txt` accepts one with no fix),
     gosec v2.22.4 and a 15s run of each fuzz target.
-  - `images`: builds the api, controlmanager, monolit, CLI and agent images;
+  - `images`: builds the api, controlmanager, monolith, CLI and agent images;
     the monolith must turn healthy and exit 0 on `docker stop`.
   - On `main`, after all three: Release Please, then one published, scanned
     and signed image per server process.

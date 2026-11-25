@@ -1,7 +1,7 @@
 name: machinarchy-apps
 
 services:
-  monolit:
+  monolith:
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,7 +10,7 @@ services:
       additional_contexts:
         agent-protocol: ${MACHINARCHY_AGENT_SOURCE:-../machinarchy-agent}/protocol
       args:
-        MACHINARCHY_COMMAND: monolit
+        MACHINARCHY_COMMAND: monolith
     ports:
       - "127.0.0.1:8080:8080"
     environment:

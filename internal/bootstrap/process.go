@@ -21,7 +21,7 @@ const (
 	defaultShutdownTimeout    = 25 * time.Second
 	apiServiceName            = "machinarchy-api"
 	controlManagerServiceName = "machinarchy-controlmanager"
-	monolithServiceName       = "machinarchy-monolit"
+	monolithServiceName       = "machinarchy-monolith"
 )
 
 type httpLifecycle interface {

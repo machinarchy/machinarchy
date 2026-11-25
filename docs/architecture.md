@@ -7,7 +7,7 @@ This page describes the system as it is. Design history lives in [the ADRs](adr/
 One Go module, ports and adapters:
 
 ```text
-cmd/{api,controlmanager,monolit}      cmd/machinarchy (CLI, HTTP client only)
+cmd/{api,controlmanager,monolith}      cmd/machinarchy (CLI, HTTP client only)
         │                                      │
 internal/bootstrap ── composes ───────────────┘ (via /api/v1)
         │
@@ -24,7 +24,7 @@ SQLite (single node)  or  PostgreSQL (shared)
 
 - **API** (`machinarchy-api`) serves `/api/v1` and health/metrics. It does no SSH work: commands are executed by the operation worker.
 - **Control Manager** (`machinarchy-controlmanager`) runs the Host reconcilers from the transactional outbox and the operation worker that executes Operations over SSH.
-- **Monolith** (`machinarchy-monolit`) runs both in one process.
+- **Monolith** (`machinarchy-monolith`) runs both in one process.
 - **CLI** (`machinarchy`) talks only to the public HTTP API (ADR-035, enforced by a test).
 - The host **agent** is a separate repository (`machinarchy-agent`) and is not integrated yet.
 

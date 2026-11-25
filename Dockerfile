@@ -3,7 +3,7 @@
 # Machinarchy server and CLI images.
 #
 #   docker buildx build --build-context agent-protocol=../machinarchy-agent/protocol \
-#     --build-arg MACHINARCHY_COMMAND=monolit -t machinarchy-monolit .
+#     --build-arg MACHINARCHY_COMMAND=monolith -t machinarchy-monolith .
 #   docker buildx build --build-context agent-protocol=../machinarchy-agent/protocol \
 #     --target cli -t machinarchy-cli .
 #
@@ -37,13 +37,15 @@ ENV CGO_ENABLED=0 GOFLAGS="-trimpath -buildvcs=false"
 ENV BUILDINFO=github.com/machinarchy/machinarchy/internal/buildinfo
 
 FROM build AS build-server
-ARG MACHINARCHY_COMMAND=monolit
-RUN case "$MACHINARCHY_COMMAND" in api|controlmanager|monolit) ;; \
-      *) echo "MACHINARCHY_COMMAND must be api, controlmanager or monolit (use --target cli for the CLI)" >&2; exit 1 ;; esac
+ARG MACHINARCHY_COMMAND=monolith
+# "monolit" is the deprecated name of "monolith", accepted for one release.
+RUN case "$MACHINARCHY_COMMAND" in api|controlmanager|monolith|monolit) ;; \
+      *) echo "MACHINARCHY_COMMAND must be api, controlmanager or monolith (use --target cli for the CLI)" >&2; exit 1 ;; esac
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    command=$MACHINARCHY_COMMAND; [ "$command" = monolit ] && command=monolith; \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
       -ldflags="-s -w -X ${BUILDINFO}.Version=${VERSION} -X ${BUILDINFO}.Commit=${COMMIT} -X ${BUILDINFO}.BuildTime=${BUILD_TIME}" \
-      -o /out/machinarchy ./cmd/"$MACHINARCHY_COMMAND" \
+      -o /out/machinarchy ./cmd/"$command" \
     && install -d -m 0700 /out/rootfs/data
 
 FROM build AS build-cli

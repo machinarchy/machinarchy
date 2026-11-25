@@ -1,4 +1,4 @@
-// Package main is the entry point for the monolit application.
+// Package main is the entry point for the monolith: the API and the Control Manager in one process.
 package main
 
 import (

@@ -9,7 +9,9 @@ see the [runbook](runbook.md).
 |---|---|---|
 | `machinarchy-api` | `/api`, `/healthz*`, `/metrics`, `/openapi.json`, `/scalar` | none |
 | `machinarchy-controlmanager` | `/healthz*`, `/metrics` only | Host reconcilers (outbox), operation worker, agent gateway |
-| `machinarchy-monolit` | everything the API serves | everything the Control Manager runs |
+| `machinarchy-monolith` | everything the API serves | everything the Control Manager runs |
+
+The monolith was called `monolit` before Phase 21. For one release the old names still work: `make build` also writes `bin/machinarchy-monolit` as a symlink, `make run-monolit`, `build-monolit` and `image-monolit` print a deprecation note, and the image build accepts `MACHINARCHY_COMMAND=monolit`. The Compose service is now `monolith`.
 
 Run several API replicas behind a load balancer against PostgreSQL. Run the
 Control Manager once per database for SQLite, and one or more for PostgreSQL
@@ -477,7 +479,7 @@ Prefer `systemd`: cancel and timeout then also kill processes that left the comm
 ## Containers
 
 ```sh
-make images AGENT_SOURCE=../machinarchy-agent   # api, controlmanager, monolit, cli
+make images AGENT_SOURCE=../machinarchy-agent   # api, controlmanager, monolith, cli
 ```
 
 - Multi-stage BuildKit builds from digest-pinned bases; distroless, non-root

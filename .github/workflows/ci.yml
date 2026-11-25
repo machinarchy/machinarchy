@@ -192,20 +192,20 @@ jobs:
       - name: Monolith image turns healthy and stops cleanly
         run: |
           set -euo pipefail
-          docker run -d --name monolit \
+          docker run -d --name monolith \
             -e MACHINARCHY_ENVIRONMENT=development \
             -e MACHINARCHY_OPERATOR_TOKEN="$(openssl rand -hex 24)" \
             -e MACHINARCHY_ENCRYPTION_SECRET="$(openssl rand -hex 24)" \
-            machinarchy-monolit:ci
+            machinarchy-monolith:ci
           for _ in $(seq 1 30); do
-            status="$(docker inspect --format '{{.State.Health.Status}}' monolit)"
+            status="$(docker inspect --format '{{.State.Health.Status}}' monolith)"
             [ "$status" = healthy ] && break
             sleep 2
           done
-          docker inspect --format 'health={{.State.Health.Status}} user={{.Config.User}}' monolit
-          [ "$(docker inspect --format '{{.State.Health.Status}}' monolit)" = healthy ]
-          docker stop --time 30 monolit
-          [ "$(docker inspect --format '{{.State.ExitCode}}' monolit)" = 0 ]
+          docker inspect --format 'health={{.State.Health.Status}} user={{.Config.User}}' monolith
+          [ "$(docker inspect --format '{{.State.Health.Status}}' monolith)" = healthy ]
+          docker stop --time 30 monolith
+          [ "$(docker inspect --format '{{.State.ExitCode}}' monolith)" = 0 ]
 
       - name: CLI and agent images report their versions
         run: |
@@ -235,7 +235,7 @@ jobs:
       }}
     strategy:
       matrix:
-        command: [api, controlmanager, monolit]
+        command: [api, controlmanager, monolith]
     uses: ./.github/workflows/template-docker.yml
     permissions:
       contents: read

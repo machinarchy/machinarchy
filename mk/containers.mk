@@ -14,7 +14,7 @@ SSH_COMPOSE_PROJECT ?= machinarchy-ssh-test
 SSH_SERVICE         ?=
 SSH_COMPOSE          = $(COMPOSE) --project-name "$(SSH_COMPOSE_PROJECT)" -f "$(SSH_COMPOSE_FILE)"
 
-.PHONY: images image-api image-controlmanager image-monolit image-cli
+.PHONY: images image-api image-controlmanager image-monolith image-monolit image-cli
 .PHONY: infra-config infra-up infra-down infra-ps infra-logs
 .PHONY: apps-config apps-up apps-down apps-ps apps-logs
 .PHONY: dev-up dev-down dev-ps dev-logs
@@ -33,10 +33,13 @@ IMAGE_BUILD   = docker buildx build --load \
 	--build-context agent-protocol=$(AGENT_SOURCE)/protocol \
 	--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(COMMIT_TIME)
 
-images: image-api image-controlmanager image-monolit image-cli ## Build all container images
+images: image-api image-controlmanager image-monolith image-cli ## Build all container images
 
-image-api image-controlmanager image-monolit: image-%: ## Build one server image
+image-api image-controlmanager image-monolith: image-%: ## Build one server image
 	$(IMAGE_BUILD) --target server --build-arg MACHINARCHY_COMMAND=$* -t $(IMAGE_PREFIX)-$*:$(IMAGE_TAG) .
+
+image-monolit: image-monolith # Deprecated alias of image-monolith
+	@echo "make image-monolit is deprecated; use make image-monolith" >&2
 
 image-cli: ## Build the CLI image
 	$(IMAGE_BUILD) --target cli -t $(IMAGE_PREFIX)-cli:$(IMAGE_TAG) .

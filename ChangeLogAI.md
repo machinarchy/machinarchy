@@ -1,5 +1,25 @@
 # ChangeLogAI
 
+## 2026-11-25 — `monolit` renamed to `monolith` (Phase 21: D-15; branch audit/final)
+
+- **Renamed (owner decision):**
+  - `cmd/monolit` → `cmd/monolith`;
+  - binary `machinarchy-monolith`;
+  - make targets `build-monolith`, `run-monolith`, `image-monolith`;
+  - Compose service `monolith`;
+  - telemetry service name `machinarchy-monolith`;
+  - CI image and container names.
+- **The old names keep working for one release:**
+  - `make build` writes `bin/machinarchy-monolit` as a symlink, which `scripts/smoke.sh`, left unchanged, uses;
+  - `build-monolit`, `run-monolit` and `image-monolit` print a deprecation note;
+  - the image build and the Docker workflow template accept `MACHINARCHY_COMMAND=monolit`.
+- **Docs:** README, architecture, operations (with a deprecation note), the CLI guide and troubleshooting, the development docs and examples.
+- **Checks run:**
+  - `go build ./...` and `make build`;
+  - `make smoke`: OK, through the old binary name;
+  - `go test ./internal/bootstrap/ ./test/e2e/`: pass;
+  - `docker buildx build --check` with `MACHINARCHY_COMMAND=monolit`: no warnings.
+
 ## 2026-11-25 — Echo v4.16.6; Echo is kept (Phase 21: D-14; branch audit/final)
 
 - `github.com/labstack/echo/v4` v4.16.4 → v4.16.6, which fixes GO-2026-6875 and GO-2026-6872. Both had been allowlisted as not exploitable here.

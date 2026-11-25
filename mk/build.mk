@@ -4,8 +4,8 @@
 
 .PHONY: setup setup-local hooks-install
 .PHONY: deps deps-tidy
-.PHONY: build build-api build-controlmanager build-monolit build-cli build-release
-.PHONY: run-api run-controlmanager run-monolit run-cli
+.PHONY: build build-api build-controlmanager build-monolith build-monolit build-cli build-release
+.PHONY: run-api run-controlmanager run-monolith run-monolit run-cli
 .PHONY: api-docs clean
 
 ##@ Development setup
@@ -29,7 +29,7 @@ deps-tidy: ## Reconcile go.mod and go.sum (modifies files)
 	$(GO) mod tidy
 
 ##@ Build
-build: build-api build-controlmanager build-monolit build-cli ## Build all binaries into BIN_DIR (default ./bin)
+build: build-api build-controlmanager build-monolith build-cli ## Build all binaries into BIN_DIR (default ./bin)
 
 build-api: ## Build the API server (bin/machinarchy-api)
 	$(call go_build,api,machinarchy-api)
@@ -37,8 +37,13 @@ build-api: ## Build the API server (bin/machinarchy-api)
 build-controlmanager: ## Build the control manager (bin/machinarchy-controlmanager)
 	$(call go_build,controlmanager,machinarchy-controlmanager)
 
-build-monolit: ## Build the single-process monolith (bin/machinarchy-monolit)
-	$(call go_build,monolit,machinarchy-monolit)
+build-monolith: ## Build the single-process monolith (bin/machinarchy-monolith)
+	$(call go_build,monolith,machinarchy-monolith)
+	@# Deprecated name, kept for one release (scripts and existing setups).
+	@ln -sf machinarchy-monolith "$(BIN_DIR)/machinarchy-monolit"
+
+build-monolit: build-monolith # Deprecated alias of build-monolith
+	@echo "make build-monolit is deprecated; use make build-monolith" >&2
 
 build-cli: ## Build the CLI (bin/machinarchy)
 	$(call go_build,machinarchy,machinarchy)
@@ -56,8 +61,12 @@ run-api: ## Run the API server
 run-controlmanager: ## Run the control manager
 	$(call run_with_env,./cmd/controlmanager)
 
-run-monolit: ## Run the monolith (API + control manager)
-	$(call run_with_env,./cmd/monolit)
+run-monolith: ## Run the monolith (API + control manager)
+	$(call run_with_env,./cmd/monolith)
+
+run-monolit: # Deprecated alias of run-monolith
+	@echo "make run-monolit is deprecated; use make run-monolith" >&2
+	$(call run_with_env,./cmd/monolith)
 
 run-cli: ## Run the CLI, e.g. make run-cli ARGS="get hosts"
 	$(call run_with_env,./cmd/machinarchy)

@@ -40,10 +40,10 @@ The default broker address in .env.example points to this local NATS instance.
 For local development with the default SQLite database, run both components in one process:
 
 ~~~sh
-make run-monolit
+make run-monolith
 ~~~
 
-This target loads .env, then starts cmd/monolit. It serves the API on MACHINARCHY_LISTEN_ADDR, defaulting to :8080. Settings exported in your shell are overridden by .env; to use another file, run make run-monolit ENV_FILE=path/to/file.env.
+This target loads .env, then starts cmd/monolith. It serves the API on MACHINARCHY_LISTEN_ADDR, defaulting to :8080. Settings exported in your shell are overridden by .env; to use another file, run make run-monolith ENV_FILE=path/to/file.env.
 
 Run the CLI the same way, with its arguments in ARGS:
 
@@ -202,7 +202,7 @@ Choose another command with the Docker build argument:
 
 ~~~sh
 docker build --build-arg MACHINARCHY_COMMAND=controlmanager -t machinarchy-controlmanager .
-docker build --build-arg MACHINARCHY_COMMAND=monolit -t machinarchy-monolit .
+docker build --build-arg MACHINARCHY_COMMAND=monolith -t machinarchy-monolith .
 docker build --build-arg MACHINARCHY_COMMAND=machinarchy -t machinarchy-cli .
 ~~~
 

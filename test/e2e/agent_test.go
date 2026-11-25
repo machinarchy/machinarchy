@@ -73,9 +73,9 @@ func builtBinaries(t *testing.T) (monolith, agent string) {
 		if binaries.dir, binaries.err = os.MkdirTemp("", "machinarchy-e2e-*"); binaries.err != nil {
 			return
 		}
-		binaries.monolith = filepath.Join(binaries.dir, "machinarchy-monolit")
+		binaries.monolith = filepath.Join(binaries.dir, "machinarchy-monolith")
 		binaries.agent = filepath.Join(binaries.dir, "machinarchy-agent")
-		if binaries.err = buildBinary(repoRoot, "./cmd/monolit", binaries.monolith); binaries.err != nil {
+		if binaries.err = buildBinary(repoRoot, "./cmd/monolith", binaries.monolith); binaries.err != nil {
 			return
 		}
 		binaries.err = buildBinary(agentDir, "./cmd/machinarchy-agent", binaries.agent)

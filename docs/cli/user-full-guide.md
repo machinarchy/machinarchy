@@ -29,7 +29,7 @@ server (step 2) and one for everything else.
 | Tool | Why |
 |---|---|
 | Docker with Compose | the three SSH servers |
-| Go 1.27 and `make` | builds `machinarchy` (CLI) and `machinarchy-monolit` (server) |
+| Go 1.27 and `make` | builds `machinarchy` (CLI) and `machinarchy-monolith` (server) |
 | `curl`, `jq` | two steps use the HTTP API directly |
 | `ssh` | a sanity check of the lab |
 
@@ -161,11 +161,11 @@ Start the server in **its own terminal** and leave it running (Ctrl-C stops it):
 
 ```sh
 set -a; . "$LAB/server.env"; set +a
-machinarchy-monolit
+machinarchy-monolith
 ```
 
 > **With `make`, pass the lab settings explicitly:**
-> `make run-monolit ENV_FILE="$LAB/server.env"`. A plain `make run-monolit`
+> `make run-monolith ENV_FILE="$LAB/server.env"`. A plain `make run-monolith`
 > loads the repository's `.env` instead and ignores what you exported, so the
 > server uses another database and another admin password, and the login in
 > step 3 fails with `Invalid credentials`.

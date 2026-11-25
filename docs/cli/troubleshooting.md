@@ -21,10 +21,10 @@ The admin password from `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` applies only
 when the server creates the first owner, on an empty database. If the login is
 refused:
 
-- **Started with `make run-monolit`?** It loads the repository's `.env`, not
+- **Started with `make run-monolith`?** It loads the repository's `.env`, not
   the variables you exported, so it may use another database whose `admin`
   has another password. Start it with
-  `make run-monolit ENV_FILE=path/to/your.env`, or run `bin/machinarchy-monolit`
+  `make run-monolith ENV_FILE=path/to/your.env`, or run `bin/machinarchy-monolith`
   after exporting your settings.
 - **The database already existed** when you set the password: the setting is
   ignored. Use the password the owner was created with, or start from an empty

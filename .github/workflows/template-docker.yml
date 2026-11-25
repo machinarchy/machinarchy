@@ -36,7 +36,7 @@ on:
         type: string
         default: linux/amd64,linux/arm64
       machinarchy_command:
-        description: "Server process to build: api, controlmanager or monolit"
+        description: "Server process to build: api, controlmanager or monolith"
         required: false
         type: string
         default: api
@@ -114,7 +114,7 @@ jobs:
             exit 1
           }
           case "$MACHINARCHY_COMMAND" in
-            api|controlmanager|monolit) ;;
+            api|controlmanager|monolith|monolit) ;;
             *) echo "::error::Unsupported Machinarchy command target: $MACHINARCHY_COMMAND"; exit 1 ;;
           esac
 
