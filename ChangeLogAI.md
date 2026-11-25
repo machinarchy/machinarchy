@@ -1,5 +1,33 @@
 # ChangeLogAI
 
+## 2026-11-25 — HA verification harness (Phase 20: D-16; branch audit/ha)
+
+- **`test/ha`:** real binaries in a multi-replica topology, all started at once.
+  - PostgreSQL in its own Docker container on a named volume, so a restart keeps the data;
+  - NATS in operator mode, with a cuttable TCP proxy in front of each Control Manager;
+  - 2 API replicas behind a load balancer with failover;
+  - 2 Control Managers;
+  - 3 agents with host-bound tokens;
+  - 6 SSH hosts on 3 test servers.
+  
+  It runs only with `MACHINARCHY_HA=1` and needs Docker. `MACHINARCHY_HA_LOG_DIR` keeps the process logs of a failed run. `MACHINARCHY_HA_LOAD_KINDS` limits the load mix.
+- **Scenarios:** baseline; `SIGKILL` a Control Manager mid-Operation (detached, attached, capability burst); restart PostgreSQL; partition one Control Manager from NATS for 30 s; `SIGTERM` during a 120-host burst; a one-minute load profile. The load profile takes latency from the server's timestamps and samples `pg_stat_activity` and the audit-lock holders.
+- **Findings fixed in separate commits:** F20-01 to F20-07 (see their entries).
+- **Checks run:** `MACHINARCHY_HA=1 go test -v ./test/ha/` on a laptop (i7-9750H, Docker Desktop): every scenario passes, in 414 s.
+  - Kill: detached `Succeeded` with one launch per target; attached `Interrupted`; capability burst `Succeeded` with one request per target.
+  - PostgreSQL restart: ready again in 3.2 s.
+  - NATS partition: capability Operations in 2.2 s.
+  - Burst: all 120 hosts reconciled 5 s after it.
+  - Load: 82 Operations per minute.
+
+    | Kind | p50 | p95 |
+    |---|---|---|
+    | Attached `uptime` (6 hosts) | 690 ms | 910 ms |
+    | Capability (3 agents) | 1.0 s | 1.13 s |
+    | Detached `sleep 1` (6 hosts) | 7.3 s | 7.5 s (5 s first poll interval) |
+
+  - Without `MACHINARCHY_HA` the package skips (`go test ./test/ha/`: ok).
+
 ## 2026-11-25 — Lease owner IDs are logged at startup (Phase 20; branch audit/ha)
 
 - The Operation worker logs `operation worker started` with `owner_id`, and the Control Manager engine logs `control manager engine started` with `instance_id`. These are the `owner_id` values written to `resource_leases` and to outbox claims, so an operator, or the HA harness, can tell which process holds a lease. Before, they were random IDs that appeared nowhere else.
