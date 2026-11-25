@@ -24,6 +24,7 @@ func TestHighAvailability(t *testing.T) {
 	t.Logf("topology up in %s: %d SSH hosts, %d agent hosts", time.Since(began).Round(time.Second), len(topo.sshHosts), len(topo.agentIDs))
 
 	t.Run("baseline", func(t *testing.T) { baseline(t, topo) })
+	t.Run("gateways share agent traffic", func(t *testing.T) { gatewaysShareTraffic(t, topo) })
 	t.Run("kill a Control Manager mid-Operation", func(t *testing.T) { killControlManager(t, topo) })
 	t.Run("restart PostgreSQL", func(t *testing.T) { restartPostgres(t, topo) })
 	t.Run("partition NATS", func(t *testing.T) { partitionNATS(t, topo) })
@@ -47,6 +48,27 @@ func baseline(t *testing.T, topo *topology) {
 	}
 	if bad := topo.operation(detached).relaunches(); len(bad) > 0 {
 		t.Errorf("detached launches: %v", bad)
+	}
+}
+
+// gatewaysShareTraffic: with both Control Managers healthy and not
+// restarted, the NATS queue group spreads agent lease renewals over both
+// gateways (AUDIT/20 F20-09). Each must answer at least a fifth of them.
+func gatewaysShareTraffic(t *testing.T, topo *topology) {
+	const renewals = "machinarchy_agent_gateway_lease_renewals_total"
+	const window = 2 * time.Minute
+	before := []float64{topo.metric(topo.cmPorts[0], renewals), topo.metric(topo.cmPorts[1], renewals)}
+	time.Sleep(window)
+	delta := []float64{topo.metric(topo.cmPorts[0], renewals) - before[0], topo.metric(topo.cmPorts[1], renewals) - before[1]}
+	total := delta[0] + delta[1]
+	t.Logf("lease renewals answered in %s: cm-1 %.0f, cm-2 %.0f", window, delta[0], delta[1])
+	if total < 10 {
+		t.Fatalf("only %.0f renewals in %s; the agents are not renewing", total, window)
+	}
+	for i, d := range delta {
+		if d < total/5 {
+			t.Errorf("cm-%d answered %.0f of %.0f renewals; the queue group is not sharing agent traffic", i+1, d, total)
+		}
 	}
 }
 

@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-25 — HA harness: the agent gateways share agent traffic (Phase 21: F20-09; branch audit/final)
+
+- `test/ha`: a new scenario, run right after the baseline while both Control Managers are fresh, counts the lease renewals each gateway answers over 2 minutes and fails if either answers less than a fifth. It settles F20-09 (the Phase 20 counts were skewed by restarts).
+- Result of the run: cm-1 36, cm-2 36 renewals; the NATS queue group shares agent traffic evenly.
+- CONTRIBUTING lists the scenario; the harness now takes about 9 minutes.
+- **Checks run:**
+  - `MACHINARCHY_HA=1 go test -run 'TestHighAvailability/(baseline|gateways)' ./test/ha/`: pass, no process left running;
+  - `golangci-lint run ./test/ha/...`: 0 issues.
+  - The full harness was not re-run for this change.
+
 ## 2026-11-25 — CLI login, Access Profile and token commands (Phase 21: G-13C-03, part 2; branch audit/final)
 
 - **`machinarchy login`:** prompts for the password without echo (`--password-stdin` for scripts; without a terminal it refuses to prompt) and stores the session token for the current context's user. A first login with `--server URL --context NAME` creates the cluster, user and context and makes it current when none is. The password is never stored or printed. The "no context" hint now starts with `login`.

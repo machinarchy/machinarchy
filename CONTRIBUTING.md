@@ -34,7 +34,7 @@ Each test creates and drops its own schema, so the database may be shared, but u
 
 Every store method that records an intent (a user or API action that changes inventory, access, configuration or secrets) or an Operation's outcome must record an audit event in the same transaction, with a contract test in `internal/store/contract_test.go` that checks the event. System-driven progress (a reconcile's status, an Operation starting, target transitions, launches, capability dispatch) is not audited: each event takes the workspace's audit-chain lock (AUDIT/20 F20-05; see "audit records intents and outcomes" in the contract tests). Never put credentials or token hashes in event details.
 
-`test/ha` checks the multi-replica design under failure: real binaries with two API replicas, two Control Managers, agents, NATS and a PostgreSQL container, and scenarios that kill a Control Manager, restart PostgreSQL, partition NATS and run a short load profile. It needs Docker and takes about 7 minutes, so it runs only when asked:
+`test/ha` checks the multi-replica design under failure: real binaries with two API replicas, two Control Managers, agents, NATS and a PostgreSQL container, and scenarios that check both agent gateways share agent traffic, kill a Control Manager, restart PostgreSQL, partition NATS and run a short load profile. It needs Docker and takes about 9 minutes, so it runs only when asked:
 
 ```sh
 MACHINARCHY_HA=1 go test -v -timeout 45m ./test/ha/
