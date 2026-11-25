@@ -2,14 +2,14 @@
 
 ## Supported Versions
 
-Security fixes are developed against the latest code on `main`. Once versioned
-releases are published, update this table to list the release branches that are
-still receiving security fixes.
+Security fixes are developed against the latest code on `main` and released as
+the next stable version.
 
 | Version | Supported |
 |---|---|
-| `main` | Yes |
-| Older releases | No, unless explicitly listed here |
+| Latest stable release (`main`) | Yes |
+| Pre-releases (`-beta.N`, `-alpha.N`) | No: upgrade to the next release of that channel or to stable |
+| Older stable releases | No, unless explicitly listed here |
 
 ## Reporting a Vulnerability
 

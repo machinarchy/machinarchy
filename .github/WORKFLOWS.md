@@ -36,7 +36,7 @@ this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
 
 ## Workflow behavior
 
-- `ci.yml` runs for pushes to `main` and pull requests:
+- `ci.yml` runs for pushes to `main`, `beta` and `alpha` and for pull requests:
   - `verify`: tidy, gofmt, vet, build, `make coverage` (race detector,
     coverage artifact, PostgreSQL contract suites, OpenAPI route coverage and
     the real agent end-to-end test, which must not skip), `make smoke`, and
@@ -47,14 +47,72 @@ this repository to `machinarchy/` and `<owner>/machinarchy-agent` to
     gosec v2.22.4 and a 15s run of each fuzz target.
   - `images`: builds the api, controlmanager, monolith, CLI and agent images;
     the monolith must turn healthy and exit 0 on `docker stop`.
-  - On `main`, after all three: Release Please, then one published, scanned
-    and signed image per server process.
+  - On `main`, `beta` and `alpha`, after all three: Release Please for that
+    branch's channel (see "Release channels"), then one published, scanned and
+    signed image per server process.
 - `release.yml` is reusable and runs Release Please after the CI checks pass.
   `dry_run: true` skips Release Please and all release mutations.
 - `template-docker.yml` always builds unless `[docker skip]` is present in the
   commit message or PR title. With `docker_push: false`, it does not push, scan,
   or sign. With `docker_push: true`, it pushes, scans by immutable digest, and
   signs that digest with Cosign keyless signing.
+
+## Release channels
+
+The branch you merge into decides what is released:
+
+| Branch | Channel | Version example | GitHub Release | Docker tags |
+|---|---|---|---|---|
+| `main` | stable | `v1.3.0` | latest release | `1.3.0`, `1.3`, `latest`, `main` |
+| `beta` | beta | `v1.3.0-beta.1`, `-beta.2` … | marked pre-release | `1.3.0-beta.1`, `beta` |
+| `alpha` | alpha | `v1.3.0-alpha.1`, `-alpha.2` … | marked pre-release | `1.3.0-alpha.1`, `alpha` |
+
+**How the suffix is added.** Release Please computes the next version from the
+Conventional Commits on the branch (`feat:` → minor, `fix:` → patch, `!` or
+`BREAKING CHANGE` → major, or minor while below 1.0). On `beta` and `alpha` its
+`prerelease` versioning appends `-beta.N` / `-alpha.N`: the first release of
+a new version ends in `.1`, and further releases of the same version raise only
+`N`. The suffix is never typed by hand and never edited in a file.
+
+**Flow of a change:**
+
+1. Merge feature PRs (squash, Conventional Commit title) into `alpha`.
+2. Release Please opens a PR "chore(alpha): release 1.3.0-alpha.1". Merging it
+   creates the tag, a pre-release with the four CLI binaries, `checksums.txt`
+   and provenance attestations, and the three server images.
+3. To promote, merge `alpha` into `beta` with a merge commit (not squash, so
+   the commit history Release Please reads stays intact), then `beta` into
+   `main`. Each branch then makes its own release PR: `1.3.0-beta.1`, then
+   `1.3.0`.
+4. Fixes found in a beta are committed to `beta` and merged back to `alpha`.
+
+**What stays separate per channel**, so that merging one branch into the next
+never conflicts: `.github/release-please/config.<channel>.json`,
+`manifest.<channel>.json` (the last released version) and the changelog
+(`CHANGELOG.md` for stable, `CHANGELOG.beta.md`, `CHANGELOG.alpha.md`).
+
+**Rules enforced by the workflows:**
+
+- A pre-release never gets `latest` or a `major.minor` image tag, so installs
+  that follow `latest` or `1.3` never receive one.
+- The release job refuses a tag whose suffix does not match its branch (a
+  `-beta.N` tag from `main`, or a stable tag from `alpha`).
+- Pre-release notes start with a warning that the build is not for production.
+
+**Using a pre-release:** download the asset from the pre-release page (the
+CLI), or pull the exact tag (`ghcr.io/<owner>/machinarchy-monolith:1.3.0-beta.1`)
+or the channel tag (`:beta`). Pin the exact tag anywhere that matters. Stored
+data may change between alphas; the README already warns that databases may
+need to be recreated during development.
+
+**Set up once:** create the branches `beta` and `alpha` from `main`, protect
+all three like `main` (required CI checks, no force pushes). The
+`manifest.*.json` files record the last released version of that channel and
+start empty: the first release of every channel is `0.0.1` (`initial-version`),
+so the first tags are `v0.0.1-alpha.1`, `v0.0.1-beta.1` and `v0.0.1`. After
+that the commit types decide (below 1.0, a breaking change raises the minor). Not yet exercised: the workflows have never run on
+GitHub (AUDIT/10 Phase 10), so the first release of each channel should be
+watched.
 
 ## Release Please expectations
 
@@ -72,19 +130,16 @@ should be reviewed against the actual workflow run before enforcement.
 
 ## Before the first release
 
-- Ensure a root `CHANGELOG.md` exists; the Release Please Go strategy expects it.
-- Confirm the Go toolchain in `Dockerfile` is compatible with the `go` directive
-  in the root `go.mod`. Those files were not both present in the review archive.
-- Confirm both `./cmd/machinarchy` and `./cmd/agent` define the linker variables
-  `main.Version`, `main.Commit`, and `main.BuildTime`.
-- Confirm the SQLite driver supports `CGO_ENABLED=0`. If it is
-  `github.com/mattn/go-sqlite3`, these release builds need a CGO-enabled native
-  toolchain instead of the current pure-Go cross-compilation approach.
-- Ensure `scripts/db/test-postgres.sh` and `scripts/dev/setup-local.sh` exist. They are
-  referenced by the Makefile but were not present in the review archive.
-- Verify the Compose environment variable names for the database URL and NATS
-  endpoint against the actual config loader; the Go configuration source was
-  not included.
+- Release Please creates `CHANGELOG.md` (and the `.beta` / `.alpha` ones) with
+  the first release PR; nothing needs to exist beforehand.
+- Release builds are pure Go (`CGO_ENABLED=0`; the SQLite driver is
+  `modernc.org/sqlite`) and set the version through
+  `internal/buildinfo` (`Version`, `Commit`, `BuildTime`).
+- The pinned scanner versions in `ci.yml` (govulncheck, gosec) are older than
+  the Go toolchain in `go.mod` and must be aligned before CI is relied on
+  (AUDIT/10, F9-03).
+- `actions/upload-artifact` and `actions/attest` are pinned by tag, not by SHA
+  (AUDIT/10, Phase 10).
 
 ## Local hooks
 

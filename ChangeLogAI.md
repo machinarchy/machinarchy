@@ -1,5 +1,16 @@
 # ChangeLogAI
 
+## 2026-11-25 — Release channels: alpha and beta pre-releases (CI; branch audit/ci)
+
+- **First version:** `initial-version` is `0.0.1` and the manifests start empty, so the first tags are `v0.0.1-alpha.1`, `v0.0.1-beta.1` and `v0.0.1`. Unverified until Release Please runs.
+- **Channels by branch:** `main` releases stable versions (`v1.3.0`), `beta` releases `v1.3.0-beta.N`, `alpha` releases `v1.3.0-alpha.N`. Release Please adds the suffix itself (prerelease versioning); nobody types it. How it works and how to promote alpha → beta → main is in `.github/WORKFLOWS.md`, "Release channels".
+- **`release.yml`:** selects the channel from the branch, passes per-channel config and manifest files to Release Please (`.github/release-please/config.*.json`, `manifest.*.json`, with separate changelogs so branch merges do not conflict), refuses a tag whose suffix does not match its branch, and starts pre-release notes with a "not for production" warning.
+- **`ci.yml`:** runs on pushes to `main`, `beta` and `alpha`, and creates releases from all three.
+- **`template-docker.yml`:** a pre-release image gets no `latest` and no `major.minor` tag (it keeps its exact tag and the branch tag `beta`/`alpha`).
+- **Docs:** `WORKFLOWS.md` rewritten where it was stale (the "Before the first release" list described a review archive); `.github/SECURITY.md` says pre-releases get no security fixes.
+- **Review of `.github`, not changed here:** scanner versions in `ci.yml` (govulncheck v1.1.4, gosec v2.22.4) predate Go 1.27; `actions/upload-artifact` and `actions/attest` are pinned by tag, not SHA; the workflows have never run on GitHub (all Phase 10).
+- **Checks run:** all workflow YAML and release-please JSON parse; the tag-versus-branch guard and the tag regex were tested for stable, beta and alpha tags. **Not run:** the workflows themselves and Release Please (needs GitHub), actionlint (not installed). The prerelease version numbering follows Release Please's documented behavior and is unverified until the first run.
+
 ## 2026-11-25 — Security status, dev-only Compose defaults, CLI setup docs (Phase 21: S-20, docs; branch audit/final)
 
 - **`docs/SECURITY.md` "Validation status":** rewritten. The old text said PostgreSQL, endpoint authorization and SSH policy were unproven; it now lists what the suite shows (the route authorization matrix, store contracts on both engines, SSH policy and host-key tests, the `test/ha` harness, govulncheck and gosec) and what is still not shown (production-like load, a penetration test, most alert paths).

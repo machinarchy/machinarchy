@@ -56,14 +56,34 @@ jobs:
           echo "::notice::dry_run=true: Release Please was not executed."
           echo "No release PR, tag, GitHub Release, or asset will be created or changed."
 
+      # The branch decides the release channel: main is stable, beta and
+      # alpha publish pre-releases (v1.3.0-beta.1, v1.3.0-alpha.1). Each
+      # channel has its own config, manifest and changelog file so the
+      # branches never conflict when one is merged into the next.
+      - name: Select the release channel
+        id: channel
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$BRANCH" in
+            main)  channel=stable ;;
+            beta)  channel=beta ;;
+            alpha) channel=alpha ;;
+            *) echo "::error::Branch '$BRANCH' has no release channel (main, beta or alpha)."; exit 1 ;;
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "::notice::Release channel: $channel (branch $BRANCH)"
+
       - name: Run Release Please
         id: release_please
         if: ${{ !inputs.dry_run }}
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.MY_GITHUB_TOKEN }}
-          release-type: go
-          target-branch: main
+          config-file: .github/release-please/config.${{ steps.channel.outputs.channel }}.json
+          manifest-file: .github/release-please/manifest.${{ steps.channel.outputs.channel }}.json
+          target-branch: ${{ github.ref_name }}
           # Do not set skip-github-release: true. We need Release Please to
           # create the GitHub Release before the asset job can upload binaries.
 
@@ -84,6 +104,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.release.outputs.new_release_tag }}
           RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           [[ -n "$RELEASE_TAG" ]] || { echo "Missing Release Please tag output." >&2; exit 1; }
@@ -92,6 +113,12 @@ jobs:
             echo "Unexpected release tag: $RELEASE_TAG" >&2
             exit 1
           }
+          # The tag's suffix must match the branch it was released from.
+          case "$BRANCH" in
+            main)  [[ "$RELEASE_TAG" != *-* ]] || { echo "Stable branch released a pre-release tag: $RELEASE_TAG" >&2; exit 1; } ;;
+            beta)  [[ "$RELEASE_TAG" == *-beta.* ]] || { echo "Branch beta must release -beta.N tags, got $RELEASE_TAG" >&2; exit 1; } ;;
+            alpha) [[ "$RELEASE_TAG" == *-alpha.* ]] || { echo "Branch alpha must release -alpha.N tags, got $RELEASE_TAG" >&2; exit 1; } ;;
+          esac
 
       - name: Checkout exact release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,6 +246,10 @@ jobs:
           EOF
 
           {
+            case "$RELEASE_TAG" in
+              *-alpha.*) printf '\n> **Alpha pre-release.** Unstable: interfaces and stored data may change without notice. Not for production.\n' ;;
+              *-beta.*)  printf '\n> **Beta pre-release.** Feature-complete for the next stable version, but still being tested. Not recommended for production.\n' ;;
+            esac
             printf '\nRelease: %s\n\n' "$RELEASE_TAG"
             printf '%s\n' '### Direct download links'
             for asset in \

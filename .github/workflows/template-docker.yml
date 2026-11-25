@@ -197,8 +197,8 @@ jobs:
           images: ${{ needs.pre-flight.outputs.image_ref }}
           tags: |
             type=raw,value=${{ inputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
-            type=raw,value=latest,enable=${{ inputs.docker_push }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ !contains(inputs.version, '-') }}
+            type=raw,value=latest,enable=${{ inputs.docker_push && !contains(inputs.version, '-') }}
             type=ref,event=branch
             type=sha,prefix=sha-
 

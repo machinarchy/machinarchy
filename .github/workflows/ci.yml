@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main is the stable channel; beta and alpha publish pre-releases
+    # (.github/WORKFLOWS.md, "Release channels").
+    branches: [main, beta, alpha]
   pull_request:
 
 # Default-deny; jobs grant only what they need.
@@ -214,7 +216,7 @@ jobs:
 
   orchestrate-release:
     name: Evaluate and create semantic release
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/beta","refs/heads/alpha"]'), github.ref) }}
     needs: [verify, security, images]
     uses: ./.github/workflows/release.yml
     permissions:
