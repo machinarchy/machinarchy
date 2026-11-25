@@ -19,6 +19,22 @@ Control Manager once per database for SQLite, and one or more for PostgreSQL
 carried out by a process that runs the agent gateway (Control Manager role or
 the monolith); the standalone API only records them.
 
+## High availability
+
+On PostgreSQL, run two or more API replicas behind a load balancer and two or more Control Managers. They coordinate through fenced leases in the database. A replica that crashes (rather than stopping cleanly) leaves leases that block the others until they expire, which sets the recovery times below. The values were measured with `test/ha` (AUDIT/20).
+
+| Failure | What happens | Recovery |
+|---|---|---|
+| A Control Manager stops cleanly (`SIGTERM`) | It drains its queue, finishes running reconciles and releases its leases within `MACHINARCHY_SHUTDOWN_TIMEOUT` | Immediate: the others take over |
+| A Control Manager crashes during a detached run | Commands keep running on the hosts | The others poll them once the host leases expire, **2 minutes** at most; each target is launched once |
+| A Control Manager crashes during an attached run | The SSH sessions it held are gone | The Operation ends `Interrupted` once its lease expires, **2 minutes** at most; the commands may have run |
+| A Control Manager crashes with capability Operations in flight | Commands and results are durable; every Control Manager relays and stores them | No wait |
+| A Control Manager crashes with host changes queued in memory | Their outbox events were already acknowledged | The next periodic resync re-reads every host. The resync lease lasts 1.25 × `controlManager.resyncSeconds`, and the others retry every quarter interval, so expect about **1.5 × the resync interval** (7.5 minutes with the default 300 s) |
+| PostgreSQL restarts | Readiness fails during the outage (the "readiness failing" alert) | Back as soon as the database accepts connections (seconds); running Operations finish |
+| One Control Manager loses NATS | Its readiness fails; agents keep working through the other gateways | It reconnects on its own |
+
+The resync interval is `controlManager.resyncSeconds` (default 300). It is a restart-required setting, and the runtime-configuration API refuses changes to those today (AUDIT/21 F21-01), so it stays at its default. The 2-minute Operation and host lease is fixed.
+
 ## Configuration
 
 Configuration comes from environment variables, a JSON file (`--config FILE`)

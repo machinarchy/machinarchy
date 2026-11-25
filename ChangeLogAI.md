@@ -1,5 +1,20 @@
 # ChangeLogAI
 
+## 2026-11-25 — Faster resync takeover after a crash; recovery times documented (Phase 21: F20-08, F20-10; branch audit/final)
+
+- **`controlmanager.Engine`:**
+  - The cluster-wide resync lease lasts 1.25 × the resync interval, down from 2 × with a 2-minute floor. That still keeps one scan per interval cluster-wide.
+  - A replica that finds the lease held now retries every quarter interval, at startup as well, instead of a full interval later. It is no longer logged as a failure.
+  - After the holder crashes, the others resync within about 1.5 intervals (7.5 minutes by default), down from up to about 3.
+- **Test:** `TestSurvivorTakesTheResyncLeaseSoonAfterItExpires`. Before the fix: the lease was taken after 1.03 s with a 1 s interval, and the TTL was 2 minutes. After: well under an interval and a TTL of 1.25 intervals; passes 5 of 5.
+- **HA harness:** a new "SIGKILL during an outbox burst" scenario, sharing the burst code with the `SIGTERM` one. It passes, with all 120 hosts reconciled 5 s after the burst. In this run the killed replica had nothing queued, so it shows no host is lost; the resync takeover itself is covered by the unit test.
+- **Docs:** `docs/operations.md` "High availability" lists each failure with its recovery time (F20-10).
+- **Found on the way (F21-01, open):** the runtime-configuration API refuses any change to a restart-required setting (`controlManager.resyncSeconds`, worker counts, database settings), and nothing else sets them. They keep their defaults. Documented; recorded in AUDIT/21.
+- **Checks run:**
+  - `go test ./internal/controlmanager/ ./internal/bootstrap/`: pass;
+  - `MACHINARCHY_HA=1` baseline and both burst scenarios: pass;
+  - `golangci-lint run ./...`: 0 issues.
+
 ## 2026-11-25 — Lint 0, duplication cut, dead interface removed (Phase 21: D-15, Q-22, Q-23; branch audit/final)
 
 - **Full `golangci-lint run ./...`: 15 issues → 0.**

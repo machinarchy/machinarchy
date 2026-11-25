@@ -28,6 +28,7 @@ func TestHighAvailability(t *testing.T) {
 	t.Run("restart PostgreSQL", func(t *testing.T) { restartPostgres(t, topo) })
 	t.Run("partition NATS", func(t *testing.T) { partitionNATS(t, topo) })
 	t.Run("SIGTERM during an outbox burst", func(t *testing.T) { sigtermDuringOutboxBurst(t, topo) })
+	t.Run("SIGKILL during an outbox burst", func(t *testing.T) { sigkillDuringOutboxBurst(t, topo) })
 	t.Run("load profile", func(t *testing.T) { loadProfile(t, topo) })
 }
 
@@ -274,6 +275,22 @@ func partitionNATS(t *testing.T, topo *topology) {
 // hosts are being created. Every host is still reconciled (by the other
 // replica) and no outbox delivery is left behind.
 func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
+	burstWhileStopping(t, topo, "burst", func() error { return topo.cm[0].stop(60 * time.Second) }, 7*time.Minute)
+}
+
+// sigkillDuringOutboxBurst: a Control Manager crashes while hosts are being
+// created. Its outbox claims were acknowledged when keys entered its memory
+// queue, so the queued hosts come back through the periodic resync, which
+// the other replica must take over soon after the crashed one's lease
+// expires (AUDIT/20 F20-08). With the default 300 s interval that is about
+// 1.5 intervals; the interval cannot be shortened at runtime (F21-01).
+func sigkillDuringOutboxBurst(t *testing.T, topo *topology) {
+	burstWhileStopping(t, topo, "kburst", func() error { topo.cm[0].kill(); return nil }, 9*time.Minute)
+}
+
+// burstWhileStopping creates 120 hosts labelled name=yes, stops cm-1 with
+// stop a third of the way in, and requires every host reconciled within.
+func burstWhileStopping(t *testing.T, topo *topology, name string, stop func() error, within time.Duration) {
 	const total = 120
 	defer func() {
 		if !topo.cm[0].alive() {
@@ -289,9 +306,9 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 			defer wg.Done()
 			for i := range jobs {
 				var host struct{}
-				if status := topo.owner.do(t, http.MethodPost, "/api/v1/managed/hosts", map[string]any{"name": fmt.Sprintf("burst-%03d", i),
-					"labels": map[string]string{"burst": "yes"}, "spec": map[string]any{}}, &host); status != http.StatusCreated {
-					t.Errorf("create burst-%03d: %d", i, status)
+				if status := topo.owner.do(t, http.MethodPost, "/api/v1/managed/hosts", map[string]any{"name": fmt.Sprintf("%s-%03d", name, i),
+					"labels": map[string]string{name: "yes"}, "spec": map[string]any{}}, &host); status != http.StatusCreated {
+					t.Errorf("create %s-%03d: %d", name, i, status)
 				}
 				created.Add(1)
 			}
@@ -301,7 +318,7 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 	go func() {
 		for i := range total {
 			if i == total/3 {
-				go func() { stopped <- topo.cm[0].stop(60 * time.Second) }()
+				go func() { stopped <- stop() }()
 			}
 			jobs <- i
 		}
@@ -309,7 +326,7 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 	}()
 	wg.Wait()
 	if err := <-stopped; err != nil {
-		t.Errorf("cm-1 did not stop cleanly on SIGTERM during the burst: %v", err)
+		t.Errorf("cm-1 did not stop cleanly during the burst: %v", err)
 	}
 	t.Logf("created %d hosts; cm-1 stopped after about %d", created.Load(), total/3)
 	type burstHost struct {
@@ -327,7 +344,7 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 		var page struct {
 			Items []burstHost `json:"items"`
 		}
-		if topo.owner.do(t, http.MethodGet, "/api/v1/managed/hosts?selector=burst%3Dyes&limit=200", nil, &page) != http.StatusOK {
+		if topo.owner.do(t, http.MethodGet, "/api/v1/managed/hosts?selector="+name+"%3Dyes&limit=200", nil, &page) != http.StatusOK {
 			return -1, nil
 		}
 		var stuck []burstHost
@@ -339,7 +356,7 @@ func sigtermDuringOutboxBurst(t *testing.T, topo *topology) {
 		return len(page.Items), stuck
 	}
 	began := time.Now()
-	deadline := began.Add(7 * time.Minute) // longer than one periodic resync (5 min)
+	deadline := began.Add(within)
 	for {
 		listed, stuck := unreconciled()
 		if listed == total && len(stuck) == 0 {

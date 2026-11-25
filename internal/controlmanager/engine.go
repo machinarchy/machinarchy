@@ -216,7 +216,8 @@ func (e *Engine) Start(ctx context.Context) error {
 	background.Add(1)
 	go func() { defer background.Done(); e.dispatchLoop(admissionCtx) }()
 
-	if err := e.resync(admissionCtx); err != nil {
+	startupErr := e.resync(admissionCtx)
+	if err := startupErr; err != nil && !errors.Is(err, errResyncLeaseHeld) {
 		e.deps.Logger.Error("Control Manager startup resync failed", "error_class", errorClass(err), "error", err)
 		stopAdmission()
 		e.queue.Shutdown()
@@ -229,7 +230,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.initialScan.Store(true)
 	e.ready.Store(true)
 	background.Add(1)
-	go func() { defer background.Done(); e.periodicResync(admissionCtx) }()
+	go func() {
+		defer background.Done()
+		e.periodicResync(admissionCtx, errors.Is(startupErr, errResyncLeaseHeld))
+	}()
 	<-ctx.Done()
 	e.ready.Store(false)
 	stopAdmission()
@@ -381,9 +385,15 @@ func (e *Engine) dispatchBatch(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) periodicResync(ctx context.Context) {
+// periodicResync scans every interval. While another replica holds the
+// scan lease it retries every quarter interval, so it takes over soon after
+// a crashed holder's lease expires (AUDIT/20 F20-08).
+func (e *Engine) periodicResync(ctx context.Context, leaseHeld bool) {
+	delay := jitterInterval(e.cfg.ResyncInterval)
+	if leaseHeld {
+		delay = jitterInterval(e.cfg.ResyncInterval / 4)
+	}
 	for {
-		delay := jitterInterval(e.cfg.ResyncInterval)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -391,11 +401,19 @@ func (e *Engine) periodicResync(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		if err := e.resync(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		err := e.resync(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errResyncLeaseHeld) {
 			e.deps.Logger.Warn("periodic Control Manager resync failed", "error_class", errorClass(err), "error", err)
+		}
+		delay = jitterInterval(e.cfg.ResyncInterval)
+		if errors.Is(err, errResyncLeaseHeld) {
+			delay = jitterInterval(e.cfg.ResyncInterval / 4)
 		}
 	}
 }
+
+// errResyncLeaseHeld: another replica holds the scan lease.
+var errResyncLeaseHeld = errors.New("another Control Manager holds the resync lease")
 
 func (e *Engine) resync(ctx context.Context) error {
 	var scanLease resource.Lease
@@ -409,8 +427,8 @@ func (e *Engine) resync(ctx context.Context) error {
 			return err
 		}
 		if !acquired {
-			return nil
-		} // Another PostgreSQL manager owns the full scan.
+			return errResyncLeaseHeld // another PostgreSQL manager owns the full scan
+		}
 		e.mu.Lock()
 		e.resyncLease, e.hasResyncLease = scanLease, true
 		e.mu.Unlock()
@@ -461,10 +479,15 @@ func (e *Engine) resync(ctx context.Context) error {
 	}
 }
 
+// resyncLeaseTTL keeps the scan lease until just after the holder's next
+// scan (interval plus a quarter, more than the ±10 % jitter), so scans stay
+// one per interval cluster-wide, and a crashed holder blocks the others for
+// at most that long. It was twice the interval with a 2-minute floor
+// (AUDIT/20 F20-08).
 func (e *Engine) resyncLeaseTTL() time.Duration {
-	ttl := 2 * e.cfg.ResyncInterval
-	if ttl < 2*time.Minute {
-		ttl = 2 * time.Minute
+	ttl := e.cfg.ResyncInterval + e.cfg.ResyncInterval/4
+	if ttl < time.Second {
+		ttl = time.Second
 	}
 	if ttl > time.Hour {
 		ttl = time.Hour
