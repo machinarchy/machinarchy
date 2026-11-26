@@ -2,7 +2,7 @@
 
 ## 2026-11-26 — Phase 8 step 8.1: ADR-059 gateway-only agent transport (branch ai/p8-gateway-transport)
 
-- **Docs only (planned, not implemented):** added `docs/adr/ADR-059-agent-gateway-transport.md` (status Proposed) with the owner's answers to Q7-Q10 (no legacy NATS agents, gRPC, current delivery guarantees kept, owner tags the protocol release), the transport-neutral flow, a kept/changed/dropped table of current guarantees and a threat list. Linked from `docs/adr/README.md` and `docs/architecture.md`.
+- **Docs only (planned, not implemented):** added `docs/adr/ADR-059-agent-gateway-transport.md` (status Accepted, owner approved) with the owner's answers to Q7-Q10 (no legacy NATS agents, gRPC, current delivery guarantees kept, owner tags the protocol release), the transport-neutral flow, a kept/changed/dropped table of current guarantees and a threat list. Linked from `docs/adr/README.md` and `docs/architecture.md`.
 - **Known limitation:** the agent-repo spec (`agentv1/doc.go`, `transport.md`) is not written; that repo had uncommitted changes that are not part of this work. No code changed.
 - **Checks run:** none applicable (docs only; no doc or link checker in the repo was run).
 

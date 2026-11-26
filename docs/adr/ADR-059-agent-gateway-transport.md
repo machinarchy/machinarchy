@@ -1,6 +1,6 @@
 # ADR-059: Agents reach the controller only through the agent gateway
 
-**Status:** Proposed (design for owner approval; no code written)
+**Status:** Accepted (owner approved 2026-11-26)
 **Date:** 2026-11-26
 
 ## Context
