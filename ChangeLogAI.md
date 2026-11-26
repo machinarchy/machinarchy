@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — Phase 8 step 8.4 (controller side): real-agent compatibility test (branch ai/p8-gateway-transport)
+
+- **Implemented:** `internal/agentgateway/server/compat_test.go`, test only, no production change. `TestRealAgentBinaryAgainstGateway` runs the `machinarchy-agent` binary built from the sibling repository against the real gateway and gRPC service of 8.3 (memory bus): the agent enrols with only a server URL, token and controller key, runs a command and returns its result, then after a restart without a token receives a command that was queued while it was down. It skips unless `MACHINARCHY_AGENT_BIN` names the binary.
+- **Agent side** (repo `machinarchy-agent`, same step): gRPC client transport, NATS removed; see its `ChangeLogAI.md`.
+- **Checks run:** the compat test passes with `-race` against the agent built at the 8.4 commit; `go vet` and `golangci-lint` on `internal/agentgateway/server` (see the final report). Not run: Postgres, `make smoke`, full suite beyond the gateway packages.
+- **Known limitations:** the test uses plaintext loopback gRPC (TLS verification is covered in the agent repository's tests); CI does not yet build the agent binary to run it.
+
 ## 2026-11-26 — Phase 8 step 8.3: agent-facing gRPC service with lease credentials (branch ai/p8-gateway-transport)
 
 - **Implemented:** new `internal/agentgateway/server` (gRPC `machinarchy.agent.v1.AgentGateway`: `Register`, `Renew`, `SendResult` unary and a bidirectional `Commands` stream). Bodies are the existing signed `agentv1` envelopes carried as raw bytes (custom codec, no protobuf schema). Stream identity comes from a signed lease-bound open request (renewal-shaped, current lease ID, clock skew checked), so a copied lease ID alone does nothing; results need a live lease and the agent ID in the signed body must verify against that agent's key. Commands are sent one at a time and acknowledged on the stream (unacknowledged or dropped streams redeliver, order kept); a revoked agent's stream is closed and an expired lease is refused. A new stream for the same agent replaces the old one. Limits: 512 KiB messages, 10000 open streams, per-client and per-agent rate limits.
