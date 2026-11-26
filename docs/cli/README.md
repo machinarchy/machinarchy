@@ -23,7 +23,7 @@ Or through `make` (it loads `.env` first; exported variables such as
 ```sh
 make run-cli ARGS="hosts"
 make run-cli ARGS="hosts add web-01 10.0.0.5 --access deploy --no-input --tag tier=web"
-make run-cli ARGS='run --host web-01 --yes -- sh -c "echo hi"'
+make run-cli ARGS='run --on web-01 --yes -- uptime'
 ```
 
 All CLI arguments go in `ARGS`, quoted as one value; quotes inside it are
@@ -60,18 +60,19 @@ machinarchy switch [SERVER]
 machinarchy tokens | tokens create NAME --role reader|operator [--expires 90d] [--out FILE] | tokens revoke NAME
 machinarchy hosts trust NAME [--replace] [--fingerprint SHA256:...]
 machinarchy hosts trust --all-pending [-l SELECTOR]
-machinarchy run (-l SELECTOR | --host NAME... | --all) [--timeout SECONDS] [--wait] [--detach] -- PROGRAM [ARG...]
-machinarchy logs operation ID [--host NAME-OR-ID] [--stream stdout|stderr] [--follow]
+machinarchy run --on TARGET [--except TARGET] [--timeout 60s] [--detach] -- PROGRAM [ARG...]
+machinarchy run --on TARGET --do CAPABILITY [KEY=VALUE...]
+machinarchy run | run ID | run ID --host NAME [--follow] | run ID --retry-failed | run ID --cancel
 ```
 
-`run` without `--wait` is **detached**:
+`run` waits by default and shows the result grouped (hosts that printed the same are one line); exit 0, 8 (some failed) or 9 (all failed). It is **detached** with `--detach` or a `--timeout` above 15 minutes:
 
 - each host's command starts under a supervisor (`systemd-run` when usable, otherwise `setsid`) and the SSH session ends at once, so a command may run up to 24 hours (`--timeout`);
-- the controller polls the hosts, and a controller restart loses nothing;
-- `logs operation ID --follow` prints the output as it arrives;
+- the controller polls the hosts, and a controller restart loses nothing; Ctrl+C while watching only stops the watching;
+- `run ID --follow` watches it, `run ID --host NAME --follow` prints one host's output as it arrives;
 - a stream keeps its first and last 15 KiB, and a skipped middle part shows as one `[… N bytes omitted …]` line.
 
-With `--wait` the session stays open (at most 15 minutes) unless the timeout is longer or `--detach` is given. Reading output needs the right to run commands: readers see states and exit codes, not output.
+Reading output needs the right to run commands: readers see states and exit codes, not output. The full description is in [commands.md](commands.md#running-programs).
 
 `hosts trust` (owner only) shows the SSH host keys the controller observed for a
 host. On a terminal you approve by typing the first 8 characters after

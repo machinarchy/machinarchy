@@ -55,7 +55,7 @@ go run ./cmd/machinarchy hosts
 go run ./cmd/machinarchy hosts show web-01 -o yaml
 go run ./cmd/machinarchy hosts -n production -o json | jq .
 go run ./cmd/machinarchy hosts -l tier=web
-go run ./cmd/machinarchy run -l tier=web --wait -- uptime
+go run ./cmd/machinarchy run --on tier=web -- uptime
 ```
 
 See [the CLI command reference](../cli/commands.md) for host, label, run and operation commands. The API examples below show the same resources over HTTP. The CLI's `config` command manages local API contexts; it is separate from `runtime-config`, which manages server runtime settings.
@@ -157,7 +157,7 @@ curl --silent --show-error --fail-with-body \
   --header "Authorization: Bearer $OPERATOR_TOKEN" | jq .
 ```
 
-Cancellation is a request; the final state is recorded by the worker. A command may already have started remotely, so cancellation does not prove that it had no effect. If a worker loses control after dispatch, the operation is marked interrupted rather than automatically replayed. Operation output and arguments are sensitive operational data; do not put credentials in argv. The CLI equivalents are `machinarchy run`, `get operation ID` and `cancel operation ID`.
+Cancellation is a request; the final state is recorded by the worker. A command may already have started remotely, so cancellation does not prove that it had no effect. If a worker loses control after dispatch, the operation is marked interrupted rather than automatically replayed. Operation output and arguments are sensitive operational data; do not put credentials in argv. The CLI equivalents are `machinarchy run`, `machinarchy run ID` and `machinarchy run ID --cancel`.
 
 The managed SSH connector accepts program argv without invoking a remote shell, bounds connection/execution concurrency and timeouts, enforces pinned host keys and configured egress policy, and bounds captured output. Do not interpret a successful Operation as proof of a broader machine configuration state; use a Host controller for desired-state convergence.
 

@@ -54,6 +54,9 @@ type Error struct {
 	Why string
 	// Hint is the next step: the exact command to run, or advice.
 	Hint string
+	// Reported means the command already told the user everything on its own
+	// (a grouped result, an interrupt notice); only the exit code is left.
+	Reported bool
 }
 
 // Error returns the underlying message.
@@ -95,6 +98,19 @@ func (e *Error) ErrorWhy() string {
 	}
 
 	return e.Why
+}
+
+// Reported returns an error that carries only an exit code: the command has
+// already printed what the user needs, so nothing more is shown.
+func Reported(code int) error {
+	return &Error{Code: code, Err: fmt.Errorf("exit %d", code), Reported: true}
+}
+
+// IsReported reports whether err came from Reported.
+func IsReported(err error) bool {
+	var coded *Error
+
+	return errors.As(err, &coded) && coded.Reported
 }
 
 // Wrap attaches an exit code and hint to err. It returns nil for a nil err.

@@ -46,39 +46,6 @@ func TestRemoteTextCannotDriveTheTerminal(t *testing.T) {
 		}
 	})
 
-	t.Run("followed command output split across polls", func(t *testing.T) {
-		client := fixtures()
-		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "Running", Targets: []api.OperationTarget{
-			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: hostileName}, State: "Running"},
-		}}}}
-		// The fake serves 6 bytes per poll, so every escape sequence is split.
-		client.outputs = map[string]string{"op-7/h1/stdout": hostileOutput}
-
-		got := run(t, client, "logs", "operation", "op-7", "--host", "h1", "--follow")
-		if got.code != 0 {
-			t.Fatalf("result = %+v", got)
-		}
-		noControlBytes(t, "logs --follow", got.stdout+got.stderr)
-		if got.stdout != "start red  end\n" {
-			t.Fatalf("stdout = %q, want the text without the sequences", got.stdout)
-		}
-	})
-
-	t.Run("output headers of every target", func(t *testing.T) {
-		client := fixtures()
-		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "Succeeded", Targets: []api.OperationTarget{
-			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: hostileName}, State: "Succeeded"},
-			{Spec: api.OperationTargetSpec{HostID: "h2", DisplayName: "web-02"}, State: "Succeeded"},
-		}}}}
-		client.outputs = map[string]string{"op-7/h1/stdout": hostileOutput, "op-7/h2/stdout": "ok\n"}
-
-		got := run(t, client, "logs", "operation", "op-7")
-		noControlBytes(t, "logs", got.stdout+got.stderr)
-		if got.code != 0 || !strings.Contains(got.stdout, "==> web-01 (Succeeded) <==") {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
 	t.Run("the trust prompt", func(t *testing.T) {
 		client := fixtures()
 		client.hosts[0].Metadata.Name = hostileName

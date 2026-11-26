@@ -3,6 +3,7 @@ package group
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -60,6 +61,67 @@ func RenderString(s Summary, o RenderOptions) string {
 	r.render(s)
 
 	return b.String()
+}
+
+// perHostSample bounds the output shown for each host by RenderPerHost.
+var perHostSample = Options{SampleLines: 10, SampleChars: 1000}
+
+// RenderPerHost writes the result of a finished run with one block per host
+// instead of one per group (--no-groups). The first line and the closing notes
+// are the same as Render's; hosts are in natural order, and nothing a host
+// sent reaches the output unsanitised.
+func RenderPerHost(w io.Writer, results []Result, o RenderOptions) error {
+	agg := New(Options{})
+	for _, result := range results {
+		agg.Add(result)
+	}
+	summary := agg.Summary()
+
+	var b strings.Builder
+	r := renderer{b: &b, o: o, width: max(o.Width, 40)}
+	if o.Width <= 0 {
+		r.width = 80
+	}
+	if summary.Total == 0 {
+		b.WriteString("No hosts.\n")
+		_, err := io.WriteString(w, b.String())
+
+		return err
+	}
+
+	header, tail := r.header(summary)
+	b.WriteString(header + "\n")
+
+	sorted := append([]Result(nil), results...)
+	sort.SliceStable(sorted, func(i, j int) bool { return NaturalLess(sorted[i].Host, sorted[j].Host) })
+	seen := make(map[string]bool, len(sorted))
+	for _, result := range sorted {
+		if seen[result.Host] {
+			continue
+		}
+		seen[result.Host] = true
+
+		view := View{Hosts: []string{result.Host}, Count: 1, ExitCode: result.ExitCode, ErrorClass: result.ErrorClass}
+		view.Stdout, view.StdoutMore = sample(result.Stdout, perHostSample)
+		view.Stderr, view.StderrMore = sample(result.Stderr, perHostSample)
+		r.group(ClassOf(result.State), view, false, "")
+	}
+
+	if summary.Count(ClassTimedOut) > 0 || summary.Count(ClassUnknown) > 0 {
+		b.WriteString("\n")
+		for _, line := range lines(ui.Render(msg.Get("run.unknown"), o.Style)) {
+			r.wrap("  " + line)
+		}
+	}
+	if len(tail) > 0 {
+		b.WriteString("\n")
+		for _, line := range tail {
+			b.WriteString(line + "\n")
+		}
+	}
+	_, err := io.WriteString(w, b.String())
+
+	return err
 }
 
 type renderer struct {

@@ -122,13 +122,15 @@ type Operation struct {
 }
 
 type OperationSpec struct {
-	Run *RunSpec `json:"run,omitempty" yaml:"run,omitempty"`
+	Run        *RunSpec        `json:"run,omitempty" yaml:"run,omitempty"`
+	Capability *CapabilitySpec `json:"capability,omitempty" yaml:"capability,omitempty"`
 }
 
 type OperationStatus struct {
-	State      string            `json:"state" yaml:"state"`
-	Conditions []Condition       `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	Targets    []OperationTarget `json:"targets" yaml:"targets"`
+	State       string            `json:"state" yaml:"state"`
+	CancelAsked bool              `json:"cancelAsked,omitempty" yaml:"cancelAsked,omitempty"`
+	Conditions  []Condition       `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	Targets     []OperationTarget `json:"targets" yaml:"targets"`
 }
 
 type OperationTarget struct {

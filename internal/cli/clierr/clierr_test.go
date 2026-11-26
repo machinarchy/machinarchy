@@ -133,3 +133,18 @@ func TestDetailedKeepsTheMostSpecificClassification(t *testing.T) {
 		t.Fatal("an already classified error must be returned unchanged")
 	}
 }
+
+// A reported error carries only the exit code: the command said the rest.
+func TestReported(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []int{ExitPartial, ExitAllFailed, ExitInterrupted, ExitWaitTimeout} {
+		err := Reported(code)
+		if got, classified := Classify(err); got != code || !classified || !IsReported(err) {
+			t.Errorf("Reported(%d): code %d classified %v reported %v", code, got, classified, IsReported(err))
+		}
+	}
+	if IsReported(Newf(ExitFailure, "", "x")) || IsReported(nil) {
+		t.Error("an ordinary error is not reported")
+	}
+}

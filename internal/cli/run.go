@@ -102,6 +102,9 @@ func reportError(w io.Writer, err error, started bool, path string, p presentati
 	if !classified && !started {
 		code = clierr.ExitUsage
 	}
+	if clierr.IsReported(err) {
+		return code
+	}
 
 	if code == clierr.ExitInterrupted {
 		_, _ = fmt.Fprintln(w, "Interrupted.")

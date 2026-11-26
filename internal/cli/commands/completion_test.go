@@ -85,3 +85,36 @@ func TestCompletionNeverFailsLoudlyOrOffersUnsafeNames(t *testing.T) {
 		}
 	})
 }
+
+// K-10 (run): where to run, run IDs, the capabilities and a run's hosts.
+func TestCompletionOfRun(t *testing.T) {
+	hosts := hostsGroupServer(t)
+	config := writeConfig(t, hosts.URL, "tok")
+
+	if got := completions(t, config, "run", "--on", "web"); strings.Join(got, ",") != "web-01,web-02" {
+		t.Errorf("--on web: %v", got)
+	}
+	if got := completions(t, config, "run", "--on", ""); !strings.Contains(strings.Join(got, ","), "all") || !strings.Contains(strings.Join(got, ","), "tier=web") ||
+		!strings.Contains(strings.Join(got, ","), "db-01") {
+		t.Errorf("--on '': %v", got)
+	}
+	if got := completions(t, config, "run", "--on", "web-01,web"); strings.Join(got, ",") != "web-01,web-01,web-01,web-02" {
+		t.Errorf("--on web-01,web: %v", got)
+	}
+	if got := completions(t, config, "run", "--on", "all", "--except", "db"); strings.Join(got, ",") != "db-01" {
+		t.Errorf("--except db: %v", got)
+	}
+	if got := completions(t, config, "run", ""); len(got) != 1 || !strings.HasPrefix(got[0], "r-op-1\t") {
+		t.Errorf("run ids: %v", got)
+	}
+	if got := completions(t, config, "run", "--on", "web-01", "--do", "service"); len(got) != 2 || !strings.HasPrefix(got[0], "service.status") ||
+		!strings.Contains(got[0], "known; the server decides") {
+		t.Errorf("--do: %v", got)
+	}
+	if got := completions(t, config, "run", "--host", "chg"); strings.Join(got, ",") != "chg-01" {
+		t.Errorf("--host without a run: %v", got)
+	}
+	if got := completions(t, config, "run", "--stream", ""); strings.Join(got, ",") != "stdout,stderr" {
+		t.Errorf("--stream: %v", got)
+	}
+}

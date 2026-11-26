@@ -32,8 +32,6 @@ func DefaultGroups() []cli.CommandGroup {
 			Commands: []cli.CommandBuilder{
 				owner(NewGetCommand, "agent-tokens"),
 				NewRunCommand,
-				NewCancelCommand,
-				NewLogsCommand,
 			},
 		},
 		{

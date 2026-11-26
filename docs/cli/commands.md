@@ -25,7 +25,7 @@ go run ./cmd/machinarchy hosts show web-01 -o yaml
 
 ## Tab completion
 
-`machinarchy completion bash|zsh|fish|powershell` prints the completion script for your shell (the command is hidden from help). Completion offers host names (`hosts show|tag|move|trust|enroll|revoke-agent|remove`), access entry names (`access show|remove`, `hosts add --access`) and env names (`--env`, `envs use|remove`; `any` for `envs use`) by asking the selected server with your saved credential. It never prompts and prints no errors: with no server, no login or a slow server (3 s limit) it offers nothing. Names with spaces or control characters are never offered.
+`machinarchy completion bash|zsh|fish|powershell` prints the completion script for your shell (the command is hidden from help). Completion offers host names (`hosts show|tag|move|trust|enroll|revoke-agent|remove`), access entry names (`access show|remove`, `hosts add --access`) env names (`--env`, `envs use|remove`; `any` for `envs use`) and, for `run`, hosts and `key=value` tags for `--on` and `--except` (the last entry of a comma list), the 20 most recent run IDs, the hosts of a run for `--host`, and the known capabilities for `--do` (marked "known; the server decides") by asking the selected server with your saved credential. It never prompts and prints no errors: with no server, no login or a slow server (3 s limit) it offers nothing. Names with spaces or control characters are never offered.
 
 ## Signing in
 
@@ -125,23 +125,38 @@ Binding a host to an access entry needs the workspace owner. Hosts on an `agent`
 
 ## Running programs
 
-`run` executes one program, without a shell, on the selected hosts. It first previews the targets, asks for confirmation, and then submits the operation bound to that preview: if the selection changes in between, the server refuses it (exit code 7) and nothing runs.
+`run` is the one command for running, listing, following, retrying and cancelling runs. A program is an argument list, never a shell string. Before anything is sent it shows the hosts, the command and the limits on stderr and asks (`[y/N]`); the run is bound to the hosts you saw, so if the set changed meanwhile the server refuses it (exit 7, "Nothing ran") and you run it again.
 
 ```sh
-go run ./cmd/machinarchy run -l tier=web -- uptime
-go run ./cmd/machinarchy run --host web-01 --host web-02 --exclude web-02 --wait -- systemctl is-active nginx
-go run ./cmd/machinarchy get operations
-go run ./cmd/machinarchy get operation 01JABCDEF123
-go run ./cmd/machinarchy cancel operation 01JABCDEF123
+machinarchy run --on tier=web -- systemctl is-active nginx
+machinarchy run --on 'web-*' --except web-02 -- uptime
+machinarchy run --on db-01 --do service.status service=postgresql.service
+machinarchy run --on all --detach -- /opt/backup/run.sh
+machinarchy run                                  # the recent runs
+machinarchy run r-4k2p9x1a                       # the grouped result of one run
+machinarchy run r-4k2p9x1a --host web-01         # the full output of one host
+machinarchy run r-4k2p9x1a --follow              # watch a run that is going
+machinarchy run r-4k2p9x1a --retry-failed        # a new run on the hosts that failed
+machinarchy run r-4k2p9x1a --cancel              # ask for the run to be cancelled
 ```
 
-`--wait` polls until the operation finishes, prints each host's state, exit code and first output line, and exits non-zero unless every host succeeded. `--concurrency N` (1–20) sets how many hosts run at once: 5 by default with `--wait`, 20 for detached launches. N hosts take about N ÷ concurrency times one host. Readers can list operations but never see their arguments or output.
+**Where to run (`--on`, `--except`).** Host names (`web-01,web-02`), a name pattern (`web-*`, expanded by the CLI over the hosts in scope so the preview shows the real hosts), tags (`tier=web` or `tier=web,region in (eu,us)`), or `all`. Names and tags are not mixed in one `--on`. `--except` takes names or patterns. The active env limits the hosts (`environment=ENV` is added to a tag selector; a name outside the env is refused); `--env any` lifts the limit. A tag called `env` is just a tag: use `--env` to pick an env, and `--on environment=X` is refused when the active env is not X. One run targets at most 200 hosts; more is refused before the preview.
 
-On agent hosts, `run --capability NAME` calls one of the agent's capabilities instead of a program. `--input` takes a JSON object and `--timeout` defaults to 60 seconds. It previews, confirms and supports `--wait` the same way; `--detach` and a program after `--` are refused:
+**The preview and the confirmation.** The first line is `[SERVER · ENV]`, then the number of hosts and their names (compressed: `web-[01-14]`), the command, which env the hosts are in and the limits. `--yes` answers the `[y/N]`. In an env that `envs add --protected` guards on this computer, you type the env name instead (`--confirm-env ENV` in a script, plus `--yes`; `--yes` alone is refused); a run whose hosts reach a guarded env is guarded wherever it was started. `--on all` outside any env asks you to type the number of hosts (or `--yes`). `--dry-run` shows the preview and sends nothing.
 
-```sh
-go run ./cmd/machinarchy run -l tier=web --capability service.status --input '{"service":"nginx.service"}' --wait
-```
+**Waiting.** A run is watched by default: a progress line on stderr (redrawn on a terminal, a plain line every 10 seconds otherwise), then the grouped result on stdout: hosts that printed the same are one line, failures first, `web-[01-12,14]` host lists, a sample of each group's output, a legend for hosts that timed out or whose outcome is unknown ("may still have run"), and a note when succeeded hosts printed different output. `--no-groups` shows one block per host, `--groups N|all` the number of groups, `-o json|yaml` the same result as data, `-q` only the run ID. The exit code is 0 when every host succeeded, 8 when some did not, 9 when none did; `--fail-on-drift` makes a clean run that printed different output exit 8. `--timeout` (default 60s, at most 24h) is per host and `--concurrency` (1-20, default 5, 20 when detached) is how many hosts work at once.
+
+**Detaching.** `--detach`, or a `--timeout` above 15 minutes, runs the command detached on the hosts (a supervisor keeps it running) and `run` returns as soon as the run is accepted; follow it with `run ID --follow`. `--wait-timeout 10m` stops watching after that long and exits 5; the run keeps going.
+
+**Ctrl+C.** Pressing it while watching only stops the watching: "Stopped watching. The run keeps going on the hosts." with the `--follow` and `--cancel` commands, exit 130; a second Ctrl+C ends the process at once. Pressing it while the run is being sent prints that the run "may or may not have been created" with `Next: machinarchy run`; the CLI never sends it again by itself. The same message appears when the connection drops at that moment (exit 4). A watch that loses the server (several failed polls in a row) prints "Lost contact with the server; the run keeps going." with the resume command (exit 4).
+
+**Retry and cancel.** `--retry-failed` starts a **new** run (new ID) of the same command on the hosts of run ID that failed or timed out. Hosts whose outcome is unknown (`Lost`, `Interrupted`) and hosts that were cancelled are skipped and listed, because the command may already have run there; `--include-unknown` and `--include-cancelled` add them with a warning. The preview, confirmation and protected-env rules apply as for any run, and the old run is not changed. The command is read from the old run, which only operators and owners can see. `--cancel` asks the controller to cancel and then follows the run to its end (or returns at once with `--no-wait`). A cancel is a request: the CLI never says a run "stopped" before the controller reports the final state; a host that finished first keeps its result, and a host that could not be reached while cancelling is flagged ("the command may still be running there").
+
+**Capabilities.** On agent hosts, `--do NAME [KEY=VALUE...]` calls one of the agent's capabilities instead of a program. The inputs are text and are sent unchanged as one JSON object; `--input-json '{...}'` is for values that are not text (not together with `KEY=VALUE`). The known capabilities are `runtime.info`, `system.facts`, `service.status` and `service.control`; the server decides what it accepts and the CLI changes no name or value. A program on an agent host is refused by the server, and the CLI points at `--do`.
+
+**IDs.** A run is shown as `r-` and the first 8 characters of its ID. Any unique prefix of at least 6 characters works, with or without `r-`; it is looked up among the 500 most recent runs. Readers can list runs and see states and exit codes but not the command (`(hidden)`) or the output.
+
+The old `run -l|--host|--all|--exclude|--wait|--capability|--input`, `get operations`, `cancel operation` and `logs operation` are removed, without aliases.
 
 Errors and verbose structured logs go to stderr. Resource output goes to stdout, so it can be piped without log lines mixed into the data.
 
@@ -191,15 +206,15 @@ Next:  <the exact command or action>
 | Code | Meaning |
 | ---: | --- |
 | 0 | Success |
-| 1 | Unexpected failure, or an operation that completed unsuccessfully |
+| 1 | Unexpected failure, or a question that was answered no |
 | 2 | Usage error: unknown command or flag, invalid argument, bad value, unusable config file, missing confirmation, or input the API rejected as invalid (HTTP 400, 422) |
 | 3 | Authentication or authorization failure (HTTP 401, 403) |
 | 4 | API server, network, or timeout failure (HTTP 5xx, 408, 429, connection refused, request timeout, response that is not Machinarchy API JSON) |
-| 5 | A local wait deadline (`--wait-timeout`) elapsed while the work it was watching is still running. No command uses it yet. |
+| 5 | A local wait deadline (`run --wait-timeout`) elapsed while the work it was watching is still running. |
 | 6 | Not found (HTTP 404, or a named host or environment that does not exist) |
 | 7 | Conflict or failed precondition (HTTP 409, 412), for example a stale `--expected-revision` |
-| 8 | A run finished with some hosts failed. No command uses it yet; it is for the grouped run result. |
-| 9 | A run finished with every host failed. No command uses it yet. |
+| 8 | A run finished with some hosts failed (`run`; also `--fail-on-drift`). |
+| 9 | A run finished with every host failed (`run`). |
 | 130 | Interrupted (Ctrl-C or SIGTERM) |
 
 Ctrl-C now exits 130; it previously exited 0. Interrupting a command stops only the local process: it does not cancel work already accepted by the server.

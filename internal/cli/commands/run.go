@@ -1,258 +1,432 @@
 package commands
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
-	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
-	"github.com/spf13/cobra"
+	"github.com/machinarchy/machinarchy/internal/cli/target"
 )
 
-// pollInterval is how often --wait checks an operation.
-var pollInterval = time.Second
+// knownCapabilities are the capabilities agents implement today. The server
+// decides what it accepts; there is no catalogue endpoint (C-08), so any name
+// is passed through.
+var knownCapabilities = []string{"runtime.info", "system.facts", "service.status", "service.control"}
 
-var terminalOperationStates = map[string]bool{"Succeeded": true, "PartiallySucceeded": true, "Failed": true,
-	"Cancelled": true, "TimedOut": true, "Interrupted": true}
+// runOptions are the flags of `machinarchy run`.
+type runOptions struct {
+	on, except, do, inputJSON        string
+	timeout, concurrency             string
+	waitTimeoutText, groups          string
+	host, stream, state              string
+	limit                            int
+	detach, noWait, noGroups         bool
+	failOnDrift, follow, retryFailed bool
+	cancel, raw                      bool
+	includeUnknown, includeCancelled bool
 
-// maxAttachedTimeout is the longest run that keeps its SSH session open.
-const maxAttachedTimeout = 900
+	// Read from the flags by parse.
+	timeoutSet       bool
+	timeoutSeconds   int
+	concurrencyValue int
+	waitFor          time.Duration
+}
 
-// NewRunCommand runs a program on managed hosts. It previews the targets,
-// asks for confirmation, and submits bound to the previewed set, so the
-// operation never runs on hosts the user did not see.
-// Fan-out of a run: hosts at once (the server allows 1 to 20).
-const (
-	maxConcurrency             = 20
-	defaultAttachedConcurrency = 5
-)
-
-func NewRunCommand(factory *cli.Factory) *cobra.Command {
-	var rule api.TargetRule
-	var timeout, concurrency int
-	var wait, detach bool
-	var capability, input string
+// NewRunCommand is the one command for running, listing, following, retrying
+// and cancelling runs (docs/cli/spec/02-commands.md section 3.10).
+func NewRunCommand(f *cli.Factory) *cobra.Command {
+	var o runOptions
 	command := &cobra.Command{
-		Use:   "run (-l SELECTOR | --host NAME-OR-ID... | --all) [--exclude NAME-OR-ID...] (-- PROGRAM [ARG...] | --capability NAME)",
-		Short: "Run a program (no shell) or an agent capability on selected managed hosts",
-		Long: "Run a program on managed hosts. Without --wait the run is detached: each host's command runs under a\n" +
-			"supervisor (systemd-run or setsid) and the SSH session ends at once, so it may run up to 24 hours;\n" +
-			"follow it with `machinarchy logs operation ID --follow`. With --wait the session stays open (at most\n" +
-			"15 minutes) unless --detach is given or the timeout is longer.\n\n" +
-			"With --capability, run an agent capability (runtime.info, system.facts, service.status, service.control)\n" +
-			"on hosts reached through their machinarchy-agent; --input passes its JSON input.",
-		Example: "  machinarchy run -l tier=web -- uptime\n" +
-			"  machinarchy run --host web-01 --host web-02 --wait -- systemctl is-active nginx\n" +
-			"  machinarchy run -l tier=db --timeout 7200 -- /opt/backup/run.sh\n" +
-			"  machinarchy run -l role=agent --capability runtime.info --wait\n" +
-			"  machinarchy run --host web-01 --capability service.status --input '{\"service\":\"nginx.service\"}' --wait",
-		Args: cobra.ArbitraryArgs,
-		RunE: func(command *cobra.Command, argv []string) error {
-			if capability != "" {
-				return runCapability(command, factory, rule, capability, input, timeout, wait)
-			}
-			if input != "" {
-				return clierr.Usagef("--input needs --capability")
-			}
-			if len(argv) == 0 || command.ArgsLenAtDash() != 0 {
-				return clierr.Usagef("put the program after --, for example: machinarchy run -l tier=web -- uptime")
-			}
-			if rule.Selector == "" && len(rule.Include) == 0 && !rule.All {
-				return clierr.Usagef("select hosts with -l SELECTOR, --host or --all")
-			}
-			if command.Flags().Changed("concurrency") && (concurrency < 1 || concurrency > maxConcurrency) {
-				return clierr.Usagef("--concurrency must be 1 to %d", maxConcurrency)
-			}
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			preview, err := client.PreviewTargets(command.Context(), rule)
-			if err != nil {
-				return fmt.Errorf("preview targets: %w", err)
-			}
-			if len(preview.UnknownIncludes)+len(preview.UnknownExcludes) > 0 {
-				return clierr.Newf(clierr.ExitNotFound, "", "unknown hosts: %s",
-					strings.Join(append(preview.UnknownIncludes, preview.UnknownExcludes...), ", "))
-			}
-			if len(preview.Hosts) == 0 {
-				return clierr.Newf(clierr.ExitNotFound, "", "no hosts match the selection")
-			}
-			names := make([]string, len(preview.Hosts))
-			for i, host := range preview.Hosts {
-				names[i] = host.Metadata.Name
-			}
-			prompt := fmt.Sprintf("Run %q on %d host(s): %s?", strings.Join(argv, " "), len(names), summarize(names, 10))
-			if err := factory.RequireConfirmation(prompt); err != nil {
-				return err
-			}
-			detached := detach || !wait || timeout > maxAttachedTimeout
-			fanOut := concurrency
-			if !command.Flags().Changed("concurrency") {
-				fanOut = defaultAttachedConcurrency
-				if detached {
-					fanOut = maxConcurrency // a launch takes about a second
-				}
-			}
-			fanOut = min(fanOut, len(preview.Hosts))
-			op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
-				Run: &api.RunSpec{Argv: argv, TimeoutSeconds: timeout, Concurrency: fanOut, Detach: detached}})
-			if err != nil {
-				return fmt.Errorf("submit operation: %w", err)
-			}
-			if !wait {
-				_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted (detached).\nFollow it with:  machinarchy logs operation %s --follow\nStatus:          machinarchy get operation %s\n", sanitize.Line(op.ID), sanitize.Line(op.ID), sanitize.Line(op.ID))
-				return err
-			}
-			if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
-				return err
-			}
-			if err := printOperation(printer, op); err != nil {
-				return err
-			}
-			if op.Status.State != "Succeeded" {
-				return clierr.Newf(clierr.ExitFailure, "", "operation %s finished %s", op.ID, op.Status.State)
-			}
-			return nil
+		Use:   "run [ID] [--on TARGET [--except TARGET]] [-- PROGRAM [ARG...]]",
+		Short: "Run a program or capability on hosts, and list, follow, retry or cancel runs",
+		Long: "Run a program on hosts, then wait and show what happened, grouped: hosts that printed the same are one line.\n" +
+			"The program is an argument list, never a shell string. You see the hosts first and confirm; the run is bound to\n" +
+			"the hosts you saw, so if the set changed meanwhile, nothing runs.\n\n" +
+			"  run --on TARGET [--except TARGET] -- PROGRAM [ARG...]    run it, wait, show the grouped result\n" +
+			"  run --on TARGET --do CAPABILITY [KEY=VALUE...]           run an agent capability\n" +
+			"  run                                                      the recent runs\n" +
+			"  run ID                                                   the result of one run\n" +
+			"  run ID --host NAME [--stream stdout|stderr] [--follow]   the full output of one host\n" +
+			"  run ID --follow                                          watch a run that is going\n" +
+			"  run ID --retry-failed                                    run it again on the hosts that failed\n" +
+			"  run ID --cancel                                          ask for the run to be cancelled\n\n" +
+			"TARGET is host names (web-01,web-02), a name pattern (web-*), tags (tier=web or tier=web,region in (eu,us)),\n" +
+			"or all. Names and tags are not mixed. The active env limits the hosts; --env any lifts it. A tag called env is\n" +
+			"just a tag: use --env to pick an env. A run targets at most 200 hosts.\n\n" +
+			"A run is detached from your terminal with --detach, or when --timeout is above 15 minutes. Ctrl+C while\n" +
+			"watching only stops the watching; the run keeps going. IDs are r- and the first characters, shown as r-xxxxxxxx.\n\n" +
+			"Capabilities known today: " + strings.Join(knownCapabilities, ", ") + ". The server decides what it accepts; the\n" +
+			"names and values are sent as you type them.\n\n" +
+			"Exit codes: 0 every host succeeded, 8 some failed, 9 all failed, 5 --wait-timeout elapsed, 130 interrupted.",
+		Example: "  machinarchy run --on tier=web -- systemctl is-active nginx\n" +
+			"  machinarchy run --on 'web-*' --except web-02 -- uptime\n" +
+			"  machinarchy run --on db-01 --do service.status service=postgresql.service\n" +
+			"  machinarchy run --on all --detach -- /opt/backup/run.sh\n" +
+			"  machinarchy run r-4k2p9x1a --host web-01\n" +
+			"  machinarchy run r-4k2p9x1a --retry-failed",
+		Args:        cobra.ArbitraryArgs,
+		Annotations: map[string]string{cli.AnnotationDryRun: "true"},
+		RunE: func(command *cobra.Command, args []string) error {
+			return dispatchRun(command, f, &o, args)
 		},
 	}
+
 	flags := command.Flags()
-	flags.StringVarP(&rule.Selector, "selector", "l", "", "Select hosts, for example tier=web,environment=prod")
-	flags.StringArrayVar(&rule.Include, "host", nil, "Add a host by name or ID (repeatable)")
-	flags.StringArrayVar(&rule.Exclude, "exclude", nil, "Remove a host by name or ID (repeatable)")
-	flags.BoolVar(&rule.All, "all", false, "Target every managed host")
-	flags.IntVar(&timeout, "timeout", 60, "Per-host timeout in seconds (up to 86400 when detached, 900 otherwise)")
-	flags.IntVar(&concurrency, "concurrency", 0, fmt.Sprintf("Hosts to run on at once, 1 to %d (default %d with --wait, %d detached)", maxConcurrency, defaultAttachedConcurrency, maxConcurrency))
-	flags.BoolVar(&wait, "wait", false, "Wait for the result and print it; exit non-zero unless every host succeeded")
-	flags.BoolVar(&detach, "detach", false, "Run detached even with --wait (the default without --wait)")
-	flags.StringVar(&capability, "capability", "", "Run this agent capability instead of a program (hosts with an agent Access Profile)")
-	flags.StringVar(&input, "input", "", "JSON object passed to the capability, e.g. '{\"service\":\"nginx.service\"}'")
+	flags.StringVar(&o.on, "on", "", "Where to run: host names, a pattern like web-*, tags like tier=web, or all")
+	flags.StringVar(&o.except, "except", "", "Leave these hosts out (names or patterns)")
+	flags.StringVar(&o.do, "do", "", "Run this agent capability instead of a program; inputs follow as KEY=VALUE")
+	flags.StringVar(&o.inputJSON, "input-json", "", "With --do: the input as a JSON object, for values that are not text")
+	flags.StringVar(&o.timeout, "timeout", "", "Time limit per host, like 90s, 15m or 2h (default 60s, at most 24h)")
+	flags.StringVar(&o.concurrency, "concurrency", "", fmt.Sprintf("Hosts to work on at once, 1 to %d (default %d, or %d when detached)", maxConcurrency, defaultAttachedConcurrency, maxConcurrency))
+	flags.BoolVar(&o.detach, "detach", false, "Return as soon as the run is accepted; it keeps going on the hosts")
+	flags.StringVar(&o.waitTimeoutText, "wait-timeout", "", "Stop watching after this long and exit 5; the run keeps going")
+	flags.BoolVar(&o.noGroups, "no-groups", false, "Show one block per host instead of grouping hosts that printed the same")
+	flags.StringVar(&o.groups, "groups", "", "Show up to N groups, or all (default 10)")
+	flags.BoolVar(&o.failOnDrift, "fail-on-drift", false, "Exit 8 when hosts that succeeded printed different output")
+	flags.BoolVarP(&o.follow, "follow", "f", false, "Watch a run that is going (with --host: stream that host's output)")
+	flags.BoolVar(&o.retryFailed, "retry-failed", false, "Start a new run of the same command on the hosts that failed")
+	flags.BoolVar(&o.includeUnknown, "include-unknown", false, "With --retry-failed: also hosts whose outcome is unknown (the command may have run)")
+	flags.BoolVar(&o.includeCancelled, "include-cancelled", false, "With --retry-failed: also hosts that were cancelled")
+	flags.BoolVar(&o.cancel, "cancel", false, "Ask for the run to be cancelled, then watch it end")
+	flags.BoolVar(&o.noWait, "no-wait", false, "With --cancel: return as soon as the request is sent")
+	flags.StringVar(&o.host, "host", "", "With a run ID: show the full output of this host. Without: list runs that include it")
+	flags.StringVar(&o.stream, "stream", "", "With --host: only stdout or only stderr (default both)")
+	flags.BoolVar(&o.raw, "raw", false, "With --host: write the output as it is, unfiltered (not to a terminal)")
+	flags.StringVar(&o.state, "state", "", "When listing: only runs in this state, for example Running")
+	flags.IntVar(&o.limit, "limit", 20, "When listing: how many runs, newest first")
+
+	registerRunCompletions(command, f)
+
 	return command
 }
 
-// runCapability submits an agent capability Operation (ADR-057), bound to
-// the previewed hosts like a program run.
-func runCapability(command *cobra.Command, factory *cli.Factory, rule api.TargetRule, name, input string, timeout int, wait bool) error {
-	if command.ArgsLenAtDash() >= 0 || len(command.Flags().Args()) > 0 {
-		return clierr.Usagef("--capability takes no program; pass its input with --input")
+// Modes of `run`, decided from the arguments and flags.
+const (
+	modeExecute = "execute"
+	modeList    = "list"
+	modeShow    = "show"
+	modeHost    = "host"
+	modeFollow  = "follow"
+	modeRetry   = "retry"
+	modeCancel  = "cancel"
+)
+
+// allowedFlags are the flags each mode accepts; any other flag the person set
+// is refused rather than ignored.
+var allowedFlags = map[string][]string{
+	modeExecute: {"on", "except", "do", "input-json", "timeout", "concurrency", "detach", "wait-timeout", "no-groups", "groups", "fail-on-drift"},
+	modeList:    {"state", "host", "limit"},
+	modeShow:    {"no-groups", "groups", "fail-on-drift"},
+	modeHost:    {"host", "stream", "raw", "follow"},
+	modeFollow:  {"follow", "wait-timeout", "no-groups", "groups", "fail-on-drift"},
+	modeRetry: {"retry-failed", "include-unknown", "include-cancelled", "timeout", "concurrency", "detach", "wait-timeout",
+		"no-groups", "groups", "fail-on-drift"},
+	modeCancel: {"cancel", "no-wait", "wait-timeout", "no-groups", "groups", "fail-on-drift"},
+}
+
+var modeNames = map[string]string{
+	modeExecute: "a run", modeList: "listing runs", modeShow: "showing a run", modeHost: "showing a host's output",
+	modeFollow: "following a run", modeRetry: "--retry-failed", modeCancel: "--cancel",
+}
+
+// dispatchRun decides what the person asked for and does it.
+func dispatchRun(command *cobra.Command, f *cli.Factory, o *runOptions, args []string) error {
+	dash := command.ArgsLenAtDash()
+	pos, program := args, []string(nil)
+	if dash >= 0 {
+		pos, program = args[:dash], args[dash:]
 	}
-	if rule.Selector == "" && len(rule.Include) == 0 && !rule.All {
-		return clierr.Usagef("select hosts with -l SELECTOR, --host or --all")
+
+	mode, err := o.mode(command, pos, program, dash)
+	if err != nil {
+		return err
 	}
-	var raw json.RawMessage
-	if input != "" {
-		if !json.Valid([]byte(input)) || !strings.HasPrefix(strings.TrimSpace(input), "{") {
-			return clierr.Usagef("--input must be a JSON object")
+	if err := o.checkFlags(command, mode); err != nil {
+		return err
+	}
+	if err := o.parse(command, mode); err != nil {
+		return err
+	}
+
+	if mode == modeExecute {
+		return executeRun(command, f, o, pos, program)
+	}
+	if mode == modeList {
+		return listRuns(command, f, *o)
+	}
+
+	client, err := f.NewAPIClient(command.Context())
+	if err != nil {
+		return err
+	}
+	id, err := resolveRunID(command.Context(), client, pos[0])
+	if err != nil {
+		return err
+	}
+
+	switch mode {
+	case modeRetry:
+		return retryFailed(command, f, client, id, *o)
+	case modeCancel:
+		return cancelRun(command, f, client, id, *o)
+	case modeHost:
+		return showHostOutput(command, f, client, id, *o)
+	case modeFollow:
+		return finish(command, f, client, id, o.followUp(f, nil))
+	default:
+		return showRun(command, f, client, id, *o)
+	}
+}
+
+// mode works out what is being asked for.
+func (o *runOptions) mode(command *cobra.Command, pos, program []string, dash int) (string, error) {
+	flags := command.Flags()
+	switch {
+	case flags.Changed("on") || flags.Changed("except") || flags.Changed("do"):
+		if !flags.Changed("on") {
+			return "", clierr.Newf(clierr.ExitUsage, "for example: machinarchy run --on tier=web -- uptime", "say where to run it with --on")
 		}
-		raw = json.RawMessage(input)
+
+		return modeExecute, nil
+	case len(pos) == 0 && len(program) == 0:
+		if o.retryFailed || o.cancel || o.follow {
+			return "", clierr.Newf(clierr.ExitUsage, "machinarchy run   lists the recent runs and their IDs", "which run? give its ID, for example: machinarchy run r-4k2p9x1a --follow")
+		}
+
+		return modeList, nil
+	case len(program) > 0 && len(pos) == 0:
+		return "", clierr.Newf(clierr.ExitUsage, "for example: machinarchy run --on tier=web -- uptime", "say where to run it with --on")
+	case len(pos) > 1 || dash >= 0:
+		return "", clierr.Newf(clierr.ExitUsage, "give one run ID", "too many arguments; put a program after -- and its hosts after --on")
 	}
-	if command.Flags().Changed("detach") {
-		return clierr.Usagef("--detach applies to programs, not capabilities")
+
+	switch {
+	case o.retryFailed && o.cancel:
+		return "", clierr.Usagef("--retry-failed and --cancel cannot be used together")
+	case o.retryFailed:
+		return modeRetry, nil
+	case o.cancel:
+		return modeCancel, nil
+	case o.host != "":
+		return modeHost, nil
+	case o.follow:
+		return modeFollow, nil
 	}
-	printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-	if err != nil {
-		return err
+
+	return modeShow, nil
+}
+
+// checkFlags refuses a flag that does not apply to what is being done.
+func (o *runOptions) checkFlags(command *cobra.Command, mode string) error {
+	var refused error
+	command.LocalNonPersistentFlags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Changed && refused == nil && flag.Name != "help" && !slices.Contains(allowedFlags[mode], flag.Name) {
+			refused = clierr.Usagef("--%s does not apply to %s", flag.Name, modeNames[mode])
+		}
+	})
+
+	return refused
+}
+
+// parse reads the values that need more than a type.
+func (o *runOptions) parse(command *cobra.Command, mode string) error {
+	flags := command.Flags()
+	var err error
+	if flags.Changed("timeout") {
+		if o.timeoutSeconds, err = parseSeconds("--timeout", o.timeout, 1, maxRunTimeout); err != nil {
+			return err
+		}
+		o.timeoutSet = true
 	}
-	client, err := factory.NewAPIClient(command.Context())
-	if err != nil {
-		return err
+	if flags.Changed("concurrency") {
+		n := 0
+		if _, scanErr := fmt.Sscanf(o.concurrency, "%d", &n); scanErr != nil || n < 1 || n > maxConcurrency || fmt.Sprint(n) != strings.TrimSpace(o.concurrency) {
+			return clierr.Usagef("--concurrency must be 1 to %d", maxConcurrency)
+		}
+		o.concurrencyValue = n
 	}
-	preview, err := client.PreviewTargets(command.Context(), rule)
-	if err != nil {
-		return fmt.Errorf("preview targets: %w", err)
+	if flags.Changed("wait-timeout") {
+		seconds, err := parseSeconds("--wait-timeout", o.waitTimeoutText, 1, 30*24*60*60)
+		if err != nil {
+			return err
+		}
+		o.waitFor = time.Duration(seconds) * time.Second
 	}
-	if len(preview.UnknownIncludes)+len(preview.UnknownExcludes) > 0 {
-		return clierr.Newf(clierr.ExitNotFound, "", "unknown hosts: %s", strings.Join(append(preview.UnknownIncludes, preview.UnknownExcludes...), ", "))
+	if _, err := o.result().maxGroups(); err != nil {
+		return clierr.Usagef("%s", err.Error())
 	}
-	if len(preview.Hosts) == 0 {
-		return clierr.Newf(clierr.ExitNotFound, "", "no hosts match the selection")
+	if flags.Changed("groups") && flags.Changed("no-groups") {
+		return clierr.Usagef("--groups and --no-groups cannot be used together")
 	}
-	names := make([]string, len(preview.Hosts))
-	for i, host := range preview.Hosts {
-		names[i] = host.Metadata.Name
+	if mode == modeHost && o.stream != "" && o.stream != "stdout" && o.stream != "stderr" {
+		return clierr.Usagef("--stream must be stdout or stderr")
 	}
-	if err := factory.RequireConfirmation(fmt.Sprintf("Run capability %s on %d host(s): %s?", name, len(names), summarize(names, 10))); err != nil {
-		return err
-	}
-	op, err := client.SubmitOperation(command.Context(), api.OperationInput{Targets: rule, ExpectTargetsHash: preview.TargetsHash,
-		Capability: &api.CapabilitySpec{Name: name, Input: raw, TimeoutSeconds: timeout}})
-	if err != nil {
-		return fmt.Errorf("submit operation: %w", err)
-	}
-	if !wait {
-		_, err = fmt.Fprintf(command.OutOrStdout(), "Operation %s submitted.\nStatus: machinarchy get operation %s\n", sanitize.Line(op.ID), sanitize.Line(op.ID))
-		return err
-	}
-	if op, err = waitForOperation(command.Context(), client, op.ID); err != nil {
-		return err
-	}
-	if err := printOperation(printer, op); err != nil {
-		return err
-	}
-	if op.Status.State != "Succeeded" {
-		return clierr.Newf(clierr.ExitFailure, "", "operation %s finished %s", op.ID, op.Status.State)
-	}
+
 	return nil
 }
 
-func waitForOperation(ctx context.Context, client api.Client, id string) (*api.Operation, error) {
-	for {
-		op, err := client.GetOperation(ctx, id)
+func (o runOptions) waitTimeout() time.Duration { return o.waitFor }
+
+func (o runOptions) result() resultOptions {
+	return resultOptions{noGroups: o.noGroups, groups: o.groups, failOnDrift: o.failOnDrift}
+}
+
+func (o runOptions) watchOptions(f *cli.Factory) watchOptions {
+	return watchOptions{waitTimeout: o.waitFor, quiet: f.Config().Quiet()}
+}
+
+// concurrencyFor is how many hosts the run works on at once: --concurrency, or
+// what the old run used, or the default for how it is run; never more than
+// there are hosts.
+func (o runOptions) concurrencyFor(detached bool, hosts, previous int) int {
+	n := o.concurrencyValue
+	switch {
+	case n > 0:
+	case previous > 0:
+		n = previous
+	case detached:
+		n = maxConcurrency
+	default:
+		n = defaultAttachedConcurrency
+	}
+
+	return max(1, min(n, hosts))
+}
+
+// followUp says what to do after a run is accepted: whether to watch it, for
+// how long, and how to print the result. r is nil when an existing run is
+// followed.
+func (o runOptions) followUp(f *cli.Factory, r *runRequest) followUp {
+	fu := followUp{watch: o.watchOptions(f), waitText: o.waitFor, result: o.result()}
+	if r == nil {
+		return fu
+	}
+	seconds := 0
+	switch {
+	case r.run != nil:
+		seconds = r.run.TimeoutSeconds
+	case r.do != nil:
+		seconds = r.do.TimeoutSeconds
+	}
+	long := seconds > maxAttachedTimeout
+	fu.returnAfter = o.detach || long
+	fu.long = long && !o.detach
+
+	return fu
+}
+
+// executeRun is `run --on TARGET -- PROGRAM`: resolve the hosts, show them,
+// confirm, submit, then wait.
+func executeRun(command *cobra.Command, f *cli.Factory, o *runOptions, pos, program []string) error {
+	ctx := command.Context()
+	flags := command.Flags()
+
+	var capability *api.CapabilitySpec
+	if o.do != "" || flags.Changed("do") {
+		if len(program) > 0 {
+			return clierr.Newf(clierr.ExitUsage, "give inputs as KEY=VALUE after the capability name, for example: --do service.status service=nginx.service",
+				"--do takes no program after --")
+		}
+		name := strings.TrimSpace(o.do)
+		if name == "" || strings.ContainsAny(name, " \t") || sanitize.Line(name) != name {
+			return clierr.Newf(clierr.ExitUsage, "known capabilities: "+strings.Join(knownCapabilities, ", "), "--do needs a capability name")
+		}
+		if flags.Changed("concurrency") {
+			return clierr.Usagef("--concurrency applies to programs, not capabilities")
+		}
+		input, err := o.capabilityInput(pos)
 		if err != nil {
-			return nil, fmt.Errorf("get operation: %w", err)
-		}
-		if terminalOperationStates[op.Status.State] {
-			return op, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(pollInterval):
-		}
-	}
-}
-
-func summarize(rawNames []string, limit int) string {
-	names := make([]string, len(rawNames))
-	for i, name := range rawNames {
-		names[i] = sanitize.Line(name)
-	}
-	if len(names) <= limit {
-		return strings.Join(names, ", ")
-	}
-	return strings.Join(names[:limit], ", ") + fmt.Sprintf(" and %d more", len(names)-limit)
-}
-
-// NewCancelCommand cancels a running operation.
-func NewCancelCommand(factory *cli.Factory) *cobra.Command {
-	command := &cobra.Command{Use: "cancel", Short: "Cancel a running resource", Args: cobra.NoArgs}
-	command.AddCommand(&cobra.Command{
-		Use:     "operation ID",
-		Aliases: []string{"op", "run"},
-		Short:   "Ask a running operation to stop",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			op, err := client.CancelOperation(command.Context(), args[0])
-			if err != nil {
-				return fmt.Errorf("cancel operation: %w", err)
-			}
-			_, err = fmt.Fprintf(command.OutOrStdout(), "Cancellation requested for operation %s (%s).\n", sanitize.Line(op.ID), sanitize.Line(op.Status.State))
 			return err
-		},
-	})
-	return command
+		}
+		capability = &api.CapabilitySpec{Name: name, Input: input}
+	} else {
+		if flags.Changed("input-json") {
+			return clierr.Usagef("--input-json needs --do")
+		}
+		if len(pos) > 0 || len(program) == 0 {
+			return clierr.Newf(clierr.ExitUsage, "for example: machinarchy run --on tier=web -- uptime", "put the program after --")
+		}
+	}
+	if flags.Changed("wait-timeout") && flags.Changed("detach") {
+		return clierr.Usagef("--wait-timeout needs a run that is watched; --detach returns at once")
+	}
+
+	seconds := defaultRunTimeout
+	if o.timeoutSet {
+		seconds = o.timeoutSeconds
+	}
+	if seconds > maxAttachedTimeout && flags.Changed("wait-timeout") {
+		return clierr.Usagef("a run over %s runs detached and is not watched, so --wait-timeout does not apply", humanSeconds(maxAttachedTimeout))
+	}
+
+	client, err := f.NewAPIClient(ctx)
+	if err != nil {
+		return err
+	}
+	renv, err := newRunEnv(ctx, f, client)
+	if err != nil {
+		return err
+	}
+	plan, err := target.Parse(o.on, o.except, renv.scope.env)
+	if err != nil {
+		return err
+	}
+
+	var names []string
+	envTotal := 0
+	if plan.NeedsHosts() || renv.scope.env != "" {
+		hosts, err := listAllHosts(ctx, client, api.HostQuery{EnvironmentID: renv.envID})
+		if err != nil {
+			return fmt.Errorf("list hosts: %w", err)
+		}
+		envTotal = len(hosts)
+		for _, host := range hosts {
+			names = append(names, host.Metadata.Name)
+		}
+	}
+	rule, err := plan.Rule(names)
+	if err != nil {
+		return err
+	}
+	set, err := previewRule(ctx, client, rule)
+	if err != nil {
+		return err
+	}
+
+	request := &runRequest{rule: rule, title: "Run on", envName: renv.scope.env, envTotal: envTotal}
+	if capability != nil {
+		capability.TimeoutSeconds = seconds
+		request.do = capability
+	} else {
+		detached := o.detach || seconds > maxAttachedTimeout
+		request.run = &api.RunSpec{Argv: program, TimeoutSeconds: seconds, Detach: detached,
+			Concurrency: o.concurrencyFor(detached, len(set.Hosts), 0)}
+	}
+
+	return runPrepared(command, f, client, renv, request, set, *o)
+}
+
+// capabilityInput is the JSON object a capability gets: KEY=VALUE words (all
+// text, sent unchanged) or --input-json.
+func (o *runOptions) capabilityInput(pairs []string) ([]byte, error) {
+	if o.inputJSON != "" {
+		if len(pairs) > 0 {
+			return nil, clierr.Usagef("give the input as KEY=VALUE or with --input-json, not both")
+		}
+
+		return validObject(o.inputJSON)
+	}
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+
+	return inputObject(pairs)
 }

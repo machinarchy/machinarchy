@@ -279,4 +279,43 @@ func init() {
 		Primary: "{groups} different outputs among {hosts} hosts; none is the majority."})
 	register(Message{ID: "run.more_groups", Kind: KindInfo,
 		Primary: "and {groups} more groups, {hosts} hosts"})
+
+	// Running, watching and stopping (docs/cli/spec/03-ux.md sections 7 and 9).
+	register(Message{ID: "run.started", Kind: KindInfo,
+		Primary: "Run {id}"})
+	register(Message{ID: "run.detached", Kind: KindInfo,
+		Primary: "Run {id} started on {hosts}. It keeps going without you.",
+		Next:    "machinarchy run {id} --follow"})
+	register(Message{ID: "run.detached_long", Kind: KindInfo,
+		Primary: "Run {id} started on {hosts}. This run is long, so it runs detached.",
+		Next:    "machinarchy run {id} --follow"})
+	register(Message{ID: "run.stopped", Kind: KindInfo,
+		Primary: "Stopped watching. The run keeps going on the hosts.",
+		Next:    "machinarchy run {id} --follow   (watch again)\nmachinarchy run {id} --cancel   (cancel it)"})
+	register(Message{ID: "run.wait_timeout", Kind: KindInfo,
+		Primary: "Still running. This command stopped waiting after {wait}; the run keeps going.",
+		Next:    "machinarchy run {id} --follow"})
+	register(Message{ID: "run.lost_contact", Kind: KindWarning,
+		Primary: "Lost contact with the server; the run keeps going.",
+		Next:    "machinarchy run {id} --follow"})
+	register(Message{ID: "run.submit_interrupted", Kind: KindWarning,
+		Primary: "Interrupted while sending the run. It may or may not have been created.",
+		Next:    "machinarchy run"})
+	register(Message{ID: "run.submit_lost", Kind: KindWarning,
+		Primary: "The connection ended while sending the run. It may or may not have been created.",
+		Why:     "{why}",
+		Next:    "machinarchy run"})
+	register(Message{ID: "run.cancel_requested", Kind: KindInfo,
+		Primary: "Cancellation requested. The hosts have not confirmed yet."})
+	register(Message{ID: "run.cancel_sent", Kind: KindInfo,
+		Primary: "Cancellation requested. The hosts have not confirmed yet; the run is {state}.",
+		Next:    "machinarchy run {id} --follow"})
+	register(Message{ID: "run.cancelled", Kind: KindInfo,
+		Primary: "Run cancelled. A host that finished before the cancel arrived keeps its result."})
+	register(Message{ID: "run.cancel_late", Kind: KindInfo,
+		Primary: "The run ended as {state}: some hosts had finished before the cancel arrived."})
+	register(Message{ID: "run.cancel_unreached", Kind: KindWarning,
+		Primary: "{hosts} could not be reached while cancelling; the command may still be running there."})
+	register(Message{ID: "run.dry_run", Kind: KindInfo,
+		Primary: "Dry run: nothing was sent. The hosts above are what would run."})
 }

@@ -3,23 +3,19 @@ package commands
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
-	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/spf13/cobra"
 )
 
 // maxListPages bounds how many pages a command follows (500 items each).
 const maxListPages = 200
 
-// NewGetCommand registers the remaining read commands: operations (replaced by
-// the run commands in M4) and agent-tokens (the source of the agent ID that
+// NewGetCommand registers the one remaining read command: agent-tokens (the source of the agent ID that
 // `hosts revoke-agent` needs until the server reports it per host, C-09).
 func NewGetCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
@@ -27,98 +23,8 @@ func NewGetCommand(factory *cli.Factory) *cobra.Command {
 		Short: "Display one or more resources",
 		Args:  cobra.NoArgs,
 	}
-	command.AddCommand(newGetOperationsCommand(factory), newGetAgentTokensCommand(factory))
+	command.AddCommand(newGetAgentTokensCommand(factory))
 	return command
-}
-
-func newGetOperationsCommand(factory *cli.Factory) *cobra.Command {
-	var state string
-	var limit int
-	command := &cobra.Command{
-		Use:     "operations [id]",
-		Aliases: []string{"operation", "ops", "runs"},
-		Short:   "List recent operations or display one with per-host results",
-		Args:    cobra.MaximumNArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			if len(args) == 1 {
-				op, err := client.GetOperation(command.Context(), args[0])
-				if err != nil {
-					return fmt.Errorf("get operation: %w", err)
-				}
-				return printOperation(printer, op)
-			}
-			page, err := client.ListOperations(command.Context(), api.OperationQuery{State: state, Limit: limit})
-			if err != nil {
-				return fmt.Errorf("list operations: %w", err)
-			}
-			if printer.Format() != output.FormatTable {
-				return printer.Document(page.Items)
-			}
-			rows := make([][]string, 0, len(page.Items))
-			for _, op := range page.Items {
-				rows = append(rows, []string{op.ID, op.State, targetCounts(op.Targets), op.CreatedAt.Local().Format(time.DateTime)})
-			}
-			return printer.Table([]string{"ID", "STATE", "TARGETS", "CREATED"}, rows)
-		},
-	}
-	command.Flags().StringVar(&state, "state", "", "Only operations in this state, for example Running")
-	command.Flags().IntVar(&limit, "limit", 20, "Number of operations to show (newest first)")
-	return command
-}
-
-func printOperation(printer *output.Printer, op *api.Operation) error {
-	if printer.Format() != output.FormatTable {
-		return printer.Document(op)
-	}
-	rows := make([][]string, 0, len(op.Status.Targets))
-	for _, target := range op.Status.Targets {
-		exit, detail := "-", ""
-		if target.Result != nil {
-			if target.Result.ExitCode != nil {
-				exit = strconv.Itoa(*target.Result.ExitCode)
-			}
-			detail = target.Result.ErrorClass
-			for _, text := range []string{target.Result.Stdout, target.Result.Stderr, target.Result.Output} {
-				if detail == "" {
-					detail = firstLine(text)
-				}
-			}
-		}
-		rows = append(rows, []string{target.Spec.DisplayName, target.State, exit, detail})
-	}
-	if err := printer.Table([]string{"HOST", "STATE", "EXIT", "OUTPUT"}, rows); err != nil {
-		return err
-	}
-	return printer.Table([]string{"OPERATION", "STATE"}, [][]string{{op.ID, op.Status.State}})
-}
-
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	if len(line) > 80 {
-		line = line[:77] + "..."
-	}
-	return line
-}
-
-func targetCounts(counts map[string]int) string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
-	}
-	return strings.Join(parts, ",")
 }
 
 // collect follows nextCursor until the last page.

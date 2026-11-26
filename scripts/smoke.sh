@@ -58,9 +58,9 @@ cli hosts show web-01 -o json | grep -q '"canary": "yes"' || fail "tag not store
 if cli hosts add web-01 127.0.0.1:3 --access deploy --wait 0 --no-input >/dev/null 2>&1; then fail "duplicate host accepted"; fi
 
 step "operations"
-if cli run -l tier=web --yes --wait --timeout 5 -- uptime >"$work/run.txt" 2>&1; then fail "run against a closed port succeeded"; fi
+if cli run --on tier=web --yes --timeout 5s -- uptime >"$work/run.txt" 2>&1; then fail "run against a closed port succeeded"; fi
 grep -q 'web-01' "$work/run.txt" || fail "run output: $(cat "$work/run.txt")"
-cli get operations | grep -q 'Failed=1' || fail "get operations"
+cli run | grep -q 'web-01\|uptime' || fail "run list"
 
 step "remove and legacy routes"
 cli hosts remove db-01 --confirm db-01 >/dev/null || fail "remove host"

@@ -305,7 +305,7 @@ Agent work is an Operation like an SSH run ([ADR-057](adr/ADR-057-capability-ope
 `POST /api/v1/managed/operations` with `capability` instead of `run`, or
 
 ```sh
-machinarchy run -l tier=web --capability service.status --input '{"service":"nginx.service"}' --wait
+machinarchy run --on tier=web --do service.status service=nginx.service
 ```
 
 It needs the same permission as a run, every target must be on an `agent`
@@ -455,7 +455,7 @@ loop. To exempt the controller, use `PerSourcePenaltyExemptList` in
 
 ## Detached execution
 
-A run with `detach: true` (the CLI's default without `--wait`) does not keep an SSH session open.
+A run with `detach: true` (the CLI's `run --detach`, and any run with a timeout over 15 minutes) does not keep an SSH session open.
 
 **How it runs:**
 - One short session per host starts the command under a supervisor and returns at once.
@@ -501,7 +501,7 @@ Prefer `systemd`: cancel and timeout then also kill processes that left the comm
 
 **Output.**
 - Each stream keeps its first and last 15 KiB plus the total size.
-- `GET …/operations/{id}/targets/{hostId}/output?stream=&from=` serves it by byte offset, live while the command runs. `machinarchy logs operation ID --follow` uses it.
+- `GET …/operations/{id}/targets/{hostId}/output?stream=&from=` serves it by byte offset, live while the command runs. `machinarchy run ID --host NAME --follow` uses it.
 - New output appears at the poll interval: 5 s for the first minute, then up to 30 s.
 - Only callers allowed to run commands can read output; readers see the `progress` sizes only.
 
