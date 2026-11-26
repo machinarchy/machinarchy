@@ -345,7 +345,7 @@ func (c *HTTPClient) transportError(ctx context.Context, method, endpoint string
 
 	return clierr.Wrap(clierr.ExitUnavailable,
 		fmt.Errorf("cannot reach the API server at %s: %w", c.baseURL.Scheme+"://"+c.baseURL.Host, cause),
-		"Check the server URL ('machinarchy config get-contexts' or --server) and that the API is running.")
+		"Check the server URL ('machinarchy whoami' shows it; --server changes it) and that the API is running.")
 }
 
 func decodeResponse(status int, endpoint string, body []byte, destination any) error {

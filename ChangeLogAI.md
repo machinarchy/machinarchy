@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.9: scorecard re-measured; stale unreachable-server hint fixed (branch ai/p6-automation-docs-hardening)
+
+- **Behavior changed:** the "cannot reach the API server" hint named `machinarchy config get-contexts`, a command removed in M2. It now says `machinarchy whoami` shows the server and `--server` changes it (`internal/cli/api/client.go`, test in `client_test.go`).
+- **Docs:** `docs/cli/spec/M6-notes.md` section 6.9: each scorecard row with command output or test names. Targets missed or unmeasured: 14 top-level commands vs 10, no typo suggestion at depth 2, no `Why:` on the unreachable error, two concepts (server, environment), A-01 time unmeasured. Spec targets were not changed.
+- **Checks run:** gofmt, `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race -count=1 ./...`, `make smoke` all pass. Not run: Postgres tests, pty layers, SSH lab automation, real agent, Windows.
+
 ## 2026-11-26 — CLI M6 step 6.8: owner session recorded (branch ai/p6-automation-docs-hardening)
 
 - **Docs only:** `docs/cli/spec/M6-usability.md` gets a partial record of the owner's lab run (login to `uptime` on web-01 succeeded) and findings F9 (`no env` in the run header with no environment selected) and F10 (brand line unverified). Time and exact outputs were not recorded; A-01 stays unmeasured and the human fresh-user session is still owed. No code changed; no checks run.

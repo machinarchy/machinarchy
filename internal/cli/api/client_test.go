@@ -595,6 +595,10 @@ func TestUnreachableServerErrorsAreClearAndSafe(t *testing.T) {
 	if clierr.Hint(err) == "" {
 		t.Error("expected a hint")
 	}
+	// The hint must name only commands that exist (get-contexts was removed in M2).
+	if strings.Contains(clierr.Hint(err), "get-contexts") || !strings.Contains(clierr.Hint(err), "machinarchy whoami") {
+		t.Errorf("hint = %q", clierr.Hint(err))
+	}
 }
 
 type closeTracker struct {

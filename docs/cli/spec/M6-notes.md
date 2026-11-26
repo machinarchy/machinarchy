@@ -66,3 +66,30 @@ A-01 A-02 A-03 B-01 B-02 B-04 B-06 B-07 B-08 B-11 B-13 B-18 B-21 C-02 C-03 C-04 
 | S-31 | not applicable: the CLI does not consume server-supplied install info (C-07 absent); the blob is built from CLI-validated fields | revisit when C-07/gateway transport lands |
 
 Still unmapped outside S: A-01..03, B-*, C-*, G-16/18/20, H-07..12, K-*, O-*, U-09/10/12 (see list above); unmapped is not the same as untested.
+
+## 6.9 Scorecard re-measured (2026-11-26)
+
+Method: `bin/machinarchy` built from this branch and a clean `HOME`, against kubectl v1.27.1 (same client as the spec's table; `kubectl version --client`). Evidence is command output run today unless a test name is given. "Unmeasured" means no evidence exists.
+
+| Criterion (`07-brand.md` s8) | Target | Measured now | Result |
+|---|---|---|---|
+| Top-level commands in `--help` | 10 | **14** listed (hosts, login, run, access, envs, tokens, logout, switch, whoami, get, help, runtime-config, secret, version; `completion` is hidden). kubectl: 42 | **Target missed** (14 vs 10); still far fewer than kubectl |
+| Output with no server reachable | one four-part error with next step | Signed out: `Error: you are not signed in to any server` + `Next: machinarchy login YOUR-SERVER-URL`, exit 3. Credential, server down: `Error: list hosts: cannot reach the API server at http://localhost:1: ... connection refused` + `Next:` line, exit 4. Two parts (error, next), no separate `Why:`. kubectl: five repeated `memcache.go` lines plus an error | **Clearer than kubectl; "four-part" not met** for this error. F11 found and fixed: the `Next:` named the removed `config get-contexts` |
+| Typo help | corrected command at any depth | `hostz` -> `Why: "hosts" is the closest command.` `Next: machinarchy hosts` (top level). `hosts lst` -> only `Next: machinarchy hosts --help`, **no suggestion** at depth 2. kubectl: `Did you mean this? set get` | **Parity at top level; target missed at depth** |
+| Missing argument | every error ends with a runnable command | `hosts trust` -> `Error: give a host NAME, or --all-pending` / `Next: machinarchy hosts trust --help`; `run` signed out -> `Next: machinarchy login ...` | Met for the cases tried (2); not checked for every error |
+| First-time sign-in | `login`, device token, expiry shown | `login` is in `--help`; flow run in `M6-usability.md` (scripted and owner sessions) | Met; expiry text seen in the scripted run only |
+| Concepts a beginner meets | one: server | Help shows `switch`, `whoami`, `-n/--env`. A beginner also meets **environments** | **Two concepts (server, environment)**, spec said one |
+| Destructive command safety | typed confirmation, protected envs, `--dry-run` | `envs remove --help`: typed name, `--yes` not enough, `--confirm-env` for protected; global `--dry-run` flag exists (`root.go`). Tests: `TestHostsRemoveIsInventoryOnlyAndGuarded`, `TestHostsInProtectedEnvNeedTheEnvName`, `TestHostsTrustNeverFollowsYes`. kubectl help shows no confirmation | Met |
+| Multi-target execution | preview-bound, grouped result, exit codes | Owner session: preview, `Run it? [y/N]`, `1 of 1 hosts succeeded`. Grouping of identical output and exit 8/9 covered by run tests in the full suite (6.7/today); **not run live on several hosts** | Partly measured (1 host live) |
+| Output formats | table, json, yaml | `-o xml` -> `unsupported output format "xml"; choose table, json, or yaml` | Met; **kubectl wins** (more formats) |
+| Shell completion | bash, zsh, fish, dynamic names | `completion` offers bash, fish, powershell, zsh; dynamic names `TestCompletionOffersNamesFromTheServer`, `TestCompletionNeverFailsLoudlyOrOffersUnsafeNames`. 800 ms budget **not re-measured** (`--help` takes 0.02 s) | Met, budget unmeasured |
+| Extensibility | none | kubectl lists plugin, apply, diff, explain, wait, auth, debug, rollout, top (run today) | **kubectl wins** (unchanged) |
+| Watching | `run ID --follow` only | `run --help` lists `--follow` | As specified; kubectl wins on breadth |
+| Safety defaults for execution | preview, env scope, typed confirm | Preview and confirm seen in the owner session. The run header showed `[localhost-8081 · none]` / `Hosts  no env 1`: a run went ahead with **no environment selected** (F9) | Partly met; F9 open |
+| Time to first managed thing | five-minute test A-01 | Owner session reached the end state; **time not recorded**; no fresh-user session | **Unmeasured** |
+
+**Verification run today (all pass):** gofmt (no files), `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race -count=1 ./...`, `make smoke`.
+
+**Not run:** Postgres store tests, pty layers, the SSH lab through automation, real agent/NATS, Windows, kubectl behaviour on newer versions.
+
+**Findings carried to Phase 7:** top-level count 14 vs target 10; typo suggestion missing at depth 2; unreachable error has no `Why:`; two concepts; F9 (`no env`); A-01 unmeasured. The spec's target column was **not** amended; owner decides whether to change the targets or the CLI.
