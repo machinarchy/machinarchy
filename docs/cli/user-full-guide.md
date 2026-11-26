@@ -365,22 +365,25 @@ $ machinarchy get hosts ssh-password -o yaml | sed -n "/observedHostKeys/,/^[a-z
 
 On a real network, compare these with the host's own keys (`ssh-keygen -lf
 /etc/ssh/ssh_host_*_key.pub` on its console) before approving. Then approve
-one host (`machinarchy trust host ssh-password`) or every waiting host at
-once:
+one host (`machinarchy hosts trust ssh-password`). The CLI never approves a
+key for you: type the first 8 characters after `SHA256:` of a key, or in a
+script pass a fingerprint you checked (`--yes` does not approve keys):
 
 ```console
-$ machinarchy trust host --all-pending --yes
-SSH host keys to trust:
-  ssh-password (127.0.0.1:2221):
-    SHA256:Tq2Qo6CW1E0cHKD6o2Qb0ekZhnk3Q3/z6o09d+VoXKk
-    SHA256:D1Je05PeWOkVrP/z9nMu+Sf98+KjzGn1mkIq8eB+Lc4
-    SHA256:gISGmJRc/K/ExVEK6rzJm4EYyP2w5tuWuut7vaBCbAM
-  ssh-hostcheck (127.0.0.1:2223):
-    SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
-    SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
-    SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
-Host "ssh-password" now trusts 3 host key(s).
-Host "ssh-hostcheck" now trusts 3 host key(s).
+$ machinarchy hosts trust ssh-password
+ssh-password (127.0.0.1:2221) presents:
+  SHA256:Tq2Qo6CW1E0cHKD6o2Qb0ekZhnk3Q3/z6o09d+VoXKk
+  SHA256:D1Je05PeWOkVrP/z9nMu+Sf98+KjzGn1mkIq8eB+Lc4
+  SHA256:gISGmJRc/K/ExVEK6rzJm4EYyP2w5tuWuut7vaBCbAM
+Compare with the key on the machine. Type the first 8 characters after SHA256: to trust it, or press Enter to skip: Tq2Qo6CW
+Key trusted. ssh-password will be reachable once it reports ready.
+
+$ machinarchy hosts trust ssh-hostcheck --fingerprint SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
+ssh-hostcheck (127.0.0.1:2223) presents:
+  SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
+  SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
+  SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
+Key trusted. ssh-hostcheck will be reachable once it reports ready.
 
 $ machinarchy get hosts -o json | jq -r '.[] | [.metadata.name, (.status.conditions[] | select(.type=="Ready") | .reason)] | @tsv'
 ssh-key	SSHVerified
@@ -388,8 +391,9 @@ ssh-password	SSHVerified
 ssh-hostcheck	SSHVerified
 ```
 
-Without `--yes` the CLI shows the same list and asks first.
-`--all-pending --selector tier=db` narrows it to matching hosts.
+`hosts trust --all-pending` goes through the waiting hosts one by one, asks the
+same question for each (Enter skips a host), needs a terminal and is refused
+with `--no-input`. `-l tier=db` narrows it to matching hosts.
 
 A full host record:
 
@@ -660,7 +664,7 @@ NAME   ID                                    ENVIRONMENT  ENDPOINT        PHASE 
 moved  e695c14b-354a-4522-8987-bc7eda4f9eac  -            127.0.0.1:2223  Active  False  HostKeyChanged
 
 $ machinarchy get hosts moved -o json | jq -r '.status.conditions[] | select(.type=="Ready") | .reason + ": " + .message'
-HostKeyChanged: the host presents SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA, SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM, SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM; trusted: SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA. Nothing was sent to it. If the change is expected: machinarchy trust host moved --replace
+HostKeyChanged: the host presents SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA, SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM, SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM; trusted: SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA. Nothing was sent to it. If the change is expected: machinarchy hosts trust moved --replace
 ```
 
 `KEYS` is an array so that each `--trust` and fingerprint is its own argument
@@ -683,14 +687,19 @@ A changed key is never accepted automatically. Once you have checked the new
 keys out of band, replace the old ones:
 
 ```console
-$ machinarchy trust host moved --replace --yes
-SSH host keys to trust:
-  moved (127.0.0.1:2223):
-    SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
-    SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
-    SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
-    replacing SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4, SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc, SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA
-Host "moved" now trusts 3 host key(s).
+$ machinarchy hosts trust moved --replace
+Replace the trusted key of moved (127.0.0.1:2223)
+  Old   SHA256:Ehd3zpE8ZzPW9qanet+DNIO9adfUFQ2WV5U6Di441e4
+  Old   SHA256:N+XdeAI8ToEzIqHlGm6uQa6OvByAPqR41XSEIUqApEc
+  Old   SHA256:7efWR23MN1hqSRUL49ztROE1RxXc9GS1Tc6QXefw9UA
+  New   SHA256:EYt0QO2qbu1xJtXr0PXuMKHiXQEPbaW8nERq9io6rCA
+  New   SHA256:+vtzFjVvhN+gu3loD/oZ/Yl+KweOgU066XLNMyHy4oM
+  New   SHA256:nnNU8fHP7Dr2brpoG7YQHxyWIlEHA4Le5yVBjkfTKyM
+Did you confirm the new key with whoever runs moved, by a channel other than Machinarchy?
+Type the first 8 characters of the NEW key (after SHA256:), or press Enter to cancel: EYt0QO2q
+Replace the trusted key of moved. Commands to it are accepted again once the new key is trusted.
+Type "moved" to confirm: moved
+moved now trusts the new key. Commands to it will be accepted again.
 
 $ machinarchy run --host moved --wait --yes -- hostname
 HOST   STATE      EXIT  OUTPUT
@@ -812,7 +821,7 @@ Real errors from this lab and what they mean:
 - **A host whose keys changed** shows `READY False` / `HostKeyChanged` soon
   after the first command to it fails on its keys (`remote_execution_failed`
   or `launch_host_key_rejected`): that failure queues a check of the host,
-  at most once a minute. Until that check runs, `trust host --replace` can
+  at most once a minute. Until that check runs, `hosts trust --replace` can
   report that no new keys were observed yet; run it again after a few seconds.
   A host nobody runs commands on is found by the periodic check (5 minutes by
   default).
@@ -856,7 +865,7 @@ cancel it first.
 | Who am I / switch server / log out | `machinarchy whoami` / `switch [NAME]` / `logout` |
 | List hosts / one host in full | `machinarchy get hosts [-l SELECTOR]` / `get hosts NAME -o yaml` |
 | Register a host | `machinarchy create host NAME --endpoint HOST:PORT --profile PROFILE --label K=V` |
-| Approve keys | `machinarchy trust host NAME` / `--all-pending [--selector S]` / `NAME --replace` |
+| Approve keys | `machinarchy hosts trust NAME` / `--all-pending [-l S]` / `NAME --replace` |
 | Run and wait (≤ 15 min) | `machinarchy run -l S --wait -- PROGRAM ARGS…` |
 | Run detached (≤ 24 h) | `machinarchy run -l S [--timeout SECONDS] -- PROGRAM ARGS…` |
 | Follow output | `machinarchy logs operation ID --host NAME --follow [--stream stderr]` |

@@ -58,8 +58,8 @@ machinarchy logout [--everywhere]
 machinarchy whoami
 machinarchy switch [SERVER]
 machinarchy tokens | tokens create NAME --role reader|operator [--expires 90d] [--out FILE] | tokens revoke NAME
-machinarchy trust host NAME-OR-ID [--replace] [--fingerprint SHA256:...]
-machinarchy trust host --all-pending [--selector SELECTOR]
+machinarchy hosts trust NAME [--replace] [--fingerprint SHA256:...]
+machinarchy hosts trust --all-pending [-l SELECTOR]
 machinarchy run (-l SELECTOR | --host NAME... | --all) [--timeout SECONDS] [--wait] [--detach] -- PROGRAM [ARG...]
 machinarchy logs operation ID [--host NAME-OR-ID] [--stream stdout|stderr] [--follow]
 ```
@@ -73,11 +73,18 @@ machinarchy logs operation ID [--host NAME-OR-ID] [--stream stdout|stderr] [--fo
 
 With `--wait` the session stays open (at most 15 minutes) unless the timeout is longer or `--detach` is given. Reading output needs the right to run commands: readers see states and exit codes, not output.
 
-`trust host` (owner only) shows the SSH host keys the controller observed for a
-host and, after confirmation, trusts exactly those keys. `--all-pending`
-approves every host waiting with `HostKeyPendingApproval`. A host that already
-trusts keys is changed only with `--replace`: check the new key out of band
-first. Hosts whose Access Profile uses `tofu` or `ca` need no approval (see
+`hosts trust` (owner only) shows the SSH host keys the controller observed for a
+host. On a terminal you approve by typing the first 8 characters after
+`SHA256:` of the key, compared with the key on the machine; `--yes` never
+answers this. In a script, pass `--fingerprint SHA256:...` of a key you
+checked; it must be one the controller saw (all observed keys are trusted
+together, because the controller refuses an incomplete set). A host that
+already trusts keys is changed only with `--replace`: type the first 8
+characters of the new key and the host's name (`--confirm NAME` in a script),
+and check the key out of band first. A host in a locally protected env also
+needs the env's name. `--all-pending` asks about each waiting host in turn, needs
+a terminal and is refused with `--no-input`. Hosts whose Access Profile uses
+`tofu` or `ca` need no approval (see
 [operations](../operations.md#ssh-host-keys)).
 
 The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.

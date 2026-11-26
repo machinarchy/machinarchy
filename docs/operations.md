@@ -415,7 +415,7 @@ follows the egress policy. The Access Profile's `hostKeyPolicy` then decides:
 | Policy | What happens | Use |
 |---|---|---|
 | `tofu` | The keys seen on first contact (every algorithm the host offers) are pinned automatically and audited as `resource_host.host_key_trusted` with `source=tofu`. Allowed only with private-key authentication; a password profile falls back to `approve`. | Networks you trust at enrolment time |
-| `approve` | The Host waits with `HostKeyPendingApproval` and `status.observedHostKeys`. An owner runs `machinarchy trust host NAME`, or `--all-pending [--selector …]` for many hosts, which shows the fingerprints and trusts exactly those. | Production default |
+| `approve` | The Host waits with `HostKeyPendingApproval` and `status.observedHostKeys`. An owner runs `machinarchy hosts trust NAME` (typed check of the key, or `--fingerprint` in a script), or `--all-pending [-l SELECTOR]` to be asked about each host in turn; `--yes` never approves a key. | Production default |
 | `ca` | Hosts present SSH host certificates signed by a CA listed in the profile's `hostCertificateAuthorities` (authorized_keys format), for the dialed host name. No per-host data. | Fleets with an SSH CA |
 | `pinned` | Only fingerprints set in `spec.accessTarget.trust` are trusted, and nothing is scanned. | Keys verified out of band |
 
@@ -427,7 +427,7 @@ development and `approve` in production by default, or `pinned`.
   that is not trusted, the Host becomes `HostKeyChanged`, and the condition
   names both the presented and the trusted fingerprints. Nothing is sent to
   the host. An owner must check the change out of band and run
-  `machinarchy trust host NAME --replace`.
+  `machinarchy hosts trust NAME --replace`.
 - **Moving a Host clears its trust.** Changing a Host's endpoint (owner only)
   clears its trusted keys, unless new ones are sent with the change, and the
   new endpoint is scanned again.

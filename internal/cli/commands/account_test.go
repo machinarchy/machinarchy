@@ -145,7 +145,7 @@ func TestOwnerOnlyActionWithAnOperatorToken(t *testing.T) {
 		{"tokens", "revoke", "ci", "--confirm", "ci"},
 		{"secret", "list"},
 		{"runtime-config", "get"},
-		{"trust", "host", "web-01", "--yes"},
+		{"hosts", "trust", "web-01", "--fingerprint", "SHA256:abcdefghijklmnop"},
 		{"create", "profile", "p", "--connector", "agent"},
 		{"get", "agent-tokens"},
 	} {

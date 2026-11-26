@@ -80,7 +80,7 @@ func NewHostsCommand(f *cli.Factory) *cobra.Command {
 	var status, selector string
 	command := &cobra.Command{
 		Use:   "hosts [--status ready|attention|all]",
-		Short: "List, show, tag and remove hosts",
+		Short: "List, show, tag, trust and remove hosts",
 		Long: "Lists the machines Machinarchy manages: name, env, address, how it reaches them (ssh or agent), a plain status and tags.\n" +
 			"Statuses: ready, waiting for key approval, key changed, checking, cannot connect, needs attention.\n" +
 			"Use --env to look at one env.",
@@ -92,7 +92,7 @@ func NewHostsCommand(f *cli.Factory) *cobra.Command {
 	}
 	command.Flags().StringVar(&status, "status", "all", "Show ready, attention (everything not ready) or all hosts")
 	command.Flags().StringVarP(&selector, "selector", "l", "", "Only hosts matching a tag selector, for example tier=web")
-	command.AddCommand(newHostsShowCommand(f), newHostsTagCommand(f), newHostsMoveCommand(f), newHostsRemoveCommand(f))
+	command.AddCommand(newHostsShowCommand(f), newHostsTagCommand(f), newHostsMoveCommand(f), newHostsTrustCommand(f), newHostsRemoveCommand(f))
 
 	return command
 }

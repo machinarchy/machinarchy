@@ -54,7 +54,7 @@ A command uses, in this order:
 2. the saved API token
 3. the saved login session
 
-A credential that is known to have expired is skipped. A command that acts as the workspace **owner** (`tokens`, `secret`, `runtime-config`, `trust host`, `create profile`, `get agent-tokens` and others) uses the saved login session and nothing else: an API token can never be an owner. With only a token it stops before sending anything:
+A credential that is known to have expired is skipped. A command that acts as the workspace **owner** (`tokens`, `secret`, `runtime-config`, `hosts trust`, `create profile`, `get agent-tokens` and others) uses the saved login session and nothing else: an API token can never be an owner. With only a token it stops before sending anything:
 
 ```text
 Error: this needs an owner signed in with a password; you are using an API token (device-laptop, operator)

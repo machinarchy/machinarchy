@@ -23,7 +23,7 @@ go run ./cmd/machinarchy login http://localhost:8080
 
 ## "This needs an owner signed in with a password"
 
-`tokens`, `secret`, `runtime-config`, `trust host`, `create profile` and a few more act as the workspace owner, and an API token can never be the owner. The command stops before sending anything. Sign in with the password; the session is used for these commands and the saved device token for everything else:
+`tokens`, `secret`, `runtime-config`, `hosts trust`, `create profile` and a few more act as the workspace owner, and an API token can never be the owner. The command stops before sending anything. Sign in with the password; the session is used for these commands and the saved device token for everything else:
 
 ```sh
 go run ./cmd/machinarchy login

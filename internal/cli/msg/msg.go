@@ -212,6 +212,12 @@ func init() {
 	register(Message{ID: "host.tagged", Kind: KindSuccess,
 		Primary: "Tags of {host}: {tags}.",
 		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.trusted", Kind: KindSuccess,
+		Primary: "Key trusted. {host} will be reachable once it reports ready.",
+		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.key_replaced", Kind: KindSuccess,
+		Primary: "{host} now trusts the new key. Commands to it will be accepted again.",
+		Next:    "machinarchy hosts show {host}"})
 	register(Message{ID: "host.removed", Kind: KindSuccess,
 		Primary: "Host {host} removed from the inventory.",
 		Why:     "Only the inventory entry is gone. Not done: an installed agent was not uninstalled or revoked, the access entry and its credentials were kept, and the machine was not touched.",

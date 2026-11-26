@@ -85,12 +85,20 @@ func TestRemoteTextCannotDriveTheTerminal(t *testing.T) {
 		client.hosts[0].Metadata.Generation = 4
 		client.hosts[0].Spec.AccessTarget.Endpoint = "10.0.0.1:22\x1b[2J"
 		client.hosts[0].Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
-		client.hosts[0].Status.ObservedHostKeys = []api.ObservedHostKey{{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:abc\x1b[31m"}}
+		client.hosts[0].Status.ObservedHostKeys = []api.ObservedHostKey{{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:abcdefghijklmnop"}}
 
-		got := run(t, client, "trust", "host", "--all-pending")
+		got := run(t, client, "hosts", "trust", client.hosts[0].Metadata.ID)
 		noControlBytes(t, "trust prompt", got.stdout+got.stderr)
-		if got.code != clierr.ExitUsage || !strings.Contains(got.stdout, "SHA256:abc") {
+		if got.code != clierr.ExitUsage || !strings.Contains(got.stdout, "SHA256:abcdefghijklmnop") {
 			t.Fatalf("result = %+v", got)
+		}
+
+		// A key with control bytes is refused outright, never shown as a prompt.
+		client.hosts[0].Status.ObservedHostKeys[0].Fingerprint = "SHA256:abc\x1b[31m"
+		got = run(t, client, "hosts", "trust", client.hosts[0].Metadata.ID)
+		noControlBytes(t, "trust refusal", got.stdout+got.stderr)
+		if got.code != clierr.ExitFailure || len(client.trusted) != 0 {
+			t.Fatalf("hostile key = %+v", got)
 		}
 	})
 }

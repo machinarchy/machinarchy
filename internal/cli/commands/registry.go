@@ -23,7 +23,7 @@ func DefaultGroups() []cli.CommandGroup {
 				NewTokensCommand,
 				NewEnvsCommand,
 				owner(NewAccessCommand, "add", "remove"),
-				owner(NewHostsCommand, "move"),
+				owner(NewHostsCommand, "move", "trust"),
 			},
 		},
 		{
@@ -34,7 +34,6 @@ func DefaultGroups() []cli.CommandGroup {
 				owner(NewCreateCommand, "profile", "agent-token"),
 				owner(NewDeleteCommand, "profile", "agent-token"),
 				NewLabelCommand,
-				owner(NewTrustCommand, "host"),
 				NewRunCommand,
 				NewCancelCommand,
 				NewLogsCommand,
