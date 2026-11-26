@@ -21,6 +21,7 @@ func DefaultGroups() []cli.CommandGroup {
 				NewWhoamiCommand,
 				NewSwitchCommand,
 				NewTokensCommand,
+				NewEnvsCommand,
 			},
 		},
 		{

@@ -316,6 +316,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 	root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
 
 	want := map[string][]string{
+		"envs":           {"add", "remove", "use"},
 		"get":            {"agent-tokens", "hosts", "operations", "profiles"},
 		"create":         {"agent-token", "host", "profile"},
 		"delete":         {"agent-token", "host", "profile"},

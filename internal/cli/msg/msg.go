@@ -184,6 +184,23 @@ func init() {
 	register(Message{ID: "server.switched", Kind: KindSuccess,
 		Primary: "Active server: {server}.",
 		Next:    "machinarchy whoami"})
+	register(Message{ID: "env.created", Kind: KindSuccess,
+		Primary: "Environment {env} created.",
+		Next:    "machinarchy envs use {env}"})
+	register(Message{ID: "env.created_protected", Kind: KindSuccess,
+		Primary: "Environment {env} created (protected, local guard).",
+		Why:     "Changes to hosts in {env} on this computer now ask you to type \"{env}\". The guard is not enforced by the server, so it does not stop other people, computers or tools.",
+		Next:    "machinarchy envs use {env}"})
+	register(Message{ID: "env.used", Kind: KindSuccess,
+		Primary: "Active env: {env}.",
+		Why:     "Commands on {server} now work on {env}. To undo: machinarchy envs use any."})
+	register(Message{ID: "env.cleared", Kind: KindSuccess,
+		Primary: "No active env: commands now cover every env.",
+		Next:    "machinarchy envs use NAME"})
+	register(Message{ID: "env.removed", Kind: KindSuccess,
+		Primary: "Environment {env} removed.",
+		Why:     "No host was deleted by this command.",
+		Next:    "machinarchy envs"})
 	register(Message{ID: "token.created", Kind: KindSuccess,
 		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
 	register(Message{ID: "token.created_file", Kind: KindSuccess,

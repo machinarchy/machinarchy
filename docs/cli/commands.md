@@ -107,6 +107,19 @@ A token has a role, `reader` or `operator` (never owner), and an expiry: `--expi
 
 `tokens revoke` stops a token at once. It is confirmed by typing the token's name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. When several active tokens share a name it lists their IDs and asks for `--id`. Managing tokens needs an owner's login session; an API token is refused locally before anything is sent.
 
+## Environments
+
+```sh
+machinarchy envs                              # list: env, host count, protected, active
+machinarchy envs add staging --description "pre-production"
+machinarchy envs add production --protected   # asks first; --yes answers
+machinarchy envs use staging                  # the active env for this server (local only)
+machinarchy envs use any                      # clear it
+machinarchy envs remove old-lab               # type the name; in a script: --confirm old-lab
+```
+
+`envs use` only changes the CLI config; the env must exist on the server. `--protected` is a **local guard**: this server cannot enforce protected environments yet, so the guard lives in the CLI config of this computer and protects you from your own typing mistakes, not from other people, other computers or other tools. It is shown as `yes (local)`. `envs remove` is confirmed by typing the env's name (`--confirm NAME` in a script, `--yes` is not enough); a locally protected env also needs `--confirm-env NAME` in a script. Removing an env clears it as the active env and drops its local guard; this command deletes no host. Moving a host between envs needs controller support (gap C-01) and arrives with `hosts move`.
+
 ## Managing hosts
 
 ```sh

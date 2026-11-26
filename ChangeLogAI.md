@@ -1,5 +1,18 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M3 step 3.2: `envs` commands (branch feat/cli-m1)
+
+- **Added** `machinarchy envs` (list with host counts, protected and active marks; `-o json|yaml`, `-q` names), `envs add NAME [--description] [--protected]`, `envs use NAME|any`, `envs remove NAME` (`internal/cli/commands/envs.go`). `--protected` is a local guard only (the server cannot enforce it, gap C-02): it asks first (`--yes` answers) and nothing is created if the answer is no. `envs remove` needs the typed name or `--confirm NAME` (`--yes` is not enough) and, for a locally protected env without a terminal, `--confirm-env NAME`; it clears the active env and the local guard and deletes no host.
+- **Config:** `servers.<name>.protected-envs` (local guard) and store methods `SetEnv`, `LocalProtected`, `SetLocalProtected`. New messages `env.*` in the catalogue. Docs: `docs/cli/commands.md`.
+- **Limits:** the active env is not yet applied by `envs` itself beyond marking it; the guard is not yet consulted by other commands (they arrive in 3.3-3.8 and M4). No controller change.
+- **Checks run:** `gofmt -l` (clean), `go vet ./internal/cli/...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass after fixing a non-ASCII character in a new message; commands 81.8 %, config 83.1 %). Not run: `make smoke`, Postgres tests, a real-terminal check of the typed prompt (tested with flags only).
+
+## 2026-11-26 — CLI M3 step 3.1: API client for inventory (branch feat/cli-m1)
+
+- **Added** `internal/cli/api/inventory.go` (`InventoryClient`): create/delete environment, get one Access Profile (spec holds secret references only), list and revoke agents, controller public key. `ListAgents` returns the raw response because its shape is not in the API contract (gap C-09). `HostQuery` gained `Phase` and `Limit`.
+- **Already present, unchanged:** host create/get/delete/labels/trust, access profile list/create/delete, enrolment tokens (`managed.go`, `access.go`), secret create (`ManagementClient.CreateSecret`). No controller change; no command uses the new methods yet (steps 3.2-3.8).
+- **Checks run:** `gofmt -l` (clean), `go vet ./internal/cli/api/`, `golangci-lint run ./internal/cli/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; api 84.3 %). Not run: `make smoke`, Postgres store tests.
+
 ## 2026-11-26 — CLI M2: servers and authentication (branch feat/cli-m1)
 
 - **New commands:** guided `login` (email and password, or an API token with `--with-token` from a hidden prompt or stdin; the token is checked before it is saved; "stay signed in" creates a device token), `logout` (revokes on the server, `--everywhere`), `whoami`, `switch`, `tokens` (list, create, revoke) and hidden `config path|show`.

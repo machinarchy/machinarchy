@@ -81,6 +81,10 @@ type Server struct {
 	CAFile string `yaml:"ca-file,omitempty"`
 	// Env is the default environment name or ID for commands on this server.
 	Env string `yaml:"env,omitempty"`
+	// ProtectedEnvs are environments guarded locally: the CLI asks for the
+	// env's name before it changes them. It is enforced by this CLI only and
+	// is never a server property (docs/cli/spec/04-security.md section 6.3).
+	ProtectedEnvs []string `yaml:"protected-envs,omitempty"`
 }
 
 // Store holds the typed config document and the flag and environment
@@ -498,4 +502,76 @@ func (s *Store) save() error {
 
 	// The file holds no secret, but it names every server, so it is private.
 	return fsutil.WriteAtomic(s.path, data, 0o700, 0o600)
+}
+
+// savedServerName returns the saved server a command works on, for settings
+// that are stored per server. A server given only as an address has no entry
+// to store them in.
+func (s *Store) savedServerName() (string, error) {
+	name, _, adhoc, err := s.selectServer()
+	if err != nil {
+		return "", err
+	}
+	if adhoc || name == "" {
+		return "", clierr.Detailed(clierr.ExitUsage, errors.New("this server is not saved, so a setting cannot be stored for it"),
+			"it was given as an address with --server", "machinarchy login YOUR-SERVER-URL")
+	}
+
+	return name, nil
+}
+
+// SetEnv saves the default environment of the selected server; "" clears it.
+func (s *Store) SetEnv(env string) error {
+	name, err := s.savedServerName()
+	if err != nil {
+		return err
+	}
+	server := s.doc.Servers[name]
+	server.Env = env
+	s.doc.Servers[name] = server
+
+	return s.save()
+}
+
+// LocalProtected reports whether env carries the local guard on the selected
+// server.
+func (s *Store) LocalProtected(env string) bool {
+	if s == nil || s.v == nil {
+		return false
+	}
+	_, server, _, err := s.selectServer()
+	if err != nil {
+		return false
+	}
+	for _, name := range server.ProtectedEnvs {
+		if strings.EqualFold(name, env) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// SetLocalProtected adds or removes the local guard on env for the selected
+// server.
+func (s *Store) SetLocalProtected(env string, protected bool) error {
+	name, err := s.savedServerName()
+	if err != nil {
+		return err
+	}
+	server := s.doc.Servers[name]
+	kept := make([]string, 0, len(server.ProtectedEnvs)+1)
+	for _, existing := range server.ProtectedEnvs {
+		if !strings.EqualFold(existing, env) {
+			kept = append(kept, existing)
+		}
+	}
+	if protected {
+		kept = append(kept, env)
+	}
+	sort.Strings(kept)
+	server.ProtectedEnvs = kept
+	s.doc.Servers[name] = server
+
+	return s.save()
 }
