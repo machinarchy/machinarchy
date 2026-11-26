@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/machinarchy/machinarchy/compare/v0.0.3...v0.0.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* **runtimeconfig:** treat cancellation during initial load as clean stop ([#18](https://github.com/machinarchy/machinarchy/issues/18)) ([a4f078a](https://github.com/machinarchy/machinarchy/commit/a4f078ae3e5102a7db101065ae89cfbce6cbdd55))
+
 ## [0.0.3](https://github.com/machinarchy/machinarchy/compare/v0.0.2...v0.0.3) (2026-11-26)
 
 
