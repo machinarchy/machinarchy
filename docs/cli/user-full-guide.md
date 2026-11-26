@@ -6,7 +6,7 @@ using the repository's own SSH test servers
 
 1. start the three SSH servers with `make ssh-servers-up`;
 2. start Machinarchy and log in;
-3. point the `machinarchy` CLI at it (a *context*);
+3. sign the `machinarchy` CLI in to it (a saved *server*);
 4. store the lab's SSH key and password, create Access Profiles, register the hosts;
 5. trust the hosts' SSH keys, automatically and by approval;
 6. run commands: waiting for the result, and detached with live output;
@@ -181,40 +181,53 @@ $ curl -s http://127.0.0.1:8080/healthz/ready
 
 ## 3. Log in
 
-`machinarchy login` asks the server for a session and stores it in the CLI
-configuration (`~/.config/machinarchy/config.yaml`, mode 0600). The first
-login names the server and the context to create:
+`machinarchy login` signs in to the server and saves it, with the session, in
+the CLI configuration (`~/.config/.machinarchy/config.yaml` for the server and
+`config.credentials.yaml` next to it for the credentials, both mode 0600). It
+asks for what it needs; give the server's address and, to name it, `--name`:
 
 ```console
-$ machinarchy login --server http://127.0.0.1:8080 --context lab --username admin
+$ machinarchy login http://127.0.0.1:8080 --name lab
+Checking http://127.0.0.1:8080 ... ✔ reached.
+How do you want to sign in?
+  1) Email and password    best on your own computer
+  2) API token             for scripts and shared machines
+Choose [1]:
+Email or username: admin
 Password:
-Logged in to http://127.0.0.1:8080 as admin; the session is stored for user "lab" of context "lab".
+Stay signed in on this computer? A 90-day device token (operator) will be saved, so you need not type your password every day [Y/n]: n
+✔ Signed in to lab as admin.
+  The session lasts 24 hours (until 2026-11-27 09:14). Role: not reported by this server.
+  Next:  machinarchy whoami
 ```
 
-The password prompt does not echo. In a script, pass it on stdin instead:
-`… login --username admin --password-stdin < password-file`.
+The password prompt does not echo, and a password is never a flag. In a script,
+pass the answers instead of being asked:
+`… login http://127.0.0.1:8080 --name lab --email admin --password-stdin < password-file`.
 
 A session lasts 24 hours (the default `MACHINARCHY_SESSION_TTL`). When it
-expires, run `machinarchy login --username admin` again: it renews the
-session of the current context. For day-to-day use, create an API token
-instead (step 16).
+expires, run `machinarchy login` again: with no address it signs in to the
+active server. Answer **yes** to "Stay signed in?" and the CLI also saves a
+90-day operator *device token* for everyday commands; owner commands still use
+the session. For scripts, create an API token (step 16).
 
 ---
 
-## 4. Contexts
+## 4. Servers
 
-A **context** is a server (*cluster*) plus a credential (*user*), like
-kubectl's. The first login created one called `lab` and made it current:
+A saved **server** is a name, an address and the credentials for it. The first
+login created one called `lab` and made it active:
 
 ```console
-$ machinarchy config get-contexts
-CURRENT  NAME  CLUSTER  USER  ENVIRONMENT
-*        lab   lab      lab   
+$ machinarchy switch
+   NAME  ADDRESS                 SIGNED IN
+*  lab   http://127.0.0.1:8080   yes
 ```
 
-The CLI refuses to send a token over plain `http://` to anything but
-loopback; use `https://` for a real server. Step 16 adds a second context
-with an API token.
+`machinarchy whoami` shows who you are signed in as and how. The CLI refuses to
+send a credential over plain `http://` to anything but loopback; use `https://`
+for a real server (`login --insecure-http` opts in for a network you trust).
+Step 16 adds API tokens.
 
 ---
 
@@ -712,59 +725,59 @@ fb5f6266-e37c-40c3-ae33-dc140d85343e  Succeeded  Succeeded=1  2026-11-19 15:32:4
 
 ---
 
-## 16. Day to day: an API token and several contexts
+## 16. Day to day: an API token for a script
 
 The owner session from step 3 can do everything, and expires in 24 hours. For
-daily work, an owner creates an **API token** with a narrower role:
+scripts and other computers, an owner creates an **API token** with a narrower
+role:
 
 | Role | Can |
 |---|---|
 | `operator` | read everything, create and label hosts, run and cancel commands, read output |
 | `reader` | read hosts and operations (no output) |
 
-Secrets, Access Profiles, host-key approval and runtime configuration stay
-with the owner's own login: API tokens are refused for them.
+Secrets, Access Profiles, host-key approval, token management and runtime
+configuration stay with the owner's own login: API tokens are refused for them,
+and the CLI refuses before it sends anything.
 
 ```console
-$ machinarchy create token lab-cli --role operator --expires-hours 720
-API token "lab-cli" (id 1, role operator) created. It is shown only now:
-mch_pat_seLK…
+$ machinarchy tokens create lab-cli --role operator --expires 30d
+✔ Token lab-cli created (operator, expires 2026-12-26). It is shown only once:
+
+  mch_pat_seLK…
+
+  Use it in a script: MACHINARCHY_TOKEN=... MACHINARCHY_SERVER=...
 ```
 
-The token is shown **once**. To store it without it ever reaching your
-screen, create it with `-q` (prints the token alone) and pipe it into a
-second CLI user, then add a context for that user:
+The token is shown **once**. To keep it off your screen, use `-q` (the token
+alone, for a pipe) or `--out FILE` (a new private file):
 
 ```console
-$ machinarchy create token lab-cli-2 --role operator --expires-hours 720 -q | machinarchy config set-credentials lab-operator --token-stdin
-Credentials "lab-operator" configured.
-
-$ machinarchy config set-context lab-ops --cluster lab --user lab-operator
-Context "lab-ops" configured.
-
-$ machinarchy config use-context lab-ops
-Switched to context "lab-ops".
-
-$ machinarchy config get-contexts
-CURRENT  NAME     CLUSTER  USER          ENVIRONMENT
-         lab      lab      lab           
-*        lab-ops  lab      lab-operator  
-
-$ machinarchy secret list
-Error: API returned HTTP 403: permission denied (request ID IssupaPSPGpSdQQHnNwQiQzDPmCnovif)
-Why:   The credential is valid but is not permitted to do this.
-Next:  Commands that manage runtime configuration or secrets need a human owner session; API tokens (mch_pat_...) are refused for them.
-
-$ machinarchy --context lab secret list -o json | jq -r ".[].name"
-lab-key
-lab-password
+$ machinarchy tokens create lab-cli-2 --role operator --out lab-cli-2.token
+✔ Token lab-cli-2 created (operator, expires 2026-12-26) and written to lab-cli-2.token.
 ```
 
-`--context NAME` runs one command with another context without switching: the
-owner context `lab` lists the two secrets from step 5.
+A script uses it without saving anything:
 
-`machinarchy get tokens` lists the tokens (never their values) and
-`machinarchy delete token ID` revokes one.
+```console
+$ MACHINARCHY_SERVER=http://127.0.0.1:8080 MACHINARCHY_TOKEN="$(cat lab-cli-2.token)" machinarchy get hosts
+```
+
+or saves it for one server with
+`machinarchy login http://127.0.0.1:8080 --name lab-ops --with-token < lab-cli-2.token`
+(the token is checked with the server first). An owner command with a token is
+stopped:
+
+```console
+$ MACHINARCHY_SERVER=http://127.0.0.1:8080 MACHINARCHY_TOKEN="$(cat lab-cli-2.token)" machinarchy secret list
+Error: this needs an owner signed in with a password; you are using an API token (from MACHINARCHY_TOKEN)
+Why:   API tokens can never act as the owner
+Next:  machinarchy login http://127.0.0.1:8080
+```
+
+`machinarchy tokens` lists the tokens (never their values) and
+`machinarchy tokens revoke NAME` revokes one: you confirm by typing its name
+(`--confirm NAME` in a script).
 
 ---
 
@@ -777,7 +790,7 @@ Real errors from this lab and what they mean:
 | `Error: unknown hosts: nope` | No host by that name or ID | `machinarchy get hosts` |
 | `… [y/N]: Error: confirmation required` | No terminal to ask in (a script) | Add `--yes` |
 | `Error: this operation has 3 targets; pick one with --host (ssh-hostcheck, ssh-key, ssh-password)` | `logs --follow` follows one host | Add `--host NAME` |
-| `HTTP 403 … API tokens (mch_pat_...) are refused for them` | Owner-only command with an API token | `--context` with the owner's login |
+| `this needs an owner signed in with a password` | Owner-only command with an API token | `machinarchy login` |
 | `READY False` | See the reason: `get hosts NAME -o yaml` | `HostKeyPendingApproval`: step 8. `HostKeyChanged`: step 14. Others: [runbook](../runbook.md#hosts-never-become-ready) |
 | `Failed` / `remote_execution_failed` or `launch_host_key_rejected` | SSH failed (host key, login, network) | Check the host's `READY` reason |
 | `Lost` / `supervisor_lost` | The host restarted during a detached run | Step 13 |
@@ -839,8 +852,8 @@ cancel it first.
 | Task | Command |
 |---|---|
 | Lab SSH servers | `make ssh-servers-up` / `ssh-servers-ps` / `ssh-servers-down` |
-| Log in / renew the session | `machinarchy login [--server URL --context NAME] --username USER` |
-| Switch context | `machinarchy config use-context NAME` |
+| Log in / renew the session | `machinarchy login [SERVER] [--name NAME]` |
+| Who am I / switch server / log out | `machinarchy whoami` / `switch [NAME]` / `logout` |
 | List hosts / one host in full | `machinarchy get hosts [-l SELECTOR]` / `get hosts NAME -o yaml` |
 | Register a host | `machinarchy create host NAME --endpoint HOST:PORT --profile PROFILE --label K=V` |
 | Approve keys | `machinarchy trust host NAME` / `--all-pending [--selector S]` / `NAME --replace` |
@@ -850,7 +863,7 @@ cancel it first.
 | Status / history | `machinarchy get operation ID` / `get operations [--state S]` |
 | Cancel | `machinarchy cancel operation ID` |
 | Labels | `machinarchy label host NAME K=V K2-` |
-| Profiles / API tokens | `machinarchy create profile …` / `create token NAME --role operator` |
+| Profiles / API tokens | `machinarchy create profile …` / `tokens create NAME --role operator` |
 
 More: [command reference](commands.md), [operations](../operations.md),
 [runbook](../runbook.md), [API reference](../api/README.md),

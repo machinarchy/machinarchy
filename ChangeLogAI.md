@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M2: servers and authentication (branch feat/cli-m1)
+
+- **New commands:** guided `login` (email and password, or an API token with `--with-token` from a hidden prompt or stdin; the token is checked before it is saved; "stay signed in" creates a device token), `logout` (revokes on the server, `--everywhere`), `whoami`, `switch`, `tokens` (list, create, revoke) and hidden `config path|show`.
+- **Credentials:** config v2 holds servers only; secrets are in a separate `0600` file written atomically, shown as `***` everywhere. Order: `MACHINARCHY_TOKEN`, saved token, saved session. A saved credential is only sent to its own server; owner-only commands use the login session and stop with Error/Why/Next when only a token exists. TLS verification cannot be turned off (`--ca-file` per server); plain http to a non-local host needs `--insecure-http`; redirects are not followed.
+- **Removed, by the owner's decision (no legacy support):** `config set-*`/`use-context`/`get-contexts`/`current-context`, `--context`, `--token`, `MACHINARCHY_CLI_*`, the token commands under `get/create/delete`, and the M1 deprecation mechanism. An old-format config is refused with the commands to move it aside; its tokens are not copied.
+- **Fixed on the way:** `-o yaml` of an issued token panicked (duplicate key); a character device such as `/dev/null` was treated as a terminal.
+- **Changed script (approved per file):** `scripts/smoke.sh` signs in with `login`.
+- **Not done:** keychain backend (question Q5 unanswered); role and expiry from `/me` (controller work C-03). Deviations: `docs/cli/spec/M2-notes.md`.
+- **Checks run:** `gofmt -l` (clean), `go build ./...`, `go vet ./...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; cli 92.2 %, api 84.3 %, commands 81.6 %, config 91.8 %, cred 92.3 %), `go test ./...` (all pass), `make smoke` (OK), and a manual run against a real `bin/machinarchy-monolith` (login, whoami, tokens, switch, owner-only refusal, logout). Includes the tests that a token is not visible in `ps`, output formats, errors or logs. Not run: the Postgres store tests, a real terminal session by a person.
+
 ## 2026-11-26 — CLI M1: foundations (branch feat/cli-m1)
 
 - **New packages under `internal/cli`:** `sanitize` (terminal-safe text, with a stream form for followed output), `msg` (message catalogue: plain primary line, why, next, optional lore), `ui` (style detection, message rendering, `--plain`, progress line), `group` (grouped-output aggregator and renderer), `deprecate` (deprecated-alias mechanism). No new third-party dependency; a test checks that the CLI binary links only cobra, pflag, yaml, `x/term` and `x/sys`.

@@ -12,20 +12,28 @@ make build
 ./bin/machinarchy --help
 ```
 
-## Configure a local API context
+## Sign in to a local server
 
-Start the local stack as described in the [project README](../../README.md#run-locally). Obtain a user JWT from signup or login, then set it in your shell. The CLI's `--token-stdin` option avoids placing the token in the command line:
+Start the local stack as described in the [project README](../../README.md#run-locally). `login` asks for what it needs; the password and tokens are typed without echo and are never flags:
 
 ```sh
-export MACHINARCHY_USER_TOKEN='paste-the-user-jwt-here'
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local --env development
-go run ./cmd/machinarchy config use-context local
-unset MACHINARCHY_USER_TOKEN
+go run ./cmd/machinarchy login http://localhost:8080 --name local    # asks for the email or username and the password
+go run ./cmd/machinarchy whoami
 ```
 
-The config file is stored under the operating system's user config directory. Its user credential is a bearer token in plaintext, protected by owner-only filesystem permissions. Do not commit or share it.
+Without a terminal, give everything it would ask for. The password comes from stdin:
+
+```sh
+printf '%s' "$ADMIN_PASSWORD" | go run ./cmd/machinarchy login http://localhost:8080 --name local --email admin --password-stdin
+```
+
+With an API token (created by an owner with `tokens create`), read it from stdin. It is checked with the server before it is saved:
+
+```sh
+printf '%s' "$TOKEN" | go run ./cmd/machinarchy login http://localhost:8080 --name local --with-token
+```
+
+The server is saved in the CLI config under the operating system's user config directory and the credentials in a private file next to it (mode 0600). Do not commit or share either.
 
 ## List and inspect hosts
 
@@ -54,56 +62,67 @@ go run ./cmd/machinarchy get hosts --env production
 go run ./cmd/machinarchy get hosts -n 3
 
 # Filter and print JSON
-go run ./cmd/machinarchy --context local get hosts -n production -o json
+go run ./cmd/machinarchy --server local get hosts -n production -o json
 ```
 
 The current API does not offer a server-side environment filter. The CLI fetches the host and environment lists, resolves the requested environment, then filters the hosts locally.
 
-## Add and switch between environments
+## Add and switch between servers
 
 ```sh
-go run ./cmd/machinarchy config set-cluster staging --server https://api.staging.example.com
-printf '%s' "$STAGING_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials staging --token-stdin
-go run ./cmd/machinarchy config set-context staging --cluster staging --user staging --env production
-
-go run ./cmd/machinarchy config get-contexts
-go run ./cmd/machinarchy config current-context
-go run ./cmd/machinarchy config use-context staging
+go run ./cmd/machinarchy login https://api.staging.example.com --name staging
+go run ./cmd/machinarchy switch               # list the servers; choose the active one
+go run ./cmd/machinarchy switch staging
+go run ./cmd/machinarchy logout               # end the session and forget it on this computer
 ```
 
-Use a context for only one command without changing the saved current context:
+Use another saved server for only one command without changing the active one:
 
 ```sh
-go run ./cmd/machinarchy --context local get hosts
+go run ./cmd/machinarchy --server local get hosts
 ```
 
 ## Use a separate config file
 
 ```sh
 export MACHINARCHY_CONFIG="$PWD/.machinarchy-dev.yaml"
-go run ./cmd/machinarchy config get-contexts
-go run ./cmd/machinarchy --config "$PWD/.machinarchy-staging.yaml" config get-contexts
+go run ./cmd/machinarchy config path
+go run ./cmd/machinarchy --config "$PWD/.machinarchy-staging.yaml" switch
 ```
 
-Add config files containing credentials to `.gitignore` before creating them.
+The credentials are saved next to the config file (`.machinarchy-dev.credentials.yaml`). Add both to `.gitignore` before creating them.
+
+## API tokens for scripts
+
+```sh
+go run ./cmd/machinarchy tokens create ci-deploy --role operator --expires 90d   # shown once
+go run ./cmd/machinarchy tokens
+go run ./cmd/machinarchy tokens revoke ci-deploy
+```
+
+In CI, give the token and the server by environment; nothing is saved to disk:
+
+```sh
+MACHINARCHY_SERVER=https://machinarchy.example.com MACHINARCHY_TOKEN="$CI_TOKEN" machinarchy get hosts
+```
 
 ## Use environment overrides
 
 ```sh
-MACHINARCHY_CONTEXT=staging go run ./cmd/machinarchy get hosts
+MACHINARCHY_SERVER=staging go run ./cmd/machinarchy get hosts
 MACHINARCHY_ENV=production go run ./cmd/machinarchy get hosts
 MACHINARCHY_OUTPUT=json go run ./cmd/machinarchy get hosts
 MACHINARCHY_VERBOSE=true go run ./cmd/machinarchy get hosts
 ```
 
-`MACHINARCHY_SERVER` and `MACHINARCHY_TOKEN` can temporarily override the endpoint and bearer token selected by the context. Avoid exporting long-lived credentials into shared or logged environments.
+`MACHINARCHY_SERVER` picks a saved server (or an address for one command) and `MACHINARCHY_TOKEN` is an API token used before any saved credential. A saved credential is never sent to an address that is not a saved server. Avoid exporting long-lived credentials into shared or logged environments.
 
 ## Troubleshooting and quality commands
 
 ```sh
-# See the effective saved selection and known contexts
-go run ./cmd/machinarchy config current-context
-go run ./cmd/machinarchy config get-contexts
+# See who you are signed in as, and what is saved (secrets are shown as ***)
+go run ./cmd/machinarchy whoami
+go run ./cmd/machinarchy config show
 
 # Enable structured debug logs on stderr
 go run ./cmd/machinarchy --verbose get hosts

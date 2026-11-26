@@ -24,12 +24,12 @@ If host names are ambiguous, use the resource ID or filter to one environment.
 
 ### Environment filter
 
-`--env` / `-n` accepts a case-insensitive environment name or its numeric ID. The active context may also define a default environment.
+`--env` / `-n` accepts a case-insensitive environment name or its numeric ID. The active server may also define a default environment.
 
 ```sh
 go run ./cmd/machinarchy get hosts --env production
 go run ./cmd/machinarchy get hosts -n 3
-go run ./cmd/machinarchy --context staging get hosts -n production
+go run ./cmd/machinarchy --server staging get hosts -n production
 ```
 
 The CLI resolves the environment name to its ID and the server filters the hosts.
@@ -50,34 +50,62 @@ For example, pipe JSON through `jq`:
 go run ./cmd/machinarchy get hosts -o json | jq '.[].metadata.name'
 ```
 
-## Logging in
+## Signing in
 
 ```sh
-go run ./cmd/machinarchy login --server https://machinarchy.example --context prod --username admin
-go run ./cmd/machinarchy login --username admin            # renew the current context's session
-go run ./cmd/machinarchy login --username admin --password-stdin < password-file
+machinarchy login https://machinarchy.example.com          # asks what it needs
+machinarchy login                                          # sign in to the active server again
+printf '%s' "$PASSWORD" | machinarchy login https://machinarchy.example.com --email admin@example.com --password-stdin
+printf '%s' "$TOKEN"    | machinarchy login https://machinarchy.example.com --with-token
 ```
 
-`login` prompts for the password without echo (or reads it from stdin with `--password-stdin`; without a terminal it refuses to prompt), signs in, and stores the session token for the current context's user. The first login with `--server` and `--context` creates the cluster, user and context, and makes the context current when none is. A session lasts the server's `MACHINARCHY_SESSION_TTL` (24 hours by default).
+`login [SERVER]` signs in with an email address (or username) and password, or with an API token (`--with-token`). On a terminal it asks for the server address, a name to save it under, the method, and the credentials; the password and the token are typed without echo. Without a terminal, or with `--no-input`, it asks nothing: the address is an argument, the password comes from stdin (`--email` and `--password-stdin`) and a token from stdin (`--with-token`), and a missing piece is named in the error. A password or a token is never a flag value.
 
-## Access Profiles and tokens (owner)
+- A **token is checked with the server before it is saved**; a token the server rejects is not saved.
+- After a password sign-in on a terminal it asks "Stay signed in on this computer?" (default yes): that saves a **90-day operator device token** next to the session, named `device-<computer>-<date>`. In a script it is off unless you pass `--stay-signed-in`. Owner actions still use the password session while it lasts, because an API token can never act as the owner.
+- A session lasts the server's `MACHINARCHY_SESSION_TTL` (24 hours by default); the expiry comes from the server.
+- The server's role for a session or a token and a token's expiry are not reported by the API (`GET /api/v1/me` returns only the account), so the CLI prints "not reported by this server" instead of guessing.
+- `--name NAME` chooses the name the server is saved under. `--insecure-http` allows plain `http://` to a host that is not on this computer (saved for that server). `--ca-file ca.pem` trusts a private CA for that server. There is no way to skip certificate verification.
+
+```sh
+machinarchy whoami            # server, user, how you are signed in, role and expiry where known
+machinarchy whoami -o json
+machinarchy switch            # list your servers; choose the active one
+machinarchy switch staging
+machinarchy logout            # end the session on the server, revoke the device token, forget both here
+machinarchy logout --everywhere   # end every login session of your account (asks first; --yes answers)
+```
+
+`logout` tells the server to end the session and revokes the device token this CLI created, then removes the credentials from this computer. If the server cannot be reached the credentials are still removed and the command exits 4, saying the session may still be active. An API token you supplied yourself is only removed from this computer; it keeps working until it expires or is revoked.
+
+## Access Profiles (owner)
 
 ```sh
 go run ./cmd/machinarchy create profile deploy --connector ssh --username deploy --secret deploy-key --auth private-key --host-key-policy approve
 go run ./cmd/machinarchy create profile agents --connector agent
 go run ./cmd/machinarchy delete profile deploy
 
-go run ./cmd/machinarchy create token ci --role operator --expires-hours 720
-go run ./cmd/machinarchy create token ci-2 --role reader -q | go run ./cmd/machinarchy config set-credentials ci --token-stdin
-go run ./cmd/machinarchy get tokens
-go run ./cmd/machinarchy delete token 7
-
 go run ./cmd/machinarchy create agent-token --host web-02 --hostname web-02.internal --ttl 30m
 go run ./cmd/machinarchy get agent-tokens
 go run ./cmd/machinarchy delete agent-token 9b1c…
 ```
 
-`create profile --secret` takes a secret's name or ID and binds its current version. A new token or enrolment token is printed once: `-q` prints it alone for a pipe, `-o json` prints the whole response. `get tokens` and `get agent-tokens` never show token values. These commands need an owner's login session; API tokens are refused.
+`create profile --secret` takes a secret's name or ID and binds its current version. A new enrolment token is printed once: `-q` prints it alone for a pipe, `-o json` prints the whole response. `get agent-tokens` never shows token values. These commands need an owner's login session; API tokens are refused locally, before anything is sent.
+
+## API tokens (owner)
+
+```sh
+machinarchy tokens                                              # list: name, role, created, expires, state
+machinarchy tokens create ci-deploy --role operator --expires 90d
+machinarchy tokens create ci-read --role reader -q > ci-read.token   # the token alone, for a pipe
+machinarchy tokens create ci-read --role reader --out ci-read.token  # or into a private file
+machinarchy tokens revoke ci-deploy
+machinarchy tokens revoke ci-deploy --confirm ci-deploy         # in a script
+```
+
+A token has a role, `reader` or `operator` (never owner), and an expiry: `--expires` takes days or hours (`90d`, `720h`), 90 days by default and 365 at most. **The token is shown once**, when it is created, and is never listed; `-o json` and `-o yaml` print the whole response including it. `--out FILE` writes it to a new file with mode 0600 and never overwrites an existing file; it cannot be combined with `-o json` or `-o yaml`. Use a token in a script as `MACHINARCHY_TOKEN` with `MACHINARCHY_SERVER`; it is not written to disk.
+
+`tokens revoke` stops a token at once. It is confirmed by typing the token's name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. When several active tokens share a name it lists their IDs and asks for `--id`. Managing tokens needs an owner's login session; an API token is refused locally before anything is sent.
 
 ## Managing hosts
 
@@ -124,20 +152,19 @@ Prints the CLI version, commit, build time, Go version, and platform. It needs n
 
 ## `config`
 
+Hidden commands for support; nothing on the usual path needs them.
+
 ```sh
-go run ./cmd/machinarchy config current-context
-go run ./cmd/machinarchy config get-contexts
-go run ./cmd/machinarchy config use-context local
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local --env development
+machinarchy config path       # the config file and the credentials file
+machinarchy config show       # saved servers, credentials as ***, and every option with where it came from
+machinarchy config show -o json
 ```
 
-`set-credentials` also accepts `--token TOKEN`, but this can place the token in shell history or process arguments; prefer `--token-stdin`.
+`config show` never prints a secret: every credential is `***`, and the token variable is `***` when it is set.
 
 ## Command groups
 
-`get`, `create`, `delete`, `config`, `runtime-config`, and `secret` are command groups. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
+`get`, `create`, `delete`, `config`, `runtime-config`, and `secret` are command groups; `tokens` lists tokens when run without a subcommand. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
 
 ## Exit codes
 
@@ -180,8 +207,8 @@ HTTP redirects are not followed and are reported as exit 2 with the redirect tar
 Flags can be combined with commands:
 
 ```sh
-go run ./cmd/machinarchy --config ./cli.yaml --context staging get hosts -n production -o json
+go run ./cmd/machinarchy --config ./cli.yaml --server staging get hosts -n production -o json
 go run ./cmd/machinarchy --verbose get hosts
 ```
 
-See [configuration and contexts](configuration.md) for file paths, environment overrides, and the context model.
+See [configuration](configuration.md) for file paths, servers and credentials, and environment overrides.

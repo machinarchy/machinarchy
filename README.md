@@ -69,7 +69,7 @@ Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` for the first start to create the
 owner account (`admin`). Then, with the CLI:
 
 ```sh
-go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
+go run ./cmd/machinarchy login http://localhost:8080 --name local --email admin
 go run ./cmd/machinarchy get hosts
 ```
 

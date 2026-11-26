@@ -12,7 +12,7 @@ What was built for milestone M1 (Foundations) and where it differs from the spec
 | Grouped-output aggregator and renderer | `internal/cli/group` |
 | Unified error format, exit codes 5, 8, 9, JSON errors | `internal/cli/clierr`, `internal/cli/run.go`, `internal/cli/api/errors.go` |
 | Global options and precedence | `internal/cli/config/settings.go`, `internal/cli/root.go`, `internal/cli/factory.go` |
-| Deprecated-alias mechanism | `internal/cli/deprecate`, `cli.Options.Aliases` |
+| Deprecated-alias mechanism | removed again in M2 (no legacy support; see `M2-notes.md`) |
 
 ## Deviations from the spec
 

@@ -69,7 +69,14 @@ func NewLoginCommand(factory *cli.Factory) *cobra.Command {
 				o.serverArgument = args[0]
 			}
 
-			return runLogin(command, factory, o)
+			err := runLogin(command, factory, o)
+			if errors.Is(err, ui.ErrBack) {
+				// "back" has nothing to go back to in the middle of a sign-in
+				// that has not saved anything: it ends it, and nothing changed.
+				return clierr.Newf(clierr.ExitFailure, "", "aborted; nothing was changed")
+			}
+
+			return err
 		},
 	}
 

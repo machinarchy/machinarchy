@@ -1,6 +1,6 @@
 # Machinarchy CLI
 
-The `machinarchy` CLI connects to a Machinarchy API and lets you inspect resources using a kubectl-style command structure. It uses named contexts to keep API endpoints, credentials, and default environments together.
+The `machinarchy` CLI connects to a Machinarchy API and lets you inspect and manage resources using a kubectl-style command structure. It remembers the servers you have signed in to and keeps their credentials in a private file.
 
 ## Build and run
 
@@ -33,35 +33,31 @@ The CLI does not start the API. Start the API or monolith separately; the projec
 
 ## Quick setup
 
-Log in. The first login names the server and creates the context; the password prompt does not echo:
+Sign in. The command asks for what it needs; the password is typed without echo:
 
 ```sh
-go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
+go run ./cmd/machinarchy login http://localhost:8080 --name local
+go run ./cmd/machinarchy whoami
 go run ./cmd/machinarchy get hosts
 ```
 
-With an API token instead of a password (for example one from `machinarchy create token`), configure the context by hand, sending the token through standard input so it does not appear in shell history or process arguments:
+On a terminal it also offers to "stay signed in" with a 90-day device token. With an API token instead of a password (for example one from `machinarchy tokens create`), read it from stdin so it does not appear in shell history or process arguments:
 
 ```sh
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local
-go run ./cmd/machinarchy config use-context local
-go run ./cmd/machinarchy get hosts
+printf '%s' "$TOKEN" | go run ./cmd/machinarchy login http://localhost:8080 --name local --with-token
 ```
 
-The CLI creates its config file on the first `config` write. See [configuration](configuration.md) for context setup, file format, and precedence rules.
+In a script or CI, set `MACHINARCHY_SERVER` and `MACHINARCHY_TOKEN` instead; nothing is saved. See [configuration](configuration.md) for the files, which credential a command uses, and the precedence rules.
 
 ## Command overview
 
 ```text
 machinarchy get hosts [name-or-id]
-machinarchy config current-context
-machinarchy config get-contexts
-machinarchy config use-context NAME
-machinarchy config set-cluster NAME --server URL [--insecure-http]
-machinarchy config set-credentials NAME --token-stdin
-machinarchy config set-context NAME --cluster CLUSTER --user USER [--env ENVIRONMENT]
+machinarchy login [SERVER] [--with-token] [--name NAME] [--email EMAIL --password-stdin] [--stay-signed-in]
+machinarchy logout [--everywhere]
+machinarchy whoami
+machinarchy switch [SERVER]
+machinarchy tokens | tokens create NAME --role reader|operator [--expires 90d] [--out FILE] | tokens revoke NAME
 machinarchy trust host NAME-OR-ID [--replace] [--fingerprint SHA256:...]
 machinarchy trust host --all-pending [--selector SELECTOR]
 machinarchy run (-l SELECTOR | --host NAME... | --all) [--timeout SECONDS] [--wait] [--detach] -- PROGRAM [ARG...]
@@ -88,21 +84,23 @@ The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` fi
 
 The CLI refuses to send its token over plain `http://` to a host that is not
 loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`): use `https://`.
-For a trusted lab network, opt in per cluster with `--insecure-http`. The
-opt-in does not cover a server given with `--server` or
-`MACHINARCHY_SERVER`.
+For a trusted lab network, opt in per server with `login --insecure-http`. The
+opt-in belongs to that saved server: an address given with `--server` or
+`MACHINARCHY_SERVER` never inherits it, and a saved credential is never sent to
+an address that is not a saved server.
 
-**New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login and CLI context to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
+**New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
 
 See [commands and flags](commands.md) for details and [example-cli.md](example-cli.md) for end-to-end recipes.
 
 ## Security notes
 
-- Prefer `config set-credentials NAME --token-stdin`; `--token TOKEN` is available but may expose secrets through shell history or process inspection.
-- The config file contains bearer tokens in plaintext. The CLI creates its parent directory with owner-only permissions and writes the config with mode `0600`; protect backups and any copied config files accordingly.
-- Use HTTPS for remote API servers. HTTP is useful for local development but sends the bearer token without transport encryption.
+- A password or a token is never a flag: it is typed without echo or read from stdin. A credential prints as `***` in every error, log and output format; `tokens create` shows a new token once.
+- Credentials live in their own file (`config.credentials.yaml`, mode `0600`, in a `0700` directory), apart from the settings. The CLI refuses a credentials file that other users can read. Protect backups and any copied config files accordingly.
+- A saved credential is sent only to the server it was saved for, over TLS with certificate verification that cannot be switched off (`login --ca-file` trusts a private CA for one server). Plain `http://` to a host that is not on this computer needs `--insecure-http`.
+- Commands that act as the owner use the login session only: an API token can never be an owner, and the CLI says so before sending anything.
 - Text that comes from a server or a remote host (host names, command output, error messages) is cleaned of terminal escape sequences and control characters before it is printed, so a remote command cannot clear your screen or write to your clipboard. `-o json` and `-o yaml` escape control characters instead.
-- Treat `--verbose` output as operational logs. Current debug logging records the selected context and environment, not the token.
+- Treat `--verbose` output as operational logs. Debug logging records the selected server and environment, never a credential.
 
 ## Extending the command tree
 
@@ -113,7 +111,7 @@ For example, a future `apply` command can be registered in the core group withou
 ## Further reading
 
 - [Full user guide: a three-host SSH lab](user-full-guide.md)
-- [Configuration and contexts](configuration.md)
+- [Configuration, servers and credentials](configuration.md)
 - [Commands and flags](commands.md)
 - [Troubleshooting](troubleshooting.md)
 - [Runnable CLI examples](example-cli.md)

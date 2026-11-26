@@ -112,13 +112,20 @@ func TestLoginGuidedOnATerminal(t *testing.T) {
 	}
 }
 
-func TestLoginBackReturnsToTheServerQuestion(t *testing.T) {
+// "back" is not a name or an email: it ends the sign-in, and nothing is saved.
+func TestLoginBackEndsTheSignInWithoutSavingAnything(t *testing.T) {
 	server := newAuthServer(t, false)
+	path := configPath(t)
 
-	// "back" at the name question is not a name: the CLI stops instead of saving it.
-	got := runAuth(t, authRun{terminal: true, stdin: server.URL + "\nback\n"}, "login")
-	if got.code == 0 {
+	got := runAuth(t, authRun{terminal: true, config: path, stdin: server.URL + "\nback\n"}, "login")
+	if got.code != clierr.ExitFailure || !strings.Contains(got.stderr, "Error: aborted; nothing was changed\n") {
 		t.Fatalf("login = %+v", got)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a sign-in that was ended saved a config")
+	}
+	if len(server.saw("POST", "/api/auth/login")) != 0 {
+		t.Fatal("nothing may be sent after \"back\"")
 	}
 }
 

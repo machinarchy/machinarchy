@@ -1,5 +1,7 @@
 # 08 - Migration
 
+> **Superseded for M1 and M2 by the product owner's decision: no legacy support.** There are no deprecated aliases, no `MACHINARCHY_CLI_*` fallback and no migration of the old config; see `M1-notes.md` and `M2-notes.md`. This file is kept as the design record of what was planned.
+
 > Goal: nobody's script breaks on the day the new grammar ships, and everybody is told what to type instead. **Plan:** release **R** is the first release with the new grammar. In R every old command still works, **behaves exactly as before** (same output, same exit codes, same flags) and prints a one-line replacement on stderr. In release **R+1** the old commands are removed. R is not given a number here: it is whatever Release Please produces for the first conventional commit marked as a breaking change (`feat!:` with a `BREAKING CHANGE:` footer); whether that is a minor or major bump depends on the repository's release configuration, which this spec does not change.
 
 ## 1. Command mapping
