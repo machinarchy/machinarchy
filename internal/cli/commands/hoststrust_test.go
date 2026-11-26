@@ -236,7 +236,15 @@ func TestHostsTrustAllPendingAsksPerHost(t *testing.T) {
 func TestOldTrustHostCommandIsGone(t *testing.T) {
 	// The old command is gone.
 	got := trustRun(t, trustFixtures(), true, "", "trust", "host", "web-01")
-	if got.code == 0 || !strings.Contains(got.stderr, "unknown command") {
+	if got.code == 0 || !strings.Contains(got.stderr, "was removed") || !strings.Contains(got.stderr, "hosts trust NAME") {
 		t.Fatalf("old trust host = %+v", got)
+	}
+}
+
+// F6: each fingerprint says which key type it is.
+func TestHostsTrustLabelsKeyType(t *testing.T) {
+	got := trustRun(t, trustFixtures(), true, "\n", "hosts", "trust", "web-01")
+	if !strings.Contains(got.stdout, keyA+"  (ssh-ed25519)") {
+		t.Fatalf("key type not shown:\n%s", got.stdout)
 	}
 }

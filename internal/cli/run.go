@@ -43,7 +43,11 @@ func Run(ctx context.Context, options Options, args []string) int {
 
 	command, err := root.ExecuteContextC(ctx)
 	if !factory.started {
-		err = suggestCommand(root, args, err)
+		if refused := removedCommand(args, err); refused != nil {
+			err = refused
+		} else {
+			err = suggestCommand(root, args, err)
+		}
 	}
 	path := ""
 	if command != nil {

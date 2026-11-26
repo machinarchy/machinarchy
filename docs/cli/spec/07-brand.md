@@ -173,7 +173,7 @@ Method: I ran `kubectl` on this machine and read its own help. **Client version 
 
 | Criterion | kubectl 1.27.1 (what I observed) | Machinarchy target | Verdict |
 |---|---|---|---|
-| Top-level commands in `--help` | 42 listed (counted from `kubectl --help`) | 10 listed | Machinarchy simpler; scopes are not comparable (kubectl manages far more) |
+| Top-level commands in `--help` | 42 listed (counted from `kubectl --help`) | 10 listed (decision 2026-11-26: counts the commands shown in the default `--help`; `help` is Cobra's own and not counted; the rarely used admin commands are grouped under one `admin` entry, see PLAN step 9.1) | Machinarchy simpler; scopes are not comparable (kubectl manages far more) |
 | Output with no cluster reachable | `kubectl get podz` printed five repeated lines like `E1125 ... memcache.go:265] couldn't get current server API group list: Get "http://localhost:8080/api?...": dial tcp [::1]:8080: connect: connection refused` | One four-part error with the next step | Machinarchy clearer, if built as specified |
 | Typo help | `kubectl gett` prints `Did you mean this? set get` | `Did you mean:` with the full corrected command, at any depth | Parity at top level; Machinarchy should extend it |
 | Missing argument | `kubectl get` explains how to list resource types (`kubectl api-resources`) | Every error ends with a runnable command | Parity |

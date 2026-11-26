@@ -74,6 +74,8 @@ type Store interface {
 3. **Environment.** `MACHINARCHY_TOKEN` is read by the Factory, never stored.
 
 ### 4.4 Keychain dependency: conditions, not a decision
+**Owner decision 2026-11-26 (Q5): the keychain does not ship in V1.** Credentials stay in the separate `0600` file; the docs state what that does and does not defend against (T3). The `cred.Store` interface stays so a backend can be added later; revisit if a security review or a real user asks (macOS Keychain first, opt-in after login, never a silent fallback to disk, R8). The checklist below applies if it is revisited.
+
 The keychain is optional and ships only if the checklist below passes during M2. If it does not, V1 ships with the file backend only and the `cred.Store` interface stays.
 
 Candidate: `github.com/zalando/go-keyring` (MIT). **Not verified in this spec:** its current maintenance status, transitive dependencies, and how it passes secrets on macOS (a design that puts the secret in a child process's argument list would be visible in `ps` and is **rejected**). Checklist:

@@ -160,8 +160,9 @@ func printWhoami(command *cobra.Command, f *cli.Factory, doc whoamiDocument) err
 			return err
 		}
 	}
+	_, err := fmt.Fprintln(command.OutOrStdout(), "\nNext:  machinarchy")
 
-	return nil
+	return err
 }
 
 // NewLogoutCommand ends the CLI's access to a server: it ends the login session

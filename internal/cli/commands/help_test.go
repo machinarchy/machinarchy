@@ -51,3 +51,22 @@ func TestHelpLayout(t *testing.T) {
 		}
 	}
 }
+
+// F7.3-1..3: a removed command or flag is refused (exit 2) and the replacement
+// is named, not a wrong "closest command".
+func TestRemovedFormsNameTheReplacement(t *testing.T) {
+	for args, want := range map[string]string{
+		"get hosts":                          "machinarchy hosts",
+		"logs operation 1":                   "machinarchy run ID --follow",
+		"trust host web-01":                  "machinarchy hosts trust NAME",
+		"config set-credentials x --token t": "machinarchy login URL --with-token",
+		"login --context lab":                "machinarchy login URL --name NAME",
+		"run --all -- uptime":                "machinarchy run --on all -- PROGRAM",
+		"cancel operation 3":                 "machinarchy run ID --cancel",
+	} {
+		got := runAuth(t, authRun{config: configPath(t)}, strings.Fields(args)...)
+		if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "was removed") || !strings.Contains(got.stderr, "Next:  "+want) || strings.Contains(got.stderr, "closest") {
+			t.Errorf("%s = %+v", args, got)
+		}
+	}
+}

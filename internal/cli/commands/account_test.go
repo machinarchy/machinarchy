@@ -30,7 +30,7 @@ func TestWhoami(t *testing.T) {
 			t.Fatalf("result = %+v", got)
 		}
 		for _, want := range []string{"Server:", "lab (" + server.URL + ")", "User:           maxim", "Signed in with: password session",
-			"Role:           not reported by this server", "Expires:", "(in 24 hours)", "Env:            none"} {
+			"Role:           not reported by this server", "Expires:", "(in 24 hours)", "Env:            none", "Next:  machinarchy"} {
 			if !strings.Contains(got.stdout, want) {
 				t.Errorf("whoami is missing %q:\n%s", want, got.stdout)
 			}

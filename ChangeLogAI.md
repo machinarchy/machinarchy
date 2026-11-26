@@ -1,5 +1,29 @@
 # ChangeLogAI
 
+## 2026-11-26 — Owner decisions: scorecard command count and keychain (branch ai/p8-gateway-transport)
+
+- **Decided by the owner (docs only):** the scorecard target "10 top-level commands" counts the commands shown in the default `--help`, not Cobra's own `help`; today 14 are listed, and the plan is to remove `get` and group `secret` and `runtime-config` under one `admin` entry (not implemented yet, see PLAN.md step 9.1). Q5: the keychain backend does not ship in V1; credentials stay in the `0600` file and the limits are documented. Edited `07-brand.md` (scorecard row), `05-architecture.md` 4.4, `10-roadmap.md` Q5.
+- **Not done:** the command changes themselves; no code changed. **Checks run:** none (docs only).
+
+## 2026-11-26 — Small CLI findings F7.3-1..3, F4, F2 fixed (branch ai/p8-gateway-transport)
+
+- **Implemented:** F7.3-1..3: new `internal/cli/removed.go` holds a table of the removed old commands and flags (`get|create|delete|label|trust|cancel|logs ...`, `config set-*`, `run -l/--all/--exclude/--selector`, `login --context`, `config set-credentials --token`). Using one is refused with exit 2 and `Error: "X" was removed`, with the replacement as the `Next:` line (for example `logs operation 1` now gives `machinarchy run ID --follow`, not `login`). Still no aliases and nothing is sent; unknown words that are not in the table keep the "closest command" suggestion. F4: when `login` also saves a device token it no longer says `Role: not reported by this server` (the device-token line states the role `whoami` shows); a session-only login still says it. F2: `hosts add` prints the repeat-without-questions command only when the host ended ready or waiting for its key, not after a "cannot connect" or "still checking" warning.
+- **Tests:** `TestRemovedFormsNameTheReplacement` (7 forms), `TestOldTrustHostCommandIsGone` updated to expect the replacement. No test for the F4 login wording or the F2 twin suppression (not run).
+- **Checks run:** gofmt, `go vet`, `golangci-lint run ./internal/cli/...` (0 issues), `go test -race ./internal/cli/... ./cmd/...` pass. Not run: `go test ./...`, `make smoke`, pty.
+- **Limitation:** the removed-form match is by words anywhere in the arguments, so it only runs when Cobra already failed on the line; the table must be kept in step with removals.
+
+## 2026-11-26 — Beginner test protocol added; test NOT run (branch ai/p8-gateway-transport)
+
+- **Implemented:** `docs/cli/spec/M6-usability-protocol.md`: participants, clean setup, verbatim task, facilitator rules, what to record, pass/fail. Documentation only.
+- **Not done:** the beginner test itself (A-01, release-blocking). It needs two real people who have never used Machinarchy; it cannot be done or simulated by Claude. A-01's time and comprehension stay unmeasured.
+- **Checks run:** none (docs only).
+
+## 2026-11-26 — Usability findings F3, F5, F6, F7, F9 fixed before the fresh-user test (branch ai/p8-gateway-transport)
+
+- **Implemented:** F7: leaving the host-key prompt of `hosts add` (end of input, interrupt, wrong answer) prints `Next:  machinarchy hosts trust NAME`. F9: a run preview that reaches hosts outside any environment adds a line explaining `no env` (decision: explain, not require `envs use`, because hosts cannot be moved into an env until C-01). F3: the credential-send note says "over plain HTTP (not encrypted in transit)" on an `http://` server and "over HTTPS" otherwise. F5: `whoami` (table output only, not `-o json|yaml`) ends with `Next:  machinarchy`. F6: each fingerprint in the trust prompt shows its key type, e.g. `(ssh-ed25519)`.
+- **Tests:** whoami Next assertion, `TestHostsTrustLabelsKeyType`, `TestSendNoteMatchesScheme`. No test for the F7 Next line or the F9 note (not run against a real prompt/run).
+- **Checks run:** gofmt, `go vet`, `golangci-lint run ./internal/cli/...` (0 issues), `go test -race ./internal/cli/... ./cmd/...` pass. Not run: `go test ./...`, `make smoke`, pty.
+
 ## 2026-11-26 — Phase 8 step 8.6: RabbitMQ bus adapter spike (branch ai/p8-gateway-transport)
 
 - **Implemented (spike, not wired):** `internal/agentgateway/bus/rabbitmq` implements `bus.Bus` on AMQP 0-9-1 (`rabbitmq/amqp091-go` v1.17.0, new dependency, confined to that package; `imports_test.go` now enforces it). One durable classic queue per agent with publisher confirms; results arrive on a topic exchange whose routing key carries the agent identity; `Next` uses a channel per delivery, so nack, ack and the ack wait (default 30s) all return unacknowledged commands to the queue in order; a dropped connection is re-established. The `bustest` contract passes on it unchanged. RabbitMQ was chosen over Kafka: a queue per agent with per-message ack and requeue fits the contract, a Kafka topic or partition per agent does not.

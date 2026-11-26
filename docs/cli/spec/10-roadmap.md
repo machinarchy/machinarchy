@@ -205,5 +205,5 @@ Only questions that stop work are listed.
 | Q2 | Is C-01 (environment on host create/update) accepted, and is it acceptable that a host without an env stays `none`? | env assignment in M3 | controller owner |
 | Q3 | Is C-02 (protected envs with server-side `confirmEnvironment`) accepted, or should the protected guard remain local-only for V1? | the meaning of "protected" in M3 | product owner and controller owner |
 | Q4 | The 200-target cap: is it final (V1 refuses larger runs) or will it be raised (C-05, C-06)? | the 500/5,000-host claims of decision 9 | controller owner |
-| Q5 | May the keychain backend ship if the M2 checklist passes, given a new third-party dependency? | M2 item 7 | product owner |
+| Q5 | May the keychain backend ship if the M2 checklist passes, given a new third-party dependency? | M2 item 7 | product owner: **decided 2026-11-26, not in V1** (see `05-architecture.md` 4.4) |
 | Q6 | Is a Windows CLI build in scope for V1 (the release builds none; the code has Windows branches)? | M6 release and the credential store design | product owner |

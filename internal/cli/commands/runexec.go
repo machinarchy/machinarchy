@@ -188,7 +188,11 @@ func showPreview(f *cli.Factory, s scope, r *runRequest, set *api.TargetSet, ind
 		}
 		_, _ = fmt.Fprintf(out, "%s%s\n", label, line)
 	}
-	_, _ = fmt.Fprintf(out, "  Hosts     %s\n", hostsLine(r, set, index, protected))
+	hosts := hostsLine(r, set, index, protected)
+	_, _ = fmt.Fprintf(out, "  Hosts     %s\n", hosts)
+	if strings.Contains(hosts, "no env ") {
+		_, _ = fmt.Fprintln(out, "            no env: hosts that are not in any environment")
+	}
 	_, _ = fmt.Fprintf(out, "  Limits    %s\n", limitsLine(r))
 }
 

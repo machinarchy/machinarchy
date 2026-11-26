@@ -158,7 +158,7 @@ func showKeys(command *cobra.Command, host api.Host, check []string, replace boo
 			}
 		}
 		for _, key := range check {
-			if _, err := fmt.Fprintf(out, "  New   %s\n", sanitize.Line(key)); err != nil {
+			if _, err := fmt.Fprintf(out, "  New   %s%s\n", sanitize.Line(key), keyKind(host, key)); err != nil {
 				return err
 			}
 		}
@@ -169,12 +169,24 @@ func showKeys(command *cobra.Command, host api.Host, check []string, replace boo
 		return err
 	}
 	for _, key := range check {
-		if _, err := fmt.Fprintf(out, "  %s\n", sanitize.Line(key)); err != nil {
+		if _, err := fmt.Fprintf(out, "  %s%s\n", sanitize.Line(key), keyKind(host, key)); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// keyKind labels a fingerprint with its key type, so the person knows which
+// ssh-keygen line on the machine to compare it with.
+func keyKind(host api.Host, fingerprint string) string {
+	for _, key := range host.Status.ObservedHostKeys {
+		if key.Fingerprint == fingerprint && key.Algorithm != "" {
+			return "  (" + sanitize.Line(key.Algorithm) + ")"
+		}
+	}
+
+	return ""
 }
 
 func confirmationPrompt(key string) (question, expected string) {

@@ -383,6 +383,9 @@ func signInWithPassword(ctx context.Context, command *cobra.Command, f *cli.Fact
 			_, _ = fmt.Fprint(command.ErrOrStderr(), ui.Render(warning, f.Style()))
 		} else {
 			credentials = append(credentials, device)
+			// whoami reports the device token's role, so do not claim here that
+			// the role is unknown.
+			detail = strings.TrimSpace(strings.ReplaceAll(detail, "Role: not reported by this server.", ""))
 		}
 	}
 

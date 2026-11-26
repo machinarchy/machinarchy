@@ -422,7 +422,7 @@ func askHostsAdd(command *cobra.Command, f *cli.Factory, plan *hostsAddPlan, o h
 			if !plan.prompted {
 				return false, nil
 			}
-			if _, err := fmt.Fprintln(command.ErrOrStderr(), "  It is sent to your server over HTTPS and stored encrypted there. It is never shown again."); err != nil {
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "  "+sendNote(f)); err != nil {
 				return true, err
 			}
 			send, err := p.YesNo("Send it?", true)
@@ -579,6 +579,12 @@ func executeHostsAdd(command *cobra.Command, f *cli.Factory, client api.Client, 
 		return err
 	}
 
+	// A repeat command is only useful when what it repeats worked: after a
+	// warning (not connectable, still checking) it would fail the same way.
+	if status, _ := hostReadiness(final); status != statusReady && status != statusKey {
+		return nil
+	}
+
 	return printTwin(command, plan, entryName, o)
 }
 
@@ -667,6 +673,9 @@ func trustNewHost(command *cobra.Command, f *cli.Factory, client api.Client, hos
 		}
 		skipped, err := askKeyPrefix(f, *host, check[0], false)
 		if err != nil {
+			// The host stays registered but untrusted: say how to come back.
+			_, _ = fmt.Fprintf(command.ErrOrStderr(), "%s is registered but its key is not trusted yet.\nNext:  %s\n", name, later)
+
 			return false, err
 		}
 		if skipped {
@@ -737,4 +746,23 @@ func shellWord(value string) string {
 	}
 
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// sendNote says how a credential travels to the server, honestly for the
+// scheme of the active server (an http:// server is not encrypted in transit).
+func sendNote(f *cli.Factory) string {
+	if target, err := f.ResolveTarget(); err == nil {
+		return noteFor(target.Server)
+	}
+
+	return noteFor("https://")
+}
+
+func noteFor(server string) string {
+	const tail = " It is stored encrypted there and never shown again."
+	if strings.HasPrefix(strings.ToLower(server), "http://") {
+		return "It is sent to your server over plain HTTP (not encrypted in transit; use https:// for a server on a network you do not trust)." + tail
+	}
+
+	return "It is sent to your server over HTTPS." + tail
 }
