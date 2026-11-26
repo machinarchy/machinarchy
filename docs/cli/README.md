@@ -59,7 +59,7 @@ machinarchy whoami
 machinarchy switch [SERVER]
 machinarchy tokens | tokens create NAME --role reader|operator [--expires 90d] [--out FILE] | tokens revoke NAME
 machinarchy hosts trust NAME [--replace] [--fingerprint SHA256:...]
-machinarchy hosts trust --all-pending [-l SELECTOR]
+machinarchy hosts trust --all-pending [-l TAGS]
 machinarchy run --on TARGET [--except TARGET] [--timeout 60s] [--detach] -- PROGRAM [ARG...]
 machinarchy run --on TARGET --do CAPABILITY [KEY=VALUE...]
 machinarchy run | run ID | run ID --host NAME [--follow] | run ID --retry-failed | run ID --cancel

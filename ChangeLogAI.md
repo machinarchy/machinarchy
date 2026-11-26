@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M5 step 5.3: catalogue applied to plain status lines (branch ai/p5-home-brand)
+
+- **Changed** plain status sentences in `internal/cli/commands/` now come from the catalogue and print through `printMessage`/`printMessageTo` (new, `envs.go`): empty lists, secret created/retired, key trusted and trust summary, "not signed in to SERVER", host registered, the `hosts add` waiting lines and the fingerprint note. New `msg` IDs: `list.no_hosts`, `list.empty`, `secret.*`, `host.registered`, `host.no_pending`, `host.key_trusted`, `host.trust_summary`, `host.waiting_*`, `host.fingerprint_note`, `auth.not_signed_in_server`. Output text is unchanged except that the fingerprint note now puts the `ssh-keygen` command on a `Next:` line.
+- **Breaking (CLI, no alias by owner rule):** `hosts` and `hosts trust --all-pending` flag `--selector` is now `--tagged` (`-l` unchanged); `-l SELECTOR` in usage is `-l TAGS`. Help for `secret rewrap` says "run data" instead of "Operation data". Docs updated: `docs/cli/commands.md`, `docs/cli/README.md`, `docs/operations.md`.
+- **Added tests:** U-03 `commands/vocabulary_test.go` (no forbidden word in name, help, examples or flag usage of any visible command); U-06 `msg` test that every success message has a `Next:` line or is on an explicit exception list.
+- **Not changed (known limitation):** data rows and tables (`hosts show`, `run` preview, home rows, enrolment blob), progress fragments and prompts stay inline; error text built with `fmt.Errorf` in `commands/` is not yet in the catalogue.
+- **Checks run:** gofmt (clean), `go vet`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass). Not run: `go test ./...`, `make smoke`, pty/colour look, Postgres.
+
 ## 2026-11-26 — CLI M5 step 5.2: logotype (branch ai/p5-home-brand)
 
 - **Added** `ui.Style.Logotype()` (`internal/cli/ui/logotype.go`: ◆ tree with accent/bold/dim roles, ASCII `*` form for non-UTF-8 locales, empty in `--plain`) and `Factory.Logotype(w)`, which returns it only when `w` is a terminal and plain output was not asked for. Shown by `version` (text output), the home screen when not signed in, and the first `login` when no server is saved (on stderr). Never in `-o json/yaml` or on a pipe.

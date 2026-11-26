@@ -91,7 +91,7 @@ func NewHostsCommand(f *cli.Factory) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&status, "status", "all", "Show ready, attention (everything not ready) or all hosts")
-	command.Flags().StringVarP(&selector, "selector", "l", "", "Only hosts matching a tag selector, for example tier=web")
+	command.Flags().StringVarP(&selector, "tagged", "l", "", "Only hosts with these tags, for example tier=web")
 	command.AddCommand(newHostsAddCommand(f), newHostsShowCommand(f), newHostsTagCommand(f), newHostsMoveCommand(f), newHostsTrustCommand(f), newHostsEnrollCommand(f), newHostsRevokeAgentCommand(f), newHostsRemoveCommand(f))
 	completeChildren(command, completeHostNames(f), "show", "tag", "move", "trust", "enroll", "revoke-agent", "remove")
 
@@ -217,9 +217,7 @@ func listHosts(command *cobra.Command, f *cli.Factory, status, selector string) 
 		return printer.Document(hosts)
 	}
 	if len(hosts) == 0 {
-		_, err := fmt.Fprintln(command.OutOrStdout(), "No hosts found.")
-
-		return err
+		return printMessage(command, f, msg.Get("list.no_hosts"))
 	}
 	facts, err := loadHostFacts(command.Context(), client, hosts)
 	if err != nil {

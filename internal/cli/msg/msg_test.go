@@ -178,3 +178,33 @@ func TestWithNextAndWithWhyReplaceOnlyTheirField(t *testing.T) {
 		t.Fatal("the catalogue entry was modified")
 	}
 }
+
+// successWithoutNext lists the success messages that deliberately end without a
+// Next line: the moment is complete or the follow-up is in the explanation.
+// Adding to it is a deliberate, reviewed act (U-06).
+var successWithoutNext = map[string]bool{
+	"auth.device_token_saved": true,
+	"auth.logged_out":         true,
+	"env.used":                true,
+	"token.created":           true,
+	"token.created_file":      true,
+	"token.revoked":           true,
+}
+
+// U-06: a success message ends with a Next line unless it is on the list above.
+func TestSuccessMessagesHaveANextStep(t *testing.T) {
+	t.Parallel()
+
+	for _, m := range All() {
+		if m.Kind != KindSuccess {
+			continue
+		}
+		hasNext := strings.TrimSpace(m.Next) != ""
+		switch {
+		case !hasNext && !successWithoutNext[m.ID]:
+			t.Errorf("success message %q has no Next step and is not on the exception list", m.ID)
+		case hasNext && successWithoutNext[m.ID]:
+			t.Errorf("success message %q has a Next step; remove it from the exception list", m.ID)
+		}
+	}
+}

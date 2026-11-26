@@ -10,6 +10,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
+	"github.com/machinarchy/machinarchy/internal/cli/msg"
 	"github.com/machinarchy/machinarchy/internal/cli/output"
 )
 
@@ -40,8 +41,7 @@ func printList(command *cobra.Command, f *cli.Factory, document any, ids []strin
 		return printer.IDs(ids)
 	}
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(command.OutOrStdout(), "No resources found.")
-		return err
+		return printMessage(command, f, msg.Get("list.empty"))
 	}
 	return printer.Table(headers, rows)
 }

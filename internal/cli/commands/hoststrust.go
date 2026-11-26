@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,7 +31,7 @@ func newHostsTrustCommand(f *cli.Factory) *cobra.Command {
 	var selector string
 	var fingerprints []string
 	command := &cobra.Command{
-		Use:   "trust NAME [--replace] [--fingerprint SHA256:...] | --all-pending [-l SELECTOR]",
+		Use:   "trust NAME [--replace] [--fingerprint SHA256:...] | --all-pending [-l TAGS]",
 		Short: "Approve the SSH host keys a host presents (owner only)",
 		Long: "Shows the SSH host keys the server saw on a host and trusts them after you check them.\n" +
 			"On a terminal you type the first 8 characters after SHA256: of the key; --yes does not answer this question.\n" +
@@ -78,7 +79,7 @@ func newHostsTrustCommand(f *cli.Factory) *cobra.Command {
 	}
 	command.Flags().BoolVar(&replace, "replace", false, "Replace the key the host trusts with the key it presents now")
 	command.Flags().BoolVar(&allPending, "all-pending", false, "Go through every host waiting for key approval (needs a terminal)")
-	command.Flags().StringVarP(&selector, "selector", "l", "", "Narrow --all-pending to hosts with these tags, for example tier=web")
+	command.Flags().StringVarP(&selector, "tagged", "l", "", "Narrow --all-pending to hosts with these tags, for example tier=web")
 	command.Flags().StringArrayVar(&fingerprints, "fingerprint", nil, "The fingerprint you checked on the machine (repeatable)")
 
 	return command
@@ -296,9 +297,7 @@ func trustAllPending(command *cobra.Command, f *cli.Factory, client api.Client, 
 	}
 	out := command.OutOrStdout()
 	if len(pending) == 0 {
-		_, err := fmt.Fprintln(out, "No hosts are waiting for key approval.")
-
-		return err
+		return printMessageTo(out, f, msg.Get("host.no_pending"))
 	}
 	trusted, skipped := 0, 0
 	for _, host := range pending {
@@ -329,13 +328,12 @@ func trustAllPending(command *cobra.Command, f *cli.Factory, client api.Client, 
 			return fmt.Errorf("trust host %q: %w", sanitize.Line(host.Metadata.Name), staleHost(err))
 		}
 		trusted++
-		if _, err := fmt.Fprintf(out, "Key of %s trusted.\n", sanitize.Line(host.Metadata.Name)); err != nil {
+		if err := printMessageTo(out, f, msg.Get("host.key_trusted").With(msg.Vars{"host": sanitize.Line(host.Metadata.Name)})); err != nil {
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(out, "%d trusted, %d skipped.\n", trusted, skipped)
-
-	return err
+	return printMessageTo(out, f, msg.Get("host.trust_summary").With(msg.Vars{
+		"trusted": strconv.Itoa(trusted), "skipped": strconv.Itoa(skipped)}))
 }
 
 // readyReason is the reason of the host's Ready condition.

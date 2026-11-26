@@ -561,7 +561,7 @@ func executeHostsAdd(command *cobra.Command, f *cli.Factory, client api.Client, 
 		return fmt.Errorf("add host: %w", err)
 	}
 	name := sanitize.Line(plan.name)
-	if _, err := fmt.Fprintf(errOut, "%s registered.\n", name); err != nil {
+	if err := printMessageTo(errOut, f, msg.Get("host.registered").With(msg.Vars{"host": name})); err != nil {
 		return err
 	}
 
@@ -620,7 +620,7 @@ func followNewHost(command *cobra.Command, f *cli.Factory, w *hostWaiter, host a
 	}
 	var err error
 	if plan.policy != policyTOFU {
-		if _, err := fmt.Fprintf(errOut, "Waiting for the server to see %s's SSH key (up to %d s) ...\n", name, seconds); err != nil {
+		if err := printMessageTo(errOut, f, msg.Get("host.waiting_key").With(msg.Vars{"host": name, "seconds": strconv.Itoa(seconds)})); err != nil {
 			return host, err
 		}
 		if host, err = w.until(func(h api.Host) bool { return len(h.Status.ObservedHostKeys) > 0 || settled(h) }); err != nil {
@@ -632,7 +632,7 @@ func followNewHost(command *cobra.Command, f *cli.Factory, w *hostWaiter, host a
 				return host, err
 			}
 		}
-	} else if _, err := fmt.Fprintf(errOut, "%s trusts the first key it sees (lab setting). Waiting for it to become ready (up to %d s) ...\n", name, seconds); err != nil {
+	} else if err := printMessageTo(errOut, f, msg.Get("host.waiting_tofu").With(msg.Vars{"host": name, "seconds": strconv.Itoa(seconds)})); err != nil {
 		return host, err
 	}
 
@@ -663,8 +663,7 @@ func trustNewHost(command *cobra.Command, f *cli.Factory, client api.Client, hos
 		return false, err
 	}
 	if o.trustFingerprint == "" {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "A fingerprint identifies a machine. If it does not match what the machine itself reports, "+
-			"something else may be answering at %s. On the machine: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n", sanitize.Line(plan.endpoint)); err != nil {
+		if err := printMessageTo(command.ErrOrStderr(), f, msg.Get("host.fingerprint_note").With(msg.Vars{"endpoint": sanitize.Line(plan.endpoint)})); err != nil {
 			return false, err
 		}
 		skipped, err := askKeyPrefix(f, *host, check[0], false)
@@ -680,7 +679,7 @@ func trustNewHost(command *cobra.Command, f *cli.Factory, client api.Client, hos
 		return false, fmt.Errorf("trust host %q: %w", name, staleHost(err))
 	}
 	*host = *trusted
-	_, err = fmt.Fprintf(command.ErrOrStderr(), "Key trusted. Waiting for %s to become ready ...\n", name)
+	err = printMessageTo(command.ErrOrStderr(), f, msg.Get("host.waiting_ready").With(msg.Vars{"host": name}))
 
 	return true, err
 }

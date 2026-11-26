@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/machinarchy/machinarchy/internal/cli/api"
+	"github.com/machinarchy/machinarchy/internal/cli/msg"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -164,8 +166,7 @@ func newSecretList(f *cli.Factory) *cobra.Command {
 			return printer.IDs(ids)
 		}
 		if len(secrets) == 0 {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "No resources found.")
-			return err
+			return printMessage(cmd, f, msg.Get("list.empty"))
 		}
 		rows := make([][]string, 0, len(secrets))
 		for _, secret := range secrets {
@@ -220,8 +221,8 @@ func newSecretCreate(f *cli.Factory) *cobra.Command {
 		if f.Config().Quiet() {
 			return printer.IDs([]string{created.ID})
 		}
-		_, e = fmt.Fprintf(cmd.OutOrStdout(), "Secret %q created: %s (version %d).\n", created.Name, created.ID, created.CurrentVersion)
-		return e
+		return printMessage(cmd, f, msg.Get("secret.created").With(msg.Vars{
+			"name": created.Name, "id": created.ID, "version": strconv.FormatUint(created.CurrentVersion, 10)}))
 	}}
 	c.Flags().StringVar(&description, "description", "", "Non-secret description")
 	c.Flags().BoolVar(&stdin, "value-stdin", false, "Read secret value from stdin")
@@ -261,9 +262,9 @@ func newSecretRotate(f *cli.Factory) *cobra.Command {
 func newSecretRewrap(f *cli.Factory) *cobra.Command {
 	var oldKeyID string
 	var batchSize int
-	c := &cobra.Command{Use: "rewrap --old-key-id ID", Short: "Move secrets and Operation data off an old encryption key",
-		Long: "Rewraps the data keys of secrets and Operation data (specs, output, progress) from --old-key-id to the current key, " +
-			"--batch-size of each per call, and reseals Operation data written before key IDs existed. Repeat until the result " +
+	c := &cobra.Command{Use: "rewrap --old-key-id ID", Short: "Move secrets and run data off an old encryption key",
+		Long: "Rewraps the data keys of secrets and run data (specs, output, progress) from --old-key-id to the current key, " +
+			"--batch-size of each per call, and reseals run data written before key IDs existed. Repeat until the result " +
 			"says \"done\": true, then remove the old key from the keyring (keep it until database backups made before are expired).",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(oldKeyID) == "" {
@@ -298,8 +299,7 @@ func newSecretDelete(f *cli.Factory) *cobra.Command {
 		if e = client.DeleteSecret(cmd.Context(), args[0]); e != nil {
 			return e
 		}
-		_, e = fmt.Fprintln(cmd.OutOrStdout(), "Secret retired.")
-		return e
+		return printMessage(cmd, f, msg.Get("secret.retired"))
 	}}
 }
 

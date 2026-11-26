@@ -446,7 +446,7 @@ func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o h
 
 		return fmt.Errorf("add host: %w", err)
 	}
-	if _, err := fmt.Fprintf(command.ErrOrStderr(), "%s registered.\n", sanitize.Line(name)); err != nil {
+	if err := printMessageTo(command.ErrOrStderr(), f, msg.Get("host.registered").With(msg.Vars{"host": sanitize.Line(name)})); err != nil {
 		return err
 	}
 

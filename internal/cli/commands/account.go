@@ -200,9 +200,7 @@ func runLogout(command *cobra.Command, f *cli.Factory, everywhere bool) error {
 		return err
 	}
 	if entry.Empty() {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "You are not signed in to %s.\n", name)
-
-		return err
+		return printMessage(command, f, msg.Get("auth.not_signed_in_server").With(msg.Vars{"server": name}))
 	}
 
 	var session api.Client

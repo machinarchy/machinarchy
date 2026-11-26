@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -301,8 +302,12 @@ func checkProtectedConfirmation(f *cli.Factory, env string, protected bool) erro
 
 // printMessage writes a catalogue message to stdout in the current style.
 func printMessage(command *cobra.Command, f *cli.Factory, message msg.Message) error {
-	out := command.OutOrStdout()
-	_, err := fmt.Fprint(out, ui.Render(message, f.StyleFor(out)))
+	return printMessageTo(command.OutOrStdout(), f, message)
+}
+
+// printMessageTo renders a catalogue message on w, styled for what w is.
+func printMessageTo(w io.Writer, f *cli.Factory, message msg.Message) error {
+	_, err := fmt.Fprint(w, ui.Render(message, f.StyleFor(w)))
 
 	return err
 }

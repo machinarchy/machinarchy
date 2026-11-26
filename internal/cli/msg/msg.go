@@ -255,6 +255,34 @@ func init() {
 		Primary: "Agent {agent} of host {host} revoked.",
 		Why:     "It can no longer serve commands. Not done: the host is still in the inventory, the agent software is still on the machine, and the machine was not touched.",
 		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.registered", Kind: KindInfo,
+		Primary: "{host} registered."})
+	register(Message{ID: "host.no_pending", Kind: KindInfo,
+		Primary: "No hosts are waiting for key approval."})
+	register(Message{ID: "host.key_trusted", Kind: KindInfo,
+		Primary: "Key of {host} trusted."})
+	register(Message{ID: "host.trust_summary", Kind: KindInfo,
+		Primary: "{trusted} trusted, {skipped} skipped."})
+	register(Message{ID: "host.waiting_key", Kind: KindInfo,
+		Primary: "Waiting for the server to see {host}'s SSH key (up to {seconds} s) ..."})
+	register(Message{ID: "host.waiting_tofu", Kind: KindInfo,
+		Primary: "{host} trusts the first key it sees (lab setting). Waiting for it to become ready (up to {seconds} s) ..."})
+	register(Message{ID: "host.waiting_ready", Kind: KindInfo,
+		Primary: "Key trusted. Waiting for {host} to become ready ..."})
+	register(Message{ID: "host.fingerprint_note", Kind: KindInfo,
+		Primary: "A fingerprint identifies a machine. If it does not match what the machine itself reports, something else may be answering at {endpoint}.",
+		Next:    "On the machine: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"})
+	register(Message{ID: "list.no_hosts", Kind: KindInfo,
+		Primary: "No hosts found."})
+	register(Message{ID: "list.empty", Kind: KindInfo,
+		Primary: "No resources found."})
+	register(Message{ID: "secret.created", Kind: KindInfo,
+		Primary: "Secret \"{name}\" created: {id} (version {version})."})
+	register(Message{ID: "secret.retired", Kind: KindInfo,
+		Primary: "Secret retired."})
+	register(Message{ID: "auth.not_signed_in_server", Kind: KindInfo,
+		Primary: "You are not signed in to {server}.",
+		Next:    "machinarchy login"})
 	register(Message{ID: "token.created", Kind: KindSuccess,
 		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
 	register(Message{ID: "token.created_file", Kind: KindSuccess,
