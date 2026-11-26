@@ -12,6 +12,7 @@ import (
 var loreAllowed = map[string]bool{
 	"run.all_ok":         true,
 	"auth.not_signed_in": true,
+	"home.not_signed_in": true,
 	"auth.signed_in":     true,
 	"host.added":         true,
 	"host.added_agent":   true,

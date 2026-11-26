@@ -57,6 +57,8 @@ type Options struct {
 	// Hostname returns the computer's name, used to name a device token. Nil
 	// selects os.Hostname.
 	Hostname func() (string, error)
+	// Home runs for bare "machinarchy" (the home screen). Nil prints help.
+	Home func(*Factory, *cobra.Command) error
 }
 
 // NewRootCommand creates a Cobra root and binds shared configuration flags.
@@ -93,6 +95,13 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 		// Completion stays available but is not listed in help or menus:
 		// people should not have to know about a script generator.
 		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
+	}
+	if options.Home != nil {
+		// Args stays nil on purpose: cobra still reports "unknown command"
+		// for a mistyped word instead of running the home screen.
+		root.RunE = func(command *cobra.Command, _ []string) error {
+			return options.Home(factory, command)
+		}
 	}
 	root.SetIn(streams.In)
 	root.SetOut(streams.Out)

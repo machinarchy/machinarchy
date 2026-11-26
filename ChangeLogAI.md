@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M5 step 5.1: the home screen (branch ai/p5-home-brand)
+
+- **Added** the state-aware home screen for bare `machinarchy` (`internal/cli/commands/home.go`, hooked in through the new `cli.Options.Home` in `root.go` and `cmd/machinarchy/main.go`; a mistyped word is still "unknown command" and `--help` still prints help). It shows not signed in, expired or refused credential (exit 3), unreachable server (exit 4), no hosts, attention needed and healthy, with the suggestion priority of `03-ux.md` section 1 (key changed, waiting for key, cannot connect, no hosts, otherwise a `run --on TAG -- uptime` example), and `-o json` with a `state` field. It makes `/me`, the hosts list (first 500, scoped to the active env) and the last two runs in parallel with a 3 s limit each; a failing request degrades one line. Host and server text is sanitised; no credential is printed or sent anywhere else.
+- **Added** four `home.*` messages to the catalogue. Docs: `docs/cli/commands.md` ("Home screen").
+- **Deviations from the spec transcript:** "Last runs" omits the command text (one request per run would break the 3-request budget); the session end comes from the saved credential instead of `GET /sessions`; at most 500 hosts are counted ("first 500 counted"); the lore allow-list in `msg_test.go` gained `home.not_signed_in` (the spec's own lore line). Not signed in also exits 3 (spec only fixes expired at 3).
+- **Tests:** `commands/home_test.go` covers every state, the suggestion priority per fixture (U-10), expired = exit 3 and no request sent (B-04), pipe output without ANSI (N-10), `--plain` and `LANG=C` ASCII only (U-05, N-12), env scoping of the host request, slow-request budget, one-line degradation, sanitised host names, JSON document, typo and `--help` behaviour.
+- **Checks run:** gofmt (clean), `go vet ./...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; commands 82.7 %), `go test ./...` (all pass). Not run: `make smoke`, a pty/real-terminal look at the colours, a real controller, Postgres tests.
+
 ## 2026-11-26 — Docs: AI workflow block in AGENTS.md; M3 and M4 approved by the owner
 
 - **Added** an "AI workflow" section to `AGENTS.md` (local-only `PLAN.md`/`.plan/`, one step per run, narrow reads, no unverified check claims). The owner approved M3 (envs, access, hosts) and M4 (runs) in code; M5 is next. Docs only, no code changed.

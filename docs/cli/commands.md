@@ -2,6 +2,27 @@
 
 Run `machinarchy --help` or `machinarchy COMMAND --help` for the built-in Cobra help. The examples below use `go run ./cmd/machinarchy`; substitute `./bin/machinarchy` after building.
 
+## Home screen (`machinarchy` with no command)
+
+Bare `machinarchy` prints where you stand and the one next step. It never prompts. It asks the server for who you are, your hosts (in the active env, first 500 counted) and your last two runs, all at the same time, each limited to 3 seconds; a request that fails or is slow turns into one `not available` line and the rest of the screen still prints. Nothing else is sent, and the saved credential only goes to its own server.
+
+```text
+machinarchy · company · production                          maxim (owner)
+Session ends in 21 h
+
+Hosts      12 ready · 1 waiting for key approval · 1 cannot connect
+           web-14  waiting for key approval
+           web-09  cannot connect
+Last runs  r-4k2p9x1a  ✔ 14 ok            2 min ago
+           r-8d1q0b7c  ⚠ 11 ok, 3 failed  1 h ago
+
+  Next:  machinarchy hosts trust web-14
+```
+
+The next step is the most urgent one: `hosts show NAME` for a changed host key, then `hosts trust NAME`, then `hosts show NAME` for a host that cannot connect, then `hosts add` when there are no hosts, otherwise an example `run --on TAG -- uptime` using a real tag of your hosts (or `--on all`). Not signed in, an expired or refused credential, and an unreachable server each get their own short screen. With `--plain` or a non-UTF-8 terminal the symbols become words (`OK`, `WARN`) and the flavour line is dropped.
+
+`machinarchy -o json` prints the same facts as one document with a `state` of `not_signed_in`, `expired`, `unreachable`, `no_hosts`, `attention` or `ok`, plus `hosts`, `runs` and `next`. The role is shown for a login session (`owner`) or when the saved token has one; the session end comes from the saved credential, not the server. Exit code: 0 when signed in, 3 when not signed in or the credential is expired or refused, 4 when the server cannot be reached. "Last runs" does not show the command text (that would need one request per run).
+
 ## Listing hosts: selectors, env filter, output
 
 `machinarchy hosts` lists the managed hosts (`GET /api/v1/managed/hosts`; the CLI follows every page). `hosts show NAME` shows one host by name or ID (see [Hosts](#hosts)); if a name is ambiguous, use the ID or narrow it with `--env`.

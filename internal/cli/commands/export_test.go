@@ -19,3 +19,12 @@ func SetRunPoll(interval time.Duration) func() {
 
 	return func() { pollInterval = previous }
 }
+
+// SetHomeBudget shortens the time each request of the home screen may take
+// and returns a function that restores it.
+func SetHomeBudget(budget time.Duration) func() {
+	previous := homeBudget
+	homeBudget = budget
+
+	return func() { homeBudget = previous }
+}

@@ -158,6 +158,20 @@ func All() []Message {
 }
 
 func init() {
+	// Home screen (docs/cli/spec/03-ux.md section 1).
+	register(Message{ID: "home.not_signed_in", Kind: KindInfo,
+		Primary: "Not signed in.",
+		Lore:    "Another machine will not manage itself.",
+		Next:    "machinarchy login"})
+	register(Message{ID: "home.expired", Kind: KindInfo,
+		Primary: "Your session on {server} expired at {time}.",
+		Next:    "machinarchy login"})
+	register(Message{ID: "home.unreachable", Kind: KindFailure,
+		Primary: "Cannot reach the server: {why}.",
+		Next:    "check the address, or switch server: machinarchy switch"})
+	register(Message{ID: "home.no_hosts", Kind: KindInfo,
+		Primary: "You have no machines yet.",
+		Next:    "machinarchy hosts add"})
 	// Sign-in and credentials (docs/cli/spec/03-ux.md sections 3 and 4).
 	register(Message{ID: "auth.signed_in", Kind: KindSuccess,
 		Primary: "Signed in to {server} as {user}.",
