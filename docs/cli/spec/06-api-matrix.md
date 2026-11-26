@@ -71,7 +71,7 @@ Roles: **any** = reader, operator or owner; **runs** = may execute runs (operato
 | An operation holds at most 200 targets; concurrency 1-20 | `domain/resource/operation.go:68,294` |
 | No idempotency key is accepted on submit | no `Idempotency-Key` in swagger or handlers (ADR-033 mentions the idea) |
 | Host-key policies `tofu`, `approve`, `pinned`, `ca`; `tofu` only with key auth | `domain/resource/hostkeys.go`, `docs/operations.md` |
-| Host conditions `Ready`, `Reachable`, `Configured`; reasons seen in code: `NotObserved`, `ConnectionFailed`, `AccessNotVerified`, `ConnectorUnavailable`, `HostKeyPendingApproval` | `domain/resource/host.go:116-118`, `hostaccess`, `commands/trust.go:51`. `HostKeyChanged` appears in `docs/operations.md`. **The complete reason list is not documented in the contract** (C-15). |
+| Host conditions `Ready`, `Reachable`, `Configured`; reasons seen in code: `NotObserved`, `ConnectionFailed`, `TargetNotAllowed`, `AccessNotVerified`, `ConnectorUnavailable`, `HostKeyPendingApproval` | `domain/resource/host.go:116-118`, `hostaccess`, `commands/trust.go:51`. `HostKeyChanged` appears in `docs/operations.md`. **The complete reason list is not documented in the contract** (C-15). |
 | Cancel records a request and the final state arrives later; remote work is not asserted stopped | `ADR-033`, `ADR-030`, `docs/operations.md` (cancel, `unreachable_during_cancel`) |
 
 ## 2. Controller work required

@@ -29,6 +29,7 @@ func hostsGroupServer(t *testing.T) *apiServer {
 		hostJSON("h4", "odd-01", 2, "prof-1", "Active", "False", "Weird", `{}`),
 		hostJSON("h5", "chg-01", 2, "prof-1", "Active", "False", "HostKeyChanged", `{}`),
 		hostJSON("h6", "new-01", 2, "prof-1", "Pending", "", "", `{}`),
+		hostJSON("h7", "lab-01", 2, "prof-2", "Active", "False", "TargetNotAllowed", `{}`),
 	}, ",")
 	routes := map[string]string{
 		"GET /api/v1/environments":                   `[{"id":1,"name":"production","description":""},{"id":2,"name":"staging","description":""}]`,
@@ -70,6 +71,7 @@ func TestHostsListMapsReadiness(t *testing.T) {
 	want := map[string]string{
 		"web-01": "ready", "web-02": "waiting for key approval", "db-01": "cannot connect",
 		"odd-01": "needs attention", "chg-01": "key changed", "new-01": "checking",
+		"lab-01": "cannot connect",
 	}
 	for host, status := range want {
 		found := false
@@ -92,7 +94,7 @@ func TestHostsListMapsReadiness(t *testing.T) {
 		t.Fatalf("--status ready = %+v", ready)
 	}
 	attention := execute(t, nil, "", "--config", config, "hosts", "--status", "attention", "-q")
-	if len(dataLines(attention.stdout)) != 5 || strings.Contains(attention.stdout, "web-01") {
+	if len(dataLines(attention.stdout)) != 6 || strings.Contains(attention.stdout, "web-01") {
 		t.Fatalf("--status attention = %+v", attention)
 	}
 	if bad := execute(t, nil, "", "--config", config, "hosts", "--status", "fine"); bad.code != clierr.ExitUsage {

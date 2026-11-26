@@ -28,6 +28,15 @@ Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` in `.env` before the first start; it
 creates the owner account (`admin`). The server listens on
 `http://localhost:8080`.
 
+The lab servers listen on loopback ports 2221-2223, which the controller
+refuses by default. Add these to `.env` before the first start, or `hosts add`
+ends with "cannot connect" and the reason `TargetNotAllowed`:
+
+```sh
+MACHINARCHY_SSH_ALLOW_LOOPBACK=true
+MACHINARCHY_SSH_ALLOWED_PORTS=2221,2222,2223
+```
+
 ## 3. Sign in and create an environment
 
 ```sh

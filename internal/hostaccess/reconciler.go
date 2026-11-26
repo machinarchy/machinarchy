@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
+	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/domain/resource"
 )
 
@@ -118,6 +119,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 		keys, scanned, err := r.scan(ctx, scanner, host)
 		if err != nil {
 			conditions[0].Reason, conditions[1].Reason = failureReason(err), failureReason(err)
+			conditions[0].Message = failureMessage(err)
 			return observation(phase, conditions, nil), nil
 		}
 		conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
@@ -135,6 +137,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 	if err := r.connector.Verify(ctx, host, revision); err != nil {
 		conditions[0].Reason = failureReason(err)
 		conditions[1].Reason = failureReason(err)
+		conditions[0].Message = failureMessage(err)
 		if errors.Is(err, ErrHostKey) && canScan {
 			// Record what the host presents now, so an owner can compare.
 			if keys, scanned, scanErr := r.scan(ctx, scanner, host); scanErr == nil {
@@ -217,8 +220,22 @@ func fingerprints(keys []resource.ObservedHostKey) []string {
 	return out
 }
 
+// targetNotAllowedMessage names the controller policy behind a denied target,
+// so an owner is not left guessing at a network fault.
+const targetNotAllowedMessage = "the controller's network policy does not allow this address or port; " +
+	"allow it with MACHINARCHY_SSH_ALLOW_LOOPBACK, MACHINARCHY_SSH_ALLOW_PRIVATE, MACHINARCHY_SSH_ALLOWED_CIDRS or MACHINARCHY_SSH_ALLOWED_PORTS"
+
+func failureMessage(err error) string {
+	if errors.Is(err, domain.ErrTargetNotAllowed) {
+		return targetNotAllowedMessage
+	}
+	return ""
+}
+
 func failureReason(err error) string {
 	switch {
+	case errors.Is(err, domain.ErrTargetNotAllowed):
+		return "TargetNotAllowed"
 	case errors.Is(err, ErrUnavailable):
 		return "AccessUnavailable"
 	case errors.Is(err, ErrCapacity):

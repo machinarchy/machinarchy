@@ -68,7 +68,7 @@ func hostReadiness(host api.Host) (status, reason string) {
 		return statusKeyChange, reason
 	case host.Status.Phase == "Pending" || reason == "NotObserved":
 		return statusChecking, reason
-	case reason == "ConnectionFailed":
+	case reason == "ConnectionFailed" || reason == "TargetNotAllowed":
 		return statusNoConnect, reason
 	default:
 		return statusAttention, reason

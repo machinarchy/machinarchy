@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 finding F1: name the network policy when a host target is denied (branch ai/p6-automation-docs-hardening)
+
+- **Behavior changed:** when the controller's SSH target policy denies an address or port, the host's Ready condition now has reason `TargetNotAllowed` and a message naming `MACHINARCHY_SSH_ALLOW_LOOPBACK`, `_ALLOW_PRIVATE`, `_ALLOWED_CIDRS` and `_ALLOWED_PORTS`. Before, it was a bare `ConnectionFailed`. The CLI lists such a host as "cannot connect". Areas: `internal/hostaccess/reconciler.go`, `internal/cli/commands/hostsgroup.go`, `docs/cli/user-full-guide.md`, `docs/cli/spec/{02-commands,06-api-matrix,M6-usability}.md`.
+- **Tests:** `failure_reason_test.go` (new), `TestHostsListMapsReadiness` extended. Checks run: gofmt, `go vet` and `go test -race -count=1` for `./internal/hostaccess/... ./internal/cli/...` pass; live check on a default-policy controller shows the new message.
+- **Not run:** golangci-lint, full suite, Postgres, API docs/OpenAPI check for the new reason string. Other findings F2-F7 are unchanged.
+
 ## 2026-11-26 — CLI M6 step 6.8: scripted walkthrough (branch ai/p6-automation-docs-hardening)
 
 - **Docs only:** `docs/cli/spec/M6-usability.md`. A scripted run by Claude of the A-01 flow on a throwaway controller and the SSH lab: login, hosts add, key trust, run all work. Seven findings listed; F1 (loopback/ports denied by default, message does not say so) blocks a fresh lab run.

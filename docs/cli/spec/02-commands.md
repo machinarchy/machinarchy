@@ -178,7 +178,7 @@ Derived only from the host's conditions (`status.conditions`, types `Ready`, `Re
 | `waiting for key approval` | `Ready` reason is `HostKeyPendingApproval` |
 | `key changed` | `Ready` reason is `HostKeyChanged` |
 | `checking` | phase `Pending` or `Ready` reason `NotObserved` |
-| `cannot connect` | `Ready` reason `ConnectionFailed` |
+| `cannot connect` | `Ready` reason `ConnectionFailed` or `TargetNotAllowed` (controller network policy; the message names the setting) |
 | `needs attention` | any other `Ready` not `True`; the raw reason is shown by `hosts show` |
 
 The reason strings are the ones in the codebase today (`hostaccess`, `trust.go:51`); the CLI shows the raw reason in `hosts show` and in `-o json` so nothing is hidden.
