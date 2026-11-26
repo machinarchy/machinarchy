@@ -204,3 +204,69 @@ func (s *apiServer) lastOf(method, path string) apiRequest {
 
 	return apiRequest{}
 }
+
+func TestHostsEnrollBrokerFlagsAndSavedDefaults(t *testing.T) {
+	server := agentServer(t, false, true)
+	creds := filepath.Join(t.TempDir(), "bootstrap.creds")
+	if err := os.WriteFile(creds, []byte("-----BEGIN NATS USER JWT-----\nSECRET-CREDS\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := agentRun(t, server, false, "", "hosts", "enroll", "web-01", "--no-input", "--nats-url", "tls://broker.example:4222", "--nats-creds-file", creds)
+	if got.code != 0 {
+		t.Fatalf("enroll = %+v", got)
+	}
+	blob := decodeBlob(t, got.stdout)
+	if !strings.Contains(blob, "MACHINARCHY_AGENT_NATS_URL=tls://broker.example:4222") ||
+		!strings.Contains(blob, "MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE=/etc/machinarchy-agent/agent.creds") {
+		t.Errorf("blob = %s", blob)
+	}
+	if strings.Contains(blob, "SECRET-CREDS") || strings.Contains(got.stdout+got.stderr, "SECRET-CREDS") {
+		t.Errorf("the credential content must never be printed")
+	}
+	if !strings.Contains(got.stderr, "install -m 0640") || !strings.Contains(got.stderr, creds) {
+		t.Errorf("stderr does not say how to copy the credential: %s", got.stderr)
+	}
+
+	// --remember keeps them for the selected server: the next run needs no flags.
+	isolate(t)
+	cfg := writeConfig(t, server.URL, "tok")
+	run := func(args ...string) result {
+		var out, errOut bytes.Buffer
+		code := cli.Run(context.Background(), cli.Options{
+			Streams:    cli.IOStreams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			Groups:     commands.DefaultGroups(),
+			IsTerminal: func(io.Reader) bool { return false },
+		}, append([]string{"--config", cfg}, args...))
+
+		return result{code: code, stdout: out.String(), stderr: errOut.String()}
+	}
+	if got := run("hosts", "enroll", "web-01", "--no-input", "--nats-url", "tls://saved.example:4222", "--remember"); got.code != 0 {
+		t.Fatalf("remember = %+v", got)
+	}
+	got = run("hosts", "enroll", "web-01", "--no-input")
+	if got.code != 0 || !strings.Contains(decodeBlob(t, got.stdout), "MACHINARCHY_AGENT_NATS_URL=tls://saved.example:4222") {
+		t.Errorf("saved default not used: %+v", got)
+	}
+	got = run("hosts", "enroll", "web-01", "--no-input", "--nats-url", "tls://other.example:4222")
+	if !strings.Contains(decodeBlob(t, got.stdout), "other.example") {
+		t.Errorf("a flag must beat the saved default: %+v", got)
+	}
+}
+
+func TestHostsEnrollRefusesBadBrokerValues(t *testing.T) {
+	server := agentServer(t, false, true)
+	for _, url := range []string{"http://x:4222", "tls://user:pw@x:4222", "x:4222", "tls://"} {
+		got := agentRun(t, server, false, "", "hosts", "enroll", "web-01", "--no-input", "--nats-url", url)
+		if got.code != 2 || strings.Contains(got.stderr, "pw@") && strings.Contains(got.stderr, "user:pw") {
+			t.Errorf("%q: %+v", url, got)
+		}
+		if server.countOf("POST", "/api/v1/agents/enrollment-tokens") != 0 {
+			t.Fatalf("%q: a token was issued for a refused request", url)
+		}
+	}
+	got := agentRun(t, server, false, "", "hosts", "enroll", "web-01", "--no-input", "--nats-creds-file", filepath.Join(t.TempDir(), "missing"))
+	if got.code != 2 {
+		t.Errorf("missing creds file exit = %d", got.code)
+	}
+}
