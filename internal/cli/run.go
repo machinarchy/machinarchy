@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -36,9 +37,14 @@ func Run(ctx context.Context, options Options, args []string) int {
 	root, factory := newRoot(options)
 	if args != nil {
 		root.SetArgs(args)
+	} else {
+		args = os.Args[1:]
 	}
 
 	command, err := root.ExecuteContextC(ctx)
+	if !factory.started {
+		err = suggestCommand(root, args, err)
+	}
 	path := ""
 	if command != nil {
 		path = command.CommandPath()

@@ -88,8 +88,11 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	var configPath string
 
 	root := &cobra.Command{
-		Use:           "machinarchy",
-		Short:         "Manage Machinarchy environments and hosts",
+		Use:   "machinarchy",
+		Short: "Manage Machinarchy environments and hosts",
+		Example: "  machinarchy login https://machinarchy.example.com\n" +
+			"  machinarchy hosts add\n" +
+			"  machinarchy run --on all -- uptime",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		// Completion stays available but is not listed in help or menus:
@@ -192,6 +195,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	}
 
 	normalizeGroupCommands(root)
+	root.SetUsageTemplate(usageTemplate)
+	if root.HasSubCommands() && groupIDs["advanced"] {
+		root.SetHelpCommandGroupID("advanced")
+	}
 
 	return root, factory
 }

@@ -2,6 +2,19 @@
 
 Run `machinarchy --help` or `machinarchy COMMAND --help` for the built-in Cobra help. The examples below use `go run ./cmd/machinarchy`; substitute `./bin/machinarchy` after building.
 
+## Help and typos
+
+`machinarchy --help` lists the commands in four groups (Get started, Everyday, Account, Advanced) and points at tab completion. Every help screen ends with `Examples:` that parse with the command's own flags. A mistyped command, at any depth, names the closest command and prints the whole corrected command line:
+
+```
+$ machinarchy host add web-01
+Error: unknown command "host" for "machinarchy"
+Why:   "hosts" is the closest command.
+Next:  machinarchy hosts add web-01
+```
+
+Nothing is run for you; with nothing close, `Next:` points at `--help`.
+
 ## Home screen (`machinarchy` with no command)
 
 Bare `machinarchy` prints where you stand and the one next step. It never prompts. It asks the server for who you are, your hosts (in the active env, first 500 counted) and your last two runs, all at the same time, each limited to 3 seconds; a request that fails or is slow turns into one `not available` line and the rest of the screen still prints. Nothing else is sent, and the saved credential only goes to its own server.

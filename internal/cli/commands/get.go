@@ -19,9 +19,10 @@ const maxListPages = 200
 // `hosts revoke-agent` needs until the server reports it per host, C-09).
 func NewGetCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "get",
-		Short: "Display one or more resources",
-		Args:  cobra.NoArgs,
+		Use:     "get",
+		Short:   "Display one or more resources",
+		Args:    cobra.NoArgs,
+		Example: "  machinarchy get agent-tokens",
 	}
 	command.AddCommand(newGetAgentTokensCommand(factory))
 	return command
@@ -42,7 +43,7 @@ func collect[T any](fetch func(cursor string) (api.Page[T], error)) ([]T, error)
 		}
 		cursor = page.NextCursor
 	}
-	return nil, clierr.Usagef("the result has more than %d pages; narrow it with a selector", maxListPages)
+	return nil, clierr.Usagef("the result has more than %d pages; narrow it with tags", maxListPages)
 }
 
 func listAllHosts(ctx context.Context, client api.Client, query api.HostQuery) ([]api.Host, error) {

@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M5 step 5.4: help layout, examples, "did you mean" (branch ai/p5-home-brand)
+
+- **Changed** help: commands are grouped Get started (login, hosts, run), Everyday (access, envs, tokens), Account (whoami, switch, logout), Advanced (get, runtime-config, secret, version, help) in `commands/registry.go`; a usage template (`internal/cli/help.go`) puts `Examples:` last, adds "Run 'machinarchy COMMAND --help' for details." and a tab-completion line on the root (`machinarchy completion --help`; `completion install` does not exist yet). "Available Commands" is now "Commands". Root got examples.
+- **Added** `internal/cli/suggest.go`: an unknown command at any depth names the closest command (`Why:`) and the full corrected command line (`Next:`); nothing close keeps `<path> --help`. Cobra's own distance default only applied at the root, so it is set for the searched command.
+- **Added** `Example` to `get`, `get agent-tokens`, every `runtime-config` and `secret` command and `access agent-tokens`.
+- **Tests:** U-02 `TestEveryCommandHasParsableExamples` (every visible command incl. root; each example line parsed by the command's own parser), `help_test.go` (suggestions at three depths and after a flag, group order, Examples last), existing group test updated for "Commands:". Docs: `docs/cli/commands.md` ("Help and typos").
+- **Limitations:** hidden `config` and `completion` have no examples (exempt). Suggestions cover commands only, not flags (Cobra reports unknown flags without a suggestion). The corrected line replaces the first argument equal to the typo.
+- **Checks run:** gofmt (clean), `go vet ./internal/cli/...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass). Not run: `go test ./...`, `make smoke`, pty/colour look, Postgres.
+
 ## 2026-11-26 — CLI M5 step 5.3: catalogue applied to plain status lines (branch ai/p5-home-brand)
 
 - **Changed** plain status sentences in `internal/cli/commands/` now come from the catalogue and print through `printMessage`/`printMessageTo` (new, `envs.go`): empty lists, secret created/retired, key trusted and trust summary, "not signed in to SERVER", host registered, the `hosts add` waiting lines and the fingerprint note. New `msg` IDs: `list.no_hosts`, `list.empty`, `secret.*`, `host.registered`, `host.no_pending`, `host.key_trusted`, `host.trust_summary`, `host.waiting_*`, `host.fingerprint_note`, `auth.not_signed_in_server`. Output text is unchanged except that the fingerprint note now puts the `ssh-keygen` command on a `Next:` line.

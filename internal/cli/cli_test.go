@@ -823,7 +823,7 @@ func TestCommandGroupsAreStrictAndNeedNoConfig(t *testing.T) {
 		for _, args := range [][]string{{"group"}, {"outer"}, {"outer", "inner"}} {
 			got := run(t, options, args...)
 
-			if got.code != 0 || !strings.Contains(got.stdout, "Available Commands:") {
+			if got.code != 0 || !strings.Contains(got.stdout, "Commands:") {
 				t.Errorf("%v: result = %+v", args, got)
 			}
 		}

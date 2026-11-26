@@ -13,40 +13,40 @@ import (
 func DefaultGroups() []cli.CommandGroup {
 	return []cli.CommandGroup{
 		{
-			ID:    "account",
-			Title: "Account Commands",
+			ID:    "start",
+			Title: "Get started",
 			Commands: []cli.CommandBuilder{
 				NewLoginCommand,
-				NewLogoutCommand,
-				NewWhoamiCommand,
-				NewSwitchCommand,
-				NewTokensCommand,
-				NewEnvsCommand,
-				owner(NewAccessCommand, "add", "remove"),
 				owner(NewHostsCommand, "add", "move", "trust", "enroll", "revoke-agent"),
-			},
-		},
-		{
-			ID:    "core",
-			Title: "Core Commands",
-			Commands: []cli.CommandBuilder{
-				owner(NewGetCommand, "agent-tokens"),
 				NewRunCommand,
 			},
 		},
 		{
-			ID:    "configuration",
-			Title: "Configuration Commands",
+			ID:    "everyday",
+			Title: "Everyday",
 			Commands: []cli.CommandBuilder{
-				NewConfigCommand,
-				owner(NewRuntimeConfigCommand),
-				owner(NewSecretCommand),
+				owner(NewAccessCommand, "add", "remove"),
+				NewEnvsCommand,
+				NewTokensCommand,
 			},
 		},
 		{
-			ID:    "other",
-			Title: "Other Commands",
+			ID:    "account",
+			Title: "Account",
 			Commands: []cli.CommandBuilder{
+				NewWhoamiCommand,
+				NewSwitchCommand,
+				NewLogoutCommand,
+			},
+		},
+		{
+			ID:    "advanced",
+			Title: "Advanced",
+			Commands: []cli.CommandBuilder{
+				owner(NewGetCommand, "agent-tokens"),
+				NewConfigCommand,
+				owner(NewRuntimeConfigCommand),
+				owner(NewSecretCommand),
 				NewVersionCommand,
 			},
 		},

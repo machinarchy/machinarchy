@@ -48,9 +48,10 @@ func printList(command *cobra.Command, f *cli.Factory, document any, ids []strin
 
 func newGetAgentTokensCommand(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "agent-tokens",
-		Short: "List agent enrolment tokens (never their secrets)",
-		Args:  cobra.NoArgs,
+		Use:     "agent-tokens",
+		Example: "  machinarchy get agent-tokens",
+		Short:   "List agent enrolment tokens (never their secrets)",
+		Args:    cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			_, access, err := accessClient(command.Context(), f)
 			if err != nil {
