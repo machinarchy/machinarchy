@@ -38,10 +38,11 @@ var dnsNamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9]
 
 type hostsAddOptions struct {
 	access, accessName, user, keyFile, hostKeyPolicy, trustFingerprint string
-	tokenOut, natsURL, credsFile                                       string
-	passwordStdin, agent, remember                                     bool
+	tokenOut                                                           string
+	passwordStdin, agent                                               bool
 	tags                                                               []string
 	wait, ttl                                                          time.Duration
+	retired                                                            retiredBrokerFlags
 }
 
 func newHostsAddCommand(f *cli.Factory) *cobra.Command {
@@ -78,9 +79,7 @@ func newHostsAddCommand(f *cli.Factory) *cobra.Command {
 	flags.DurationVar(&o.wait, "wait", defaultAddWait, "How long to wait for the host (0 registers it and returns)")
 	flags.BoolVar(&o.agent, "agent", false, "Add a machine reached through an agent: registers it and prints the install blob (no address)")
 	flags.DurationVar(&o.ttl, "ttl", time.Hour, "With --agent: how long the one-time token stays valid (1m to 24h)")
-	flags.StringVar(&o.natsURL, "nats-url", "", "With --agent: broker address agents connect to (default: the saved one of this server)")
-	flags.StringVar(&o.credsFile, "nats-creds-file", "", "With --agent: local bootstrap credential file to copy to the machine (default: the saved one)")
-	flags.BoolVar(&o.remember, "remember", false, "With --agent: save --nats-url and --nats-creds-file as the defaults of this server")
+	addRetiredBrokerFlags(command, &o.retired)
 	flags.StringVar(&o.tokenOut, "token-out", "", "With --agent: write the install blob to this new file (mode 0600)")
 
 	return command

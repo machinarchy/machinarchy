@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — Phase 8 step 8.5: CLI prints server URL + token only (branch ai/p8-gateway-transport)
+
+- **Implemented:** `hosts enroll` and `hosts add --agent` build the install blob from the active server URL (`MACHINARCHY_AGENT_SERVER_URL`), the controller public key and the one-time token; no broker value, and the "not reported by this server" broker lines and install step are gone. `--nats-url`, `--nats-creds-file` and `--remember` are removed without aliases: they stay as hidden flags only so that using one is refused (exit 2, nothing sent) with the replacement named. `-o json|yaml` output gains `serverUrl`. Config fields `agent-nats-url`/`agent-bootstrap-creds` and their store methods are deleted (an old config file's unknown keys are ignored as before). Docs: `docs/cli/commands.md`, `M3-notes.md`, `06-api-matrix.md` (C-07 without broker fields).
+- **Tests:** replaced the broker-flag tests with a blob-content test (server URL, token, keys, no broker text, token not repeated on stderr) and a refusal test for the three retired flags on both commands.
+- **Checks run:** gofmt, `go vet`, `golangci-lint run ./internal/cli/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` pass, `make smoke` pass. Not run: A-02 against a live controller and agent, Postgres tests.
+- **Known limitation:** the URL in the blob is the CLI's API server URL; the gateway's gRPC listener is separate in 8.3 (dedicated port) so a deployment must route it behind the same URL.
+
 ## 2026-11-26 — Phase 8 step 8.4 (controller side): real-agent compatibility test (branch ai/p8-gateway-transport)
 
 - **Implemented:** `internal/agentgateway/server/compat_test.go`, test only, no production change. `TestRealAgentBinaryAgainstGateway` runs the `machinarchy-agent` binary built from the sibling repository against the real gateway and gRPC service of 8.3 (memory bus): the agent enrols with only a server URL, token and controller key, runs a command and returns its result, then after a restart without a token receives a command that was queued while it was down. It skips unless `MACHINARCHY_AGENT_BIN` names the binary.

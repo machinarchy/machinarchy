@@ -88,12 +88,6 @@ type Server struct {
 	// env's name before it changes them. It is enforced by this CLI only and
 	// is never a server property (docs/cli/spec/04-security.md section 6.3).
 	ProtectedEnvs []string `yaml:"protected-envs,omitempty"`
-	// AgentNATSURL is the broker address new agents of this server connect to
-	// (nats:// or tls://, no credentials in it). The server does not report it.
-	AgentNATSURL string `yaml:"agent-nats-url,omitempty"`
-	// AgentBootstrapCreds is the local path of the bootstrap credential file
-	// copied to new agents. Only the path is stored, never the credential.
-	AgentBootstrapCreds string `yaml:"agent-bootstrap-creds,omitempty"`
 }
 
 // Store holds the typed config document and the flag and environment
@@ -562,34 +556,6 @@ func (s *Store) SetEnv(env string) error {
 	}
 	server := s.doc.Servers[name]
 	server.Env = env
-	s.doc.Servers[name] = server
-
-	return s.save()
-}
-
-// AgentDefaults returns the saved broker URL and bootstrap credential path of
-// the selected server ("" when not set).
-func (s *Store) AgentDefaults() (natsURL, credsFile string) {
-	if s == nil || s.v == nil {
-		return "", ""
-	}
-	_, server, _, err := s.selectServer()
-	if err != nil {
-		return "", ""
-	}
-
-	return server.AgentNATSURL, server.AgentBootstrapCreds
-}
-
-// SetAgentDefaults saves the broker URL and credential path for the selected
-// server; "" clears one.
-func (s *Store) SetAgentDefaults(natsURL, credsFile string) error {
-	name, err := s.savedServerName()
-	if err != nil {
-		return err
-	}
-	server := s.doc.Servers[name]
-	server.AgentNATSURL, server.AgentBootstrapCreds = natsURL, credsFile
 	s.doc.Servers[name] = server
 
 	return s.save()

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	neturl "net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -23,16 +22,13 @@ import (
 // The agent path of `hosts` (docs/cli/spec/02-commands.md, section 3.8):
 // `hosts add --agent`, `hosts enroll` and `hosts revoke-agent`.
 //
-// The server does not report the broker address or the broker credential an
-// agent needs (Q1/C-07). Until it does, the install blob carries what the CLI
-// can know (name, controller key, one-time token) and the instructions name the
-// rest as "not reported by this server".
+// Agents reach the controller only through its gateway (ADR-059): the install
+// blob carries the server URL, the controller key and the one-time token, and
+// nothing about any broker.
 
 const (
 	minEnrollTTL = time.Minute
 	maxEnrollTTL = 24 * time.Hour
-	// agentCredsTarget is where the bootstrap credential file goes on the machine.
-	agentCredsTarget = "/etc/machinarchy-agent/agent.creds" // #nosec G101 -- a file path, not a credential
 	// sharedAgentEntry is the access entry `hosts add --agent` reuses or creates.
 	sharedAgentEntry = "agents"
 )
@@ -43,6 +39,7 @@ var agentNameSafe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // The token is shown once and is left out when it went to a file.
 type agentIssue struct {
 	Host                 string    `json:"host" yaml:"host"`
+	ServerURL            string    `json:"serverUrl" yaml:"serverUrl"`
 	HostID               string    `json:"hostId" yaml:"hostId"`
 	TokenID              string    `json:"tokenId" yaml:"tokenId"`
 	ExpiresAt            time.Time `json:"expiresAt" yaml:"expiresAt"`
@@ -84,20 +81,15 @@ func agentGatewayKeys(command *cobra.Command, inventory api.InventoryClient) ([]
 
 // installBlob is the agent's environment settings, base64 so it stays one short line.
 // It holds the one-time token: it is shown once, never put in a command line.
-func installBlob(hostName, token string, keys []string, broker brokerInfo) string {
+func installBlob(hostName, serverURL, token string, keys []string) string {
 	var b strings.Builder
 	b.WriteString("# Machinarchy agent settings; the token is single use.\n")
 	if agentNameSafe.MatchString(hostName) {
 		fmt.Fprintf(&b, "MACHINARCHY_AGENT_NAME=%s\n", hostName)
 	}
+	fmt.Fprintf(&b, "MACHINARCHY_AGENT_SERVER_URL=%s\n", serverURL)
 	fmt.Fprintf(&b, "MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=%s\n", strings.Join(keys, ","))
 	fmt.Fprintf(&b, "MACHINARCHY_AGENT_ENROLLMENT_TOKEN=%s\n", token)
-	if broker.url != "" {
-		fmt.Fprintf(&b, "MACHINARCHY_AGENT_NATS_URL=%s\n", broker.url)
-	}
-	if broker.credsFile != "" {
-		fmt.Fprintf(&b, "MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE=%s\n", agentCredsTarget)
-	}
 
 	return base64.StdEncoding.EncodeToString([]byte(b.String()))
 }
@@ -107,69 +99,46 @@ type enrollOptions struct {
 	ttl       time.Duration
 	tokenOut  string
 	revokeOld bool
-	natsURL   string
-	credsFile string
-	remember  bool
+	// retired holds the removed broker flags; any of them being set is refused.
+	retired retiredBrokerFlags
 }
 
-// brokerInfo is what the install blob says about the broker: the address and
-// the local path of the bootstrap credential file. The credential itself is
-// never put in the blob; it is copied to the machine as a file.
-type brokerInfo struct{ url, credsFile string }
-
-// resolveBroker applies the flags over the saved defaults of the selected server.
-func resolveBroker(f *cli.Factory, o enrollOptions) (brokerInfo, error) {
-	url, creds := f.Config().AgentDefaults()
-	if o.natsURL != "" {
-		url = o.natsURL
-	}
-	if o.credsFile != "" {
-		creds = expandHome(o.credsFile)
-	}
-	if url != "" {
-		if err := validateBrokerURL(url); err != nil {
-			return brokerInfo{}, err
-		}
-	}
-	if creds != "" {
-		info, err := os.Stat(creds)
-		if err != nil || !info.Mode().IsRegular() {
-			return brokerInfo{}, clierr.Usagef("--nats-creds-file %q is not a readable file", sanitize.Line(creds))
-		}
-	}
-	if o.remember {
-		if url == "" && creds == "" {
-			return brokerInfo{}, clierr.Usagef("--remember needs --nats-url or --nats-creds-file")
-		}
-		if err := f.Config().SetAgentDefaults(url, creds); err != nil {
-			return brokerInfo{}, err
-		}
-	}
-
-	return brokerInfo{url: url, credsFile: creds}, nil
+// retiredBrokerFlags are the broker flags of the old agent path. They stay
+// defined (hidden) only so that using one is refused with the replacement
+// named instead of a bare "unknown flag".
+type retiredBrokerFlags struct {
+	natsURL, credsFile string
+	remember           bool
 }
 
-// validateBrokerURL accepts nats:// and tls:// addresses without credentials in them.
-func validateBrokerURL(raw string) error {
-	parsed, err := neturl.Parse(raw)
-	if err != nil || (parsed.Scheme != "nats" && parsed.Scheme != "tls") || parsed.Host == "" || parsed.Hostname() == "" {
-		return clierr.Usagef("the broker address %q must look like tls://HOST:4222 (or nats://HOST:4222)", sanitize.Line(raw))
+const brokerFlagsRetired = "agents no longer connect to a broker: the install blob holds the server URL, the controller key and the one-time token, nothing else"
+
+func addRetiredBrokerFlags(command *cobra.Command, r *retiredBrokerFlags) {
+	flags := command.Flags()
+	flags.StringVar(&r.natsURL, "nats-url", "", "Removed")
+	flags.StringVar(&r.credsFile, "nats-creds-file", "", "Removed")
+	flags.BoolVar(&r.remember, "remember", false, "Removed")
+	for _, name := range []string{"nats-url", "nats-creds-file", "remember"} {
+		if err := flags.MarkHidden(name); err != nil {
+			panic(err.Error()) // the flag was defined just above
+		}
 	}
-	if parsed.User != nil {
-		return clierr.Usagef("the broker address must not contain a user or password; the credential goes in a file (--nats-creds-file)")
+}
+
+// refuseRetiredBrokerFlags stops before anything is sent when a removed flag was given.
+func refuseRetiredBrokerFlags(command *cobra.Command) error {
+	for _, name := range []string{"nats-url", "nats-creds-file", "remember"} {
+		if command.Flags().Changed(name) {
+			return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("--%s was removed", name), brokerFlagsRetired,
+				"machinarchy hosts enroll NAME")
+		}
 	}
 
 	return nil
 }
 
-func addBrokerFlags(command *cobra.Command, o *enrollOptions) {
-	command.Flags().StringVar(&o.natsURL, "nats-url", "", "Broker address agents connect to (default: the saved one of this server)")
-	command.Flags().StringVar(&o.credsFile, "nats-creds-file", "", "Local bootstrap credential file to copy to the machine (default: the saved one)")
-	command.Flags().BoolVar(&o.remember, "remember", false, "Save --nats-url and --nats-creds-file as the defaults of this server")
-}
-
 // issueAgentEnrolment issues a one-time token for host and prints the install blob.
-func issueAgentEnrolment(command *cobra.Command, f *cli.Factory, access api.AccessClient, host api.Host, keys []string, broker brokerInfo, o enrollOptions) error {
+func issueAgentEnrolment(command *cobra.Command, f *cli.Factory, access api.AccessClient, host api.Host, keys []string, o enrollOptions) error {
 	printer, err := f.Printer(command.OutOrStdout(), output.FormatTable)
 	if err != nil {
 		return err
@@ -179,14 +148,18 @@ func issueAgentEnrolment(command *cobra.Command, f *cli.Factory, access api.Acce
 			return clierr.Usagef("%s already exists; --token-out never overwrites a file", sanitize.Line(o.tokenOut))
 		}
 	}
+	target, err := f.ResolveTarget()
+	if err != nil {
+		return err
+	}
 	name := host.Metadata.Name
 	issued, err := access.CreateEnrollmentToken(command.Context(), api.EnrollmentTokenInput{
 		HostID: host.Metadata.ID, TTLSeconds: int(o.ttl.Seconds())})
 	if err != nil {
 		return fmt.Errorf("issue the enrolment token: %w", err)
 	}
-	blob := installBlob(name, issued.Token, keys, broker)
-	document := agentIssue{Host: name, HostID: host.Metadata.ID, TokenID: issued.ID, ExpiresAt: issued.ExpiresAt, ControllerPublicKeys: keys}
+	blob := installBlob(name, target.Server, issued.Token, keys)
+	document := agentIssue{Host: name, ServerURL: target.Server, HostID: host.Metadata.ID, TokenID: issued.ID, ExpiresAt: issued.ExpiresAt, ControllerPublicKeys: keys}
 	if o.tokenOut != "" {
 		if err := writeNewPrivateFile(o.tokenOut, blob+"\n"); err != nil {
 			revokeErr := access.RevokeEnrollmentToken(command.Context(), issued.ID)
@@ -209,7 +182,7 @@ func issueAgentEnrolment(command *cobra.Command, f *cli.Factory, access api.Acce
 	if printer.Format() != output.FormatTable {
 		return printer.Document(document)
 	}
-	if err := printInstallSteps(command, f, name, issued.ExpiresAt, o.tokenOut, broker); err != nil {
+	if err := printInstallSteps(command, f, name, issued.ExpiresAt, o.tokenOut); err != nil {
 		return err
 	}
 	if o.tokenOut != "" {
@@ -255,7 +228,7 @@ func revokeOldTokens(command *cobra.Command, access api.AccessClient, hostID, ke
 }
 
 // printInstallSteps tells what to do on the machine. It never repeats the token.
-func printInstallSteps(command *cobra.Command, f *cli.Factory, rawName string, expires time.Time, tokenFile string, broker brokerInfo) error {
+func printInstallSteps(command *cobra.Command, f *cli.Factory, rawName string, expires time.Time, tokenFile string) error {
 	if f.Config().Quiet() {
 		return nil
 	}
@@ -268,24 +241,11 @@ func printInstallSteps(command *cobra.Command, f *cli.Factory, rawName string, e
 		"  1. Install machinarchy-agent from its release (scripts/install-systemd.sh in the package).\n"+
 		"  2. Append the settings to /etc/machinarchy-agent/agent.env:  echo BLOB | base64 -d >> /etc/machinarchy-agent/agent.env\n"+
 		"     Pass the blob on standard input or from the file, not typed into a shared shell history.\n"+
-		"  3. %s\n"+
-		"  4. Start the service, then delete the token line from agent.env once the agent has registered.\n"+
+		"  3. Start the service, then delete the token line from agent.env once the agent has registered.\n"+
 		"Then: machinarchy hosts show %s\n\n",
-		sanitize.Line(rawName), expires.Format(time.RFC3339), where, brokerStep(broker), shellWord(rawName))
+		sanitize.Line(rawName), expires.Format(time.RFC3339), where, shellWord(rawName))
 
 	return err
-}
-
-// brokerStep is install step 3: what to do about the broker address and credential.
-func brokerStep(broker brokerInfo) string {
-	switch {
-	case broker.url != "" && broker.credsFile != "":
-		return fmt.Sprintf("The broker address is in the blob. Copy the bootstrap credential: install -m 0640 -o root -g machagent %s %s", shellWord(broker.credsFile), agentCredsTarget)
-	case broker.url != "":
-		return "The broker address is in the blob. Also place one NATS credential for the agent (MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE or another method); this server does not report it. Next time: --nats-creds-file FILE."
-	default:
-		return "Also set MACHINARCHY_AGENT_NATS_URL and one NATS credential. This server does not report them; ask whoever runs the broker, or pass --nats-url and --nats-creds-file (--remember keeps them for this server)."
-	}
 }
 
 func newHostsEnrollCommand(f *cli.Factory) *cobra.Command {
@@ -295,11 +255,13 @@ func newHostsEnrollCommand(f *cli.Factory) *cobra.Command {
 		Use:   "enroll NAME",
 		Short: "Issue a one-time install blob for an agent host (owner)",
 		Long: "Issues a new one-time enrolment token for an existing host and prints the install blob: the agent's name, the controller's\n" +
-			"public key and the token, as base64 settings. The token is shown once. The server does not yet report the broker address\n" +
-			"or credential, so those are named as still to be set.",
+			"public key, the server URL and the token, as base64 settings. The token is shown once. Nothing else is needed on the machine.",
 		Example: "  machinarchy hosts enroll web-01\n  machinarchy hosts enroll web-01 --ttl 30m --token-out web-01.blob\n  machinarchy hosts enroll web-01 --revoke-old",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := refuseRetiredBrokerFlags(command); err != nil {
+				return err
+			}
 			if err := validateEnrollTTL(o.ttl); err != nil {
 				return err
 			}
@@ -321,18 +283,13 @@ func newHostsEnrollCommand(f *cli.Factory) *cobra.Command {
 				}
 			}
 
-			broker, err := resolveBroker(f, o)
-			if err != nil {
-				return err
-			}
-
-			return issueAgentEnrolment(command, f, access, host, keys, broker, o)
+			return issueAgentEnrolment(command, f, access, host, keys, o)
 		},
 	}
 	command.Flags().DurationVar(&o.ttl, "ttl", time.Hour, "How long the token stays valid (1m to 24h)")
 	command.Flags().StringVar(&o.tokenOut, "token-out", "", "Write the install blob to this new file (mode 0600, never overwrites)")
 	command.Flags().BoolVar(&o.revokeOld, "revoke-old", false, "Also revoke this host's earlier unused tokens")
-	addBrokerFlags(command, &o)
+	addRetiredBrokerFlags(command, &o.retired)
 	command.Flags().BoolVar(&showKey, "show-controller-key", false, "Also print the controller public key")
 
 	return command
@@ -387,6 +344,9 @@ func newHostsRevokeAgentCommand(f *cli.Factory) *cobra.Command {
 
 // runHostsAddAgent registers a host reached through an agent and issues its install blob.
 func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o hostsAddOptions) error {
+	if err := refuseRetiredBrokerFlags(command); err != nil {
+		return err
+	}
 	if len(args) > 1 {
 		return clierr.Usagef("an agent host takes only a NAME, no address")
 	}
@@ -427,10 +387,6 @@ func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o h
 	if err != nil {
 		return err
 	}
-	broker, err := resolveBroker(f, enrollOptions{natsURL: o.natsURL, credsFile: o.credsFile, remember: o.remember})
-	if err != nil {
-		return err
-	}
 	entryID, err := agentEntry(command, f, client, inventory, o.access)
 	if err != nil {
 		return err
@@ -450,7 +406,7 @@ func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o h
 		return err
 	}
 
-	return issueAgentEnrolment(command, f, access, *host, keys, broker, enrollOptions{ttl: o.ttl, tokenOut: o.tokenOut})
+	return issueAgentEnrolment(command, f, access, *host, keys, enrollOptions{ttl: o.ttl, tokenOut: o.tokenOut})
 }
 
 // agentEntry returns the id of the agent access entry: the one named, else the shared entry "agents" (created if missing).
