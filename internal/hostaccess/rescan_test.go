@@ -2,6 +2,7 @@ package hostaccess
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,8 @@ func TestPendingHostReusesARecentScan(t *testing.T) {
 	for range 5 {
 		if got := reconcileAndStore(t, r, host); got.Conditions[0].Reason != "HostKeyPendingApproval" {
 			t.Fatalf("reason = %s", got.Conditions[0].Reason)
+		} else if !strings.Contains(got.Conditions[0].Message, "machinarchy hosts trust ") || strings.Contains(got.Conditions[0].Message, "trust host") {
+			t.Fatalf("message names a removed command: %q", got.Conditions[0].Message)
 		}
 	}
 	if scanner.scans != 1 {
@@ -118,6 +121,9 @@ func TestChangedKeyRescansOnceThenReuses(t *testing.T) {
 		got := reconcileAndStore(t, r, host)
 		if got.Conditions[0].Reason != "HostKeyChanged" {
 			t.Fatalf("reason = %s", got.Conditions[0].Reason)
+		}
+		if m := got.Conditions[0].Message; !strings.Contains(m, "machinarchy hosts trust ") || !strings.Contains(m, " --replace") || strings.Contains(m, "trust host") {
+			t.Fatalf("message names a removed command: %q", m)
 		}
 	}
 	if scanner.scans != 1 {

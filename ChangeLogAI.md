@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — 11.1: host-key condition messages name `hosts trust` (branch ai/p10-controller-gaps)
+
+- **Changed:** `internal/hostaccess/reconciler.go`: the `HostKeyPendingApproval` and `HostKeyChanged` condition messages now say `machinarchy hosts trust NAME [--replace]` instead of the removed `machinarchy trust host`. Message text only; no behaviour or API shape change. `rescan_test.go` asserts both messages.
+- **Checks run:** gofmt, `go vet ./internal/hostaccess/`, `golangci-lint run ./internal/hostaccess/...` (0 issues), `go test -race -count=1 ./internal/hostaccess/... ./internal/cli/...` pass. Not run: Postgres tests, `make smoke`, e2e.
+
 ## 2026-11-26 — 10.6: e2e tests use the gateway gRPC agent transport (branch ai/p10-controller-gaps)
 
 - **Changed:** `test/e2e/{agent_test,rotation_test}.go`: the controller serves `MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR` on a free port and agents get `MACHINARCHY_AGENT_SERVER_URL=http://127.0.0.1:<port>` (development) instead of the removed `MACHINARCHY_AGENT_NATS_*`/`_NAME`. The state-file assertion now checks that no NATS credential is stored. No controller code changed: the monolith already serves the gRPC listener (ADR-059); NATS remains only as the controller-side bus.

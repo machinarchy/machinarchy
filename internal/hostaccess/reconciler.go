@@ -130,7 +130,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 			return result, nil
 		}
 		conditions[0].Reason = "HostKeyPendingApproval"
-		conditions[0].Message = "an owner must approve the host keys: machinarchy trust host " + host.Metadata.Name +
+		conditions[0].Message = "an owner must approve the host keys: machinarchy hosts trust " + host.Metadata.Name +
 			" (" + strings.Join(fingerprints(keys), ", ") + ")"
 		return observation(phase, conditions, scanned), nil
 	}
@@ -144,7 +144,7 @@ func (r *HostReconciler) ReconcileHost(ctx context.Context, host *resource.Host)
 				conditions[1].Status, conditions[1].Reason = resource.ConditionTrue, "Reachable"
 				if trusted {
 					conditions[0].Reason = "HostKeyChanged"
-					conditions[0].Message = fmt.Sprintf("the host presents %s; trusted: %s. Nothing was sent to it. If the change is expected: machinarchy trust host %s --replace",
+					conditions[0].Message = fmt.Sprintf("the host presents %s; trusted: %s. Nothing was sent to it. If the change is expected: machinarchy hosts trust %s --replace",
 						strings.Join(fingerprints(keys), ", "), strings.Join(host.Spec.AccessTarget.Trust, ", "), host.Metadata.Name)
 				} else {
 					conditions[0].Reason, conditions[0].Message = "HostKeyNotTrusted", "the host certificate is not signed by a trusted authority"
