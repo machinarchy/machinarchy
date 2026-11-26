@@ -334,6 +334,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
 		"version":        nil,
 		"login":          nil,
+		"access":         {"add", "remove", "show"},
 	}
 
 	var top []string

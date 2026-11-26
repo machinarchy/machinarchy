@@ -107,6 +107,19 @@ A token has a role, `reader` or `operator` (never owner), and an expiry: `--expi
 
 `tokens revoke` stops a token at once. It is confirmed by typing the token's name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. When several active tokens share a name it lists their IDs and asks for `--id`. Managing tokens needs an owner's login session; an API token is refused locally before anything is sent.
 
+## Access (how Machinarchy reaches machines)
+
+```sh
+machinarchy access                            # list: name, how (ssh-key, ssh-password, agent), user, hosts using it
+machinarchy access show deploy-key            # how it works and which hosts use it (never the key)
+machinarchy access add deploy-key --how ssh-key --user deploy --key-file ~/.ssh/id_ed25519
+printf '%s' "$PW" | machinarchy access add lab --how ssh-password --user ops --password-stdin
+machinarchy access add agents --how agent
+machinarchy access remove deploy-key          # type the name; in a script: --confirm deploy-key
+```
+
+`access add` (owner) asks what it needs when run on a terminal. The key or password comes from a hidden prompt, `--key-file` or `--password-stdin`, never from a flag. It is stored as an encrypted secret on the server and is never shown again (`access show` and `-o json` hold no secret reference or value); a file that is not a private key (for example a `.pub` file) is refused. Host keys (`--host-key-policy`): `approve` (default: you approve each key), `pinned` (only keys you pin) or `tofu` (the first key seen is trusted; a lab setting, allowed only with a key). If the entry cannot be created after the secret was stored, the secret is retired again. `access remove` (owner) is confirmed by typing the name (`--yes` is not enough), is refused by the server while hosts use the entry, and does **not** retire the stored key or password: remove it with `machinarchy secret delete`. The older `create profile` and `delete profile` still work until step 3.8 removes them.
+
 ## Environments
 
 ```sh

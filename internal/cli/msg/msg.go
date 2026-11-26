@@ -201,6 +201,14 @@ func init() {
 		Primary: "Environment {env} removed.",
 		Why:     "No host was deleted by this command.",
 		Next:    "machinarchy envs"})
+	register(Message{ID: "access.created", Kind: KindSuccess,
+		Primary: "Access entry {name} added.",
+		Why:     "The key or password is stored encrypted on the server and is never shown again.",
+		Next:    "machinarchy access show {name}"})
+	register(Message{ID: "access.removed", Kind: KindSuccess,
+		Primary: "Access entry {name} removed.",
+		Why:     "The stored key or password was not retired and still exists on the server.",
+		Next:    "machinarchy secret list"})
 	register(Message{ID: "token.created", Kind: KindSuccess,
 		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
 	register(Message{ID: "token.created_file", Kind: KindSuccess,

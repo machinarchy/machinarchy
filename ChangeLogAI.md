@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M3 step 3.3: `access` commands (branch ai/p3-envs-access-hosts)
+
+- **Added** `machinarchy access` (list with how, user and host count; `-o json|yaml`, `-q` names), `access show NAME` (how it works, host-key policy in words, hosts using it; no secret reference or value), `access add NAME` (owner; guided on a terminal, flags `--how ssh-key|ssh-password|agent`, `--user`, `--key-file`, `--password-stdin`, `--host-key-policy approve|pinned|tofu`; the credential becomes a secret, then the entry, and the secret is retired again if the entry fails; `tofu` only with a key; a non-private-key file is refused) and `access remove NAME` (owner; typed name or `--confirm`, `--yes` is not enough; says the stored secret is not retired) in `internal/cli/commands/accessentries.go`. Messages `access.*`; docs `docs/cli/commands.md`.
+- **Limits:** the old `create profile` / `delete profile` stay until step 3.8. The host-key policy of an existing entry cannot be changed yet. No controller change.
+- **Checks run:** `gofmt -l` (clean), `go vet ./internal/cli/...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; commands 80.5 %). New tests cover that the key and password are never printed, refusals, rollback of the secret and the typed-name removal. Not run: `make smoke`, Postgres tests, a real-terminal wizard session, `go test ./...`.
+
 ## 2026-11-26 — CLI M3 step 3.2: `envs` commands (branch feat/cli-m1)
 
 - **Added** `machinarchy envs` (list with host counts, protected and active marks; `-o json|yaml`, `-q` names), `envs add NAME [--description] [--protected]`, `envs use NAME|any`, `envs remove NAME` (`internal/cli/commands/envs.go`). `--protected` is a local guard only (the server cannot enforce it, gap C-02): it asks first (`--yes` answers) and nothing is created if the answer is no. `envs remove` needs the typed name or `--confirm NAME` (`--yes` is not enough) and, for a locally protected env without a terminal, `--confirm-env NAME`; it clears the active env and the local guard and deletes no host.

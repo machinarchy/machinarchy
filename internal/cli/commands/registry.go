@@ -22,6 +22,7 @@ func DefaultGroups() []cli.CommandGroup {
 				NewSwitchCommand,
 				NewTokensCommand,
 				NewEnvsCommand,
+				owner(NewAccessCommand, "add", "remove"),
 			},
 		},
 		{
