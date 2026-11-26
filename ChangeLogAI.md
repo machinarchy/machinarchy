@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI Phase 7 final review report (branch ai/p7-final-review)
+
+- **Docs only:** added `docs/cli/spec/M7-review.md`: verification, audit re-check, breaking changes, security evidence, A-01 and scorecard status, open findings (F7.3-1..3, F3, F9), controller work (C-01, C-02, C-03, C-05/06, C-07, C-09, C-11), next steps. No code changed; A-01 time and fresh-user comprehension remain unmeasured.
+- **Checks run:** in this phase gofmt, build, vet, golangci-lint, `go test -race ./...` (7.1) and the security tests and fuzz seeds under `-race` (7.4) pass. Not run: Postgres tests, pty layers, SSH lab automation, real agent, live HA, Windows.
+
 ## 2026-11-26 — CLI M6 step 6.9: scorecard re-measured; stale unreachable-server hint fixed (branch ai/p6-automation-docs-hardening)
 
 - **Behavior changed:** the "cannot reach the API server" hint named `machinarchy config get-contexts`, a command removed in M2. It now says `machinarchy whoami` shows the server and `--server` changes it (`internal/cli/api/client.go`, test in `client_test.go`).
