@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/machinarchy/machinarchy/internal/buildinfo"
@@ -296,7 +297,79 @@ func (c *HTTPClient) request(ctx context.Context, method, endpoint string, paylo
 			fmt.Errorf("API response from %s exceeds %d bytes", displayPath, limit), "")
 	}
 
-	return decodeResponse(response.StatusCode, displayPath, body, destination)
+	if err := decodeResponse(response.StatusCode, displayPath, body, destination); err != nil {
+		return c.explainDecodeFailure(ctx, err)
+	}
+
+	return nil
+}
+
+// explainDecodeFailure runs only after a response failed to decode. It asks the
+// public version endpoint (C-11) and, when the server's API range excludes the
+// one this CLI speaks, replaces the generic message with one naming both. An
+// old server (no endpoint), an unreachable one or a compatible one keeps the
+// original error.
+func (c *HTTPClient) explainDecodeFailure(ctx context.Context, original error) error {
+	endpoint := c.baseURL.JoinPath("/api/v1/version")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return original
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", c.userAgent)
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return original
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return original
+	}
+
+	var info struct {
+		Version string `json:"version"`
+		APIMin  *int   `json:"apiMin"`
+		APIMax  *int   `json:"apiMax"`
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
+	if err != nil || json.Unmarshal(body, &info) != nil || info.APIMin == nil || info.APIMax == nil {
+		return original
+	}
+	if *info.APIMax >= buildinfo.APIMin && *info.APIMin <= buildinfo.APIMax {
+		return original
+	}
+
+	return clierr.Wrap(clierr.ExitUnavailable,
+		fmt.Errorf("incompatible server: this server speaks API version %s (release %s); this CLI supports %s",
+			apiRange(*info.APIMin, *info.APIMax), sanitiseVersion(info.Version), apiRange(buildinfo.APIMin, buildinfo.APIMax)),
+		"Use a CLI of the same release as the server, or update whichever is older (docs/cli/commands.md, section \"Supported servers\").")
+}
+
+func apiRange(lo, hi int) string {
+	if lo == hi {
+		return strconv.Itoa(lo)
+	}
+
+	return fmt.Sprintf("%d-%d", lo, hi)
+}
+
+// sanitiseVersion keeps a server-supplied release string printable and short.
+func sanitiseVersion(v string) string {
+	out := make([]rune, 0, len(v))
+	for _, r := range v {
+		if len(out) >= 32 {
+			break
+		}
+		if r > ' ' && r < 0x7f {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return "unknown"
+	}
+
+	return string(out)
 }
 
 // decorate applies the headers every request carries. It is the only place

@@ -90,7 +90,7 @@ Separate from CLI work. "Blocks" lists the CLI features that must refuse or degr
 | C-08 | `GET /api/v1/agents/capabilities` (names, one-line descriptions, input fields and types) | `--do` help, completion, early validation | discoverability | static list of the four known capabilities | N |
 | C-09 | Document the `GET /api/v1/agents` response (agent id, bound host id, state, last seen) in swagger | `hosts revoke-agent NAME` without `--agent-id` | name-based revoke | `--agent-id` | S |
 | C-10 | Short, unique, typeable run IDs (`shortId`) or `?idPrefix=` lookup | `r-4k2p` style IDs | typeable IDs | first 8 characters of the ID, unique prefix resolved in the 500 most recent runs | S |
-| C-11 | Server version and supported API range on every response (header `X-Machinarchy-Version`) or at `GET /api/v1/version` | "incompatible version" handling, support | version message | decode failure message | S |
+| C-11 | **Done (10.4):** `GET /api/v1/version`, public, `{"version","apiMin","apiMax"}`; no header | "incompatible version" handling, support | version message | decode failure message | S |
 | C-12 | `Idempotency-Key` on `POST /api/v1/managed/operations` (ADR-033 already specifies it) | safe handling of "did the submit go through?" | exact answer after a dropped connection | the user is told to check `machinarchy run` | S |
 | C-13 | Connectivity probe for a registered host (`POST .../hosts/{id}/probe`) | "test connectivity" before trusting | an explicit test step | the wizard waits for the controller's own observation | N |
 | C-14 | Validate host names (letters, digits, `.`, `_`, `-`, 1-255) like labels | defence in depth for T8 and T16 | - | the CLI sanitises everything | S |

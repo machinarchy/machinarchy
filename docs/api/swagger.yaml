@@ -3416,6 +3416,19 @@ paths:
       summary: Revoke an API token
       tags:
       - API tokens
+  /api/v1/version:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Server version and supported API range
+      tags:
+      - Operations
   /healthz:
     get:
       produces:

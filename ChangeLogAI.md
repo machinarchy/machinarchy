@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — C-11: server version and API range at `GET /api/v1/version` (branch ai/p10-controller-gaps)
+
+- **Implemented (controller, additive):** public `GET /api/v1/version` (no auth, registered with the health routes) returns `{"version","apiMin","apiMax"}`; the range constants `buildinfo.APIMin/APIMax` (both 1) are new. No `X-Machinarchy-Version` header (owner-approved shape). `docs/api/swagger.*` regenerated.
+- **Implemented (CLI):** only after a response fails to decode, the CLI asks the endpoint without a token; if the server's range does not overlap the CLI's it exits 4 with `incompatible server: this server speaks API version X (release R); this CLI supports Y`. A compatible, missing (404), unreachable or malformed answer keeps the previous wrong-shape / not-JSON messages; the server's release string is stripped to printable ASCII, 32 characters. Docs: `docs/cli/commands.md` ("Supported servers"), `06-api-matrix.md`.
+- **Limitations:** compatible-range skew that still decodes is not detected; the check is not run on every call. K-04 "old commands keep working" stays unimplemented (no-legacy rule).
+- **Tests:** `TestVersionEndpointIsPublicAndReportsRange`, `/api/v1/version` in the operational-routes table, `TestDecodeFailureNamesIncompatibleServer` (incompatible, compatible, 404, garbled; no token sent; control characters removed).
+- **Checks run:** gofmt, `go build ./...`, `go vet`, `golangci-lint` on touched packages (0 issues), `go test -race ./internal/cli/... ./internal/transport/http/... ./cmd/...` pass, `make api-docs`, `make smoke`. Not run: whole-repo suite, Postgres tests, `test/e2e`.
+
 ## 2026-11-26 — C-03: `GET /api/v1/me` reports role, auth method and token details (branch ai/p10-controller-gaps)
 
 - **Implemented (controller, additive):** `/api/v1/me` now also returns `role` (effective role), `authMethod` (`session` or `api_token`) and, for an API token, `tokenId`, `tokenName` and `expiresAt` (looked up in the caller's own tokens; left out if the lookup fails). No secret or hash is returned. A session returns no expiry. `docs/api/swagger.*` regenerated.

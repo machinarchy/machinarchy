@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/machinarchy/machinarchy/internal/buildinfo"
 	"github.com/machinarchy/machinarchy/internal/config"
 )
 
@@ -53,6 +55,7 @@ func TestOperationalRoutesFollowConfiguration(t *testing.T) {
 			s.registerOperationalRoutes(e, tc.docs, tc.metrics)
 			for path, want := range map[string]bool{
 				"/healthz/live":   true,
+				"/api/v1/version": true,
 				"/metrics":        tc.metrics,
 				"/openapi.json":   tc.docs,
 				"/scalar":         tc.docs,
@@ -114,5 +117,27 @@ func TestMetricsListenerServesOnlyMetrics(t *testing.T) {
 	if response, err := http.Get("http://" + s.metricsBound + "/metrics"); err == nil {
 		_ = response.Body.Close()
 		t.Fatal("metrics listener still accepts connections after shutdown")
+	}
+}
+
+func TestVersionEndpointIsPublicAndReportsRange(t *testing.T) {
+	s := &Server{metricsHandler: promhttp.HandlerFor(prometheus.NewRegistry(), promhttp.HandlerOpts{})}
+	e := echo.New()
+	s.registerOperationalRoutes(e, false, false)
+	recorder := httptest.NewRecorder()
+	e.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	var got struct {
+		Version string `json:"version"`
+		APIMin  int    `json:"apiMin"`
+		APIMax  int    `json:"apiMax"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version == "" || got.APIMin != buildinfo.APIMin || got.APIMax != buildinfo.APIMax || got.APIMin > got.APIMax {
+		t.Fatalf("unexpected body %s", recorder.Body.String())
 	}
 }

@@ -947,3 +947,42 @@ func TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress(t *testing.T) {
 		}
 	}
 }
+
+// C-11: after a decode failure the CLI asks /api/v1/version and names an
+// incompatible server; a compatible, old (404) or garbled answer keeps the
+// generic message. The version call carries no token.
+func TestDecodeFailureNamesIncompatibleServer(t *testing.T) {
+	versionBody := func(body string, status int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/version" {
+				if r.Header.Get("Authorization") != "" {
+					t.Errorf("token sent to the version endpoint")
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte(`<html>x</html>`))
+		}
+	}
+	for name, tc := range map[string]struct {
+		handler http.HandlerFunc
+		want    string
+	}{
+		"incompatible":    {versionBody(`{"version":"9.0.0\u001b[31m","apiMin":7,"apiMax":9}`, 200), "API version 7-9"},
+		"compatible":      {versionBody(`{"version":"1","apiMin":1,"apiMax":1}`, 200), "points at the Machinarchy API"},
+		"old server 404":  {versionBody(`not found`, 404), "points at the Machinarchy API"},
+		"garbled version": {versionBody(`{"apiMin":"x"}`, 200), "points at the Machinarchy API"},
+	} {
+		client := newClient(t, tc.handler)
+		var out struct{ A []string }
+		err := client.get(context.Background(), "/api/v1/x", &out)
+		var coded *clierr.Error
+		if !errors.As(err, &coded) || coded.ExitCode() != clierr.ExitUnavailable {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := err.Error() + " " + coded.Hint; !strings.Contains(got, tc.want) || strings.Contains(got, "\x1b") {
+			t.Errorf("%s: %q lacks %q or has a control character", name, got, tc.want)
+		}
+	}
+}
