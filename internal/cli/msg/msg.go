@@ -237,6 +237,10 @@ func init() {
 		Primary: "Host {host} removed from the inventory.",
 		Why:     "Only the inventory entry is gone. Not done: an installed agent was not uninstalled or revoked, the access entry and its credentials were kept, and the machine was not touched.",
 		Next:    "machinarchy access"})
+	register(Message{ID: "host.agent_revoked", Kind: KindSuccess,
+		Primary: "Agent {agent} of host {host} revoked.",
+		Why:     "It can no longer serve commands. Not done: the host is still in the inventory, the agent software is still on the machine, and the machine was not touched.",
+		Next:    "machinarchy hosts show {host}"})
 	register(Message{ID: "token.created", Kind: KindSuccess,
 		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
 	register(Message{ID: "token.created_file", Kind: KindSuccess,

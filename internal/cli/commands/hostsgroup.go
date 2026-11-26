@@ -92,7 +92,7 @@ func NewHostsCommand(f *cli.Factory) *cobra.Command {
 	}
 	command.Flags().StringVar(&status, "status", "all", "Show ready, attention (everything not ready) or all hosts")
 	command.Flags().StringVarP(&selector, "selector", "l", "", "Only hosts matching a tag selector, for example tier=web")
-	command.AddCommand(newHostsAddCommand(f), newHostsShowCommand(f), newHostsTagCommand(f), newHostsMoveCommand(f), newHostsTrustCommand(f), newHostsRemoveCommand(f))
+	command.AddCommand(newHostsAddCommand(f), newHostsShowCommand(f), newHostsTagCommand(f), newHostsMoveCommand(f), newHostsTrustCommand(f), newHostsEnrollCommand(f), newHostsRevokeAgentCommand(f), newHostsRemoveCommand(f))
 
 	return command
 }

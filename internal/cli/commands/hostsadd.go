@@ -26,7 +26,7 @@ import (
 )
 
 // `hosts add` for machines reached over SSH (docs/cli/spec/02-commands.md
-// section 3.8, 03-ux.md section 2.1). The agent path arrives with the next step.
+// section 3.8, 03-ux.md section 2.1). The agent path is in hostsagent.go.
 
 // hostsAddPoll is how often the wait loop asks the server. Tests shorten it.
 var hostsAddPoll = 2 * time.Second
@@ -38,9 +38,10 @@ var dnsNamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9]
 
 type hostsAddOptions struct {
 	access, accessName, user, keyFile, hostKeyPolicy, trustFingerprint string
-	passwordStdin                                                      bool
+	tokenOut                                                           string
+	passwordStdin, agent                                               bool
 	tags                                                               []string
-	wait                                                               time.Duration
+	wait, ttl                                                          time.Duration
 }
 
 func newHostsAddCommand(f *cli.Factory) *cobra.Command {
@@ -72,6 +73,9 @@ func newHostsAddCommand(f *cli.Factory) *cobra.Command {
 	flags.StringArrayVar(&o.tags, "tag", nil, "Tag as KEY=VALUE (repeatable)")
 	flags.StringVar(&o.trustFingerprint, "trust-fingerprint", "", "Trust the host key with this fingerprint, if the server sees it (SHA256:...)")
 	flags.DurationVar(&o.wait, "wait", defaultAddWait, "How long to wait for the host (0 registers it and returns)")
+	flags.BoolVar(&o.agent, "agent", false, "Add a machine reached through an agent: registers it and prints the install blob (no address)")
+	flags.DurationVar(&o.ttl, "ttl", time.Hour, "With --agent: how long the one-time token stays valid (1m to 24h)")
+	flags.StringVar(&o.tokenOut, "token-out", "", "With --agent: write the install blob to this new file (mode 0600)")
 
 	return command
 }
@@ -139,6 +143,9 @@ func runHostsAdd(command *cobra.Command, f *cli.Factory, args []string, o hostsA
 	if flag := command.Flags().Lookup("env"); flag != nil && flag.Changed {
 		return clierr.Detailed(clierr.ExitFailure, errors.New("this server cannot place a new host in an env yet"),
 			"the server does not accept an env when a host is created (gap C-01); the host would land in the default env", "machinarchy hosts add NAME ADDRESS")
+	}
+	if o.agent {
+		return runHostsAddAgent(command, f, args, o)
 	}
 	plan := &hostsAddPlan{}
 	if len(args) > 0 {
