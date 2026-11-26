@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — 10.6: e2e tests use the gateway gRPC agent transport (branch ai/p10-controller-gaps)
+
+- **Changed:** `test/e2e/{agent_test,rotation_test}.go`: the controller serves `MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR` on a free port and agents get `MACHINARCHY_AGENT_SERVER_URL=http://127.0.0.1:<port>` (development) instead of the removed `MACHINARCHY_AGENT_NATS_*`/`_NAME`. The state-file assertion now checks that no NATS credential is stored. No controller code changed: the monolith already serves the gRPC listener (ADR-059); NATS remains only as the controller-side bus.
+- **Checks run:** gofmt, `go vet ./...`, `golangci-lint run ./test/...` (0 issues), `go test -race -count=1 ./...` all pass, including both e2e tests against `../machinarchy-agent` (branch with commit 1c1b3ee). Not run: Postgres tests, `make smoke`.
+
 ## 2026-11-26 — Phase 10 closing check: authorization matrix entry for `/api/v1/version` (branch ai/p10-controller-gaps)
 
 - **Fixed:** `TestRouteAuthorizationMatrix` failed because the new public `GET /api/v1/version` (10.4) had no matrix entry; added it as `public` in `internal/bootstrap/authz_matrix_test.go`.
