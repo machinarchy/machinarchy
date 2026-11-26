@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.6: hardening (branch ai/p6-automation-docs-hardening)
+
+- **Tests added:** fuzz targets `FuzzReadDocument` (`internal/cli/config/fuzz_test.go`), `FuzzNewError` and `FuzzDecodeResponse` (`internal/cli/api/fuzz_test.go`); the sanitiser, target parser and normaliser fuzz targets already existed. No code under test changed.
+- **Docs:** `docs/cli/spec/M6-notes.md` section 6.6: security review against T1..T16 with test evidence, scan results, and why R+1 removal stubs are not prepared (no-legacy rule).
+- **Limitations:** the CLI fuzz targets are not in `FUZZ_TARGETS` (`mk/checks.mk`), so `make fuzz` and CI do not run them; wiring needs owner approval. Checks run: each new target 20 s and each existing CLI target 10 s fuzzing, `make vuln` (no unaccepted vulnerabilities), gofmt, golangci-lint, `go test -race -cover ./internal/cli/... ./cmd/...`, `go test ./...` (see result in the step report). Not run: smoke, pty, Postgres.
+
 ## 2026-11-26 — CLI M6 step 6.5: documentation (branch ai/p6-automation-docs-hardening)
 
 - **Docs:** README "Five-minute path"; new `docs/cli/ci.md` (CI and scripts), `docs/cli/migration.md` (old to new, no aliases, behaviour changes), `docs/cli/messages.md` (generated from the message catalogue); `docs/cli/user-full-guide.md` rewritten for the current commands (lab hosts, ports and key paths taken from `deployments/testing`); `docs/cli/README.md` links and a pointer that the spec is a design record. One synopsis line in `commands.md` made a real example.

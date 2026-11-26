@@ -7,3 +7,33 @@ Checked 2026-11-26: the controller has no version endpoint and no `X-Machinarchy
 Proposal (C-11): `GET /api/v1/version`, public or any role, returning `{"version":"1.4.0","apiMin":1,"apiMax":2}` from `internal/buildinfo` plus a constant for the API generation; optionally the same value as `X-Machinarchy-Version` on every response. The CLI would read it once per command on the first failure to decode (not on every call), compare against its own range, and print `This server speaks API version X; this CLI supports Y` with the update hint (O-20, exit 4). Cost: one handler, one constant, one test; no data model change. Needs owner approval before any controller change.
 
 Until then: decode failures split into "wrong shape" (update the CLI) and "not JSON" (check the address); `commands.md` "Supported servers" says same release. K-04 as written (old commands keep working) is not implemented by project rule (no legacy); see M4-notes.
+
+## 6.6 Hardening
+
+**Fuzz targets (CLI).** Sanitiser `FuzzClean`, `FuzzStream`; target parser `FuzzParse`; normaliser `FuzzNormalise`; v1/v2 config reader `FuzzReadDocument` (`config/fuzz_test.go`); API error decoder `FuzzNewError` and success decoder `FuzzDecodeResponse` (`api/fuzz_test.go`). Each ran 10-20 s locally with no finding. **Not wired into `make fuzz`/CI**: `FUZZ_TARGETS` in `mk/checks.mk` lists no `internal/cli` target, and editing that file needs owner approval. One line per target would do it.
+
+**Scans.** `make vuln` (govulncheck with the repo allowlist): no unaccepted vulnerabilities in called code. gosec runs inside golangci-lint (0 issues).
+
+**Review against `04-security.md` (evidence = test names under `internal/cli`).**
+
+| Threat | Evidence |
+|---|---|
+| T1 password | `TestLoginWithPasswordFromStdin`, `TestWrongPassword`, `TestLoginDoesNotFollowRedirects` |
+| T2 token leak | `TestTokenIsNeverInTheProcessList`, `TestNoCommandErrorLeaksTheToken`, `TestNoSecretIsEverVisible`, `TestSecretsAreNeverFlags`, `TestTokensCreatePrintsTheTokenOnlyOnce` |
+| T3 at rest | `TestLaxPermissionsAreRefused`, `TestLooseCredentialPermissionsStopTheCommand`, `TestCredentialNeverPrintsItsSecret`, `FuzzReadDocument`. Plaintext file remains (keychain Q5 open) |
+| T4 host key | `TestHostsTrustNeverFollowsYes`, `TestHostsTrustTypedPrefix`, `TestHostsTrustFingerprint`, `TestHostsTrustReplace`. Limit stays: fingerprint comes from the controller |
+| T5 argv | as T2; `run` text warning is help only |
+| T6 TLS/HTTP | `TestHTTPClientTrustsAConfiguredCA`, `TestEndpointCAFileErrors`, `TestRedirectsAreNotFollowed`, `TestLoginRemembersInsecureHTTPPerServer`, `TestIsLoopbackHost` |
+| T7 impersonation | `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress`, `TestSavedCredentialsNeverGoToAnotherServer`. Env/flag server-differs warning not re-verified |
+| T8 escapes | `TestErrorTextIsSanitised`, `TestServerMessagesAreSanitised`, `TestRunOutputIsSanitised`, `TestHostNamesInTheRenderedOutputAreSanitised`, `FuzzClean`, `FuzzStream`, `FuzzNewError` |
+| T9 expired/forbidden | `TestExpiredAndRevokedCredentials`, `TestOwnerOnlyActionWithAnOperatorToken` |
+| T10 malformed responses | `FuzzDecodeResponse`, `FuzzNewError`, client size/redirect tests; install blob is built by the CLI (`TestHostsEnroll*`) |
+| T11/T12 production | `TestHostsInProtectedEnvNeedTheEnvName`, `TestRunCancelInAProtectedEnv`, `TestRunRetryInAProtectedEnv`. Protected is local-only (C-02) |
+| T13 wrong place | `TestSavedCredentialsNeverGoToAnotherServer`, `TestOwnerCommandsUseTheSessionEvenWithATokenSaved` |
+| T14 CI | `TestHostsTrustNeverFollowsYes`, CI tests from 6.2 |
+| T15 binary | README checksum/attestation steps (6.4); no self-update. Protocol pin open (no `protocol/v0.1.0`) |
+| T16 completion | `TestCompletionNeverFailsLoudlyOrOffersUnsafeNames`; 800 ms budget and no-prompt rule not re-measured |
+
+Not covered by evidence: pty behaviour, Windows permission warning (skipped on Windows), real controller TLS.
+
+**Removal stubs (R+1).** Not prepared: the no-legacy rule removed old commands outright, so there is no R/R+1 window and K-13 text is not implemented; old commands fail as unknown (`TestOldTrustHostCommandIsGone`).
