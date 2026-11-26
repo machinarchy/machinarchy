@@ -1,0 +1,8 @@
+$ array
+$[] object
+$[].active boolean
+$[].description string
+$[].hosts number
+$[].id number
+$[].name string
+$[].protectedLocal boolean

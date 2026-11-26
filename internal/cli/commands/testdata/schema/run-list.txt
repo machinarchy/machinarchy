@@ -1,0 +1,8 @@
+$ array
+$[] object
+$[].createdAt string
+$[].id string
+$[].state string
+$[].targets object
+$[].targets.Failed number
+$[].targets.Succeeded number

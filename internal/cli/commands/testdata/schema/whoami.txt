@@ -1,0 +1,9 @@
+$ object
+$.email string
+$.expiresAt string
+$.method string
+$.role string
+$.server string
+$.tokenName string
+$.url string
+$.user string

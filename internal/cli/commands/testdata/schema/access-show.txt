@@ -1,0 +1,10 @@
+$ object
+$.description string
+$.hostKeyPolicy string
+$.hostNames array
+$.hostNames[] string
+$.hosts number
+$.how string
+$.id string
+$.name string
+$.user string

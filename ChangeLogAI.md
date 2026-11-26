@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.1: schema goldens for `-o json`/`-o yaml` (branch ai/p6-automation-docs-hardening)
+
+- **Added** `commands/schema_test.go` and goldens `commands/testdata/schema/*.txt` (key path + type per output) for `hosts`, `hosts show`, `envs`, `access`, `access show`, `tokens`, `whoami`, `run`, `run ID`, home and `version`. Tests: N-01 a promised key that is gone or retyped fails (new keys allowed); N-02 the same command twice is byte-identical (JSON and YAML) for outputs that do not carry the clock; the check itself is tested against removed/renamed/retyped keys; YAML paths must exist in JSON. `-update` rewrites the goldens.
+- **Docs:** `docs/cli/commands.md` section "Output compatibility". No code behaviour changed.
+- **Finding (not changed):** `-o json` prints a zero `lastSeenAt` (`0001-01-01T00:00:00Z`) on observed host keys, `-o yaml` omits it (`omitempty` differs). Left as is: changing it would alter a documented key.
+- **Limitations:** run list, tokens, home and version are shape-only (the fakes or the output carry the clock, map order or build data). Not pinned: `config show`, `hosts add`, `hosts enroll`, `tokens create`, `secret`, `runtime-config`.
+
 ## 2026-11-26 — CLI M5 step 5.5: lore guard, completion hint, plain audit (branch ai/p5-home-brand)
 
 - **Added** one-time completion hint: the first interactive `login` prints `hint.completion` on stderr (points at `machinarchy completion --help`; `completion install` does not exist). Remembered per computer in the config (`hints:`, `Store.HintSeen/MarkHintSeen`); skipped with `--plain`, `-q`, or no terminal.

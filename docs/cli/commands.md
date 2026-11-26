@@ -217,6 +217,10 @@ machinarchy config show -o json
 
 `config show` never prints a secret: every credential is `***`, and the token variable is `***` when it is set.
 
+## Output compatibility (`-o json`, `-o yaml`)
+
+Scripts may rely on the data output. The promise is: **keys are added, never renamed, removed or retyped** within a major version, and key names are the API's own names. The same command on the same data prints the same bytes (stable key and list order). `-o yaml` has the same names and types as `-o json`, but may leave out an empty optional value (for example a zero `lastSeenAt` that JSON prints). The key paths and types of these outputs are pinned by golden files in `internal/cli/commands/testdata/schema/`: `hosts`, `hosts show`, `envs`, `access`, `access show`, `tokens`, `whoami`, `run`, `run ID`, the home screen and `version`. A change that removes or retypes a pinned key fails `TestOutputSchemas`; adding keys does not. To record added keys, run `go test ./internal/cli/commands -run TestOutputSchemas -update` and review the diff. Outputs not pinned yet: `config show`, `hosts add`, `hosts enroll`, `tokens create`, `secret` and `runtime-config` commands.
+
 ## Command groups
 
 `get`, `create`, `delete`, `config`, `runtime-config`, and `secret` are command groups; `tokens` lists tokens when run without a subcommand. Running a group with no subcommand prints its help and exits 0. An unknown subcommand (for example `machinarchy secret lst`) is a usage error and exits 2. Help for a group never reads the config file.
