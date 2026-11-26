@@ -163,8 +163,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/agents.agentList"
                         }
                     },
                     "401": {
@@ -3538,6 +3537,59 @@
                     "items": {
                         "$ref": "#/definitions/agents.signingKeyView"
                     }
+                }
+            }
+        },
+        "agents.agentList": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/agents.agentView"
+                    }
+                }
+            }
+        },
+        "agents.agentView": {
+            "type": "object",
+            "properties": {
+                "agentVersion": {
+                    "type": "string"
+                },
+                "architecture": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "connected": {
+                    "description": "Connected is true while the agent holds an unexpired, unrevoked lease.",
+                    "type": "boolean"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeenAt": {
+                    "type": "string"
+                },
+                "leaseExpiresAt": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "registeredAt": {
+                    "type": "string"
+                },
+                "revokedAt": {
+                    "type": "string"
                 }
             }
         },

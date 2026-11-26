@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -295,29 +297,89 @@ func newHostsEnrollCommand(f *cli.Factory) *cobra.Command {
 	return command
 }
 
+// agentOfHost finds the agent enrolled for a host: the agent that used one of
+// the host's enrolment tokens (the agent record itself has no host id, C-09).
+// Agents that are already revoked are ignored. It refuses rather than guesses
+// when there is none or more than one.
+func agentOfHost(ctx context.Context, access api.AccessClient, inventory api.InventoryClient, host api.Host) (string, error) {
+	tokens, err := access.ListEnrollmentTokens(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list agent tokens: %w", err)
+	}
+	var candidates []string
+	seen := map[string]bool{}
+	for _, token := range tokens {
+		if token.HostID == host.Metadata.ID && token.UsedByAgent != "" && !seen[token.UsedByAgent] {
+			seen[token.UsedByAgent] = true
+			candidates = append(candidates, token.UsedByAgent)
+		}
+	}
+	if raw, err := inventory.ListAgents(ctx); err == nil {
+		var listed struct {
+			Items []struct {
+				ID        string     `json:"id"`
+				RevokedAt *time.Time `json:"revokedAt"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(raw, &listed) == nil {
+			revoked := map[string]bool{}
+			for _, agent := range listed.Items {
+				revoked[agent.ID] = agent.RevokedAt != nil
+			}
+			active := candidates[:0:0]
+			for _, id := range candidates {
+				if !revoked[id] {
+					active = append(active, id)
+				}
+			}
+			candidates = active
+		}
+	}
+	name := sanitize.Line(host.Metadata.Name)
+	switch len(candidates) {
+	case 1:
+		return candidates[0], nil
+	case 0:
+		return "", clierr.Detailed(clierr.ExitUsage, fmt.Errorf("no active agent found for host %q", name),
+			"the server did not report an enrolled agent for this host; 'get agent-tokens' shows the ID as 'used by ID'",
+			"machinarchy hosts revoke-agent "+name+" --agent-id ID")
+	default:
+		quoted := make([]string, len(candidates))
+		for i, id := range candidates {
+			quoted[i] = sanitize.Line(id)
+		}
+
+		return "", clierr.Detailed(clierr.ExitUsage, fmt.Errorf("host %q has %d active agents: %s", name, len(candidates), strings.Join(quoted, ", ")),
+			"choose the one to revoke", "machinarchy hosts revoke-agent "+name+" --agent-id ID")
+	}
+}
+
 func newHostsRevokeAgentCommand(f *cli.Factory) *cobra.Command {
 	var agentID string
 	command := &cobra.Command{
-		Use:   "revoke-agent NAME --agent-id ID",
+		Use:   "revoke-agent NAME [--agent-id ID]",
 		Short: "Revoke an agent's identity so it can no longer serve commands (owner)",
 		Long: "Revokes the agent identity, so the agent can no longer serve commands. The host stays in the inventory and the machine is\n" +
 			"not touched. You confirm by typing the host's name (in a script: --confirm NAME); --yes is not enough. A host in a protected\n" +
-			"env also needs the env's name. The agent ID is the one 'machinarchy get agent-tokens' shows as 'used by ID'; the server does\n" +
-			"not yet say which agent belongs to a host.",
-		Example: "  machinarchy hosts revoke-agent web-01 --agent-id agent-3f9\n  machinarchy hosts revoke-agent web-01 --agent-id agent-3f9 --confirm web-01",
+			"env also needs the env's name. The agent is found from the host's used enrolment token; if the host has none or several\n" +
+			"active agents, or the server does not report which token belongs to the host, give --agent-id ID (the ID that\n" +
+			"'machinarchy get agent-tokens' shows as 'used by ID').",
+		Example: "  machinarchy hosts revoke-agent web-01\n  machinarchy hosts revoke-agent web-01 --agent-id agent-3f9 --confirm web-01",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			if strings.TrimSpace(agentID) == "" {
-				return clierr.Detailed(clierr.ExitUsage, errors.New("--agent-id is required"),
-					"the server does not yet say which agent belongs to a host; 'get agent-tokens' shows the ID as 'used by ID'", "machinarchy get agent-tokens")
-			}
-			client, _, inventory, err := accessClients(command.Context(), f)
+			client, access, inventory, err := accessClients(command.Context(), f)
 			if err != nil {
 				return err
 			}
 			host, err := findHost(command.Context(), f, client, args[0])
 			if err != nil {
 				return err
+			}
+			agentID = strings.TrimSpace(agentID)
+			if agentID == "" {
+				if agentID, err = agentOfHost(command.Context(), access, inventory, host); err != nil {
+					return err
+				}
 			}
 			env, protected, err := hostEnvName(command.Context(), f, client, host)
 			if err != nil {
@@ -330,7 +392,7 @@ func newHostsRevokeAgentCommand(f *cli.Factory) *cobra.Command {
 			if err := f.ConfirmTyped(fmt.Sprintf("Revoke agent %s of host %q? It can no longer serve commands.", sanitize.Line(agentID), name), host.Metadata.Name); err != nil {
 				return err
 			}
-			if err := inventory.RevokeAgent(command.Context(), strings.TrimSpace(agentID)); err != nil {
+			if err := inventory.RevokeAgent(command.Context(), agentID); err != nil {
 				return fmt.Errorf("revoke agent: %w", err)
 			}
 

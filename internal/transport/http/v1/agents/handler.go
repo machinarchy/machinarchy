@@ -185,9 +185,26 @@ func (h *Handler) RevokeToken(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// agentView is an enrolled agent as listed. It names its fields (like
+// tokenView) so key material and lease ids can never be added by accident.
 type agentView struct {
-	agentgateway.Agent
+	ID             string     `json:"id"`
+	Hostname       string     `json:"hostname"`
+	AgentVersion   string     `json:"agentVersion"`
+	OS             string     `json:"os"`
+	Architecture   string     `json:"architecture"`
+	Capabilities   []string   `json:"capabilities"`
+	LeaseExpiresAt time.Time  `json:"leaseExpiresAt"`
+	RegisteredAt   time.Time  `json:"registeredAt"`
+	LastSeenAt     time.Time  `json:"lastSeenAt"`
+	RevokedAt      *time.Time `json:"revokedAt,omitempty"`
+	// Connected is true while the agent holds an unexpired, unrevoked lease.
 	Connected bool `json:"connected"`
+}
+
+// agentList is the response of GET /api/v1/agents.
+type agentList struct {
+	Items []agentView `json:"items"`
 }
 
 // list godoc
@@ -195,7 +212,7 @@ type agentView struct {
 // @Tags Agents
 // @Produce json
 // @Security BearerAuth
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} agentList
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Router /api/v1/agents [get]
@@ -207,9 +224,11 @@ func (h *Handler) List(c echo.Context) error {
 	now := time.Now()
 	items := make([]agentView, len(agents))
 	for i, agent := range agents {
-		items[i] = agentView{Agent: agent, Connected: agent.Connected(now)}
+		items[i] = agentView{ID: agent.ID, Hostname: agent.Hostname, AgentVersion: agent.AgentVersion, OS: agent.OS,
+			Architecture: agent.Architecture, Capabilities: agent.Capabilities, LeaseExpiresAt: agent.LeaseExpiresAt,
+			RegisteredAt: agent.RegisteredAt, LastSeenAt: agent.LastSeenAt, RevokedAt: agent.RevokedAt, Connected: agent.Connected(now)}
 	}
-	return c.JSON(http.StatusOK, map[string]any{"items": items})
+	return c.JSON(http.StatusOK, agentList{Items: items})
 }
 
 // controllerKey godoc

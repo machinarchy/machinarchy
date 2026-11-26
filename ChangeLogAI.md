@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — 13.1: C-09 agent list documented; `hosts revoke-agent NAME` finds the agent (branch ai/p10-controller-gaps)
+
+- **Controller (owner approved A+B):** `GET /api/v1/agents` now has a typed response (`agents.agentList`/`agentView`, `docs/api/swagger.{json,yaml}` regenerated with `make api-docs`). JSON is unchanged except that `agentView` names its fields: same keys as before (`id, hostname, agentVersion, os, architecture, capabilities, leaseExpiresAt, registeredAt, lastSeenAt, revokedAt?, connected`), still no key material or lease id. Regeneration also reordered the `TargetState` enum; that unrelated drift was reverted by hand.
+- **CLI:** `hosts revoke-agent NAME` without `--agent-id` takes the agent that used one of the host's enrolment tokens, ignoring revoked agents. It refuses (exit 2, naming the candidates) when there are none or several, and on servers whose tokens carry no host id. `--agent-id` still overrides; the typed-name confirmation is unchanged (`--yes` is not enough). Docs: `commands.md`, matrix C-09 row.
+- **Tests:** `TestListAgentsShapeHasNoKeyMaterial`, `TestHostsRevokeAgentFindsTheAgentByHostName`, `TestHostsRevokeAgentRefusesWhenAmbiguousOrUnknown`.
+- **Checks run:** gofmt, `go vet`, `go test -race -count=1 ./internal/transport/http/v1/... ./internal/cli/...` pass , `golangci-lint` (0 issues), `go test -race ./internal/bootstrap/...` pass (spec and authz matrix tests). Not run: Postgres tests, `make smoke`, e2e, a real controller with agents.
+
 ## 2026-11-26 — 12.1: test that `access` never echoes credential fields (branch ai/p10-controller-gaps)
 
 - **Added:** `TestAccessShowNeverEchoesCredentialFields` (`internal/cli/commands/accessentries_test.go`): a server returning `password`, `privateKey`, `token` and a credential `value` in an access entry must not leak them, nor the secret id, through `access show` (table, json, yaml) or `access` list (table, json). Closes the Phase 7.4 gap "redaction not asserted". Test only; no behaviour change (the output is built from fixed fields).

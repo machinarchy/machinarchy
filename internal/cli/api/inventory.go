@@ -68,8 +68,8 @@ func (c *HTTPClient) GetAccessProfile(ctx context.Context, id string) (*AccessPr
 	return &profile, nil
 }
 
-// ListAgents returns the response as the server sent it: its shape is not in
-// the API contract (gap C-09), so callers decode only the fields they need.
+// ListAgents returns the response as the server sent it (shape: swagger
+// agents.agentList); callers decode only the fields they need.
 func (c *HTTPClient) ListAgents(ctx context.Context) (json.RawMessage, error) {
 	return c.raw(ctx, http.MethodGet, "/api/v1/agents", nil)
 }

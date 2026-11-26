@@ -7,6 +7,42 @@ definitions:
           $ref: '#/definitions/agents.signingKeyView'
         type: array
     type: object
+  agents.agentList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.agentView'
+        type: array
+    type: object
+  agents.agentView:
+    properties:
+      agentVersion:
+        type: string
+      architecture:
+        type: string
+      capabilities:
+        items:
+          type: string
+        type: array
+      connected:
+        description: Connected is true while the agent holds an unexpired, unrevoked
+          lease.
+        type: boolean
+      hostname:
+        type: string
+      id:
+        type: string
+      lastSeenAt:
+        type: string
+      leaseExpiresAt:
+        type: string
+      os:
+        type: string
+      registeredAt:
+        type: string
+      revokedAt:
+        type: string
+    type: object
   agents.controllerKeyResponse:
     properties:
       nextPublicKey:
@@ -1313,8 +1349,7 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/agents.agentList'
         "401":
           description: Unauthorized
           schema:

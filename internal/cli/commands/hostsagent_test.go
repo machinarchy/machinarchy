@@ -242,3 +242,77 @@ func TestRetiredBrokerFlagsAreRefusedWithReplacement(t *testing.T) {
 		}
 	}
 }
+
+// revokeByNameServer answers the routes `hosts revoke-agent NAME` needs, with
+// the given enrolment tokens and agents (raw JSON arrays).
+func revokeByNameServer(t *testing.T, tokens, agents string) *apiServer {
+	t.Helper()
+	write := func(w http.ResponseWriter, status int, body string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}
+
+	return newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/managed/hosts":
+			write(w, 200, `{"items":[`+agentHostJSON+`]}`)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/agents/enrollment-tokens":
+			write(w, 200, `{"items":`+tokens+`}`)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/agents":
+			write(w, 200, `{"items":`+agents+`}`)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/v1/agents/") && strings.HasSuffix(r.URL.Path, "/revoke"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			write(w, 404, `{"error":"no route","code":"not_found"}`)
+		}
+	})
+}
+
+func TestHostsRevokeAgentFindsTheAgentByHostName(t *testing.T) {
+	const exp = `"expiresAt":"2099-01-01T00:00:00Z"`
+	tokens := `[{"id":"t1","hostId":"h7","usedByAgent":"agent-old",` + exp + `},{"id":"t2","hostId":"h7","usedByAgent":"agent-new",` + exp + `},` +
+		`{"id":"t3","hostId":"h7",` + exp + `},{"id":"t4","hostId":"other","usedByAgent":"agent-x",` + exp + `}]`
+	agents := `[{"id":"agent-old","revokedAt":"2026-11-01T00:00:00Z"},{"id":"agent-new"},{"id":"agent-x"}]`
+
+	server := revokeByNameServer(t, tokens, agents)
+	got := agentRun(t, server, false, "", "hosts", "revoke-agent", "web-01", "--no-input", "--confirm", "web-01")
+	if got.code != 0 || server.countOf("POST", "/api/v1/agents/agent-new/revoke") != 1 ||
+		server.countOf("POST", "/api/v1/agents/agent-old/revoke") != 0 || server.countOf("POST", "/api/v1/agents/agent-x/revoke") != 0 {
+		t.Fatalf("revoke by name = %+v", got)
+	}
+
+	// Typing the name is still required: --yes is not enough.
+	server = revokeByNameServer(t, tokens, agents)
+	if got := agentRun(t, server, false, "", "hosts", "revoke-agent", "web-01", "--no-input", "--yes"); got.code == 0 || server.countOf("POST", "/api/v1/agents/agent-new/revoke") != 0 {
+		t.Fatalf("--yes must not be enough: %+v", got)
+	}
+
+	// --agent-id overrides the lookup.
+	server = revokeByNameServer(t, tokens, agents)
+	if got := agentRun(t, server, false, "", "hosts", "revoke-agent", "web-01", "--agent-id", "agent-old", "--no-input", "--confirm", "web-01"); got.code != 0 ||
+		server.countOf("POST", "/api/v1/agents/agent-old/revoke") != 1 {
+		t.Fatalf("override = %+v", got)
+	}
+}
+
+func TestHostsRevokeAgentRefusesWhenAmbiguousOrUnknown(t *testing.T) {
+	const exp = `"expiresAt":"2099-01-01T00:00:00Z"`
+	two := `[{"id":"t1","hostId":"h7","usedByAgent":"agent-a",` + exp + `},{"id":"t2","hostId":"h7","usedByAgent":"agent-b",` + exp + `}]`
+	for name, tokens := range map[string]string{
+		"two active agents":  two,
+		"no used token":      `[{"id":"t1","hostId":"h7",` + exp + `}]`,
+		"old server no host": `[{"id":"t1","usedByAgent":"agent-a",` + exp + `}]`,
+	} {
+		server := revokeByNameServer(t, tokens, `[{"id":"agent-a"},{"id":"agent-b"}]`)
+		got := agentRun(t, server, false, "", "hosts", "revoke-agent", "web-01", "--no-input", "--confirm", "web-01")
+		if got.code != 2 || !strings.Contains(got.stderr, "--agent-id") {
+			t.Errorf("%s: %+v", name, got)
+		}
+		for _, id := range []string{"agent-a", "agent-b"} {
+			if server.countOf("POST", "/api/v1/agents/"+id+"/revoke") != 0 {
+				t.Errorf("%s: revoked %s without being sure", name, id)
+			}
+		}
+	}
+}
