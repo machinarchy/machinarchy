@@ -49,3 +49,20 @@ A-01 A-02 A-03 B-01 B-02 B-04 B-06 B-07 B-08 B-11 B-13 B-18 B-21 C-02 C-03 C-04 
 **Release-blocking set.** G-04, G-05 and K-04 are referenced by tests that pass (K-04 only as the wrong-shape/not-JSON message; the "old commands keep working" part is not implemented by the no-legacy rule). **Unmapped S-series IDs above must be mapped or written before release.** A-01 (five-minute test) is **not run**: it needs a clean machine and a lab server (step 6.8).
 
 **Not run:** Postgres store tests, pty/`script` layers (P: O-15 second Ctrl+C, redrawn progress, hidden-input prompts), SSH lab (L), real agent and NATS (A-02, C-07/Q1), Windows (Q6), CI nightly layers.
+
+**6.7 follow-up: S-series mapping (by reading the tests; IDs are not in the test names).**
+
+| ID | Covered by | Note |
+|---|---|---|
+| S-02 | `TestLoginWithAPrivateCertificate` (login_test.go: CA saved to `ca/lab.pem`) | later-commands-only-for-that-server not separately asserted |
+| S-04 | `TestLoginRefusesPlainHTTPToAnotherHost`, `TestLoginRemembersInsecureHTTPPerServer` | home-screen warning not asserted |
+| S-05, S-18 | `TestNoSecretIsEverVisible` (login `-v`, config show, whoami, tokens, hosts, errors) | `access show -o json` not in its list |
+| S-10, S-11, S-12 | `TestHostsTrustNeverFollowsYes` (`--all-pending --no-input`), `TestHostsTrustFingerprint` (unseen/malformed/control bytes; observed key accepted) | |
+| S-15 | `TestRunOutputIsSanitised` (`--raw` to a pipe passes bytes) | |
+| S-16 | **not tested**: needs a pty; refusal exists in `runshow.go` | layer P, not run |
+| S-17 | new `TestRunJSONOutputIsEscaped` | |
+| S-19, S-20, S-21 | `TestHostsRemoveIsInventoryOnlyAndGuarded` (`--yes` alone refused, `--confirm` accepted), `TestConfirmTyped` | `y` answer and `--no-input` wording not separately asserted |
+| S-29 | `TestOversizedResponses`, `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress` | |
+| S-31 | not applicable: the CLI does not consume server-supplied install info (C-07 absent); the blob is built from CLI-validated fields | revisit when C-07/gateway transport lands |
+
+Still unmapped outside S: A-01..03, B-*, C-*, G-16/18/20, H-07..12, K-*, O-*, U-09/10/12 (see list above); unmapped is not the same as untested.

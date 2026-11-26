@@ -615,3 +615,20 @@ func TestRunOldFormsAreGone(t *testing.T) {
 		}
 	}
 }
+
+// S-17: -o json of a run with hostile output is valid JSON with no raw
+// control byte. (S-16, --raw refused on a terminal, needs a pty: not run.)
+func TestRunJSONOutputIsEscaped(t *testing.T) {
+	fake := newRunFake()
+	id := runID("4b2d9e10", 1)
+	fake.put(operation(id, "Failed",
+		target(hostileName, "Failed", exit(1), hostileOutput, ""), target("web-02", "Failed", exit(1), "plain\n", "bad\x1b[2Jclass")))
+
+	got := runCLI(t, fake, runCfg{}, "run", "r-4b2d9e", "-o", "json")
+	if !json.Valid([]byte(got.stdout)) {
+		t.Fatalf("not valid JSON:\n%q", got.stdout)
+	}
+	if strings.ContainsAny(got.stdout, "\x1b\x07\x7f") {
+		t.Fatalf("raw control byte in JSON: %q", got.stdout)
+	}
+}

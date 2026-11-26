@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.7 follow-up: S-series mapping (branch ai/p6-automation-docs-hardening)
+
+- **Tests added:** `TestRunJSONOutputIsEscaped` (S-17) in `commands/runsops_test.go`.
+- **Docs:** `M6-notes.md` maps S-02/04/05/10/11/12/15/17/18/19/20/21/29 to existing tests by reading them. S-16 needs a pty (not run); S-31 not applicable until the CLI consumes server install info.
+- **Limitations:** mapping is by reading, not by per-ID execution; non-S unmapped IDs remain. Checks run: gofmt, golangci-lint 0 issues, `go test -race -count=1 ./internal/cli/... ./cmd/...` pass.
+
 ## 2026-11-26 — CLI M6 step 6.7: full acceptance run report (branch ai/p6-automation-docs-hardening)
 
 - **Docs only:** `docs/cli/spec/M6-notes.md` section 6.7. Checks run, all pass: gofmt, `go vet ./...`, golangci-lint (0 issues), `go test -race -count=1 ./...`, `make smoke`, `make vuln`.
