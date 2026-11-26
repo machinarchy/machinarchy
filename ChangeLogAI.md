@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.7: full acceptance run report (branch ai/p6-automation-docs-hardening)
+
+- **Docs only:** `docs/cli/spec/M6-notes.md` section 6.7. Checks run, all pass: gofmt, `go vet ./...`, golangci-lint (0 issues), `go test -race -count=1 ./...`, `make smoke`, `make vuln`.
+- **Findings:** 70 of 179 acceptance IDs are not referenced by ID in test code (listed in the notes), including several S-series IDs; they are reported as unmapped, not passing. A-01 not run (6.8).
+- **Not run:** Postgres, pty layers, SSH lab, real agent/NATS, Windows.
+
 ## 2026-11-26 — CLI M6 step 6.6 follow-up: CLI fuzz targets in `make fuzz` (branch ai/p6-automation-docs-hardening)
 
 - **Changed** `mk/checks.mk` (owner approved): `FUZZ_TARGETS` now lists the seven `internal/cli` fuzz targets, so `make fuzz` and the CI fuzz smoke run them. Checks run: `make fuzz FUZZTIME=3s` pass. Not run: CI itself.
