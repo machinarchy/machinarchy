@@ -188,7 +188,7 @@ go run ./cmd/machinarchy version
 go run ./cmd/machinarchy version -o json
 ```
 
-Prints the CLI version, commit, build time, Go version, and platform. It needs no config file or server, so it works on a fresh or damaged installation. The server's version is not available from the API.
+Prints the CLI version, commit, build time, Go version, and platform. It needs no config file or server, so it works on a fresh or damaged installation. On a terminal it starts with the logotype (also on the home screen when not signed in and on the first `login`); `--plain`, pipes and `-o json` never show it. The server's version is not available from the API.
 
 ## `config`
 

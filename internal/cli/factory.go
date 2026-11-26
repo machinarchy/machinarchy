@@ -158,6 +158,22 @@ func (f *Factory) StyleFor(w io.Writer) ui.Style {
 	return ui.DetectStyle(f.getenv, w, f.Plain())
 }
 
+// Logotype returns the logotype for output written to w, followed by a blank
+// line, or "" when w is not a terminal or plain output was asked for
+// (07-brand.md section 4).
+func (f *Factory) Logotype(w io.Writer) string {
+	if f == nil || f.Plain() || !ui.IsTerminal(w) {
+		return ""
+	}
+
+	logo := f.StyleFor(w).Logotype()
+	if logo == "" {
+		return ""
+	}
+
+	return logo + "\n"
+}
+
 // Width returns the line width available on w.
 func (f *Factory) Width(w io.Writer) int {
 	return ui.Width(f.getenv, w)

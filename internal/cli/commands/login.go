@@ -108,6 +108,13 @@ func runLogin(command *cobra.Command, f *cli.Factory, o loginOptions) error {
 	store := f.Config()
 	errOut := command.ErrOrStderr()
 
+	if len(store.ServerNames()) == 0 {
+		// The first screen of the first sign-in (07-brand.md section 4).
+		if _, err := io.WriteString(errOut, f.Logotype(errOut)); err != nil {
+			return err
+		}
+	}
+
 	target, err := chooseServer(prompter, store, o)
 	if err != nil {
 		return err

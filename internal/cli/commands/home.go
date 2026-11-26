@@ -396,6 +396,7 @@ func writeHome(out io.Writer, f *cli.Factory, doc *homeDocument) error {
 
 	switch doc.State {
 	case homeNotSignedIn:
+		b.WriteString(f.Logotype(out))
 		b.WriteString(ui.Render(msg.Get("home.not_signed_in"), style))
 	case homeExpired:
 		m := msg.Get("home.expired").With(vars)

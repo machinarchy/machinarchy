@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M5 step 5.2: logotype (branch ai/p5-home-brand)
+
+- **Added** `ui.Style.Logotype()` (`internal/cli/ui/logotype.go`: ◆ tree with accent/bold/dim roles, ASCII `*` form for non-UTF-8 locales, empty in `--plain`) and `Factory.Logotype(w)`, which returns it only when `w` is a terminal and plain output was not asked for. Shown by `version` (text output), the home screen when not signed in, and the first `login` when no server is saved (on stderr). Never in `-o json/yaml` or on a pipe.
+- **Already in place before this step** (verified, not rewritten): the 16-colour palette, symbol set with ASCII words, `NO_COLOR`, `TERM=dumb`, locale detection and plain mode in `ui/style.go`.
+- **Deviations:** `machinarchy --version` does not exist (only the `version` command); documenting/adding it stays in step 6.4. Spec 07-brand.md section 4 says plain mode prints the tagline only, section 6 says no logotype; section 6 was followed (nothing printed in plain mode).
+- **Tests:** `ui/logotype_test.go` (goldens rich/ASCII/plain, N-11, N-12, U-05, U-07 width, colour roles); `version` output to a pipe has no logotype or escape codes (N-10).
+- **Checks run:** gofmt (clean), `go vet ./internal/cli/...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass). Not run: `go test ./...`, `make smoke`, a pty/real-terminal look at the colours.
+
 ## 2026-11-26 — CLI M5 step 5.1: the home screen (branch ai/p5-home-brand)
 
 - **Added** the state-aware home screen for bare `machinarchy` (`internal/cli/commands/home.go`, hooked in through the new `cli.Options.Home` in `root.go` and `cmd/machinarchy/main.go`; a mistyped word is still "unknown command" and `--help` still prints help). It shows not signed in, expired or refused credential (exit 3), unreachable server (exit 4), no hosts, attention needed and healthy, with the suggestion priority of `03-ux.md` section 1 (key changed, waiting for key, cannot connect, no hosts, otherwise a `run --on TAG -- uptime` example), and `-o json` with a `state` field. It makes `/me`, the hosts list (first 500, scoped to the active env) and the last two runs in parallel with a 3 s limit each; a failing request degrades one line. Host and server text is sanitised; no credential is printed or sent anywhere else.

@@ -431,6 +431,10 @@ func TestVersion(t *testing.T) {
 		if got.code != 0 || !strings.HasPrefix(got.stdout, "machinarchy ") {
 			t.Fatalf("result = %+v", got)
 		}
+		// N-10: a pipe gets no logotype and no escape codes.
+		if strings.ContainsAny(got.stdout, "◆*\x1b") {
+			t.Errorf("output to a pipe has a logotype or colour:\n%q", got.stdout)
+		}
 		for _, want := range []string{"commit:", "built:", "go:", "platform:", runtime.GOOS + "/" + runtime.GOARCH} {
 			if !strings.Contains(got.stdout, want) {
 				t.Errorf("output lacks %q:\n%s", want, got.stdout)

@@ -48,7 +48,7 @@ func NewVersionCommand(factory *cli.Factory) *cobra.Command {
 			}
 
 			_, err = fmt.Fprintf(command.OutOrStdout(),
-				"machinarchy %s\ncommit:     %s\nbuilt:      %s\ngo:         %s\nplatform:   %s\n",
+				factory.Logotype(command.OutOrStdout())+"machinarchy %s\ncommit:     %s\nbuilt:      %s\ngo:         %s\nplatform:   %s\n",
 				info.Version, info.Commit, info.BuildTime, info.GoVersion, info.Platform)
 
 			return err
