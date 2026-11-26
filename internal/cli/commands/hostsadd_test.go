@@ -3,6 +3,7 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -23,6 +24,7 @@ type addScenario struct {
 	afterTrust  string
 	duplicate   bool
 	failProfile bool
+	oldServer   bool // ignores environmentId, like a server before C-01
 }
 
 const addProfiles = `{"items":[{"id":"prof-1","name":"agents","currentRevision":1},{"id":"prof-2","name":"deploy","currentRevision":2},{"id":"prof-3","name":"lab","currentRevision":1}]}`
@@ -33,7 +35,10 @@ func addServer(t *testing.T, scenario addScenario) *apiServer {
 	reads, trusted := 0, false
 
 	hostJSON := func(stage string) string {
-		const meta = `"metadata":{"id":"h9","name":"web-01","generation":3,"revision":1},`
+		meta := `"metadata":{"id":"h9","environmentId":1,"name":"web-01","generation":3,"revision":1},`
+		if scenario.oldServer {
+			meta = `"metadata":{"id":"h9","name":"web-01","generation":3,"revision":1},`
+		}
 		trust := ""
 		if trusted {
 			trust = `,"trust":["` + keyA + `"]`
@@ -61,6 +66,8 @@ func addServer(t *testing.T, scenario addScenario) *apiServer {
 		mu.Lock()
 		defer mu.Unlock()
 		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/environments":
+			write(w, 200, `[{"id":1,"name":"prod","description":""}]`)
 		case "GET /api/v1/managed/access-profiles":
 			write(w, 200, addProfiles)
 		case "GET /api/v1/managed/access-profiles/prof-1":
@@ -134,13 +141,6 @@ func (s *apiServer) countOf(method, path string) int {
 	}
 
 	return n
-}
-
-func (s *apiServer) total() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return len(s.requests)
 }
 
 const (
@@ -306,10 +306,29 @@ func TestHostsAddRefusesBadInputLocally(t *testing.T) {
 			t.Errorf("%s = %+v", name, got)
 		}
 	}
-	// The env of a new host cannot be set yet (C-01): refused before any request.
+}
+
+// --env places the new host (C-01); a server that ignores it is reported.
+func TestHostsAddEnvironment(t *testing.T) {
+	args := []string{"hosts", "add", "web-01", "10.0.0.5", "--access", "deploy", "--no-input", "--wait", "0", "--env", "prod"}
 	server := addServer(t, addScenario{})
-	if got := addRun(t, server, false, "", "hosts", "add", "web-01", "10.0.0.5", "--access", "deploy", "--env", "prod"); got.code == 0 || server.total() != 0 {
-		t.Fatalf("--env = %+v, %d requests", got, server.total())
+	if got := addRun(t, server, false, "", args...); got.code != 0 {
+		t.Fatalf("--env = %+v", got)
+	}
+	var sent map[string]any
+	for _, request := range server.requests {
+		if request.Method == http.MethodPost && request.Path == hostsPath {
+			_ = json.Unmarshal(request.Body, &sent)
+		}
+	}
+	if sent["environmentId"] != float64(1) {
+		t.Fatalf("create body = %v, want environmentId 1", sent)
+	}
+	if got := addRun(t, addServer(t, addScenario{}), false, "", "hosts", "add", "web-01", "10.0.0.5", "--access", "deploy", "--no-input", "--wait", "0", "--env", "nope"); got.code != clierr.ExitNotFound {
+		t.Fatalf("unknown env = %+v", got)
+	}
+	if got := addRun(t, addServer(t, addScenario{oldServer: true}), false, "", args...); got.code != clierr.ExitFailure || !strings.Contains(got.stderr, "ignored the env") {
+		t.Fatalf("old server = %+v", got)
 	}
 }
 

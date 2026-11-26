@@ -354,6 +354,10 @@ definitions:
     type: object
   managedresource.hostRequest:
     properties:
+      environmentId:
+        description: EnvironmentID is optional; absent means the workspace's default
+          environment.
+        type: integer
       labels:
         additionalProperties:
           type: string
@@ -365,6 +369,10 @@ definitions:
     type: object
   managedresource.hostUpdateRequest:
     properties:
+      environmentId:
+        description: EnvironmentID is optional; absent means the host stays where
+          it is.
+        type: integer
       generation:
         type: integer
       revision:
@@ -1062,7 +1070,6 @@ definitions:
     type: object
   resource.TargetState:
     enum:
-    - Lost
     - Pending
     - Running
     - Succeeded
@@ -1070,9 +1077,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
+    - Lost
     type: string
     x-enum-varnames:
-    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -1080,6 +1087,7 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
+    - TargetLost
   secret.RewrapCounts:
     properties:
       remaining:
@@ -2031,6 +2039,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httperr.Body'
       security:
       - BearerAuth: []
       summary: Create a managed host
@@ -2155,6 +2167,10 @@ paths:
             $ref: '#/definitions/httperr.Body'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
           schema:
             $ref: '#/definitions/httperr.Body'
       security:

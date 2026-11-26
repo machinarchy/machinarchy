@@ -261,9 +261,11 @@ func (c *HTTPClient) GetHost(ctx context.Context, id string) (*Host, error) {
 
 // HostInput creates a managed host.
 type HostInput struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels,omitempty"`
-	Spec   HostSpec          `json:"spec"`
+	// EnvironmentID places the host; 0 lets the server use its default env.
+	EnvironmentID int               `json:"environmentId,omitempty"`
+	Name          string            `json:"name"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Spec          HostSpec          `json:"spec"`
 }
 
 func (c *HTTPClient) CreateHost(ctx context.Context, input HostInput) (*Host, error) {
@@ -277,6 +279,14 @@ func (c *HTTPClient) CreateHost(ctx context.Context, input HostInput) (*Host, er
 func (c *HTTPClient) DeleteHost(ctx context.Context, id string, revision uint64) error {
 	return c.request(ctx, http.MethodDelete, withQuery(managedPath("hosts", id),
 		url.Values{"revision": {strconv.FormatUint(revision, 10)}}), nil, nil)
+}
+
+// MoveHost sends the host's current spec back with a new environment. A
+// server that predates host environments ignores the field and answers 204 as
+// for any update, so the caller re-reads the host to see whether it moved.
+func (c *HTTPClient) MoveHost(ctx context.Context, id string, revision, generation uint64, spec HostSpec, environmentID int) error {
+	return c.request(ctx, http.MethodPut, managedPath("hosts", id),
+		map[string]any{"revision": revision, "generation": generation, "spec": spec, "environmentId": environmentID}, nil)
 }
 
 func (c *HTTPClient) SetHostLabels(ctx context.Context, id string, revision uint64, labels map[string]string) (*Host, error) {

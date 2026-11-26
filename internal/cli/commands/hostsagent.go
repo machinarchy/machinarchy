@@ -391,7 +391,11 @@ func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o h
 	if err != nil {
 		return err
 	}
-	host, err := client.CreateHost(command.Context(), api.HostInput{Name: name, Labels: labels, Spec: api.HostSpec{
+	environmentID, err := resolveEnvironment(command.Context(), client, f.Config().Environment())
+	if err != nil {
+		return err
+	}
+	host, err := client.CreateHost(command.Context(), api.HostInput{EnvironmentID: environmentID, Name: name, Labels: labels, Spec: api.HostSpec{
 		Presence: "Managed", AccessProfileID: entryID}})
 	if err != nil {
 		var apiErr *api.Error
@@ -401,6 +405,9 @@ func runHostsAddAgent(command *cobra.Command, f *cli.Factory, args []string, o h
 		}
 
 		return fmt.Errorf("add host: %w", err)
+	}
+	if err := checkHostEnvironment(host, environmentID); err != nil {
+		return err
 	}
 	if err := printMessageTo(command.ErrOrStderr(), f, msg.Get("host.registered").With(msg.Vars{"host": sanitize.Line(name)})); err != nil {
 		return err

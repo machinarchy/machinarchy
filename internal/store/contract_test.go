@@ -356,7 +356,7 @@ func testEnvironments(t *testing.T, f *fixture) {
 		t.Fatalf("the same name in another workspace must be allowed: %v", err)
 	}
 
-	if list, err := f.stores.Environments.ListEnvironments(ctx, 1); err != nil || len(list) != 1 || list[0].Description != "prod" {
+	if list, err := f.stores.Environments.ListEnvironments(ctx, 1); err != nil || len(list) != 2 || list[1].Description != "prod" || list[0].Name != domain.DefaultEnvironmentName {
 		t.Errorf("workspace 1 environments = %+v, %v", list, err)
 	}
 	if _, err := f.stores.Environments.GetEnvironmentByID(ctx, other, production.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
@@ -491,8 +491,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 1 {
-		t.Fatalf("applied migrations = %d, want the single baseline", before)
+	if before != 2 {
+		t.Fatalf("applied migrations = %d, want the baseline and the default environment", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

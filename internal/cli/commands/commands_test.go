@@ -96,6 +96,9 @@ type fakeClient struct {
 	outputs   map[string]string // "op/host" -> the full stream, served in 6-byte steps
 	deleted   []string
 	trusted   []string
+	moves     []string
+	createdIn []int
+	oldServer bool // ignores environments on hosts, like a server before C-01
 	calls     int
 }
 
@@ -136,7 +139,11 @@ func (f *fakeClient) GetHost(_ context.Context, id string) (*api.Host, error) {
 }
 
 func (f *fakeClient) CreateHost(_ context.Context, input api.HostInput) (*api.Host, error) {
-	host := api.Host{Metadata: api.HostMetadata{ID: fmt.Sprint(len(f.hosts) + 100), Name: input.Name, Labels: input.Labels, Revision: 1}, Spec: input.Spec}
+	host := api.Host{Metadata: api.HostMetadata{ID: fmt.Sprint(len(f.hosts) + 100), Name: input.Name, Labels: input.Labels, Revision: 1, Generation: 1}, Spec: input.Spec}
+	f.createdIn = append(f.createdIn, input.EnvironmentID)
+	if !f.oldServer {
+		host.Metadata.EnvironmentID = input.EnvironmentID
+	}
 	f.hosts = append(f.hosts, host)
 	return &host, nil
 }
@@ -162,6 +169,23 @@ func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint
 		}
 	}
 	return nil, &api.Error{Status: 404, Message: "resource not found"}
+}
+
+func (f *fakeClient) MoveHost(_ context.Context, id string, revision, generation uint64, _ api.HostSpec, environmentID int) error {
+	f.moves = append(f.moves, fmt.Sprintf("%s->%d", id, environmentID))
+	for i := range f.hosts {
+		if f.hosts[i].Metadata.ID == id {
+			if f.hosts[i].Metadata.Revision != revision || f.hosts[i].Metadata.Generation != generation {
+				return &api.Error{Status: 409, Message: "resource revision conflict"}
+			}
+			if !f.oldServer {
+				f.hosts[i].Metadata.EnvironmentID = environmentID
+				f.hosts[i].Metadata.Revision++
+			}
+			return nil
+		}
+	}
+	return &api.Error{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) SetHostLabels(_ context.Context, id string, revision uint64, labels map[string]string) (*api.Host, error) {

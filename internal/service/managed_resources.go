@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -43,7 +44,44 @@ func NewManagedResourceService(hosts resource.HostRepository, profiles resource.
 	return service, nil
 }
 
+// CreateHost creates a host in the workspace's default environment.
 func (s *ManagedResourceService) CreateHost(ctx context.Context, principal domain.Principal, name string, labels map[string]string, spec resource.HostSpec) (*resource.Host, error) {
+	return s.CreateHostInEnvironment(ctx, principal, 0, name, labels, spec)
+}
+
+// resolveEnvironment returns the environment a host should be in. 0 means the
+// workspace's default environment; any other ID must exist in the workspace.
+// Without an environment source (tests) 0 stays 0.
+func (s *ManagedResourceService) resolveEnvironment(ctx context.Context, workspaceID, requested int) (int, error) {
+	if requested < 0 {
+		return 0, domain.ErrEnvironmentUnknown
+	}
+	if s.environments == nil {
+		if requested != 0 {
+			return 0, domain.ErrEnvironmentUnknown
+		}
+		return 0, nil
+	}
+	list, err := s.environments.ListEnvironments(ctx, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	for _, environment := range list {
+		if requested > 0 && environment.ID == requested {
+			return requested, nil
+		}
+		if requested == 0 && strings.EqualFold(environment.Name, domain.DefaultEnvironmentName) {
+			return environment.ID, nil
+		}
+	}
+	if requested == 0 {
+		return 0, nil // no default yet (database predates migration 000002)
+	}
+	return 0, domain.ErrEnvironmentUnknown
+}
+
+// CreateHostInEnvironment creates a host in environmentID (0 = default).
+func (s *ManagedResourceService) CreateHostInEnvironment(ctx context.Context, principal domain.Principal, environmentID int, name string, labels map[string]string, spec resource.HostSpec) (*resource.Host, error) {
 	if err := authorizeManagedHost(principal); err != nil {
 		return nil, err
 	}
@@ -54,7 +92,11 @@ func (s *ManagedResourceService) CreateHost(ctx context.Context, principal domai
 			return nil, err
 		}
 	}
-	host, err := resource.NewHost(principal.WorkspaceID, 0, name, labels, spec, time.Now().UTC())
+	environmentID, err := s.resolveEnvironment(ctx, principal.WorkspaceID, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	host, err := resource.NewHost(principal.WorkspaceID, environmentID, name, labels, spec, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -65,19 +107,39 @@ func (s *ManagedResourceService) CreateHost(ctx context.Context, principal domai
 }
 
 func (s *ManagedResourceService) UpdateHost(ctx context.Context, principal domain.Principal, id resource.ID, revision, generation uint64, spec resource.HostSpec) error {
+	return s.UpdateHostInEnvironment(ctx, principal, id, revision, generation, 0, spec)
+}
+
+// UpdateHostInEnvironment replaces a host's spec and, when environmentID is
+// not 0, moves it to that environment (0 = leave it where it is). A move
+// needs only inventory write, like a label change: it never changes where a
+// credential is presented. The two writes are separate revisions, so a failure
+// between them leaves the host moved with its old spec; the caller sees the
+// error and retries against the new revision.
+func (s *ManagedResourceService) UpdateHostInEnvironment(ctx context.Context, principal domain.Principal, id resource.ID, revision, generation uint64, environmentID int, spec resource.HostSpec) error {
 	if err := authorizeManagedHost(principal); err != nil {
 		return err
 	}
-	if spec.AccessProfileID != "" {
-		current, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)
-		if err != nil {
+	target := 0
+	if environmentID != 0 {
+		var err error
+		if target, err = s.resolveEnvironment(ctx, principal.WorkspaceID, environmentID); err != nil {
 			return err
 		}
-		if current.Metadata.Revision != revision {
-			return resource.ErrConflict // the store would reject it too; never authorize against a stale spec
-		}
+	}
+	if spec.AccessProfileID == "" && target == 0 {
+		return s.hosts.UpdateHostSpec(ctx, principal.WorkspaceID, id, revision, generation, spec, time.Now().UTC())
+	}
+	current, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)
+	if err != nil {
+		return err
+	}
+	if current.Metadata.Revision != revision {
+		return resource.ErrConflict // the store would reject it too; never authorize against a stale spec
+	}
+	if spec.AccessProfileID != "" {
 		if credentialBindingChanged(current.Spec, spec) {
-			if err := authorizeProfileOwner(principal); err != nil {
+			if err = authorizeProfileOwner(principal); err != nil {
 				return err
 			}
 		}
@@ -88,6 +150,13 @@ func (s *ManagedResourceService) UpdateHost(ctx context.Context, principal domai
 			slices.Equal(current.Spec.AccessTarget.Trust, spec.AccessTarget.Trust) {
 			spec.AccessTarget.Trust = nil
 		}
+	}
+	if target != 0 && current.Metadata.EnvironmentID != target {
+		if err = s.hosts.UpdateHostMetadata(ctx, principal.WorkspaceID, id, revision, current.Metadata.Name,
+			target, current.Metadata.Labels, time.Now().UTC()); err != nil {
+			return err
+		}
+		revision++
 	}
 	return s.hosts.UpdateHostSpec(ctx, principal.WorkspaceID, id, revision, generation, spec, time.Now().UTC())
 }

@@ -24,12 +24,12 @@ Roles: **any** = reader, operator or owner; **runs** = may execute runs (operato
 | `hosts` | list hosts | `GET /api/v1/managed/hosts` (`selector`, `environment`, `phase`, `cursor`, `limit` <= 500) | any | yes | - |
 | `hosts show` | get host | `GET /api/v1/managed/hosts/{id}` | any | yes (metadata, spec, status, conditions, `observedHostKeys`) | - |
 | `hosts show` (recent runs) | list operations by host | `GET /api/v1/managed/operations?host=ID` | any | yes | - |
-| `hosts add` (SSH) | create host | `POST /api/v1/managed/hosts` (`name`, `labels`, `spec.presence`, `spec.accessProfileId`, `spec.accessTarget.endpoint`, `.trust`) | **owner** when binding an access profile (`service/managed_resources.go:50-53`) | yes | C-01 for env |
+| `hosts add` (SSH) | create host | `POST /api/v1/managed/hosts` (`name`, `labels`, `spec.presence`, `spec.accessProfileId`, `spec.accessTarget.endpoint`, `.trust`) | **owner** when binding an access profile (`service/managed_resources.go:50-53`) | yes | C-01 done: optional `environmentId`, default env when absent |
 | `hosts add` (credential) | create secret | `POST /api/v1/secrets` | owner session | yes (`purpose` is fixed to `ssh-credential` by the CLI) | - |
 | `hosts add`, `access add` | create access profile | `POST /api/v1/managed/access-profiles` | owner | yes | - |
 | `hosts add` (wait) | get host (poll) | `GET /api/v1/managed/hosts/{id}` | any | yes | - |
 | `hosts tag` | set labels | `PATCH /api/v1/managed/hosts/{id}/labels` (`revision`, `labels`) | per service rules | yes | - |
-| `hosts move` | replace host spec/metadata | `PUT /api/v1/managed/hosts/{id}` | owner for profile/endpoint/trust changes | **no env field accepted** (`hostUpdateRequest`: `revision`, `generation`, `spec`) | **C-01** |
+| `hosts move` | replace host spec/metadata | `PUT /api/v1/managed/hosts/{id}` | owner for profile/endpoint/trust changes | C-01 done: optional `environmentId` (absent = unchanged; unknown = 422); a move is a second revision | none |
 | `hosts trust` | trust host keys | `POST /api/v1/managed/hosts/{id}/trust` (`generation`, `fingerprints`, `replace`) | owner | yes | - |
 | `hosts add --agent`, `hosts enroll` | issue enrolment token | `POST /api/v1/agents/enrollment-tokens` (`hostId`, `hostname`, `ttlSeconds`) | owner session | yes (token shown once) | C-07 for the install command |
 | `hosts enroll --revoke-old` | list / revoke enrolment tokens | `GET /api/v1/agents/enrollment-tokens`, `DELETE /api/v1/agents/enrollment-tokens/{id}` | owner session | yes | - |

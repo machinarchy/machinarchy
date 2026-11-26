@@ -257,3 +257,31 @@ func TestCapabilityOperationsAPI(t *testing.T) {
 		t.Fatalf("capability view must name the capability and hide its input: %s", view.raw)
 	}
 }
+
+// C-01: a host without environmentId joins the default environment (ID 1 on
+// a fresh database), an explicit one is kept, and an unknown one is a 422.
+func TestHostEnvironmentOverHTTP(t *testing.T) {
+	f := newAPI(t)
+	hostBody := func(name string, environment int) map[string]any {
+		body := map[string]any{"name": name, "spec": map[string]any{"accessTarget": map[string]any{"endpoint": "192.0.2.9:22"}}}
+		if environment != 0 {
+			body["environmentId"] = environment
+		}
+		return body
+	}
+	created := f.expect(f.do(domain.RoleOperator, http.MethodPost, "/managed/hosts", hostBody("env-a", 0)), http.StatusCreated, "create without env")
+	metadata, _ := created.body["metadata"].(map[string]any)
+	if metadata["environmentId"] != float64(1) {
+		t.Fatalf("default environment = %v, want 1 (%s)", metadata["environmentId"], created.raw)
+	}
+	f.expect(f.do(domain.RoleOperator, http.MethodPost, "/managed/hosts", hostBody("env-b", 1)), http.StatusCreated, "create in env 1")
+	f.expect(f.do(domain.RoleOperator, http.MethodPost, "/managed/hosts", hostBody("env-c", 9999)), http.StatusUnprocessableEntity, "create in unknown env")
+
+	path := "/managed/hosts/" + metadata["id"].(string)
+	update := map[string]any{"revision": 1, "generation": 1, "environmentId": 9999,
+		"spec": map[string]any{"presence": "Managed", "accessTarget": map[string]any{"endpoint": "192.0.2.9:22"}}}
+	f.expect(f.do(domain.RoleOperator, http.MethodPut, path, update), http.StatusUnprocessableEntity, "move to unknown env")
+	f.expect(f.do(domain.RoleReader, http.MethodPut, path, update), http.StatusForbidden, "reader move")
+	update["environmentId"] = 1
+	f.expect(f.do(domain.RoleOperator, http.MethodPut, path, update), http.StatusNoContent, "update with the current env")
+}

@@ -1,9 +1,11 @@
 package commands_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -177,15 +179,63 @@ func TestHostsInProtectedEnvNeedTheEnvName(t *testing.T) {
 	}
 }
 
-func TestHostsMoveIsRefusedUntilTheServerCan(t *testing.T) {
-	server := hostsGroupServer(t)
+func TestHostsMove(t *testing.T) {
+	var mu sync.Mutex
+	environment, ignore := 1, false
+	var server *apiServer
+	server = newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/environments":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"production","description":""},{"id":2,"name":"staging","description":""}]`))
+		case "GET /api/v1/managed/hosts":
+			_, _ = w.Write([]byte(`{"items":[` + hostJSON("h1", "web-01", environment, "prof-2", "Active", "True", "Ready", `{}`) + `]}`))
+		case "GET /api/v1/managed/hosts/h1":
+			_, _ = w.Write([]byte(hostJSON("h1", "web-01", environment, "prof-2", "Active", "True", "Ready", `{}`)))
+		case "PUT /api/v1/managed/hosts/h1":
+			var body struct {
+				Revision      uint64 `json:"revision"`
+				EnvironmentID int    `json:"environmentId"`
+			}
+			server.mu.Lock() // the server helper already read the body; it keeps a copy
+			_ = json.Unmarshal(server.requests[len(server.requests)-1].Body, &body)
+			server.mu.Unlock()
+			if body.Revision != 4 {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":"conflict","code":"conflict"}`))
+				return
+			}
+			if !ignore {
+				environment = body.EnvironmentID
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
 	config := writeConfig(t, server.URL, "tok")
 
-	got := execute(t, nil, "", "--config", config, "hosts", "move", "web-01", "--env", "staging")
-	if got.code == 0 || !strings.Contains(got.stderr, "cannot move hosts between envs") || server.saw(http.MethodPatch, "/api/v1/managed/hosts/h1") {
-		t.Fatalf("move = %+v", got)
-	}
 	if noEnv := execute(t, nil, "", "--config", config, "hosts", "move", "web-01"); noEnv.code != clierr.ExitUsage {
 		t.Fatalf("move without --env = %+v", noEnv)
+	}
+	if got := execute(t, nil, "", "--config", config, "hosts", "move", "web-01", "--env", "nope"); got.code != clierr.ExitNotFound || server.saw(http.MethodPut, "/api/v1/managed/hosts/h1") {
+		t.Fatalf("move to unknown env = %+v", got)
+	}
+	if got := execute(t, nil, "", "--config", config, "hosts", "move", "web-01", "--env", "production"); got.code != 0 || !strings.Contains(got.stdout, "already in") || server.saw(http.MethodPut, "/api/v1/managed/hosts/h1") {
+		t.Fatalf("move to the same env = %+v", got)
+	}
+	mu.Lock()
+	ignore = true
+	mu.Unlock()
+	if got := execute(t, nil, "", "--config", config, "hosts", "move", "web-01", "--env", "staging"); got.code != clierr.ExitFailure || !strings.Contains(got.stderr, "cannot move hosts between envs") {
+		t.Fatalf("old server = %+v", got)
+	}
+	mu.Lock()
+	ignore = false
+	mu.Unlock()
+	if got := execute(t, nil, "", "--config", config, "hosts", "move", "web-01", "--env", "staging"); got.code != 0 || !strings.Contains(got.stdout, "Moved web-01 to staging") {
+		t.Fatalf("move = %+v", got)
 	}
 }

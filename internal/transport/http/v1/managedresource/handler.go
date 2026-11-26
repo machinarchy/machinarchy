@@ -26,14 +26,18 @@ func NewHandler(application *service.ManagedResourceService) *Handler {
 }
 
 type hostRequest struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels,omitempty"`
-	Spec   resource.HostSpec `json:"spec"`
+	Name string `json:"name"`
+	// EnvironmentID is optional; absent means the workspace's default environment.
+	EnvironmentID int               `json:"environmentId,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Spec          resource.HostSpec `json:"spec"`
 }
 type hostUpdateRequest struct {
-	Revision   uint64            `json:"revision"`
-	Generation uint64            `json:"generation"`
-	Spec       resource.HostSpec `json:"spec"`
+	// EnvironmentID is optional; absent means the host stays where it is.
+	EnvironmentID int               `json:"environmentId,omitempty"`
+	Revision      uint64            `json:"revision"`
+	Generation    uint64            `json:"generation"`
+	Spec          resource.HostSpec `json:"spec"`
 }
 type labelsRequest struct {
 	Revision uint64            `json:"revision"`
@@ -179,11 +183,12 @@ func (h *Handler) ListHosts(c echo.Context) error {
 // @Failure 401 {object} httperr.Body
 // @Failure 403 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
+// @Failure 422 {object} httperr.Body
 // @Router /api/v1/managed/hosts [post]
 func (h *Handler) CreateHost(c echo.Context) error {
 	var request hostRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
-		return h.service.CreateHost(ctx, p, request.Name, request.Labels, request.Spec)
+		return h.service.CreateHostInEnvironment(ctx, p, request.EnvironmentID, request.Name, request.Labels, request.Spec)
 	})
 }
 
@@ -219,12 +224,13 @@ func (h *Handler) GetHost(c echo.Context) error {
 // @Failure 403 {object} httperr.Body
 // @Failure 404 {object} httperr.Body
 // @Failure 409 {object} httperr.Body
+// @Failure 422 {object} httperr.Body
 // @Router /api/v1/managed/hosts/{id} [put]
 func (h *Handler) UpdateHost(c echo.Context) error {
 	var id resource.ID
 	var request hostUpdateRequest
 	return call(c, http.StatusNoContent, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (any, error) {
-		return nil, h.service.UpdateHost(ctx, p, id, request.Revision, request.Generation, request.Spec)
+		return nil, h.service.UpdateHostInEnvironment(ctx, p, id, request.Revision, request.Generation, request.EnvironmentID, request.Spec)
 	})
 }
 

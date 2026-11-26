@@ -82,8 +82,8 @@ func TestSQLiteWorkspaceAuthorizationAndAPITokens(t *testing.T) {
 	}
 
 	visibleA, err := stores.Environments.ListEnvironments(ctx, ownerA.WorkspaceID)
-	if err != nil || len(visibleA) != 1 || visibleA[0].ID != envA.ID {
-		t.Fatalf("workspace A environments = %#v, err=%v; want only env A", visibleA, err)
+	if err != nil || len(visibleA) != 2 || visibleA[0].Name != domain.DefaultEnvironmentName || visibleA[1].ID != envA.ID {
+		t.Fatalf("workspace A environments = %#v, err=%v; want the default environment and env A", visibleA, err)
 	}
 	if _, err := stores.Environments.GetEnvironmentByID(ctx, ownerA.WorkspaceID, envB.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
 		t.Fatalf("cross-workspace environment lookup error = %v, want not found", err)

@@ -145,10 +145,6 @@ func validateHostName(name string) error {
 }
 
 func runHostsAdd(command *cobra.Command, f *cli.Factory, args []string, o hostsAddOptions) error {
-	if flag := command.Flags().Lookup("env"); flag != nil && flag.Changed {
-		return clierr.Detailed(clierr.ExitFailure, errors.New("this server cannot place a new host in an env yet"),
-			"the server does not accept an env when a host is created (gap C-01); the host would land in the default env", "machinarchy hosts add NAME ADDRESS")
-	}
 	if o.agent {
 		return runHostsAddAgent(command, f, args, o)
 	}
@@ -548,7 +544,11 @@ func executeHostsAdd(command *cobra.Command, f *cli.Factory, client api.Client, 
 		}
 	}
 
-	host, err := client.CreateHost(command.Context(), api.HostInput{Name: plan.name, Labels: labels, Spec: api.HostSpec{
+	environmentID, err := resolveEnvironment(command.Context(), client, f.Config().Environment())
+	if err != nil {
+		return err
+	}
+	host, err := client.CreateHost(command.Context(), api.HostInput{EnvironmentID: environmentID, Name: plan.name, Labels: labels, Spec: api.HostSpec{
 		Presence: "Managed", AccessProfileID: accessID, AccessTarget: api.HostAccessTarget{Endpoint: plan.endpoint}}})
 	if err != nil {
 		var apiErr *api.Error
@@ -558,6 +558,9 @@ func executeHostsAdd(command *cobra.Command, f *cli.Factory, client api.Client, 
 		}
 
 		return fmt.Errorf("add host: %w", err)
+	}
+	if err := checkHostEnvironment(host, environmentID); err != nil {
+		return err
 	}
 	name := sanitize.Line(plan.name)
 	if err := printMessageTo(errOut, f, msg.Get("host.registered").With(msg.Vars{"host": name})); err != nil {
@@ -765,4 +768,17 @@ func noteFor(server string) string {
 	}
 
 	return "It is sent to your server over HTTPS." + tail
+}
+
+// checkHostEnvironment reports a server that ignored the env asked for. Such a
+// server predates host environments (C-01): the host exists, but not where
+// the user asked.
+func checkHostEnvironment(host *api.Host, want int) error {
+	if want == 0 || host.Metadata.EnvironmentID == want {
+		return nil
+	}
+
+	return clierr.Detailed(clierr.ExitFailure, errors.New("this server ignored the env: the host was not placed in it"),
+		fmt.Sprintf("host %q exists but this server does not support envs on hosts; update the server", sanitize.Line(host.Metadata.Name)),
+		"machinarchy hosts show "+host.Metadata.Name)
 }

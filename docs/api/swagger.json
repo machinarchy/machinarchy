@@ -1373,6 +1373,12 @@
                         "schema": {
                             "$ref": "#/definitions/httperr.Body"
                         }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
                     }
                 }
             }
@@ -1498,6 +1504,12 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
                         "schema": {
                             "$ref": "#/definitions/httperr.Body"
                         }
@@ -4023,6 +4035,10 @@
         "managedresource.hostRequest": {
             "type": "object",
             "properties": {
+                "environmentId": {
+                    "description": "EnvironmentID is optional; absent means the workspace's default environment.",
+                    "type": "integer"
+                },
                 "labels": {
                     "type": "object",
                     "additionalProperties": {
@@ -4040,6 +4056,10 @@
         "managedresource.hostUpdateRequest": {
             "type": "object",
             "properties": {
+                "environmentId": {
+                    "description": "EnvironmentID is optional; absent means the host stays where it is.",
+                    "type": "integer"
+                },
                 "generation": {
                     "type": "integer"
                 },
@@ -5010,24 +5030,24 @@
         "resource.TargetState": {
             "type": "string",
             "enum": [
-                "Lost",
                 "Pending",
                 "Running",
                 "Succeeded",
                 "Failed",
                 "TimedOut",
                 "Cancelled",
-                "Interrupted"
+                "Interrupted",
+                "Lost"
             ],
             "x-enum-varnames": [
-                "TargetLost",
                 "TargetPending",
                 "TargetRunning",
                 "TargetSucceeded",
                 "TargetFailed",
                 "TargetTimedOut",
                 "TargetCancelled",
-                "TargetInterrupted"
+                "TargetInterrupted",
+                "TargetLost"
             ]
         },
         "secret.RewrapCounts": {

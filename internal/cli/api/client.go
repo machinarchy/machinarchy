@@ -48,6 +48,7 @@ type Client interface {
 	GetHost(context.Context, string) (*Host, error)
 	CreateHost(context.Context, HostInput) (*Host, error)
 	DeleteHost(context.Context, string, uint64) error
+	MoveHost(ctx context.Context, id string, revision, generation uint64, spec HostSpec, environmentID int) error
 	SetHostLabels(context.Context, string, uint64, map[string]string) (*Host, error)
 	TrustHostKeys(context.Context, string, uint64, []string, bool) (*Host, error)
 	ListEnvironments(context.Context) ([]Environment, error)

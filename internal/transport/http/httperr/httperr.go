@@ -143,6 +143,9 @@ var common = []Mapping{
 	{resource.ErrHostNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrOperationNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrAccessProfileNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
+	{domain.ErrEnvironmentUnknown, http.StatusUnprocessableEntity, CodeInvalidRequest, domain.ErrEnvironmentUnknown.Error()},
+	{domain.ErrEnvironmentInUse, http.StatusConflict, CodeConflict, domain.ErrEnvironmentInUse.Error()},
+	{domain.ErrDefaultEnvironment, http.StatusConflict, CodeConflict, domain.ErrDefaultEnvironment.Error()},
 	{domain.ErrInvalidInput, http.StatusBadRequest, CodeInvalidRequest, ""},
 	{resource.ErrInvalidResource, http.StatusBadRequest, CodeInvalidRequest, "invalid resource request"},
 }

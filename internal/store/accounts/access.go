@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -256,6 +257,16 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
+	var current string
+	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT name FROM environments WHERE id = ? AND workspace_id = ?`),
+		environment.ID, environment.WorkspaceID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrEnvironmentNotFound
+	} else if err != nil {
+		return fmt.Errorf("read environment %d: %w", environment.ID, err)
+	}
+	if strings.EqualFold(current, domain.DefaultEnvironmentName) && !strings.EqualFold(environment.Name, domain.DefaultEnvironmentName) {
+		return domain.ErrDefaultEnvironment
+	}
 	result, err := s.db.ExecContext(ctx, s.bind(`UPDATE environments SET name = ?, description = ? WHERE id = ? AND workspace_id = ?`),
 		environment.Name, environment.Description, environment.ID, environment.WorkspaceID)
 	if err != nil {
@@ -271,6 +282,24 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 func (s *Store) DeleteEnvironment(ctx context.Context, workspaceID, id int) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
+	}
+	var name string
+	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT name FROM environments WHERE id = ? AND workspace_id = ?`),
+		id, workspaceID).Scan(&name); errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrEnvironmentNotFound
+	} else if err != nil {
+		return fmt.Errorf("read environment %d: %w", id, err)
+	}
+	if strings.EqualFold(name, domain.DefaultEnvironmentName) {
+		return domain.ErrDefaultEnvironment
+	}
+	var hosts int
+	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM managed_hosts WHERE workspace_id = ? AND environment_id = ?`),
+		workspaceID, id).Scan(&hosts); err != nil {
+		return fmt.Errorf("count hosts of environment %d: %w", id, err)
+	}
+	if hosts > 0 {
+		return domain.ErrEnvironmentInUse
 	}
 	result, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM environments WHERE id = ? AND workspace_id = ?`), id, workspaceID)
 	if err != nil {

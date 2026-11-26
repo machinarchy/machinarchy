@@ -462,9 +462,9 @@ func staleHost(err error) error {
 func newHostsMoveCommand(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
 		Use:   "move NAME --env ENV",
-		Short: "Move a host to another env (needs a newer server)",
-		Long: "Moving a host between envs needs a server feature that does not exist yet (the server cannot change the env of an\n" +
-			"existing host). This command checks the names and then says so; nothing is changed.",
+		Short: "Move a host to another env",
+		Long: "Moves a host to another env. Every host is in exactly one env; the host keeps its name, tags and access.\n" +
+			"A locally protected source or target env needs its name typed (or --confirm-env in a script).",
 		Example: "  machinarchy hosts move web-01 --env staging",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -484,13 +484,48 @@ func newHostsMoveCommand(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := resolveEnvironment(command.Context(), client, target); err != nil {
+			targetID, err := resolveEnvironment(command.Context(), client, target)
+			if err != nil {
 				return err
 			}
-
-			return clierr.Detailed(clierr.ExitFailure, errors.New("this server cannot move hosts between envs yet"),
-				fmt.Sprintf("the server API has no way to change the env of host %q", sanitize.Line(host.Metadata.Name)),
-				"remove the host and add it again in the other env: machinarchy hosts remove "+host.Metadata.Name)
+			name := sanitize.Line(host.Metadata.Name)
+			if host.Metadata.EnvironmentID == targetID {
+				_, err = fmt.Fprintf(command.OutOrStdout(), "%s is already in %s; nothing was changed.\n", name, sanitize.Line(target))
+				return err
+			}
+			source, sourceProtected, err := hostEnvName(command.Context(), f, client, host)
+			if err != nil {
+				return err
+			}
+			if sourceProtected {
+				if err = confirmProtectedEnv(f, source, true); err != nil {
+					return err
+				}
+			}
+			if f.Config().LocalProtected(target) {
+				if err = confirmProtectedEnv(f, target, true); err != nil {
+					return err
+				}
+			}
+			if err = client.MoveHost(command.Context(), host.Metadata.ID, host.Metadata.Revision, host.Metadata.Generation, host.Spec, targetID); err != nil {
+				var apiErr *api.Error
+				if errors.As(err, &apiErr) && apiErr.Status == 409 {
+					return clierr.Detailed(clierr.ExitConflict, fmt.Errorf("the host %s changed meanwhile", name),
+						"nothing was changed", "machinarchy hosts move "+host.Metadata.Name+" --env "+target)
+				}
+				return fmt.Errorf("move host: %w", err)
+			}
+			moved, err := client.GetHost(command.Context(), host.Metadata.ID)
+			if err != nil {
+				return fmt.Errorf("read the host after the move: %w", err)
+			}
+			if moved.Metadata.EnvironmentID != targetID {
+				return clierr.Detailed(clierr.ExitFailure, errors.New("this server cannot move hosts between envs"),
+					fmt.Sprintf("host %q is still in its old env; the server ignored the request (it predates envs on hosts)", name),
+					"update the server")
+			}
+			_, err = fmt.Fprintf(command.OutOrStdout(), "Moved %s to %s.\n", name, sanitize.Line(target))
+			return err
 		},
 	}
 }
