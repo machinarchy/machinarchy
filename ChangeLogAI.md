@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.5: documentation (branch ai/p6-automation-docs-hardening)
+
+- **Docs:** README "Five-minute path"; new `docs/cli/ci.md` (CI and scripts), `docs/cli/migration.md` (old to new, no aliases, behaviour changes), `docs/cli/messages.md` (generated from the message catalogue); `docs/cli/user-full-guide.md` rewritten for the current commands (lab hosts, ports and key paths taken from `deployments/testing`); `docs/cli/README.md` links and a pointer that the spec is a design record. One synopsis line in `commands.md` made a real example.
+- **Tests added:** `commands/docs_test.go` `TestDocsExamplesParse` (every `machinarchy ...` line in `sh`/`bash` fences of the README and `docs/cli/*.md` is accepted by the command's parser; 20+ lines required); `msg/docs_test.go` `TestMessagesDoc` (fails when `messages.md` differs from the catalogue; `-update` rewrites it).
+- **Limitations:** the guide has no recorded output (it was not re-run against the lab, so no output is claimed); the doc test checks parsing, not that the commands succeed. `troubleshooting.md` stays hand-written; the generated page is `messages.md`. Checks run: gofmt, vet, golangci-lint 0 issues, `go test -race -cover ./internal/cli/... ./cmd/...` pass; not run: `go test ./...`, smoke, the lab guide itself.
+
 ## 2026-11-26 — CLI M6 step 6.4: install and upgrade docs (branch ai/p6-automation-docs-hardening)
 
 - **Docs only:** `README.md` section "Install the CLI" (checksum and attestation verification, `machinarchy version`, upgrade procedure); pointer in `docs/cli/README.md`. Verified against `.github/workflows/release.yml`: `publish-assets` already builds linux/darwin amd64/arm64, writes `checksums.txt` and attests; no workflow or script was changed.

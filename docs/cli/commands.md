@@ -149,7 +149,7 @@ machinarchy hosts show web-01                 # status, env, address, access, co
 machinarchy hosts tag web-01 tier=web canary- # KEY=VALUE sets, KEY- removes
 machinarchy hosts remove web-01               # type the name; in a script: --confirm web-01
 machinarchy hosts add web-01 --agent          # register an agent host and print its install blob (owner)
-machinarchy hosts enroll web-01 [--ttl 1h] [--token-out FILE] [--revoke-old] [--show-controller-key]
+machinarchy hosts enroll web-01 --ttl 1h --token-out web-01.blob   # also --revoke-old, --show-controller-key
 machinarchy hosts revoke-agent web-01 --agent-id ID   # type the name; --yes is not enough
 ```
 

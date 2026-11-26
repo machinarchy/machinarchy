@@ -71,6 +71,28 @@ there is no `--version` flag.
 CLI answers "Update the CLI", the server is newer than the CLI; see
 [supported servers](docs/cli/commands.md). Release notes list breaking changes.
 
+## Five-minute path
+
+From an installed CLI and a running server to your first command on a host.
+Every line below is checked to be a valid command by `TestDocsExamplesParse`.
+
+```sh
+machinarchy login https://machinarchy.example.com
+machinarchy envs add staging
+machinarchy envs use staging
+machinarchy access add deploy-key --how ssh-key --user deploy --key-file ~/.ssh/id_ed25519
+machinarchy hosts add web-01 10.0.0.5 --access deploy-key
+machinarchy hosts trust web-01
+machinarchy run --on web-01 -- uptime
+```
+
+`login` asks for your email and password (typed without echo). `hosts add`
+waits for the first connection; `hosts trust` shows the SSH host key the server
+saw and asks you to type part of its fingerprint, which you compare with the
+key on the machine. Each command prints the next one to run. Scripts and CI:
+[docs/cli/ci.md](docs/cli/ci.md). Coming from the old commands:
+[docs/cli/migration.md](docs/cli/migration.md).
+
 ## Build
 
 ```sh

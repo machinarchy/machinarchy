@@ -99,7 +99,9 @@ opt-in belongs to that saved server: an address given with `--server` or
 `MACHINARCHY_SERVER` never inherits it, and a saved credential is never sent to
 an address that is not a saved server.
 
-**New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
+**New here?** Follow the five-minute path in the [README](../../README.md#five-minute-path), or the [full user guide](user-full-guide.md): a lab with three SSH servers, from login to hosts, host-key trust, detached runs, cancel and cleanup. Scripts: [CI](ci.md). Coming from the old commands: [migration](migration.md). Every error and what to do: [messages](messages.md).
+
+The design record is in [spec/](spec/) (see `M1-notes.md` to `M6-notes.md` for what was built and where it differs); where they disagree, these pages and `--help` describe the implemented behaviour.
 
 See [commands and flags](commands.md) for details and [example-cli.md](example-cli.md) for end-to-end recipes.
 
