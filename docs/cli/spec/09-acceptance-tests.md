@@ -14,7 +14,7 @@
 
 ### A-01 SSH path (L, P)
 - **Initial state:** a controller running with a bootstrap owner; one lab SSH server reachable from the controller (key auth); the CLI binary just downloaded; no CLI config; a timer starts at `machinarchy` first typed.
-- **Steps:** `machinarchy` -> `machinarchy login` (answers: server URL, default name, option 1, email, password, `Y` to stay signed in) -> `machinarchy hosts add` (answers: name, address, option 1 key, user, key path, send `Y`, option 1 approve) -> type the first 8 characters of the fingerprint when asked -> `machinarchy run --on web-01 -- uptime` (answer `y`).
+- **Steps:** `machinarchy` -> `machinarchy login` (answers: server URL, default name, option 1, email, password, `Y` to stay signed in) -> `machinarchy hosts add` (answers: name, address, option 1 key, user, key path, send `Y`, option 1 approve) -> type `yes` when asked to trust the key -> `machinarchy run --on web-01 -- uptime` (answer `y`).
 - **Expected:** every prompt matches `03-ux.md` section 2.1 in wording and order; the host reaches `ready`; the run prints `✔ 1 of 1 hosts succeeded` and the uptime line; the user never types a command that is not printed in a `Next:` line, except the first (`machinarchy`).
 - **Exit codes:** 0 for each command.
 - **Pass:** total time under 5 minutes of wall clock for a person following the printed prompts (measured in a usability session with a person who has not used it; the automated version under 90 s excluding human think-time); zero uses of documentation.

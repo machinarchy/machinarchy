@@ -210,7 +210,7 @@ Changes the env. **Needs C-01.** Until then: `Error: this server cannot move hos
 | | |
 |---|---|
 | Purpose | Approve the SSH host keys the controller observed. |
-| Interactive | Prints the observed keys with the explanation; asks "Do the fingerprints match what the machine reports? Type the first 8 characters after SHA256: to confirm". A changed key (`--replace`) uses the stronger flow in `03-ux.md` section 8. |
+| Interactive | Prints the observed keys with the explanation; asks "Do the fingerprints match what the machine reports? Type yes to trust it". A changed key still asks for the first 8 characters. A changed key (`--replace`) uses the stronger flow in `03-ux.md` section 8. |
 | Non-interactive | `--fingerprint` is required and must equal one of the observed keys. `--yes` is ignored for trust. `--all-pending` is refused with `--no-input` (it would trust unseen keys); use one `--fingerprint` per host. |
 | Permissions | owner. |
 | API | `GET /api/v1/managed/hosts/{id}`, `POST /api/v1/managed/hosts/{id}/trust` (`generation`, `fingerprints`, `replace`). |

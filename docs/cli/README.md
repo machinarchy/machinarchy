@@ -77,9 +77,8 @@ machinarchy run | run ID | run ID --host NAME [--follow] | run ID --retry-failed
 Reading output needs the right to run commands: readers see states and exit codes, not output. The full description is in [commands.md](commands.md#running-programs).
 
 `hosts trust` (owner only) shows the SSH host keys the controller observed for a
-host. On a terminal you approve by typing the first 8 characters after
-`SHA256:` of the key, compared with the key on the machine; `--yes` never
-answers this. In a script, pass `--fingerprint SHA256:...` of a key you
+host. On a terminal you approve by typing `yes` after comparing the key with the
+key on the machine; the `--yes` flag never answers this. In a script, pass `--fingerprint SHA256:...` of a key you
 checked; it must be one the controller saw (all observed keys are trusted
 together, because the controller refuses an incomplete set). A host that
 already trusts keys is changed only with `--replace`: type the first 8

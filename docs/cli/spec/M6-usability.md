@@ -29,6 +29,8 @@ The flow reached A-01's expected end state. Exit codes were 0 except step 1 (3, 
 - **F6: the host key prompt lists three fingerprints** (ECDSA, ED25519, RSA) without saying which is which; the user must guess which `ssh-keygen` line to compare. Typing 8 characters of any one trusts the set.
 - **F7: the `Next:` line after `hosts add`** pointed at `ssh-keygen` on the machine, then the run left the trust step running only because the driver kept the prompt open; when the session was closed at the prompt, the host stayed registered and untrusted. `hosts trust` finished it, but nothing in that output named it as the way back. Worth a `Next: machinarchy hosts trust web-01` line on an unanswered prompt.
 
+- **F8 (fixed 2026-11-26, owner decision): the 8-character prefix does not scale.** Trusting 100 hosts meant 100 typed prefixes. A tester also pasted the whole fingerprint and was refused with "that is not the start of the key". First-key trust now asks for `yes` (Enter or `no` skips); `--yes` still never approves; a changed key (`--replace`) keeps the typed prefix. The risk accepted: `yes` is easier to type without comparing the key. Bulk approval (`--all-pending` in one step) was not added.
+
 ## Verdict against A-01
 Not measured for time or comprehension. Mechanically: the commands and prompts work in the expected order, the fingerprint matched, and the run succeeded. Two points need follow-up before a human session is worth running: F1 (blocks a fresh lab) and F7.
 

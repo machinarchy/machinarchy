@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 finding F8: first host key is trusted by typing yes (branch ai/p6-automation-docs-hardening)
+
+- **Behavior changed (owner decision):** `hosts trust` and `hosts add` on a terminal now trust a first SSH host key when the person types `yes` or `y` (Enter or `no` skips). Before, the first 8 characters of the fingerprint were required, which does not scale to many hosts. Unchanged: the `--yes` flag never approves a key; without a terminal `--fingerprint` or `--trust-fingerprint` is still needed; a changed key (`--replace`) still needs the typed prefix and the host name. Security trade-off: typing `yes` is easier to do without comparing the key.
+- **Areas:** `internal/cli/commands/{hoststrust,hostsadd}.go`, their tests, `docs/cli/{README,commands}.md`, `docs/cli/spec/{02,03,04,07,09,M6-usability}`.
+- **Checks run:** gofmt, `go vet`, `go test -race` for `./internal/cli/... ./cmd/...` pass; golangci-lint on `./internal/cli/...` 0 issues. Not run: full suite, smoke, a real-terminal session. `04-security.md` was edited for this decision; the owner should re-read it.
+
 ## 2026-11-26 — CLI M6 finding F1: name the network policy when a host target is denied (branch ai/p6-automation-docs-hardening)
 
 - **Behavior changed:** when the controller's SSH target policy denies an address or port, the host's Ready condition now has reason `TargetNotAllowed` and a message naming `MACHINARCHY_SSH_ALLOW_LOOPBACK`, `_ALLOW_PRIVATE`, `_ALLOWED_CIDRS` and `_ALLOWED_PORTS`. Before, it was a bare `ConnectionFailed`. The CLI lists such a host as "cannot connect". Areas: `internal/hostaccess/reconciler.go`, `internal/cli/commands/hostsgroup.go`, `docs/cli/user-full-guide.md`, `docs/cli/spec/{02-commands,06-api-matrix,M6-usability}.md`.

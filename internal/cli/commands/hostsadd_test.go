@@ -197,10 +197,10 @@ func TestHostsAddTofuAsksNothing(t *testing.T) {
 	}
 }
 
-// S-06: on a terminal the key is trusted only after its first 8 characters are typed.
-func TestHostsAddWizardTypedPrefix(t *testing.T) {
+// S-06: on a terminal the key is trusted only after yes is typed.
+func TestHostsAddWizardTypedYes(t *testing.T) {
 	server := addServer(t, addScenario{stages: []string{"pending", "key"}})
-	got := addRun(t, server, true, "web-01\n10.0.0.5\n3\n"+prefixOf(keyA)+"\n", "hosts", "add")
+	got := addRun(t, server, true, "web-01\n10.0.0.5\n3\nyes\n", "hosts", "add")
 	if got.code != 0 || !strings.Contains(server.body(http.MethodPost, trustPath), keyA) || !strings.Contains(got.stdout, "is ready") {
 		t.Fatalf("wizard = %+v", got)
 	}
@@ -216,9 +216,9 @@ func TestHostsAddWizardTypedPrefix(t *testing.T) {
 	}
 }
 
-// H-05 and S-07: Enter skips, and neither "y" nor --yes trusts.
-func TestHostsAddWizardNeverTrustsWithoutTheTypedKey(t *testing.T) {
-	for name, answer := range map[string]string{"enter": "\n", "y": "y\n", "yes": "yes\n", "closed": ""} {
+// H-05 and S-07: Enter, "no" and end of input skip; the --yes flag never trusts.
+func TestHostsAddWizardNeverTrustsWithoutYes(t *testing.T) {
+	for name, answer := range map[string]string{"enter": "\n", "no": "no\n", "closed": ""} {
 		server := addServer(t, addScenario{stages: []string{"key"}})
 		got := addRun(t, server, true, "web-01\n10.0.0.5\n3\n"+answer, "--yes", "hosts", "add")
 		if server.countOf(http.MethodPost, trustPath) != 0 {

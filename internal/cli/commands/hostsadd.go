@@ -52,8 +52,8 @@ func newHostsAddCommand(f *cli.Factory) *cobra.Command {
 		Long: "Registers a machine, then waits for the server to see its SSH host key, asks you to check it and waits until the host\n" +
 			"is ready. Without arguments it asks what it needs; type back to return to the previous question. Nothing is sent to the\n" +
 			"server before every answer is in. At the end it prints the command that does the same without questions.\n" +
-			"The key shown is the one the server saw, not one read from your computer. --yes does not approve a key: type the first\n" +
-			"8 characters after SHA256: on a terminal, or pass --trust-fingerprint of a key you checked on the machine.\n" +
+			"The key shown is the one the server saw, not one read from your computer. --yes does not approve a key: type yes\n" +
+			"on a terminal, or pass --trust-fingerprint of a key you checked on the machine.\n" +
 			"Without a terminal and without --trust-fingerprint the host is registered and left waiting for key approval.",
 		Example: "  machinarchy hosts add\n" +
 			"  machinarchy hosts add web-01 10.0.0.5 --access deploy --no-input\n" +

@@ -66,7 +66,7 @@ Home screen when not signed in; the success line of `login`, `hosts add` (SSH an
 | host.added | S | `✔ {host} added.` | `Another machine joins the hierarchy.` | `machinarchy run --on {host} -- uptime` |
 | host.added_agent | S | `✔ {host} added. It stays "waiting for agent" until the agent starts.` | `Another operative reports for duty.` (when ready) | `the install command` |
 | host.waiting_key | info | `Waiting for the server to see {host}'s SSH key (up to {n} s) ...` | | |
-| host.key_prompt | security | `{host} presents this SSH host key: {fp}` + `Type the first 8 characters after "SHA256:" to trust this key, or press Enter to skip:` | | |
+| host.key_prompt | security | `{host} presents this SSH host key: {fp}` + `Trust this key? Type yes to trust it, or press Enter to skip:` | | |
 | host.trusted | S | `✔ Key trusted. {host} will be reachable once it reports ready.` | | `machinarchy hosts show {host}` |
 | host.ready | S | `✔ {host} is ready ({n} s).` | | |
 | host.key_changed | E/security | `{host} now presents a different SSH key.` why `This is normal after a reinstall. It is also what a machine pretending to be {host} would look like.` | | `check with whoever runs {host}, then: machinarchy hosts trust {host} --replace` |

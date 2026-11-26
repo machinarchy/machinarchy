@@ -34,7 +34,7 @@ func newHostsTrustCommand(f *cli.Factory) *cobra.Command {
 		Use:   "trust NAME [--replace] [--fingerprint SHA256:...] | --all-pending [-l TAGS]",
 		Short: "Approve the SSH host keys a host presents (owner only)",
 		Long: "Shows the SSH host keys the server saw on a host and trusts them after you check them.\n" +
-			"On a terminal you type the first 8 characters after SHA256: of the key; --yes does not answer this question.\n" +
+			"On a terminal you compare the key with the machine and type yes; --yes does not answer this question.\n" +
 			"In a script, pass --fingerprint SHA256:... of a key you checked on the machine; it must be one the server saw.\n" +
 			"A host whose key changed is replaced with --replace: you also type the host's name (--confirm NAME in a script).\n" +
 			"--all-pending goes through the hosts waiting for approval one by one and needs a terminal.\n" +
@@ -180,7 +180,7 @@ func showKeys(command *cobra.Command, host api.Host, check []string, replace boo
 func confirmationPrompt(key string) (question, expected string) {
 	expected = strings.TrimPrefix(key, "SHA256:")[:fingerprintPrefixLength]
 
-	return fmt.Sprintf("Compare with the key on the machine. Type the first %d characters after SHA256: to trust it, or press Enter to skip", fingerprintPrefixLength), expected
+	return "Compare with the key on the machine. Trust it? Type yes to trust it, or press Enter to skip", expected
 }
 
 // askKeyPrefix asks for the first characters of key. skipped is true when the
@@ -199,6 +199,18 @@ func askKeyPrefix(f *cli.Factory, host api.Host, key string, replace bool) (skip
 		return false, err
 	}
 	answer = strings.TrimSpace(answer)
+	if !replace {
+		// A first key is approved by typing yes; the typed prefix is kept for a
+		// replaced (changed) key, which is the case worth slowing down for.
+		switch strings.ToLower(answer) {
+		case "y", "yes":
+			return false, nil
+		case "", "n", "no":
+			return true, nil
+		}
+
+		return false, clierr.Newf(clierr.ExitFailure, "", "answer yes to trust the key, or press Enter to skip; nothing was trusted")
+	}
 	if answer == "" {
 		return true, nil
 	}

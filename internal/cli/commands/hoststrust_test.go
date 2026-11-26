@@ -66,27 +66,27 @@ func trustRun(t *testing.T, client *fakeClient, terminal bool, stdin string, arg
 	return result{code: code, stdout: out.String(), stderr: errOut.String()}
 }
 
-// S-06: the first trust is a typed check, never --yes.
+// S-06: the first trust needs a typed yes on a terminal, never the --yes flag.
 func TestHostsTrustTypedPrefix(t *testing.T) {
-	prefix := strings.TrimPrefix(keyA, "SHA256:")[:8]
-
 	client := trustFixtures()
-	got := trustRun(t, client, true, prefix+"\n", "hosts", "trust", "web-01")
+	got := trustRun(t, client, true, "yes\n", "hosts", "trust", "web-01")
 	if got.code != 0 || strings.Join(client.trusted, ";") != "1="+keyA || !strings.Contains(got.stdout, keyA) || !strings.Contains(got.stdout, "Key trusted") {
-		t.Fatalf("typed prefix = %+v, trusted %v", got, client.trusted)
+		t.Fatalf("typed yes = %+v, trusted %v", got, client.trusted)
 	}
 
-	for name, stdin := range map[string]string{"empty answer": "\n", "wrong text": "nope\n", "y": "y\n", "yes": "yes\n", "end of input": ""} {
+	for name, stdin := range map[string]string{"empty answer": "\n", "wrong text": "nope\n", "no": "no\n", "the key prefix": prefixOf(keyA) + "\n", "end of input": ""} {
 		client := trustFixtures()
 		got := trustRun(t, client, true, stdin, "hosts", "trust", "web-01", "--yes")
 		if got.code == 0 || len(client.trusted) != 0 {
-			t.Errorf("%s: trusted without the typed prefix: %+v", name, got)
+			t.Errorf("%s: trusted without typing yes: %+v", name, got)
 		}
 	}
-	// "SHA256:" is not part of the prefix.
-	client = trustFixtures()
-	if got := trustRun(t, client, true, "SHA256:\n", "hosts", "trust", "web-01"); got.code == 0 || len(client.trusted) != 0 {
-		t.Fatalf("SHA256: accepted: %+v", got)
+	// y and yes (any case) trust; the --yes flag alone never does (see TestHostsTrustNeverFollowsYes).
+	for _, answer := range []string{"y\n", "YES\n"} {
+		client = trustFixtures()
+		if got := trustRun(t, client, true, answer, "hosts", "trust", "web-01"); got.code != 0 || len(client.trusted) != 1 {
+			t.Fatalf("%q = %+v", answer, got)
+		}
 	}
 }
 
@@ -203,11 +203,11 @@ func TestHostsTrustInAProtectedEnv(t *testing.T) {
 		t.Fatalf("protected, confirmed = %+v", got)
 	}
 	client = trustFixtures()
-	if got := trustRun(t, client, true, "dev\n"+prefixOf(keyA)+"\n", "hosts", "trust", "db-01"); got.code != 0 || len(client.trusted) != 1 {
+	if got := trustRun(t, client, true, "dev\nyes\n", "hosts", "trust", "db-01"); got.code != 0 || len(client.trusted) != 1 {
 		t.Fatalf("protected, typed = %+v", got)
 	}
 	client = trustFixtures()
-	if got := trustRun(t, client, true, "prod\n"+prefixOf(keyA)+"\n", "hosts", "trust", "db-01"); got.code == 0 || len(client.trusted) != 0 {
+	if got := trustRun(t, client, true, "prod\nyes\n", "hosts", "trust", "db-01"); got.code == 0 || len(client.trusted) != 0 {
 		t.Fatalf("protected, wrong env name = %+v", got)
 	}
 }
@@ -215,7 +215,7 @@ func TestHostsTrustInAProtectedEnv(t *testing.T) {
 func TestHostsTrustAllPendingAsksPerHost(t *testing.T) {
 	// web-01 is typed, db-01 (protected dev) is skipped; web-02 is not pending.
 	client := trustFixtures()
-	got := trustRun(t, client, true, prefixOf(keyA)+"\n"+"\n", "hosts", "trust", "--all-pending", "-l", "tier=web")
+	got := trustRun(t, client, true, "yes\n"+"\n", "hosts", "trust", "--all-pending", "-l", "tier=web")
 	if got.code != 0 || strings.Join(client.trusted, ";") != "1="+keyA || !strings.Contains(got.stdout, "1 trusted, 0 skipped") {
 		t.Fatalf("all-pending = %+v, trusted %v", got, client.trusted)
 	}
@@ -227,7 +227,7 @@ func TestHostsTrustAllPendingAsksPerHost(t *testing.T) {
 	}
 	// One typed answer never approves the next host.
 	client = trustFixtures()
-	got = trustRun(t, client, true, prefixOf(keyA)+"\n", "hosts", "trust", "--all-pending")
+	got = trustRun(t, client, true, "yes\n", "hosts", "trust", "--all-pending")
 	if len(client.trusted) > 1 {
 		t.Fatalf("one answer approved several hosts: %v", client.trusted)
 	}
