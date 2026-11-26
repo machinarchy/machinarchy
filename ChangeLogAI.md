@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M3: hide the `completion` command from help and menus (branch ai/p3-envs-access-hosts)
+
+- **Changed** `internal/cli/root.go`: Cobra's `completion` generator is hidden from `--help` and command lists (`HiddenDefaultCmd`). It still works (`machinarchy completion bash`), as the spec (3.13) says: hidden, documented. `completion install` and dynamic completion stay planned for step 3.8; completion that turns itself on without installing a script is not possible, and the CLI never edits shell rc files.
+- **Checks run:** `gofmt -l` (clean), `go build`, manual `--help` (no `completion` line) and `completion bash` (still prints). vet, golangci-lint (0 issues) and `go test -race -cover ./internal/cli/... ./cmd/...` pass. Not run: smoke, Postgres tests.
+
 ## 2026-11-26 — CLI M3 step 3.7: agent path of `hosts` (branch ai/p3-envs-access-hosts)
 
 - **Added** `hosts add NAME --agent [--access ENTRY] [--tag K=V] [--ttl] [--token-out]`, `hosts enroll NAME [--ttl] [--token-out] [--revoke-old] [--show-controller-key]` and `hosts revoke-agent NAME --agent-id ID` (owner) in `internal/cli/commands/hostsagent.go`. The one-time token and controller key are returned as a base64 install blob on stdout only; `--token-out` writes it to a new 0600 file and never overwrites; a failed write revokes the token again. `revoke-agent` needs the typed host name (`--yes` is not enough) and the protected-env guard. Message `host.agent_revoked`; docs `docs/cli/commands.md`.

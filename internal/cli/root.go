@@ -90,6 +90,9 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 		Short:         "Manage Machinarchy environments and hosts",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// Completion stays available but is not listed in help or menus:
+		// people should not have to know about a script generator.
+		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
 	}
 	root.SetIn(streams.In)
 	root.SetOut(streams.Out)
