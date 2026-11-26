@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M3 step 3.8: remove the old resource commands, add dynamic completion (branch ai/p3-envs-access-hosts)
+
+- **Removed** (no aliases) `get hosts`, `get profiles`, `create host|profile|agent-token`, `delete host|profile|agent-token` and `label host` with their code and tests (`commands/hosts.go`, `access.go`, `get.go`, `registry.go`); their replacements are `hosts`, `hosts show|add|tag|remove|enroll|revoke-agent`, `access` and `envs`. `get operations` stays until M4; `get agent-tokens` stays because `hosts revoke-agent` needs the agent ID it shows (C-09). A test asserts the old commands now fail with exit 2 and send nothing.
+- **Added** dynamic shell completion (`internal/cli/completion.go`, `commands/completion.go`): host names for `hosts show|tag|move|trust|enroll|revoke-agent|remove`, access names for `access show|remove` and `hosts add --access`, env names for `--env` and `envs use|remove`. It uses the saved credential, has a 3 s limit, prompts for nothing, prints no errors and drops names with whitespace or control characters. Tests in `completion_test.go`.
+- **Changed** tests that used `get hosts` now use `hosts` (`TestHostsList` replaces `TestGetHosts`); `scripts/smoke.sh` and the Makefile example use the new commands (approved per file).
+- **Docs:** `docs/cli/{commands,README,configuration,troubleshooting,example-cli}.md`, `docs/examples/*`, `docs/operations.md`, `docs/runbook.md`, root `README.md`, new `docs/cli/spec/M3-notes.md`. `docs/cli/user-full-guide.md` still shows the removed commands; it has a banner and is rewritten in step 6.4 (known limitation).
+- **Not implemented:** step 3.7b (deferred by the owner). Controller condition messages still say `trust host` (controller change, owner).
+- **Checks run:** `gofmt -l` (clean), `go vet ./...`, `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (all pass; commands 80.3 %), `go test ./...` (all pass), `make build` + `make smoke` (OK, against the real monolith). Not run: Postgres tests, real-terminal tab completion in a shell, SSH-container lab, real agent compatibility.
+
 ## 2026-11-26 — CLI M3: hide the `completion` command from help and menus (branch ai/p3-envs-access-hosts)
 
 - **Changed** `internal/cli/root.go`: Cobra's `completion` generator is hidden from `--help` and command lists (`HiddenDefaultCmd`). It still works (`machinarchy completion bash`), as the spec (3.13) says: hidden, documented. `completion install` and dynamic completion stay planned for step 3.8; completion that turns itself on without installing a script is not possible, and the CLI never edits shell rc files.

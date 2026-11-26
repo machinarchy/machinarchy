@@ -65,6 +65,9 @@ func newHostsAddCommand(f *cli.Factory) *cobra.Command {
 	}
 	flags := command.Flags()
 	flags.StringVar(&o.access, "access", "", "Use this existing access entry")
+	if err := command.RegisterFlagCompletionFunc("access", completeAccessNames(f, false)); err != nil {
+		panic(err.Error()) // the flag was defined just above
+	}
 	flags.StringVar(&o.accessName, "access-name", "", "Name of the access entry created on the way (default USER-key or USER-password)")
 	flags.StringVar(&o.user, "user", "", "SSH login user (creates an access entry)")
 	flags.StringVar(&o.keyFile, "key-file", "", "File with the SSH private key (creates an access entry)")

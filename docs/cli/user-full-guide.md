@@ -1,5 +1,12 @@
 # Machinarchy CLI: full user guide (a lab with three SSH servers)
 
+> **Out of date (M3).** The recorded sessions below use the commands removed in
+> milestone M3 (`get hosts|profiles`, `create host|profile|agent-token`,
+> `delete host|profile`, `label host`). They no longer exist and have no
+> aliases. Use `hosts`, `hosts show`, `hosts add`, `hosts tag`, `hosts remove`,
+> `hosts trust` and `access` instead (see [commands](commands.md)). The guide
+> is rewritten in milestone M6 (step 6.4).
+
 This guide takes you from nothing to running commands on three managed hosts,
 using the repository's own SSH test servers
 ([`deployments/testing`](../../deployments/testing/README.md)). You will:

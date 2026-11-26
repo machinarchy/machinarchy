@@ -52,6 +52,7 @@ func NewAccessCommand(f *cli.Factory) *cobra.Command {
 		RunE:    listAccess(f),
 	}
 	command.AddCommand(newAccessShowCommand(f), newAccessAddCommand(f), newAccessRemoveCommand(f))
+	completeChildren(command, completeAccessNames(f, true), "show", "remove")
 
 	return command
 }

@@ -23,7 +23,7 @@ go run ./cmd/machinarchy login http://localhost:8080
 
 ## "This needs an owner signed in with a password"
 
-`tokens`, `secret`, `runtime-config`, `hosts trust`, `create profile` and a few more act as the workspace owner, and an API token can never be the owner. The command stops before sending anything. Sign in with the password; the session is used for these commands and the saved device token for everything else:
+`tokens`, `secret`, `runtime-config`, `hosts trust`, `access add` and a few more act as the workspace owner, and an API token can never be the owner. The command stops before sending anything. Sign in with the password; the session is used for these commands and the saved device token for everything else:
 
 ```sh
 go run ./cmd/machinarchy login
@@ -78,7 +78,7 @@ Check that the API is reachable and that the configured server URL is its base U
 
 ```sh
 curl -i http://localhost:8080/healthz/ready
-go run ./cmd/machinarchy --verbose get hosts
+go run ./cmd/machinarchy --verbose hosts
 ```
 
 Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
@@ -90,7 +90,7 @@ If the error says the server did not return JSON, or reports a redirect, the con
 `--env` / `-n` accepts the environment name or numeric ID. Names are matched without case sensitivity. If names collide, use the ID:
 
 ```sh
-go run ./cmd/machinarchy get hosts -n 3
+go run ./cmd/machinarchy hosts -n 3
 ```
 
 ## Unsupported output format
@@ -98,7 +98,7 @@ go run ./cmd/machinarchy get hosts -n 3
 The supported formats are `table`, `json`, and `yaml`:
 
 ```sh
-go run ./cmd/machinarchy get hosts -o yaml
+go run ./cmd/machinarchy hosts -o yaml
 ```
 
 ## Malformed or unreadable config

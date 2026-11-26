@@ -32,6 +32,8 @@ func NewEnvsCommand(f *cli.Factory) *cobra.Command {
 		RunE:    listEnvs(f),
 	}
 	command.AddCommand(newEnvsAddCommand(f), newEnvsUseCommand(f), newEnvsRemoveCommand(f))
+	completeChildren(command, cli.CompleteEnvNames(f, true), "remove")
+	completeChildren(command, cli.CompleteEnvNames(f, true, anyEnv), "use")
 
 	return command
 }

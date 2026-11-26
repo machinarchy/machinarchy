@@ -36,11 +36,11 @@ func TestRemoteTextCannotDriveTheTerminal(t *testing.T) {
 	t.Run("host names in a table", func(t *testing.T) {
 		client := fixtures()
 		client.hosts[0].Metadata.Name = hostileName
-		got := run(t, client, "get", "hosts")
+		got := run(t, client, "hosts")
 		if got.code != 0 {
 			t.Fatalf("result = %+v", got)
 		}
-		noControlBytes(t, "get hosts", got.stdout+got.stderr)
+		noControlBytes(t, "hosts", got.stdout+got.stderr)
 		if !strings.Contains(got.stdout, "web-01") {
 			t.Fatalf("the name must survive, cleaned:\n%s", got.stdout)
 		}

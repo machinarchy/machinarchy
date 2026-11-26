@@ -87,16 +87,16 @@ func TestCredentialPrecedence(t *testing.T) {
 		return hosts[len(hosts)-1].Auth
 	}
 
-	if got := runAuth(t, authRun{config: path, env: map[string]string{"MACHINARCHY_TOKEN": "mch_pat_env-0001"}}, "get", "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer mch_pat_env-0001" {
+	if got := runAuth(t, authRun{config: path, env: map[string]string{"MACHINARCHY_TOKEN": "mch_pat_env-0001"}}, "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer mch_pat_env-0001" {
 		t.Fatalf("the environment token must come first: %+v / %q", got, lastAuth())
 	}
-	if got := runAuth(t, authRun{config: path}, "get", "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer mch_pat_saved-0001" {
+	if got := runAuth(t, authRun{config: path}, "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer mch_pat_saved-0001" {
 		t.Fatalf("the saved token must come next: %+v / %q", got, lastAuth())
 	}
 	if err := cred.NewFile(config.CredentialsPath(path)).Delete("lab", cred.SlotToken); err != nil {
 		t.Fatal(err)
 	}
-	if got := runAuth(t, authRun{config: path}, "get", "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer sess-saved" {
+	if got := runAuth(t, authRun{config: path}, "hosts", "-o", "json"); got.code != 0 || lastAuth() != "Bearer sess-saved" {
 		t.Fatalf("the saved session must come last: %+v / %q", got, lastAuth())
 	}
 }
@@ -111,7 +111,7 @@ func TestSavedCredentialsNeverGoToAnotherServer(t *testing.T) {
 		"--server":           {config: path},
 		"MACHINARCHY_SERVER": {config: path, env: map[string]string{"MACHINARCHY_SERVER": other.URL}},
 	} {
-		args := []string{"get", "hosts"}
+		args := []string{"hosts"}
 		if name == "--server" {
 			args = append([]string{"--server", other.URL}, args...)
 		}
@@ -126,7 +126,7 @@ func TestSavedCredentialsNeverGoToAnotherServer(t *testing.T) {
 	}
 
 	// A saved server can be chosen by name; that is the same server.
-	got := runAuth(t, authRun{config: path}, "--server", "lab", "get", "hosts")
+	got := runAuth(t, authRun{config: path}, "--server", "lab", "hosts")
 	if got.code != 0 {
 		t.Fatalf("result = %+v", got)
 	}
@@ -146,7 +146,8 @@ func TestOwnerOnlyActionWithAnOperatorToken(t *testing.T) {
 		{"secret", "list"},
 		{"runtime-config", "get"},
 		{"hosts", "trust", "web-01", "--fingerprint", "SHA256:abcdefghijklmnop"},
-		{"create", "profile", "p", "--connector", "agent"},
+		{"access", "add", "p", "--how", "agent"},
+		{"hosts", "enroll", "web-01"},
 		{"get", "agent-tokens"},
 	} {
 		server.reset()
@@ -191,7 +192,7 @@ func TestOwnerCommandsUseTheSessionEvenWithATokenSaved(t *testing.T) {
 		t.Fatalf("an owner command must run as the session: %+v", list)
 	}
 	// The same server, an ordinary command: the token comes first.
-	if got := runAuth(t, authRun{config: path}, "get", "hosts"); got.code != 0 {
+	if got := runAuth(t, authRun{config: path}, "hosts"); got.code != 0 {
 		t.Fatalf("result = %+v", got)
 	}
 	if hosts := server.saw("GET", "/api/v1/managed/hosts"); len(hosts) != 1 || hosts[0].Auth != "Bearer mch_pat_device-0003" {
@@ -206,7 +207,7 @@ func TestExpiredAndRevokedCredentials(t *testing.T) {
 	t.Run("an expired session is named, and nothing is sent", func(t *testing.T) {
 		path := seed(t, server.URL, cred.Credential{Kind: cred.KindSession, Secret: "sess-old", ExpiresAt: past()})
 		server.reset()
-		got := runAuth(t, authRun{config: path}, "get", "hosts")
+		got := runAuth(t, authRun{config: path}, "hosts")
 		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "Error: your session on lab expired at ") || !strings.Contains(got.stderr, "Next:  machinarchy login\n") {
 			t.Fatalf("result = %+v", got)
 		}
@@ -217,7 +218,7 @@ func TestExpiredAndRevokedCredentials(t *testing.T) {
 
 	t.Run("an expired device token is named", func(t *testing.T) {
 		path := seed(t, server.URL, cred.Credential{Kind: cred.KindDeviceToken, Secret: "mch_pat_old", ExpiresAt: past()})
-		got := runAuth(t, authRun{config: path}, "get", "hosts")
+		got := runAuth(t, authRun{config: path}, "hosts")
 		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "the saved API token for lab expired at ") || !strings.Contains(got.stderr, "Next:  machinarchy login\n") {
 			t.Fatalf("result = %+v", got)
 		}
@@ -238,14 +239,14 @@ func TestExpiredAndRevokedCredentials(t *testing.T) {
 			t.Fatalf("a request was sent: %+v", server.log())
 		}
 		// Ordinary commands still work with the token.
-		if got := runAuth(t, authRun{config: path}, "get", "hosts"); got.code != 0 {
+		if got := runAuth(t, authRun{config: path}, "hosts"); got.code != 0 {
 			t.Fatalf("the device token must still work for ordinary commands: %+v", got)
 		}
 	})
 
 	t.Run("a revoked token is not called a permission problem", func(t *testing.T) {
 		path := seed(t, server.URL, cred.Credential{Kind: cred.KindDeviceToken, Secret: "mch_pat_revoked-0001", ExpiresAt: future()})
-		got := runAuth(t, authRun{config: path}, "get", "hosts")
+		got := runAuth(t, authRun{config: path}, "hosts")
 		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "Why:   The server did not accept the credential; it may have expired or been revoked.\n") ||
 			!strings.Contains(got.stderr, "Next:  machinarchy login\n") {
 			t.Fatalf("result = %+v", got)
@@ -281,7 +282,7 @@ func TestLogoutEndsTheSessionOnTheServer(t *testing.T) {
 	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "lab:") { // #nosec G304 -- test path
 		t.Fatalf("config = %q", data)
 	}
-	if got := runAuth(t, authRun{config: path}, "get", "hosts"); got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "you are not signed in to lab") {
+	if got := runAuth(t, authRun{config: path}, "hosts"); got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "you are not signed in to lab") {
 		t.Fatalf("after logout = %+v", got)
 	}
 }

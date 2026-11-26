@@ -51,10 +51,10 @@ go run ./cmd/machinarchy config use-context local
 Then inspect Hosts:
 
 ```sh
-go run ./cmd/machinarchy get hosts
-go run ./cmd/machinarchy get hosts web-01 -o yaml
-go run ./cmd/machinarchy get hosts -n production -o json | jq .
-go run ./cmd/machinarchy get hosts -l tier=web
+go run ./cmd/machinarchy hosts
+go run ./cmd/machinarchy hosts show web-01 -o yaml
+go run ./cmd/machinarchy hosts -n production -o json | jq .
+go run ./cmd/machinarchy hosts -l tier=web
 go run ./cmd/machinarchy run -l tier=web --wait -- uptime
 ```
 
@@ -239,7 +239,7 @@ The current Profile API exposes create and update, but not list, get, history, o
 `DELETE /api/v1/managed/hosts/{id}?revision=N` deletes a host at its current revision. It is refused with `409` while an Operation targets the host. The CLI asks for confirmation:
 
 ```sh
-go run ./cmd/machinarchy delete host web-01
+go run ./cmd/machinarchy hosts remove web-01
 curl --silent --show-error --fail-with-body --request DELETE \
   "$API_URL/api/v1/managed/hosts/$MANAGED_HOST_ID?revision=$(printf '%s' "$HOST_STATE" | jq -r '.metadata.revision')" \
   --header "Authorization: Bearer $OPERATOR_TOKEN"

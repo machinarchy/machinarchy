@@ -71,7 +71,7 @@ For a detached target that failed to start:
 - `TimedOut` / `timeout`: the command exceeded `timeoutSeconds`.
 - `Failed` with an exit code: the program ran and failed; read stdout/stderr.
 - `Failed` / `remote_execution_failed`: SSH connection or authentication
-  failed. Check the host's `Ready` condition (`get hosts`), its endpoint and
+  failed. Check the host's `Ready` condition (`hosts`), its endpoint and
   trusted key, and the Access Profile's secret version.
 - `Failed` / `access_profile_unavailable`: the profile or its pinned revision
   was deleted or disabled after submission.

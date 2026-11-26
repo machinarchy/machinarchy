@@ -54,7 +54,7 @@ A command uses, in this order:
 2. the saved API token
 3. the saved login session
 
-A credential that is known to have expired is skipped. A command that acts as the workspace **owner** (`tokens`, `secret`, `runtime-config`, `hosts trust`, `create profile`, `get agent-tokens` and others) uses the saved login session and nothing else: an API token can never be an owner. With only a token it stops before sending anything:
+A credential that is known to have expired is skipped. A command that acts as the workspace **owner** (`tokens`, `secret`, `runtime-config`, `hosts trust`, `access add`, `get agent-tokens` and others) uses the saved login session and nothing else: an API token can never be an owner. With only a token it stops before sending anything:
 
 ```text
 Error: this needs an owner signed in with a password; you are using an API token (device-laptop, operator)
@@ -150,7 +150,7 @@ machinarchy login https://machinarchy.example.com --name prod
 machinarchy login https://staging.example.com --name staging
 machinarchy switch                    # list them and choose one
 machinarchy switch staging            # make staging the active server
-machinarchy --server prod get hosts   # one command on another server
+machinarchy --server prod hosts   # one command on another server
 ```
 
 `switch` lists every saved server with an `*` on the active one and whether you are signed in.

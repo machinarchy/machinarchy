@@ -21,8 +21,8 @@ Or through `make` (it loads `.env` first; exported variables such as
 `MACHINARCHY_CONFIG` still apply):
 
 ```sh
-make run-cli ARGS="get hosts"
-make run-cli ARGS="create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web"
+make run-cli ARGS="hosts"
+make run-cli ARGS="hosts add web-01 10.0.0.5 --access deploy --no-input --tag tier=web"
 make run-cli ARGS='run --host web-01 --yes -- sh -c "echo hi"'
 ```
 
@@ -38,7 +38,7 @@ Sign in. The command asks for what it needs; the password is typed without echo:
 ```sh
 go run ./cmd/machinarchy login http://localhost:8080 --name local
 go run ./cmd/machinarchy whoami
-go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy hosts
 ```
 
 On a terminal it also offers to "stay signed in" with a 90-day device token. With an API token instead of a password (for example one from `machinarchy tokens create`), read it from stdin so it does not appear in shell history or process arguments:
@@ -52,7 +52,7 @@ In a script or CI, set `MACHINARCHY_SERVER` and `MACHINARCHY_TOKEN` instead; not
 ## Command overview
 
 ```text
-machinarchy get hosts [name-or-id]
+machinarchy hosts [--status ready|attention|all] | hosts show|tag|remove NAME | hosts add|enroll|trust ...
 machinarchy login [SERVER] [--with-token] [--name NAME] [--email EMAIL --password-stdin] [--stay-signed-in]
 machinarchy logout [--everywhere]
 machinarchy whoami
@@ -87,7 +87,7 @@ a terminal and is refused with `--no-input`. Hosts whose Access Profile uses
 `tofu` or `ca` need no approval (see
 [operations](../operations.md#ssh-host-keys)).
 
-The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
+The `hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
 
 The CLI refuses to send its token over plain `http://` to a host that is not
 loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`): use `https://`.

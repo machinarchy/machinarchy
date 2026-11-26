@@ -39,30 +39,30 @@ The server is saved in the CLI config under the operating system's user config d
 
 ```sh
 # Default table
-go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy hosts
 
 # Select one host by its name or ID
-go run ./cmd/machinarchy get hosts web-01
+go run ./cmd/machinarchy hosts show web-01
 
 # JSON for scripts
-go run ./cmd/machinarchy get hosts -o json
-go run ./cmd/machinarchy get hosts -o json | jq '.[].name'
+go run ./cmd/machinarchy hosts -o json
+go run ./cmd/machinarchy hosts -o json | jq '.[].name'
 
 # YAML output
-go run ./cmd/machinarchy get hosts -o yaml
+go run ./cmd/machinarchy hosts -o yaml
 ```
 
 ## Filter by environment
 
 ```sh
 # Environment name, case-insensitive
-go run ./cmd/machinarchy get hosts --env production
+go run ./cmd/machinarchy hosts --env production
 
 # Short flag and numeric environment ID
-go run ./cmd/machinarchy get hosts -n 3
+go run ./cmd/machinarchy hosts -n 3
 
 # Filter and print JSON
-go run ./cmd/machinarchy --server local get hosts -n production -o json
+go run ./cmd/machinarchy --server local hosts -n production -o json
 ```
 
 The current API does not offer a server-side environment filter. The CLI fetches the host and environment lists, resolves the requested environment, then filters the hosts locally.
@@ -79,7 +79,7 @@ go run ./cmd/machinarchy logout               # end the session and forget it on
 Use another saved server for only one command without changing the active one:
 
 ```sh
-go run ./cmd/machinarchy --server local get hosts
+go run ./cmd/machinarchy --server local hosts
 ```
 
 ## Use a separate config file
@@ -103,16 +103,16 @@ go run ./cmd/machinarchy tokens revoke ci-deploy
 In CI, give the token and the server by environment; nothing is saved to disk:
 
 ```sh
-MACHINARCHY_SERVER=https://machinarchy.example.com MACHINARCHY_TOKEN="$CI_TOKEN" machinarchy get hosts
+MACHINARCHY_SERVER=https://machinarchy.example.com MACHINARCHY_TOKEN="$CI_TOKEN" machinarchy hosts
 ```
 
 ## Use environment overrides
 
 ```sh
-MACHINARCHY_SERVER=staging go run ./cmd/machinarchy get hosts
-MACHINARCHY_ENV=production go run ./cmd/machinarchy get hosts
-MACHINARCHY_OUTPUT=json go run ./cmd/machinarchy get hosts
-MACHINARCHY_VERBOSE=true go run ./cmd/machinarchy get hosts
+MACHINARCHY_SERVER=staging go run ./cmd/machinarchy hosts
+MACHINARCHY_ENV=production go run ./cmd/machinarchy hosts
+MACHINARCHY_OUTPUT=json go run ./cmd/machinarchy hosts
+MACHINARCHY_VERBOSE=true go run ./cmd/machinarchy hosts
 ```
 
 `MACHINARCHY_SERVER` picks a saved server (or an address for one command) and `MACHINARCHY_TOKEN` is an API token used before any saved credential. A saved credential is never sent to an address that is not a saved server. Avoid exporting long-lived credentials into shared or logged environments.
@@ -125,7 +125,7 @@ go run ./cmd/machinarchy whoami
 go run ./cmd/machinarchy config show
 
 # Enable structured debug logs on stderr
-go run ./cmd/machinarchy --verbose get hosts
+go run ./cmd/machinarchy --verbose hosts
 
 # Compile the project without changing dependency manifests
 go build -mod=readonly ./...

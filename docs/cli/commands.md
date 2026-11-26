@@ -2,53 +2,30 @@
 
 Run `machinarchy --help` or `machinarchy COMMAND --help` for the built-in Cobra help. The examples below use `go run ./cmd/machinarchy`; substitute `./bin/machinarchy` after building.
 
-## `get hosts`
+## Listing hosts: selectors, env filter, output
 
-List the managed hosts visible to the configured API token (`GET /api/v1/managed/hosts`; the CLI follows every page):
+`machinarchy hosts` lists the managed hosts (`GET /api/v1/managed/hosts`; the CLI follows every page). `hosts show NAME` shows one host by name or ID (see [Hosts](#hosts)); if a name is ambiguous, use the ID or narrow it with `--env`.
 
-```sh
-go run ./cmd/machinarchy get hosts
-go run ./cmd/machinarchy get host
-```
-
-Show one host by name or ID:
-
-```sh
-go run ./cmd/machinarchy get hosts web-01
-go run ./cmd/machinarchy get hosts 01JABCDEF123
-```
-
-If host names are ambiguous, use the resource ID or filter to one environment.
-
-`-l` / `--selector` filters with the selector syntax, for example `-l tier=web`, `-l 'role in (web,db),!canary'` or `-l name=web-*`. Built-in fields are `id`, `name`, `environment`, `phase`, `presence` and `profile`; any other key is a label.
-
-### Environment filter
+`-l` / `--selector` filters with the selector syntax, for example `-l tier=web`, `-l 'role in (web,db),!canary'` or `-l name=web-*`. Built-in fields are `id`, `name`, `environment`, `phase`, `presence` and `profile`; any other key is a tag.
 
 `--env` / `-n` accepts a case-insensitive environment name or its numeric ID. The active server may also define a default environment.
 
 ```sh
-go run ./cmd/machinarchy get hosts --env production
-go run ./cmd/machinarchy get hosts -n 3
-go run ./cmd/machinarchy --server staging get hosts -n production
+go run ./cmd/machinarchy hosts --env production
+go run ./cmd/machinarchy hosts -n 3
+go run ./cmd/machinarchy --server staging hosts -n production
 ```
 
-The CLI resolves the environment name to its ID and the server filters the hosts.
-
-### Output formats
-
-The default is a human-readable table. JSON and YAML are intended for scripts and tooling:
+The default output is a human-readable table. JSON and YAML keep the API field names and are meant for scripts:
 
 ```sh
-go run ./cmd/machinarchy get hosts -o table
-go run ./cmd/machinarchy get hosts -o json
-go run ./cmd/machinarchy get hosts -o yaml
+go run ./cmd/machinarchy hosts -o json | jq '.[].metadata.name'
+go run ./cmd/machinarchy hosts show web-01 -o yaml
 ```
 
-For example, pipe JSON through `jq`:
+## Tab completion
 
-```sh
-go run ./cmd/machinarchy get hosts -o json | jq '.[].metadata.name'
-```
+`machinarchy completion bash|zsh|fish|powershell` prints the completion script for your shell (the command is hidden from help). Completion offers host names (`hosts show|tag|move|trust|enroll|revoke-agent|remove`), access entry names (`access show|remove`, `hosts add --access`) and env names (`--env`, `envs use|remove`; `any` for `envs use`) by asking the selected server with your saved credential. It never prompts and prints no errors: with no server, no login or a slow server (3 s limit) it offers nothing. Names with spaces or control characters are never offered.
 
 ## Signing in
 
@@ -78,19 +55,13 @@ machinarchy logout --everywhere   # end every login session of your account (ask
 
 `logout` tells the server to end the session and revokes the device token this CLI created, then removes the credentials from this computer. If the server cannot be reached the credentials are still removed and the command exits 4, saying the session may still be active. An API token you supplied yourself is only removed from this computer; it keeps working until it expires or is revoked.
 
-## Access Profiles (owner)
+## Agent enrolment tokens (owner)
 
 ```sh
-go run ./cmd/machinarchy create profile deploy --connector ssh --username deploy --secret deploy-key --auth private-key --host-key-policy approve
-go run ./cmd/machinarchy create profile agents --connector agent
-go run ./cmd/machinarchy delete profile deploy
-
-go run ./cmd/machinarchy create agent-token --host web-02 --hostname web-02.internal --ttl 30m
 go run ./cmd/machinarchy get agent-tokens
-go run ./cmd/machinarchy delete agent-token 9b1c…
 ```
 
-`create profile --secret` takes a secret's name or ID and binds its current version. A new enrolment token is printed once: `-q` prints it alone for a pipe, `-o json` prints the whole response. `get agent-tokens` never shows token values. These commands need an owner's login session; API tokens are refused locally, before anything is sent.
+Lists the agent enrolment tokens (never their values): host, expiry and state, where a used token shows `used by AGENT-ID`. This is where the agent ID for `hosts revoke-agent` comes from until the server reports it per host (gap C-09). New tokens are issued by `hosts add --agent` and `hosts enroll`. The command needs an owner's login session; API tokens are refused locally, before anything is sent.
 
 ## API tokens (owner)
 
@@ -118,7 +89,7 @@ machinarchy access add agents --how agent
 machinarchy access remove deploy-key          # type the name; in a script: --confirm deploy-key
 ```
 
-`access add` (owner) asks what it needs when run on a terminal. The key or password comes from a hidden prompt, `--key-file` or `--password-stdin`, never from a flag. It is stored as an encrypted secret on the server and is never shown again (`access show` and `-o json` hold no secret reference or value); a file that is not a private key (for example a `.pub` file) is refused. Host keys (`--host-key-policy`): `approve` (default: you approve each key), `pinned` (only keys you pin) or `tofu` (the first key seen is trusted; a lab setting, allowed only with a key). If the entry cannot be created after the secret was stored, the secret is retired again. `access remove` (owner) is confirmed by typing the name (`--yes` is not enough), is refused by the server while hosts use the entry, and does **not** retire the stored key or password: remove it with `machinarchy secret delete`. The older `create profile` and `delete profile` still work until step 3.8 removes them.
+`access add` (owner) asks what it needs when run on a terminal. The key or password comes from a hidden prompt, `--key-file` or `--password-stdin`, never from a flag. It is stored as an encrypted secret on the server and is never shown again (`access show` and `-o json` hold no secret reference or value); a file that is not a private key (for example a `.pub` file) is refused. Host keys (`--host-key-policy`): `approve` (default: you approve each key), `pinned` (only keys you pin) or `tofu` (the first key seen is trusted; a lab setting, allowed only with a key). If the entry cannot be created after the secret was stored, the secret is retired again. `access remove` (owner) is confirmed by typing the name (`--yes` is not enough), is refused by the server while hosts use the entry, and does **not** retire the stored key or password: remove it with `machinarchy secret delete`.
 
 ## Environments
 
@@ -146,21 +117,11 @@ machinarchy hosts enroll web-01 [--ttl 1h] [--token-out FILE] [--revoke-old] [--
 machinarchy hosts revoke-agent web-01 --agent-id ID   # type the name; --yes is not enough
 ```
 
-`STATUS` is one of `ready`, `waiting for key approval`, `key changed`, `checking`, `cannot connect` or `needs attention`, worked out from the host's conditions (`hosts show` and `-o json` show the raw reasons). `HOW` is `ssh` or `agent` (from the access entry). Tags follow the controller's rules (letters, digits, `.`, `_`, `-`; keys may also hold `/`; at most 63 characters; `name`, `id`, `status`, `environment` and a few more are reserved); the CLI checks them before sending, and a host that changed meanwhile is reported as "the host changed", not overwritten. `hosts remove` takes the host out of the inventory **only**: an installed agent is not uninstalled or revoked, the access entry and credentials are kept, and the machine is not touched; the output says so. A host in a locally protected env (`envs add --protected`) also needs the env's name (typed, or `--confirm-env ENV` in a script) for `tag` and `remove`. `hosts move NAME --env ENV` checks the names and then refuses: the server cannot change a host's env yet (gap C-01). `hosts trust NAME` (owner) is the only way to approve SSH host keys (the old `trust host` is gone). First trust: the CLI shows the keys the controller saw and you type the first 8 characters after `SHA256:` of the key, compared with the machine; Enter skips. In a script use `--fingerprint SHA256:...`, which must be a key the controller saw; all seen keys are trusted together (the controller refuses an incomplete set). `--yes` never approves a key, and without a terminal and without `--fingerprint` nothing is trusted. A host that already trusts keys is changed only with `--replace`: the old and new keys are shown, you type the first 8 characters of the new key and then the host's name (`--confirm NAME` in a script); a locally protected env also needs its name. `hosts trust --all-pending [-l SELECTOR]` asks about each waiting host in turn, needs a terminal and is refused with `--no-input`. `hosts add [NAME [ADDRESS]]` (owner) brings a machine reached over SSH under management. Without arguments it asks (name, address, how to sign in: a new key, a new password or an existing access entry, then the host-key policy for a new entry); `back` returns to the previous question and nothing is sent to the server until every answer is in. Then it registers the host, waits (`--wait`, default 90 s, `0` = do not wait) for the server to see the host's SSH key, shows the key **the server saw** and asks for the first 8 characters after `SHA256:`; Enter skips and leaves the host `waiting for key approval`. With the `tofu` policy (lab only) nothing is asked and the server trusts the first key. `--yes` never approves a key. Scripted form: `hosts add NAME ADDRESS --access ENTRY --no-input` registers the host and trusts nothing (it prints the exact `hosts trust` command); `--trust-fingerprint SHA256:...` trusts only a key the server saw, otherwise it refuses and lists the seen keys. `--user` with `--key-file` or `--password-stdin` creates the access entry on the way (`--access-name`, `--host-key-policy`); `--tag K=V` is repeatable; `ADDRESS` is `HOST` or `HOST:PORT` (default 22) and is checked before any request. A duplicate name exits 7; a host the server cannot reach is registered and reported as `cannot connect` with the server's reason (exit 0). `--env` is refused until the server accepts an env on host creation (gap C-01). `-o json` prints the host. The wizard ends by printing the command that repeats it without questions. The agent path (`--agent`) and `hosts enroll` / `revoke-agent` follow in a later step; the older `get hosts`, `label host` and `delete host` still work until step 3.8.
+`STATUS` is one of `ready`, `waiting for key approval`, `key changed`, `checking`, `cannot connect` or `needs attention`, worked out from the host's conditions (`hosts show` and `-o json` show the raw reasons). `HOW` is `ssh` or `agent` (from the access entry). Tags follow the controller's rules (letters, digits, `.`, `_`, `-`; keys may also hold `/`; at most 63 characters; `name`, `id`, `status`, `environment` and a few more are reserved); the CLI checks them before sending, and a host that changed meanwhile is reported as "the host changed", not overwritten. `hosts remove` takes the host out of the inventory **only**: an installed agent is not uninstalled or revoked, the access entry and credentials are kept, and the machine is not touched; the output says so. A host in a locally protected env (`envs add --protected`) also needs the env's name (typed, or `--confirm-env ENV` in a script) for `tag` and `remove`. `hosts move NAME --env ENV` checks the names and then refuses: the server cannot change a host's env yet (gap C-01). `hosts trust NAME` (owner) is the only way to approve SSH host keys (the old `trust host` is gone). First trust: the CLI shows the keys the controller saw and you type the first 8 characters after `SHA256:` of the key, compared with the machine; Enter skips. In a script use `--fingerprint SHA256:...`, which must be a key the controller saw; all seen keys are trusted together (the controller refuses an incomplete set). `--yes` never approves a key, and without a terminal and without `--fingerprint` nothing is trusted. A host that already trusts keys is changed only with `--replace`: the old and new keys are shown, you type the first 8 characters of the new key and then the host's name (`--confirm NAME` in a script); a locally protected env also needs its name. `hosts trust --all-pending [-l SELECTOR]` asks about each waiting host in turn, needs a terminal and is refused with `--no-input`. `hosts add [NAME [ADDRESS]]` (owner) brings a machine reached over SSH under management. Without arguments it asks (name, address, how to sign in: a new key, a new password or an existing access entry, then the host-key policy for a new entry); `back` returns to the previous question and nothing is sent to the server until every answer is in. Then it registers the host, waits (`--wait`, default 90 s, `0` = do not wait) for the server to see the host's SSH key, shows the key **the server saw** and asks for the first 8 characters after `SHA256:`; Enter skips and leaves the host `waiting for key approval`. With the `tofu` policy (lab only) nothing is asked and the server trusts the first key. `--yes` never approves a key. Scripted form: `hosts add NAME ADDRESS --access ENTRY --no-input` registers the host and trusts nothing (it prints the exact `hosts trust` command); `--trust-fingerprint SHA256:...` trusts only a key the server saw, otherwise it refuses and lists the seen keys. `--user` with `--key-file` or `--password-stdin` creates the access entry on the way (`--access-name`, `--host-key-policy`); `--tag K=V` is repeatable; `ADDRESS` is `HOST` or `HOST:PORT` (default 22) and is checked before any request. A duplicate name exits 7; a host the server cannot reach is registered and reported as `cannot connect` with the server's reason (exit 0). `--env` is refused until the server accepts an env on host creation (gap C-01). `-o json` prints the host. The wizard ends by printing the command that repeats it without questions.
 
 **Agent hosts.** `hosts add NAME --agent` (no address) reuses or creates the access entry `agents`, registers the host and issues a one-time token; `hosts enroll NAME` issues a new one later. The install blob goes to standard output only, as one base64 line holding the agent's name, the controller public key and the token (shown once, valid `--ttl` 1m-24h); the instructions go to standard error and never repeat it. `--token-out FILE` writes the blob to a new file (mode 0600, never overwrites); `--revoke-old` revokes this host's earlier unused tokens. The server does not yet report the broker address or credential (Q1/C-07). Give them with `--nats-url tls://HOST:4222` (no user or password in it) and `--nats-creds-file FILE` (the bootstrap credential, a local file the instructions tell you to copy to the machine; only its path is used, its content is never printed or put in the blob); `--remember` saves them for the selected server so the next command needs no flags, and a flag always beats the saved value (use `--server` to build a blob for another server). Without them the instructions name `MACHINARCHY_AGENT_NATS_URL` and one NATS credential as "not reported by this server". `hosts revoke-agent` revokes the agent identity only (the host stays, the machine is untouched); until the server says which agent belongs to a host, the ID comes from `get agent-tokens` ("used by ID"). A server without an agent gateway answers "this server has no agent gateway".
 
-## Managing hosts (older commands)
-
-```sh
-go run ./cmd/machinarchy get profiles
-go run ./cmd/machinarchy create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web --trust SHA256:...
-go run ./cmd/machinarchy create host web-02 --profile agents   # an agent host: no endpoint
-go run ./cmd/machinarchy label host web-01 canary=yes tier-
-go run ./cmd/machinarchy delete host web-01
-```
-
-Binding a host to an Access Profile, or changing its endpoint or trusted keys, needs the workspace owner. `--endpoint` is needed for hosts on an SSH profile. Hosts on an `agent` profile are reached through their enrolled agent instead (see [enrolling a host](../operations.md#enrolling-a-host)). `delete host` asks for confirmation (`--yes` skips it) and is refused while an operation targets the host.
+Binding a host to an access entry needs the workspace owner. Hosts on an `agent` entry are reached through their enrolled agent (see [enrolling a host](../operations.md#enrolling-a-host)). The older `hosts|profiles`, `create host|profile|agent-token`, `delete host|profile|agent-token`, `label host` and `trust host` commands are removed, without aliases: use `hosts`, `hosts show`, `hosts add`, `hosts remove`, `hosts tag`, `hosts trust`, `hosts enroll` and `access`.
 
 ## Running programs
 
@@ -250,8 +211,8 @@ HTTP redirects are not followed and are reported as exit 2 with the redirect tar
 Flags can be combined with commands:
 
 ```sh
-go run ./cmd/machinarchy --config ./cli.yaml --server staging get hosts -n production -o json
-go run ./cmd/machinarchy --verbose get hosts
+go run ./cmd/machinarchy --config ./cli.yaml --server staging hosts -n production -o json
+go run ./cmd/machinarchy --verbose hosts
 ```
 
 See [configuration](configuration.md) for file paths, servers and credentials, and environment overrides.

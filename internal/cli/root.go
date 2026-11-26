@@ -115,6 +115,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	flags.BoolP("yes", "y", false, "Confirm destructive or sensitive actions without prompting")
 	flags.Bool("plain", false, "Plain output: no colour, symbols or flavour text (MACHINARCHY_PLAIN=1)")
 
+	if err := root.RegisterFlagCompletionFunc("env", CompleteEnvNames(factory, false)); err != nil {
+		panic(err.Error()) // the flag was defined above
+	}
+
 	// Answers to confirmations and the dry run belong to commands that do not
 	// exist yet; they are accepted and hidden so scripts can be written ahead.
 	flags.Bool("dry-run", false, "Show what would happen and change nothing")

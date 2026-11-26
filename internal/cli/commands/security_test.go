@@ -34,7 +34,7 @@ func TestNoSecretIsEverVisible(t *testing.T) {
 	for _, args := range [][]string{
 		{"whoami"}, {"whoami", "-o", "json"}, {"whoami", "-o", "yaml"}, {"whoami", "-v"},
 		{"tokens"}, {"tokens", "-o", "json"}, {"tokens", "-o", "yaml"}, {"tokens", "-v"},
-		{"get", "hosts", "-v"}, {"get", "hosts", "-o", "json", "-v"},
+		{"hosts", "-v"}, {"hosts", "-o", "json", "-v"},
 		{"switch"}, {"switch", "-o", "json"},
 		{"config", "path"}, {"config", "show"}, {"config", "show", "-o", "json"}, {"config", "show", "-o", "yaml"}, {"config", "show", "-v"},
 		{"version"}, {"--help"}, {"login", "--help"}, {"tokens", "create", "--help"},
@@ -44,7 +44,7 @@ func TestNoSecretIsEverVisible(t *testing.T) {
 	// Failures must not leak either.
 	results = append(results,
 		runAuth(t, authRun{config: path, env: map[string]string{"MACHINARCHY_TOKEN": envToken}}, "secret", "list", "-v"),
-		runAuth(t, authRun{config: path, env: map[string]string{"MACHINARCHY_TOKEN": envToken, "MACHINARCHY_SERVER": "http://127.0.0.1:1"}}, "get", "hosts", "-v"),
+		runAuth(t, authRun{config: path, env: map[string]string{"MACHINARCHY_TOKEN": envToken, "MACHINARCHY_SERVER": "http://127.0.0.1:1"}}, "hosts", "-v"),
 		runAuth(t, authRun{config: path}, "login", server.URL, "--token", "x"),
 	)
 

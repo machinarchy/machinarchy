@@ -18,88 +18,17 @@ import (
 // maxListPages bounds how many pages a command follows (500 items each).
 const maxListPages = 200
 
-// NewGetCommand registers resource read commands.
+// NewGetCommand registers the remaining read commands: operations (replaced by
+// the run commands in M4) and agent-tokens (the source of the agent ID that
+// `hosts revoke-agent` needs until the server reports it per host, C-09).
 func NewGetCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "get",
 		Short: "Display one or more resources",
 		Args:  cobra.NoArgs,
 	}
-	command.AddCommand(newGetHostsCommand(factory), newGetProfilesCommand(factory), newGetOperationsCommand(factory),
-		newGetAgentTokensCommand(factory))
+	command.AddCommand(newGetOperationsCommand(factory), newGetAgentTokensCommand(factory))
 	return command
-}
-
-func newGetHostsCommand(factory *cli.Factory) *cobra.Command {
-	var selector string
-	command := &cobra.Command{
-		Use:     "hosts [name-or-id]",
-		Aliases: []string{"host"},
-		Short:   "List managed hosts or display one",
-		Args:    cobra.MaximumNArgs(1),
-		Example: "  machinarchy get hosts\n  machinarchy get hosts -l tier=web\n  machinarchy get hosts web-01 -o yaml\n  machinarchy get hosts --env production",
-		RunE: func(command *cobra.Command, args []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			query := api.HostQuery{Selector: selector}
-			if query.EnvironmentID, err = resolveEnvironment(command.Context(), client, factory.Config().Environment()); err != nil {
-				return err
-			}
-			hosts, err := listAllHosts(command.Context(), client, query)
-			if err != nil {
-				return fmt.Errorf("list hosts: %w", err)
-			}
-			if len(args) == 1 {
-				host, err := pickHost(hosts, args[0])
-				if err != nil {
-					return err
-				}
-				return printer.Host(host)
-			}
-			return printer.Hosts(hosts)
-		},
-	}
-	command.Flags().StringVarP(&selector, "selector", "l", "", "Filter by selector, for example tier=web,region in (eu,us)")
-	return command
-}
-
-func newGetProfilesCommand(factory *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "profiles",
-		Aliases: []string{"profile", "access-profiles"},
-		Short:   "List Access Profiles (credential references, never secret values)",
-		Args:    cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			profiles, err := collect(func(cursor string) (api.Page[api.AccessProfile], error) {
-				return client.ListAccessProfiles(command.Context(), cursor)
-			})
-			if err != nil {
-				return fmt.Errorf("list access profiles: %w", err)
-			}
-			if printer.Format() != output.FormatTable {
-				return printer.Document(profiles)
-			}
-			rows := make([][]string, 0, len(profiles))
-			for _, profile := range profiles {
-				rows = append(rows, []string{profile.Name, profile.ID, strconv.FormatUint(profile.CurrentRevision, 10), profile.Description})
-			}
-			return printer.Table([]string{"NAME", "ID", "REVISION", "DESCRIPTION"}, rows)
-		},
-	}
 }
 
 func newGetOperationsCommand(factory *cli.Factory) *cobra.Command {

@@ -70,10 +70,10 @@ owner account (`admin`). Then, with the CLI:
 
 ```sh
 go run ./cmd/machinarchy login http://localhost:8080 --name local --email admin
-go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy hosts
 ```
 
-The same through `make`: `make run-monolith` and `make run-cli ARGS="get hosts"`.
+The same through `make`: `make run-monolith` and `make run-cli ARGS="hosts"`.
 These targets load `.env` (or `ENV_FILE=…`) themselves and ignore settings
 exported in your shell.
 

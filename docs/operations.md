@@ -269,7 +269,7 @@ or execution settings, and its hosts need no endpoint:
 curl -s -X POST https://machinarchy.example/api/v1/managed/access-profiles \
   -H "Authorization: Bearer $OWNER_SESSION" -H 'Content-Type: application/json' \
   -d '{"name":"agents","spec":{"connectorKind":"agent","enabled":true}}' | jq -r .id
-machinarchy create host web-01 --profile agents --label tier=web
+machinarchy hosts add web-01 --agent --tag tier=web
 ```
 
 An owner then issues one token per host. It is single-use, expires after 1
