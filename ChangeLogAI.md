@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — Phase 10 closing check: authorization matrix entry for `/api/v1/version` (branch ai/p10-controller-gaps)
+
+- **Fixed:** `TestRouteAuthorizationMatrix` failed because the new public `GET /api/v1/version` (10.4) had no matrix entry; added it as `public` in `internal/bootstrap/authz_matrix_test.go`.
+- **Checks run:** `go test -race ./...` (full): everything passes except `test/e2e` `TestAgentEnrolsAndRunsCapabilitiesThroughMachinarchy` and `TestControllerSigningKeyRotation`; `internal/bootstrap` passes after the fix.
+- **Known failure, not fixed:** the two e2e tests fail because the `machinarchy-agent` binary used rejects `MACHINARCHY_AGENT_NATS_URL`, `_NATS_CREDENTIALS_FILE` and `_NAME` ("unsupported settings are set"), i.e. the agent build does not match this controller's transport. Not caused by Phase 10 changes; needs an agent-side or test-harness decision. Not run: Postgres tests.
+
 ## 2026-11-26 — C-05/C-06: operation target cap decided as final at 200 (branch ai/p10-controller-gaps)
 
 - **Decision (owner, option A):** `MaxOperationTargets` stays 200; C-06 (`summary` and `targets` endpoints) is not built. No controller behaviour changed. A raise would need C-06 and a 500/5,000-host load test; no such lab exists.
