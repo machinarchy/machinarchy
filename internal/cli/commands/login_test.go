@@ -363,3 +363,39 @@ func TestLoginWithAPrivateCertificate(t *testing.T) {
 		t.Fatalf("whoami over the private CA = %+v", got)
 	}
 }
+
+// The completion hint is shown once per computer, on a terminal, on stderr.
+func TestLoginShowsTheCompletionHintOnce(t *testing.T) {
+	server := newAuthServer(t, false)
+	path := configPath(t)
+	args := []string{"login", server.URL, "--name", "lab", "--email", testEmail, "--no-stay-signed-in"}
+
+	first := runAuth(t, authRun{terminal: true, config: path, secrets: []string{testPassword}}, args...)
+	if first.code != 0 || !strings.Contains(first.stderr, "machinarchy completion --help") {
+		t.Fatalf("first login = %+v", first)
+	}
+	if strings.Contains(first.stdout, "completion") {
+		t.Fatalf("the hint belongs on stderr: %q", first.stdout)
+	}
+
+	again := runAuth(t, authRun{terminal: true, config: path, secrets: []string{testPassword}}, args...)
+	if again.code != 0 || strings.Contains(again.stderr, "machinarchy completion") {
+		t.Fatalf("the hint must appear once: %+v", again)
+	}
+}
+
+func TestLoginShowsNoCompletionHintWithoutATerminalOrInPlain(t *testing.T) {
+	server := newAuthServer(t, false)
+
+	piped := runAuth(t, authRun{stdin: testPassword + "\n"},
+		"login", server.URL, "--name", "lab", "--email", testEmail, "--password-stdin", "--no-stay-signed-in")
+	if piped.code != 0 || strings.Contains(piped.stdout+piped.stderr, "completion") {
+		t.Fatalf("no hint without a terminal: %+v", piped)
+	}
+
+	plain := runAuth(t, authRun{terminal: true, secrets: []string{testPassword}},
+		"--plain", "login", server.URL, "--name", "lab", "--email", testEmail, "--no-stay-signed-in")
+	if plain.code != 0 || strings.Contains(plain.stdout+plain.stderr, "completion") {
+		t.Fatalf("no hint with --plain: %+v", plain)
+	}
+}

@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M5 step 5.5: lore guard, completion hint, plain audit (branch ai/p5-home-brand)
+
+- **Added** one-time completion hint: the first interactive `login` prints `hint.completion` on stderr (points at `machinarchy completion --help`; `completion install` does not exist). Remembered per computer in the config (`hints:`, `Store.HintSeen/MarkHintSeen`); skipped with `--plain`, `-q`, or no terminal.
+- **Added tests:** U-04 `TestLoreTextAppearsOnlyInTheCatalogue` (no lore line in any CLI source outside `msg`), complements the existing allowlist and renderer tests; U-05 `TestPlainHelpIsASCIIForEveryCommand` (help of every visible command under `--plain`); login hint tests (once, stderr, none on pipe or `--plain`). Docs: `docs/cli/commands.md`; `docs/cli/spec/M5-notes.md`.
+- **Limitations:** plain audit covers help and catalogue messages, not every command's data output; inline `fmt.Errorf` and prompts are not catalogued, so lore there is guarded only by the source scan. No pty run.
+- **Checks run:** gofmt (clean), `golangci-lint run ./internal/cli/... ./cmd/...` (0 issues), `go test -race -cover ./internal/cli/... ./cmd/...` (pass), `go test ./...` (pass), `make smoke` (OK). Not run: pty/colour look, Postgres, SSH lab.
+
 ## 2026-11-26 — CLI M5 step 5.4: help layout, examples, "did you mean" (branch ai/p5-home-brand)
 
 - **Changed** help: commands are grouped Get started (login, hosts, run), Everyday (access, envs, tokens), Account (whoami, switch, logout), Advanced (get, runtime-config, secret, version, help) in `commands/registry.go`; a usage template (`internal/cli/help.go`) puts `Examples:` last, adds "Run 'machinarchy COMMAND --help' for details." and a tab-completion line on the root (`machinarchy completion --help`; `completion install` does not exist yet). "Available Commands" is now "Commands". Root got examples.

@@ -59,6 +59,8 @@ go run ./cmd/machinarchy hosts show web-01 -o yaml
 
 ## Tab completion
 
+The first interactive `login` on a computer prints one line on stderr pointing at `machinarchy completion --help`; it is remembered in the config (`hints:`) and never printed again, and not with `--plain` or `-q`.
+
 `machinarchy completion bash|zsh|fish|powershell` prints the completion script for your shell (the command is hidden from help). Completion offers host names (`hosts show|tag|move|trust|enroll|revoke-agent|remove`), access entry names (`access show|remove`, `hosts add --access`) env names (`--env`, `envs use|remove`; `any` for `envs use`) and, for `run`, hosts and `key=value` tags for `--on` and `--except` (the last entry of a comma list), the 20 most recent run IDs, the hosts of a run for `--host`, and the known capabilities for `--do` (marked "known; the server decides") by asking the selected server with your saved credential. It never prompts and prints no errors: with no server, no login or a slow server (3 s limit) it offers nothing. Names with spaces or control characters are never offered.
 
 ## Signing in

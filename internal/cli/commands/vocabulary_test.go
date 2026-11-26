@@ -132,3 +132,43 @@ func TestEveryCommandHasParsableExamples(t *testing.T) {
 	}
 	walk(root)
 }
+
+// U-05: with --plain, the help of every visible command is ASCII only, with
+// no ANSI sequences and no carriage returns.
+func TestPlainHelpIsASCIIForEveryCommand(t *testing.T) {
+	t.Parallel()
+
+	probe := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
+	var paths [][]string
+	var walk func(*cobra.Command, []string)
+	walk = func(command *cobra.Command, path []string) {
+		if command.Hidden {
+			return
+		}
+		paths = append(paths, path)
+		for _, child := range command.Commands() {
+			walk(child, append(append([]string(nil), path...), child.Name()))
+		}
+	}
+	walk(probe, nil)
+
+	for _, path := range paths {
+		root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
+		var out strings.Builder
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(append(append([]string(nil), path...), "--help", "--plain"))
+		if err := root.Execute(); err != nil {
+			t.Errorf("%v --help: %v", path, err)
+
+			continue
+		}
+		for _, r := range out.String() {
+			if r > 127 || r == '\r' || r == 0x1b {
+				t.Errorf("%v --plain help contains %q", path, r)
+
+				break
+			}
+		}
+	}
+}

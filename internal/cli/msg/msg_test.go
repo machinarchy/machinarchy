@@ -1,6 +1,9 @@
 package msg
 
 import (
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -206,5 +209,38 @@ func TestSuccessMessagesHaveANextStep(t *testing.T) {
 		case hasNext && successWithoutNext[m.ID]:
 			t.Errorf("success message %q has a Next step; remove it from the exception list", m.ID)
 		}
+	}
+}
+
+// U-04: a lore line is written only in the catalogue. No other source file of
+// the CLI (prompts, inline errors, warnings) repeats one.
+func TestLoreTextAppearsOnlyInTheCatalogue(t *testing.T) {
+	t.Parallel()
+
+	var lore []string
+	for _, m := range All() {
+		if m.Lore != "" {
+			lore = append(lore, m.Lore)
+		}
+	}
+	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
+			filepath.Base(filepath.Dir(path)) == "msg" {
+			return err
+		}
+		data, err := os.ReadFile(path) // #nosec G304 -- test reads the repository's own sources
+		if err != nil {
+			return err
+		}
+		for _, line := range lore {
+			if strings.Contains(string(data), line) {
+				t.Errorf("%s repeats the lore line %q outside the catalogue", path, line)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -184,7 +184,26 @@ func runLogin(command *cobra.Command, f *cli.Factory, o loginOptions) error {
 		}
 	}
 
+	showCompletionHint(command, f, prompter.Interactive)
+
 	return nil
+}
+
+// showCompletionHint prints the one-time completion line after the first
+// sign-in on a terminal, on stderr (docs/cli/spec/03-ux.md section 11). It is remembered
+// in the config, so it appears once per computer, and never blocks a login.
+func showCompletionHint(command *cobra.Command, f *cli.Factory, interactive bool) {
+	store := f.Config()
+	if !interactive || f.Plain() || store.Quiet() || store.HintSeen("completion") {
+		return
+	}
+	out := command.ErrOrStderr() // guidance, not data: stdout stays clean for pipes
+	if _, err := fmt.Fprint(out, ui.Render(msg.Get("hint.completion"), f.StyleFor(out))); err != nil {
+		return
+	}
+	if err := store.MarkHintSeen("completion"); err != nil {
+		return // a failed save only repeats the hint
+	}
 }
 
 // chooseServer works out which server to sign in to: the argument (a saved name

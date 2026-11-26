@@ -59,6 +59,9 @@ type File struct {
 	// Defaults are saved values for a few global options (see settings.go):
 	// they apply when neither a flag nor an environment variable is given.
 	Defaults map[string]string `yaml:"defaults,omitempty"`
+	// Hints names the one-time hints already shown on this computer, so each is
+	// printed once (for example "completion" after the first sign-in).
+	Hints []string `yaml:"hints,omitempty"`
 
 	// The keys below belong to the format this CLI replaced. They are read only
 	// to recognise such a file and refuse it with a helpful message.
@@ -524,6 +527,31 @@ func (s *Store) savedServerName() (string, error) {
 	}
 
 	return name, nil
+}
+
+// HintSeen reports whether the one-time hint name was already shown.
+func (s *Store) HintSeen(name string) bool {
+	if s == nil {
+		return false
+	}
+	for _, seen := range s.doc.Hints {
+		if seen == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// MarkHintSeen remembers that the one-time hint name was shown.
+func (s *Store) MarkHintSeen(name string) error {
+	if s.HintSeen(name) {
+		return nil
+	}
+	s.doc.Hints = append(s.doc.Hints, name)
+	sort.Strings(s.doc.Hints)
+
+	return s.save()
 }
 
 // SetEnv saves the default environment of the selected server; "" clears it.

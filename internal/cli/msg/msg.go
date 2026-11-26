@@ -178,6 +178,9 @@ func init() {
 		Why:     "{detail}",
 		Lore:    "The authority acknowledges you.",
 		Next:    "{next}"})
+	register(Message{ID: "hint.completion", Kind: KindInfo,
+		Primary: "Tab completion is available for commands, hosts and environments.",
+		Next:    "machinarchy completion --help"})
 	register(Message{ID: "auth.device_token_saved", Kind: KindSuccess,
 		Primary: "Device token saved ({role}, {days} days).",
 		Why:     "Owner actions still use your password session while it lasts."})
