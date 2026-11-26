@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.8: scripted walkthrough (branch ai/p6-automation-docs-hardening)
+
+- **Docs only:** `docs/cli/spec/M6-usability.md`. A scripted run by Claude of the A-01 flow on a throwaway controller and the SSH lab: login, hosts add, key trust, run all work. Seven findings listed; F1 (loopback/ports denied by default, message does not say so) blocks a fresh lab run.
+- **Limitation:** this is not the human fresh-user test. Time and confusion were not measured; A-01's pass criteria are unmeasured. No code changed, no automated tests run.
+
 ## 2026-11-26 — CLI M6 step 6.7 follow-up: S-series mapping (branch ai/p6-automation-docs-hardening)
 
 - **Tests added:** `TestRunJSONOutputIsEscaped` (S-17) in `commands/runsops_test.go`.
