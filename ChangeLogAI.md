@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — Docs: AI workflow block in AGENTS.md; M3 and M4 approved by the owner
+
+- **Added** an "AI workflow" section to `AGENTS.md` (local-only `PLAN.md`/`.plan/`, one step per run, narrow reads, no unverified check claims). The owner approved M3 (envs, access, hosts) and M4 (runs) in code; M5 is next. Docs only, no code changed.
+- **Checks:** none applicable (documentation only); no tests run.
+
 ## 2026-11-26 — CLI M4: the `run` command (branch ai/p3-envs-access-hosts)
 
 - **Added** the single `run` command (`internal/cli/commands/run*.go`): `run --on TARGET [--except TARGET] -- PROGRAM`, `--do CAPABILITY [KEY=VALUE...]` / `--input-json`, `run` (list), `run ID` (grouped result), `run ID --host NAME [--stream] [--raw] [--follow]`, `--follow`, `--retry-failed [--include-unknown] [--include-cancelled]`, `--cancel [--no-wait]`, `--detach`, `--timeout`, `--concurrency`, `--wait-timeout` (exit 5), `--no-groups`, `--groups N|all`, `--fail-on-drift`, `--dry-run`, `-q`, `-o json|yaml`. It waits by default and detaches with `--detach` or a timeout above 15 minutes. Exit codes 0 / 8 (some failed) / 9 (all failed) / 5 / 130 come from the M1 aggregator (`group.ExitFor`).
