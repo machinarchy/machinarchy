@@ -301,6 +301,24 @@ state (never the secret), and `DELETE /api/v1/agents/enrollment-tokens/{id}`
 revokes an unused one. Issuing and revoking are audited, and an agent's
 `agent.registered` event names the token it used.
 
+**Getting the agent binary.** The controller does not serve or point at agent
+downloads (no install endpoint, gap C-07: not built). Agent releases are published by the agent repository:
+`machinarchy-agent_<tag>_linux_{amd64,arm64}.tar.gz` and one `checksums.txt`, with a GitHub
+build attestation, at <https://github.com/machinarchy/machinarchy-agent/releases>. Download
+the archive for the host's architecture and the `checksums.txt` of the **same tag**, then verify
+before installing:
+
+```sh
+grep -F "  machinarchy-agent_<tag>_linux_amd64.tar.gz" checksums.txt | sha256sum --check -
+gh attestation verify machinarchy-agent_<tag>_linux_amd64.tar.gz --repo machinarchy/machinarchy-agent
+```
+
+The full install steps (systemd unit, environment file, rollback) are in the agent repository's
+`docs/deployment/systemd.md`, which ships inside the archive as `INSTALL.md`. The values to put in the agent's
+environment come from `machinarchy hosts add NAME --agent` or `hosts enroll NAME` (the install blob: server URL,
+controller public key, one-time token). Use an agent release whose protocol the controller supports; a version
+mismatch shows up when the agent registers.
+
 The gateway provisions the `MACHINARCHY_AGENT_COMMANDS` JetStream stream (file
 storage, 24h max age, 15 min duplicate window) and one durable consumer per
 agent. JetStream must be enabled on the NATS server.

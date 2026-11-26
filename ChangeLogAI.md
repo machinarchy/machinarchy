@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — 14.1: C-07 not built; docs say where the agent binary comes from (branch ai/p10-controller-gaps)
+
+- **Decision (owner, option C):** no `GET /api/v1/agents/install`. The controller has no source for agent release data, releases are per platform in the agent repository, and the agent-repo `install.sh` (Q10) does not exist yet. No controller or CLI change; revisit as option A (operator-configured manifest, `.plan/14.1.md`) when `install.sh` exists.
+- **Docs:** `docs/operations.md` ("Getting the agent binary": release location, per-tag `checksums.txt` and attestation verification, pointer to the agent's `systemd.md`/`INSTALL.md`); `docs/cli/commands.md` points there; matrix C-07 row marked decided.
+- **Checks run:** none applicable beyond reading the agent repo's release workflow and `docs/deployment/systemd.md` to confirm asset names and URL pattern; no doc/link checker run. The `gh attestation verify` command line was not executed against a real release.
+
 ## 2026-11-26 — 13.1: C-09 agent list documented; `hosts revoke-agent NAME` finds the agent (branch ai/p10-controller-gaps)
 
 - **Controller (owner approved A+B):** `GET /api/v1/agents` now has a typed response (`agents.agentList`/`agentView`, `docs/api/swagger.{json,yaml}` regenerated with `make api-docs`). JSON is unchanged except that `agentView` names its fields: same keys as before (`id, hostname, agentVersion, os, architecture, capabilities, leaseExpiresAt, registeredAt, lastSeenAt, revokedAt?, connected`), still no key material or lease id. Regeneration also reordered the `TargetState` enum; that unrelated drift was reverted by hand.
