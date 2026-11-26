@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.2: CI behaviour tests and docs (branch ai/p6-automation-docs-hardening)
+
+- **Added** `commands/ci_test.go`: N-04/N-05 sweep (every prompting command exits 2 naming a flag, with no terminal and with `--no-input`, sending nothing that changes), N-06 (`MACHINARCHY_TOKEN/SERVER/NO_INPUT/OUTPUT` honoured, config dir stays empty), N-07 (JSON error on stderr, stdout empty), N-08 (`hosts -q`), S-30/N-09 (`--dry-run` on every changing command sends no non-GET request). N-03 already existed (`errors_test.go`). No production code changed: the audit (`.plan/6.2.md`, local) found no gap in behaviour.
+- **Docs:** `docs/cli/commands.md` section "Scripts and CI".
+- **Limitation:** only `run` previews under `--dry-run`; other changing commands refuse the flag (exit 2), so the S-30 "prints the preview" part is not implemented. `-q` is tested for `hosts` only, not `run -q` or `tokens create -q` here (`run -q` is covered in `runs_test.go`).
+
 ## 2026-11-26 — CLI M6 step 6.1: schema goldens for `-o json`/`-o yaml` (branch ai/p6-automation-docs-hardening)
 
 - **Added** `commands/schema_test.go` and goldens `commands/testdata/schema/*.txt` (key path + type per output) for `hosts`, `hosts show`, `envs`, `access`, `access show`, `tokens`, `whoami`, `run`, `run ID`, home and `version`. Tests: N-01 a promised key that is gone or retyped fails (new keys allowed); N-02 the same command twice is byte-identical (JSON and YAML) for outputs that do not carry the clock; the check itself is tested against removed/renamed/retyped keys; YAML paths must exist in JSON. `-update` rewrites the goldens.

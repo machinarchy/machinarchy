@@ -271,3 +271,7 @@ go run ./cmd/machinarchy --verbose hosts
 ```
 
 See [configuration](configuration.md) for file paths, servers and credentials, and environment overrides.
+
+## Scripts and CI
+
+Set `MACHINARCHY_SERVER`, `MACHINARCHY_TOKEN` (an API token), `MACHINARCHY_ENV`, `MACHINARCHY_NO_INPUT=1` and `MACHINARCHY_OUTPUT=json`; nothing is written to the config directory. Without a terminal, or with `--no-input`, a command never waits: it exits 2 and names the flag that answers the question (`--confirm NAME`, `--yes`, `--confirm-env ENV`, `--email`). With `-o json` an error is one JSON object on stderr and stdout stays empty. `-q` prints identifiers only. `--dry-run` is supported by `run`; every other changing command refuses it (exit 2) instead of ignoring it. Exit codes are in the table above; `8` is a partial run and `9` a run where every host failed.
