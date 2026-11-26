@@ -511,9 +511,16 @@ func signInWithToken(ctx context.Context, command *cobra.Command, f *cli.Factory
 		return cred.Credential{}, "", err
 	}
 
-	// /api/v1/me does not report the token's role or expiry, so they are shown
-	// as unknown instead of being guessed.
-	detail := "Role: not reported by this server. Expires: unknown."
+	// An older server does not report the token's role or expiry; they are
+	// then shown as unknown instead of being guessed.
+	role, expires := "not reported by this server", "unknown"
+	if user.Role != "" {
+		role = user.Role
+	}
+	if user.ExpiresAt != nil {
+		expires = user.ExpiresAt.Local().Format("2006-01-02 15:04")
+	}
+	detail := "Role: " + role + ". Expires: " + expires + "."
 
 	return cred.Credential{Kind: cred.KindToken, Secret: token, User: user.Label()}, detail, nil
 }

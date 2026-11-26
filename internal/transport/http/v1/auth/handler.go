@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -24,6 +25,30 @@ type Handler struct {
 	secureCookie   bool
 	signupEnabled  atomic.Bool
 	signupProvider func() bool
+	tokens         TokenLookup
+}
+
+// TokenLookup finds the API token a request was made with, for GET /me.
+type TokenLookup interface {
+	ListAPITokens(ctx context.Context, userID, workspaceID int) ([]domain.APIToken, error)
+}
+
+// SetTokenLookup enables tokenName and expiresAt in GET /api/v1/me.
+func (h *Handler) SetTokenLookup(tokens TokenLookup) { h.tokens = tokens }
+
+// MeResponse is the caller's account plus how it signed in. role, authMethod
+// and, for an API token, tokenId, tokenName and expiresAt are additive: an
+// older server returns only the account. No secret is ever included.
+type MeResponse struct {
+	domain.UserResponse
+	// Role is the caller's effective role in the workspace.
+	Role domain.Role `json:"role,omitempty"`
+	// AuthMethod is "session" (a login session) or "api_token".
+	AuthMethod string `json:"authMethod,omitempty"`
+	TokenID    int    `json:"tokenId,omitempty"`
+	TokenName  string `json:"tokenName,omitempty"`
+	// ExpiresAt is when the API token stops working.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 // NewHandler creates an authentication HTTP handler using the provided
@@ -193,7 +218,7 @@ func (h *Handler) Login(c echo.Context) error {
 // @Tags Authentication
 // @Produce json
 // @Security BearerAuth
-// @Success 200 {object} domain.UserResponse
+// @Success 200 {object} MeResponse
 // @Failure 401 {object} httperr.Body
 // @Failure 500 {object} httperr.Body
 // @Router /api/v1/me [get]
@@ -212,7 +237,36 @@ func (h *Handler) GetMe(c echo.Context) error {
 		return httperr.FromError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, userResp)
+	me := MeResponse{UserResponse: *userResp}
+	if principal, ok := middleware.Principal(c); ok && domain.ValidRole(principal.Role) {
+		me.Role = principal.Role
+		me.AuthMethod = "session"
+		if principal.APITokenID > 0 {
+			me.AuthMethod = "api_token"
+			me.TokenID = principal.APITokenID
+			h.describeToken(ctx, principal, &me)
+		}
+	}
+
+	return c.JSON(http.StatusOK, me)
+}
+
+// describeToken adds the name and expiry of the API token the request used. A
+// lookup failure leaves them out: the rest of the answer is still true.
+func (h *Handler) describeToken(ctx context.Context, principal domain.Principal, me *MeResponse) {
+	if h.tokens == nil {
+		return
+	}
+	tokens, err := h.tokens.ListAPITokens(ctx, principal.UserID, principal.WorkspaceID)
+	if err != nil {
+		return
+	}
+	for _, token := range tokens {
+		if token.ID == principal.APITokenID {
+			me.TokenName, me.ExpiresAt = token.Name, token.ExpiresAt
+			return
+		}
+	}
 }
 
 // Logout ends the current session: the session is revoked on the server, so a

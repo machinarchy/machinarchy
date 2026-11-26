@@ -9,7 +9,7 @@ Roles: **any** = reader, operator or owner; **runs** = may execute runs (operato
 | CLI command | API operation | Method and path | Role | Today | Missing controller work |
 |---|---|---|---|---|---|
 | `login` (password) | log in | `POST /api/auth/login` | none | yes (body `email` or `username`, `password`; returns `token`, `user`) | - (expiry comes from `/sessions`) |
-| `login --with-token`, `whoami` | current user | `GET /api/v1/me` | any (session or API token) | yes; returns **only** `id`, `username`, `email` | C-03 (role, auth method, token name and expiry) |
+| `login --with-token`, `whoami` | current user | `GET /api/v1/me` | any (session or API token) | yes; returns `id`, `username`, `email` and, since Phase 10.3 (C-03), `role`, `authMethod`, token `tokenId`, `tokenName`, `expiresAt` |
 | `login`, `whoami`, home | my sessions | `GET /api/v1/sessions` | session only | yes (`id`, `current`, `createdAt`, `expiresAt`, `clientIp`, `userAgent`) | - |
 | `login` ("stay signed in") | create API token | `POST /api/v1/tokens` | owner session | yes (`name`, `role` operator or reader, `expiresInHours`; token shown once) | - |
 | `logout` | log out | `POST /api/auth/logout` | none (revokes the session whose token is sent) | yes | - |
@@ -82,7 +82,7 @@ Separate from CLI work. "Blocks" lists the CLI features that must refuse or degr
 |---|---|---|---|---|---|
 | C-01 | Accept `environmentId` on host create and on host update (`hostRequest`, `hostUpdateRequest`); the domain method `UpdateMetadata` already takes an environment | `hosts add --env`, `hosts move`, the "which env?" question | env assignment | The questions are skipped and `hosts move` refuses with "this server cannot move hosts between envs yet" | M3 |
 | C-02 | `protected` on environments; mutations of hosts in a protected env (run submit, host update/delete/trust/move) require `confirmEnvironment` equal to the env name, else HTTP 409 `protected_environment_confirmation_required` | server-held protected envs (`04-security.md` 6.3) | server-side protection | Local guard, labelled `protected (local)` | M3. **Implemented 10.2** (`confirmEnvironment` string or list; 409 message lists the env names) |
-| C-03 | `GET /api/v1/me` also returns `role`, `authMethod` (`session`, `api_token`), and for tokens `tokenName`, `tokenId`, `expiresAt` | decision 5 ("show user, role and expiry") for token logins | role and expiry for tokens | CLI prints "not reported by this server" | M2 |
+| C-03 | `GET /api/v1/me` also returns `role`, `authMethod` (`session`, `api_token`), and for tokens `tokenName`, `tokenId`, `expiresAt` | decision 5 ("show user, role and expiry") for token logins | role and expiry for tokens | CLI prints "not reported by this server" | M2. **Implemented 10.3** |
 | C-04 | Login response includes `expiresAt` | saves one request; optional because `/sessions` has it | - | `GET /api/v1/sessions` | N |
 | C-05 | Decide the cap on targets per operation: raise `MaxOperationTargets` (200) or document it as final | runs on more than 200 hosts | >200-host runs | Refuse with advice | S |
 | C-06 | `GET /api/v1/managed/operations/{id}/summary` (state counts, per-state host lists as ids, groups by result hash) and `GET .../targets?state=&cursor=&limit=`; the operation document stops embedding every target for large runs | 500 and 5,000 host runs; polling cost | large runs (needs C-05) | The CLI downloads the whole operation (<= 200 targets) | S |

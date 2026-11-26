@@ -77,7 +77,7 @@ printf '%s' "$TOKEN"    | machinarchy login https://machinarchy.example.com --wi
 - A **token is checked with the server before it is saved**; a token the server rejects is not saved.
 - After a password sign-in on a terminal it asks "Stay signed in on this computer?" (default yes): that saves a **90-day operator device token** next to the session, named `device-<computer>-<date>`. In a script it is off unless you pass `--stay-signed-in`. Owner actions still use the password session while it lasts, because an API token can never act as the owner.
 - A session lasts the server's `MACHINARCHY_SESSION_TTL` (24 hours by default); the expiry comes from the server.
-- The server's role for a session or a token and a token's expiry are not reported by the API (`GET /api/v1/me` returns only the account), so the CLI prints "not reported by this server" instead of guessing.
+- `GET /api/v1/me` reports the role, how you signed in (`authMethod`: `session` or `api_token`) and, for an API token, its name, ID and expiry; `whoami` and `login --with-token` show them. A server that predates this returns only the account, and the CLI then prints "not reported by this server" instead of guessing. A session's expiry still comes from the saved credential or the session list.
 - `--name NAME` chooses the name the server is saved under. `--insecure-http` allows plain `http://` to a host that is not on this computer (saved for that server). `--ca-file ca.pem` trusts a private CA for that server. There is no way to skip certificate verification.
 
 ```sh

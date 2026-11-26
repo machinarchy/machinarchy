@@ -20,8 +20,9 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/ui"
 )
 
-// notReported is shown where the server does not tell the CLI: /api/v1/me does
-// not return a role or a token's expiry, and the CLI never guesses them.
+// notReported is shown where the server does not tell the CLI: a server that
+// predates C-03 returns no role or token expiry from /api/v1/me, and the CLI
+// never guesses them.
 const notReported = "not reported by this server"
 
 // whoamiDocument is the stable machine-readable form of `whoami`.
@@ -72,6 +73,17 @@ func NewWhoamiCommand(f *cli.Factory) *cobra.Command {
 				Method: methodName(target), TokenName: target.CredentialName, Role: target.Role, Environment: target.Environment,
 			}
 			doc.ExpiresAt = expiryOf(command.Context(), f, target, auth)
+			// What the server reports about this credential wins over what
+			// the CLI saved: the server is the one that enforces it.
+			if user.Role != "" {
+				doc.Role = user.Role
+			}
+			if user.TokenName != "" {
+				doc.TokenName = user.TokenName
+			}
+			if user.ExpiresAt != nil {
+				doc.ExpiresAt = user.ExpiresAt
+			}
 
 			if printer.Format() != output.FormatTable {
 				return printer.Document(doc)

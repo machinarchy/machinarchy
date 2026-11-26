@@ -157,6 +157,12 @@ type User struct {
 	ID       int    `json:"id" yaml:"id"`
 	Username string `json:"username" yaml:"username"`
 	Email    string `json:"email" yaml:"email"`
+	// Role, AuthMethod ("session" or "api_token"), TokenName and ExpiresAt are
+	// empty when the server does not report them (an older server).
+	Role       string     `json:"role,omitempty" yaml:"role,omitempty"`
+	AuthMethod string     `json:"authMethod,omitempty" yaml:"authMethod,omitempty"`
+	TokenName  string     `json:"tokenName,omitempty" yaml:"tokenName,omitempty"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty" yaml:"expiresAt,omitempty"`
 }
 
 // Label returns the name to show for the user.

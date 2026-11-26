@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-26 — C-03: `GET /api/v1/me` reports role, auth method and token details (branch ai/p10-controller-gaps)
+
+- **Implemented (controller, additive):** `/api/v1/me` now also returns `role` (effective role), `authMethod` (`session` or `api_token`) and, for an API token, `tokenId`, `tokenName` and `expiresAt` (looked up in the caller's own tokens; left out if the lookup fails). No secret or hash is returned. A session returns no expiry. `docs/api/swagger.*` regenerated.
+- **Implemented (CLI):** `whoami` (table, json, yaml) and `login --with-token` show the server's role, token name and expiry; what the server reports wins over what the CLI saved. An older server still gets "not reported by this server" / "Expires: unknown".
+- **Limitations:** a session's expiry is still read from the saved credential or the session list. The `whoami` schema golden did not change (it is generated against an old-style server).
+- **Tests:** `TestGetMeReportsRoleAndTokenDetails` (session, token, other tokens and hash absent, no lookup), `TestWhoamiShowsWhatTheServerReports`, `TestWhoamiOnAnOlderServerSaysNotReported`.
+- **Checks run:** gofmt, `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race` on `internal/cli/...`, `internal/transport/...`, `internal/domain/...`, `cmd/...`, `make smoke` pass. Not run: the whole repo suite, Postgres tests (no store change), `test/e2e`.
+
 ## 2026-11-26 — C-02: protected environments held by the server (branch ai/p10-controller-gaps)
 
 - **Implemented (controller, additive API):** migration `000003_environment_protected` (SQLite and PostgreSQL) adds `environments.protected` (default false). `POST/PUT /api/v1/environments` take an optional `protected` (a `PUT` without it keeps the stored value; anyone with inventory write may protect, only the workspace owner may unprotect, else 403); environments are returned with `protected`. A change of the value is audited in the same transaction (`environment.protection_changed`, target `environment`). Guarded calls: run submit (by ids, rule or `--on all`), host update, move (source and target env), trust, and delete refuse with HTTP 409 `protected_environment_confirmation_required` (message lists the env names) unless the request carries `confirmEnvironment` naming every protected env touched, by exact name, for every principal including API tokens and `curl`. The field is a string or a list in the body; for `DELETE /managed/hosts/{id}` it is a repeated query parameter. Enforcement is in `ManagedResourceService` (`internal/service/protected_environments.go`) with the names carried in the context (`domain.WithConfirmedEnvironments`). `docs/api/swagger.*` regenerated.

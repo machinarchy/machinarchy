@@ -128,6 +128,29 @@ definitions:
     required:
     - password
     type: object
+  auth.MeResponse:
+    properties:
+      authMethod:
+        description: AuthMethod is "session" (a login session) or "api_token".
+        type: string
+      email:
+        type: string
+      expiresAt:
+        description: ExpiresAt is when the API token stops working.
+        type: string
+      id:
+        type: integer
+      role:
+        allOf:
+        - $ref: '#/definitions/domain.Role'
+        description: Role is the caller's effective role in the workspace.
+      tokenId:
+        type: integer
+      tokenName:
+        type: string
+      username:
+        type: string
+    type: object
   auth.MessageResponse:
     properties:
       message:
@@ -1099,7 +1122,6 @@ definitions:
     type: object
   resource.TargetState:
     enum:
-    - Lost
     - Pending
     - Running
     - Succeeded
@@ -1107,9 +1129,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
+    - Lost
     type: string
     x-enum-varnames:
-    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -1117,6 +1139,7 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
+    - TargetLost
   secret.RewrapCounts:
     properties:
       remaining:
@@ -2578,7 +2601,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/domain.UserResponse'
+            $ref: '#/definitions/auth.MeResponse'
         "401":
           description: Unauthorized
           schema:
