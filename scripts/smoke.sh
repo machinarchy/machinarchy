@@ -3,7 +3,7 @@
 #
 # Starts bin/machinarchy-monolith on a throwaway SQLite database, signs in as
 # the bootstrap owner, and drives the CLI: secret, Access Profile, host
-# create/label/delete, a bound run (expected to fail: the endpoint is closed),
+# add/tag/remove, a bound run (expected to fail: the endpoint is closed),
 # operation listing, and the legacy-route 404. Build first with `make build`.
 set -euo pipefail
 
@@ -38,10 +38,7 @@ token=$(curl -sf "$api/api/auth/login" -H 'Content-Type: application/json' \
 	fail "login"
 export XDG_CONFIG_HOME="$work"
 cli() { "$root/bin/machinarchy" --config "$work/cli.yaml" "$@"; }
-cli config set-cluster smoke --server "$api" >/dev/null
-printf '%s' "$token" | cli config set-credentials smoke --token-stdin >/dev/null
-cli config set-context smoke --cluster smoke --user smoke >/dev/null
-cli config use-context smoke >/dev/null
+printf '%s' "smoke-admin-password" | cli login "$api" --name smoke --email admin --password-stdin --no-stay-signed-in >/dev/null
 
 step "secret and Access Profile"
 # -o json: the default output is a line for people, not data for scripts.
@@ -50,23 +47,24 @@ secret_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"
 curl -sf "$api/api/v1/managed/access-profiles" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
 	-d "{\"name\":\"deploy\",\"spec\":{\"connectorKind\":\"ssh\",\"username\":\"deploy\",\"authenticationMethod\":\"password\",\"credential\":{\"id\":\"$secret_id\",\"version\":1},\"enabled\":true}}" >/dev/null ||
 	fail "create Access Profile"
-cli get profiles | grep -q deploy || fail "get profiles"
+cli access | grep -q deploy || fail "access list"
 
 step "hosts"
-cli create host web-01 --endpoint 127.0.0.1:1 --profile deploy --label tier=web -q >/dev/null || fail "create host"
-cli create host db-01 --endpoint 127.0.0.1:2 --profile deploy --label tier=db -q >/dev/null || fail "create second host"
-[[ $(cli get hosts -l tier=web -q | wc -l) -eq 1 ]] || fail "selector"
-cli label host web-01 canary=yes -o json | grep -q '"canary": "yes"' || fail "label host"
-if cli create host web-01 --endpoint 127.0.0.1:3 --profile deploy >/dev/null 2>&1; then fail "duplicate host accepted"; fi
+cli hosts add web-01 127.0.0.1:1 --access deploy --tag tier=web --wait 0 --no-input -q >/dev/null || fail "add host"
+cli hosts add db-01 127.0.0.1:2 --access deploy --tag tier=db --wait 0 --no-input -q >/dev/null || fail "add second host"
+[[ $(cli hosts -l tier=web -q | wc -l) -eq 1 ]] || fail "selector"
+cli hosts tag web-01 canary=yes >/dev/null || fail "tag host"
+cli hosts show web-01 -o json | grep -q '"canary": "yes"' || fail "tag not stored"
+if cli hosts add web-01 127.0.0.1:3 --access deploy --wait 0 --no-input >/dev/null 2>&1; then fail "duplicate host accepted"; fi
 
 step "operations"
-if cli run -l tier=web --yes --wait --timeout 5 -- uptime >"$work/run.txt" 2>&1; then fail "run against a closed port succeeded"; fi
+if cli run --on tier=web --yes --timeout 5s -- uptime >"$work/run.txt" 2>&1; then fail "run against a closed port succeeded"; fi
 grep -q 'web-01' "$work/run.txt" || fail "run output: $(cat "$work/run.txt")"
-cli get operations | grep -q 'Failed=1' || fail "get operations"
+cli run | grep -q 'web-01\|uptime' || fail "run list"
 
-step "delete and legacy routes"
-cli delete host db-01 --yes >/dev/null || fail "delete host"
-[[ $(cli get hosts -q | wc -l) -eq 1 ]] || fail "host count after delete"
+step "remove and legacy routes"
+cli hosts remove db-01 --confirm db-01 >/dev/null || fail "remove host"
+[[ $(cli hosts -q | wc -l) -eq 1 ]] || fail "host count after delete"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$api/api/v1/hosts" -H "Authorization: Bearer $token")
 [[ $code == 404 ]] || fail "legacy /api/v1/hosts returned $code"
 

@@ -1,0 +1,5 @@
+FAILED 14 of 14 hosts failed
+  FAILED web-[01-14]  exit 3
+    inactive
+
+  Next:  machinarchy run r-4k2p9x1a --host web-01

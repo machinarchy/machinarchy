@@ -3,8 +3,10 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -13,6 +15,17 @@ import (
 // config file (version, for example). Global flags and environment overrides
 // still apply. Cobra's built-in help and completion commands are exempt too.
 const AnnotationSkipConfig = "machinarchy.io/skip-config"
+
+// AnnotationOwner marks a command that acts as the workspace owner. Such a
+// command runs with the saved login session and with nothing else: an API
+// token can never be an owner, so with only a token the command stops before
+// it sends anything and says how to sign in with a password.
+const AnnotationOwner = "machinarchy.io/owner"
+
+// AnnotationDryRun marks a command that honours --dry-run. A command without
+// it refuses the flag instead of ignoring it, so "--dry-run" can never run
+// something for real.
+const AnnotationDryRun = "machinarchy.io/dry-run"
 
 // CommandBuilder creates a command with the shared CLI dependencies.
 type CommandBuilder func(*Factory) *cobra.Command
@@ -30,6 +43,22 @@ type Options struct {
 	Streams       IOStreams
 	ClientBuilder APIClientBuilder
 	Groups        []CommandGroup
+	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
+	// locale, COLUMNS). Nil selects os.Getenv; tests inject one.
+	Getenv func(string) string
+	// IsTerminal reports whether a reader is an interactive terminal. Nil
+	// selects the real check; tests inject one.
+	IsTerminal func(io.Reader) bool
+	// ReadSecret reads a line without echo. Nil reads from the terminal;
+	// tests inject one.
+	ReadSecret func(prompt string) (string, error)
+	// Now returns the current time. Nil selects time.Now.
+	Now func() time.Time
+	// Hostname returns the computer's name, used to name a device token. Nil
+	// selects os.Hostname.
+	Hostname func() (string, error)
+	// Home runs for bare "machinarchy" (the home screen). Nil prints help.
+	Home func(*Factory, *cobra.Command) error
 }
 
 // NewRootCommand creates a Cobra root and binds shared configuration flags.
@@ -48,48 +77,89 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	factory := &Factory{
 		Streams:       streams,
 		ClientBuilder: options.ClientBuilder,
+		Getenv:        options.Getenv,
+		isTerminal:    options.IsTerminal,
+		readSecret:    options.ReadSecret,
+		now:           options.Now,
+		hostname:      options.Hostname,
 		Logger: slog.New(slog.NewJSONHandler(streams.ErrOut,
 			&slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	var configPath string
 
 	root := &cobra.Command{
-		Use:           "machinarchy",
-		Short:         "Manage Machinarchy environments and hosts",
+		Use:   "machinarchy",
+		Short: "Manage Machinarchy environments and hosts",
+		Example: "  machinarchy login https://machinarchy.example.com\n" +
+			"  machinarchy hosts add\n" +
+			"  machinarchy run --on all -- uptime",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// Completion stays available but is not listed in help or menus:
+		// people should not have to know about a script generator.
+		CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
+	}
+	if options.Home != nil {
+		// Args stays nil on purpose: cobra still reports "unknown command"
+		// for a mistyped word instead of running the home screen.
+		root.RunE = func(command *cobra.Command, _ []string) error {
+			return options.Home(factory, command)
+		}
 	}
 	root.SetIn(streams.In)
 	root.SetOut(streams.Out)
 	root.SetErr(streams.ErrOut)
 
-	// Global flags. Every flag except --config and --yes is bound to Viper by
-	// name, giving the precedence flag > MACHINARCHY_CLI_<NAME> > config
-	// file > default.
+	// Global flags. Every flag except --config, --yes, --confirm, --confirm-env
+	// and --dry-run resolves with the precedence flag > MACHINARCHY_<NAME> >
+	// saved defaults > default
+	// (config/settings.go). The four exceptions are flag-only on purpose.
 	flags := root.PersistentFlags()
 	flags.StringVar(&configPath, "config", "", "CLI config file (default: user config directory)")
-	flags.String("context", "", "Context to use for this command")
 	flags.StringP("env", "n", "", "Machinarchy environment name or ID")
 	flags.StringP("output", "o", "", "Output format: table, json, or yaml (default depends on the command)")
 	flags.BoolP("verbose", "v", false, "Enable debug logging")
-	flags.String("server", "", "API server URL, overriding the context's server")
+	flags.String("server", "", "Saved server name, or an address for this command only (MACHINARCHY_SERVER)")
 	flags.String("request-timeout", "", "Timeout for each API request, such as 10s or 2m (default 30s)")
 	flags.BoolP("quiet", "q", false, "Suppress status output; print only identifiers where supported")
 	flags.Bool("no-headers", false, "Omit table headers")
 	flags.Bool("no-input", false, "Never prompt; fail if input or confirmation is required")
 	flags.BoolP("yes", "y", false, "Confirm destructive or sensitive actions without prompting")
+	flags.Bool("plain", false, "Plain output: no colour, symbols or flavour text (MACHINARCHY_PLAIN=1)")
+
+	if err := root.RegisterFlagCompletionFunc("env", CompleteEnvNames(factory, false)); err != nil {
+		panic(err.Error()) // the flag was defined above
+	}
+
+	// Answers to confirmations and the dry run belong to commands that do not
+	// exist yet; they are accepted and hidden so scripts can be written ahead.
+	flags.Bool("dry-run", false, "Show what would happen and change nothing")
+	flags.String("confirm", "", "Answer a type-the-name confirmation without a prompt")
+	flags.StringSlice("confirm-env", nil, "Answer a protected-environment confirmation without a prompt (repeat for each protected env)")
+	for _, name := range []string{"dry-run", "confirm", "confirm-env"} {
+		if err := flags.MarkHidden(name); err != nil {
+			panic(err.Error()) // the flag was defined just above
+		}
+	}
 
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		// Cobra validates the command line before this hook runs, so reaching
 		// it means the invocation was well formed. Anything that fails later
 		// is a runtime failure, not a usage error.
 		factory.started = true
+		factory.needsOwner = command.Annotations[AnnotationOwner] == "true"
 
+		var err error
 		if skipsConfig(command) {
-			return factory.LoadSettings(command.Root().PersistentFlags())
+			err = factory.LoadSettings(command.Root().PersistentFlags())
+		} else {
+			err = factory.LoadConfig(configPath, command.Root().PersistentFlags())
+		}
+		if err != nil {
+			return err
 		}
 
-		return factory.LoadConfig(configPath, command.Root().PersistentFlags())
+		return factory.checkDryRun(command)
 	}
 
 	registered := map[string]string{"help": "cobra", "completion": "cobra"}
@@ -125,6 +195,10 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	}
 
 	normalizeGroupCommands(root)
+	root.SetUsageTemplate(usageTemplate)
+	if root.HasSubCommands() && groupIDs["advanced"] {
+		root.SetHelpCommandGroupID("advanced")
+	}
 
 	return root, factory
 }

@@ -789,3 +789,60 @@ func TestStatementTimeoutStaysBelowTheRequestDeadline(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadAgentGatewayGRPC covers the agent-facing gRPC listener (ADR-059):
+// off by default, certificate and key together, TLS required in production.
+func TestLoadAgentGatewayGRPC(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte(strings.Repeat("t", 40)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]string{
+		"MACHINARCHY_AGENT_GATEWAY_NATS_URL":              "nats://127.0.0.1:4222",
+		"MACHINARCHY_AGENT_GATEWAY_ENROLLMENT_TOKEN_FILE": token,
+	}
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		ok   bool
+		addr string
+	}{
+		"off by default":    {nil, true, ""},
+		"plain in dev":      {map[string]string{"MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR": ":8443"}, true, ":8443"},
+		"tls":               {map[string]string{"MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR": ":8443", "MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE": "/c", "MACHINARCHY_AGENT_GATEWAY_GRPC_KEY_FILE": "/k"}, true, ":8443"},
+		"cert without key":  {map[string]string{"MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR": ":8443", "MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE": "/c"}, false, ""},
+		"cert without addr": {map[string]string{"MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE": "/c", "MACHINARCHY_AGENT_GATEWAY_GRPC_KEY_FILE": "/k"}, false, ""},
+		"bad address":       {map[string]string{"MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR": "nope"}, false, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setCommonEnv(t)
+			for k, v := range base {
+				t.Setenv(k, v)
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load()
+			if (err == nil) != tc.ok {
+				t.Fatalf("Load() error = %v, want ok=%v", err, tc.ok)
+			}
+			if tc.ok && cfg.AgentGateway.GRPCAddr != tc.addr {
+				t.Fatalf("GRPCAddr = %q, want %q", cfg.AgentGateway.GRPCAddr, tc.addr)
+			}
+		})
+	}
+	// Production refuses a plaintext listener.
+	err := func() error {
+		cfg := AgentGatewayConfig{}
+		get := func(key string, _ ...string) string {
+			if key == "MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR" {
+				return ":8443"
+			}
+			return ""
+		}
+		return loadAgentGRPC(&cfg, get, Production)
+	}()
+	if err == nil || !strings.Contains(err.Error(), "TLS") {
+		t.Fatalf("production plaintext gRPC = %v, want a TLS error", err)
+	}
+}

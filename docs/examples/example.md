@@ -48,7 +48,7 @@ This target loads .env, then starts cmd/monolith. It serves the API on MACHINARC
 Run the CLI the same way, with its arguments in ARGS:
 
 ~~~sh
-make run-cli ARGS="get hosts"
+make run-cli ARGS="hosts"
 ~~~
 
 Open the Scalar API reference at <http://localhost:8080/scalar>. The raw API document is at <http://localhost:8080/openapi.json>.
@@ -90,10 +90,10 @@ Use --context to override the selected context for one command. Use --env to fil
 Query resources and choose table, JSON, or YAML output:
 
 ~~~sh
-go run ./cmd/machinarchy get hosts
-go run ./cmd/machinarchy get hosts web-01
-go run ./cmd/machinarchy --context local get hosts --env production -o json
-go run ./cmd/machinarchy get hosts -o yaml
+go run ./cmd/machinarchy hosts
+go run ./cmd/machinarchy hosts show web-01
+go run ./cmd/machinarchy --context local hosts --env production -o json
+go run ./cmd/machinarchy hosts -o yaml
 ~~~
 
 List and switch contexts:

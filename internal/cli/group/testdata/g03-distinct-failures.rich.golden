@@ -1,0 +1,12 @@
+⚠ 9 of 14 hosts succeeded, 5 did not
+  ✖ web-09  exit 3
+    inactive
+  ✖ web-13  could not connect (unreachable)
+  ✖ web-14  timed out after 60 s
+  ? web-[05,11]  (2 hosts)
+      outcome unknown (the controller lost contact before it finished)
+  ✔ web-[01-04,06-08,10,12]  exit 0  (9 hosts)
+    active
+
+  ⚠ A command on a "timed out" or "outcome unknown" host may still have run.
+  Next:  machinarchy run r-4k2p9x1a --retry-failed

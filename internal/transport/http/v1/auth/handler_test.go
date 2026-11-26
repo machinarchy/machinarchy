@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -231,5 +232,59 @@ func TestLogoutRevokesTheSessionOfTheTokenSent(t *testing.T) {
 		if recorder.Code != http.StatusOK || len(auth.loggedOut) != 1 || auth.loggedOut[0] != tc.want {
 			t.Errorf("%s: status %d, service got %q, want %q", tc.name, recorder.Code, auth.loggedOut, tc.want)
 		}
+	}
+}
+
+type fakeTokens struct{ tokens []domain.APIToken }
+
+func (f fakeTokens) ListAPITokens(context.Context, int, int) ([]domain.APIToken, error) {
+	return f.tokens, nil
+}
+
+func serveMe(h *Handler, principal *domain.Principal) *httptest.ResponseRecorder {
+	e := echo.New()
+	e.GET("/api/v1/me", h.GetMe, func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("username", "alice")
+			if principal != nil {
+				c.Set("principal", *principal)
+			}
+			return next(c)
+		}
+	})
+	recorder := httptest.NewRecorder()
+	e.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/me", nil))
+	return recorder
+}
+
+// C-03: /me tells a session from a token, gives the role, and for a token its
+// name and expiry; the token's secret and hash are never in the answer.
+func TestGetMeReportsRoleAndTokenDetails(t *testing.T) {
+	expires := time.Date(2031, 5, 6, 7, 8, 0, 0, time.UTC)
+	auth := &fakeAuth{verify: func(string) (*domain.UserResponse, error) { return &domain.UserResponse{ID: 1, Username: "alice"}, nil }}
+	handler := NewHandler(auth, true, false)
+	handler.SetTokenLookup(fakeTokens{tokens: []domain.APIToken{
+		{ID: 3, Name: "other", Role: domain.RoleReader},
+		{ID: 7, Name: "ci-deploy", Role: domain.RoleOperator, TokenHash: "deadbeef-hash", ExpiresAt: &expires},
+	}})
+
+	session := serveMe(handler, &domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner, SessionID: "s1"})
+	if session.Code != http.StatusOK || !strings.Contains(session.Body.String(), `"role":"owner"`) || !strings.Contains(session.Body.String(), `"authMethod":"session"`) ||
+		strings.Contains(session.Body.String(), "tokenName") || strings.Contains(session.Body.String(), "expiresAt") {
+		t.Fatalf("session me = %d %s", session.Code, session.Body)
+	}
+	token := serveMe(handler, &domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOperator, APITokenID: 7})
+	for _, want := range []string{`"role":"operator"`, `"authMethod":"api_token"`, `"tokenId":7`, `"tokenName":"ci-deploy"`, `"expiresAt":"2031-05-06T07:08:00Z"`} {
+		if !strings.Contains(token.Body.String(), want) {
+			t.Fatalf("token me lacks %s: %s", want, token.Body)
+		}
+	}
+	if strings.Contains(token.Body.String(), "deadbeef") || strings.Contains(token.Body.String(), "other") {
+		t.Fatalf("token me leaks: %s", token.Body)
+	}
+	// Without a lookup the token is still identified, without name or expiry.
+	bare := serveMe(NewHandler(auth, true, false), &domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOperator, APITokenID: 7})
+	if !strings.Contains(bare.Body.String(), `"authMethod":"api_token"`) || strings.Contains(bare.Body.String(), "tokenName") {
+		t.Fatalf("bare token me = %s", bare.Body)
 	}
 }

@@ -26,6 +26,7 @@ func (denyResolution) AuthorizeSecretResolution(context.Context, secrets.Resolut
 type managedFixture struct {
 	service                 *ManagedResourceService
 	secrets                 *secrets.Service
+	stores                  *store.Stores
 	owner, operator, reader domain.Principal
 	execution               atomic.Pointer[domain.ExecutionPolicy]
 }
@@ -43,7 +44,7 @@ func newManagedFixture(t *testing.T) *managedFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stores.Close() })
-	f := &managedFixture{}
+	f := &managedFixture{stores: stores}
 	member := func(name string, role domain.Role) domain.Principal {
 		user, err := stores.Users.CreateUser(ctx, name, name+"@example.test", "hash")
 		if err != nil {

@@ -1,0 +1,9 @@
+$ array
+$[] object
+$[].description string
+$[].hostKeyPolicy string
+$[].hosts number
+$[].how string
+$[].id string
+$[].name string
+$[].user string

@@ -28,6 +28,9 @@ const (
 	// newer revision cannot fix).
 	CodeAlreadyExists  = "already_exists"
 	CodeTargetsChanged = "targets_changed"
+	// CodeProtectedEnvironment: a guarded call touched a protected
+	// environment without confirming its name (the message lists the names).
+	CodeProtectedEnvironment = "protected_environment_confirmation_required"
 	// CodeExecutionNotAllowed: the execution policy refuses the command.
 	CodeExecutionNotAllowed = "execution_not_allowed"
 	CodeTooManyRequests     = "too_many_requests"
@@ -143,6 +146,9 @@ var common = []Mapping{
 	{resource.ErrHostNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrOperationNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
 	{resource.ErrAccessProfileNotFound, http.StatusNotFound, CodeNotFound, "resource not found"},
+	{domain.ErrEnvironmentUnknown, http.StatusUnprocessableEntity, CodeInvalidRequest, domain.ErrEnvironmentUnknown.Error()},
+	{domain.ErrEnvironmentInUse, http.StatusConflict, CodeConflict, domain.ErrEnvironmentInUse.Error()},
+	{domain.ErrDefaultEnvironment, http.StatusConflict, CodeConflict, domain.ErrDefaultEnvironment.Error()},
 	{domain.ErrInvalidInput, http.StatusBadRequest, CodeInvalidRequest, ""},
 	{resource.ErrInvalidResource, http.StatusBadRequest, CodeInvalidRequest, "invalid resource request"},
 }

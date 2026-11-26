@@ -22,10 +22,11 @@ import (
 type fakeStore struct {
 	mu        sync.Mutex
 	tokens    []agentgateway.EnrollmentToken
+	agents    []agentgateway.Agent
 	revokedBy int
 }
 
-func (s *fakeStore) ListAgents(context.Context) ([]agentgateway.Agent, error) { return nil, nil }
+func (s *fakeStore) ListAgents(context.Context) ([]agentgateway.Agent, error) { return s.agents, nil }
 
 func (s *fakeStore) CreateEnrollmentToken(_ context.Context, token agentgateway.EnrollmentToken) error {
 	s.mu.Lock()
@@ -74,6 +75,40 @@ func call(e *echo.Echo, method, path, body string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	e.ServeHTTP(recorder, request)
 	return recorder
+}
+
+// The agent list shape is documented in swagger (agents.agentList); this pins
+// the keys and checks that no key material or lease id is ever listed.
+func TestListAgentsShapeHasNoKeyMaterial(t *testing.T) {
+	now := time.Now()
+	revoked := now.Add(-time.Hour)
+	store := &fakeStore{agents: []agentgateway.Agent{
+		{ID: "agent-1", Hostname: "web-01", AgentVersion: "1.2.3", OS: "linux", Architecture: "amd64", Capabilities: []string{"shell.run"},
+			PublicKey: ed25519.PublicKey("PUBLICKEYBYTES"), LeaseID: "LEASEID-SECRET", LeaseExpiresAt: now.Add(time.Minute), RegisteredAt: now, LastSeenAt: now},
+		{ID: "agent-2", Hostname: "web-02", LeaseExpiresAt: now.Add(time.Minute), RevokedAt: &revoked},
+	}}
+	got := call(router(store), http.MethodGet, "/api/v1/agents", "")
+	if got.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", got.Code, got.Body)
+	}
+	body := got.Body.String()
+	if strings.Contains(body, "LEASEID-SECRET") || strings.Contains(body, "PUBLICKEYBYTES") || strings.Contains(strings.ToLower(body), "publickey") {
+		t.Fatalf("list leaks key material: %s", body)
+	}
+	var response struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &response); err != nil || len(response.Items) != 2 {
+		t.Fatalf("response = %s (%v)", body, err)
+	}
+	for _, key := range []string{"id", "hostname", "agentVersion", "os", "architecture", "capabilities", "leaseExpiresAt", "registeredAt", "lastSeenAt", "connected"} {
+		if _, ok := response.Items[0][key]; !ok {
+			t.Errorf("agent lacks %q: %s", key, body)
+		}
+	}
+	if response.Items[0]["connected"] != true || response.Items[1]["connected"] != false || response.Items[1]["revokedAt"] == nil {
+		t.Errorf("connected/revokedAt wrong: %s", body)
+	}
 }
 
 func TestEnrollmentTokenEndpoints(t *testing.T) {

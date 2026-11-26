@@ -23,7 +23,7 @@ Both main Compose projects receive this file through `docker compose --env-file`
 
 The `run-*` targets therefore override settings you exported in your shell with the values in `.env`. To run with another file (for example the CLI guide's lab settings), pass it: `make run-monolith ENV_FILE="$LAB/server.env"`. Variables that `.env` does not set, such as `MACHINARCHY_CONFIG`, are inherited.
 
-`make run-cli` takes the CLI's arguments in `ARGS`: `make run-cli ARGS="get hosts -l tier=web"`.
+`make run-cli` takes the CLI's arguments in `ARGS`: `make run-cli ARGS="hosts -l tier=web"`.
 
 Create a local file from the example when needed:
 

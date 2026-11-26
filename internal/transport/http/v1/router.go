@@ -70,6 +70,10 @@ func RegisterRoutes(
 		authHandler.SetSignupEnabledProvider(repos.SignupEnabled)
 	}
 
+	if repos.Access != nil {
+		authHandler.SetTokenLookup(repos.Access)
+	}
+
 	// Public: no authentication middleware.
 	auth.RegisterRoutes(api, authHandler)
 

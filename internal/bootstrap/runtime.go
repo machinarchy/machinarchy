@@ -50,6 +50,7 @@ type Runtime struct {
 	// server of this process also serves on /metrics.
 	metrics      *prometheus.Registry
 	agentGateway *agentgateway.Gateway
+	agentGRPC    *agentGRPC
 	agentKeys    *agentkeys.Manager
 }
 
@@ -184,10 +185,14 @@ func newConfigurationRuntime(ctx context.Context, stores *store.Stores, cfg conf
 			slog.Warn("agent signing keys not loaded yet", "error", err)
 		}
 	}
+	grpcService, err := newAgentGRPC(cfg.AgentGateway, gateway, cfg.ShutdownTimeout)
+	if err != nil {
+		return nil, errors.Join(err, wrapCloseError("close datastore after agent gRPC failure", stores.Close()))
+	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	runtime := &Runtime{hostKeyPolicy: cfg.SSHHostKeyPolicy, stores: stores, configuration: configuration, snapshots: snapshots, secrets: secretService,
 		operationSecrets: operationSecretService, configCancel: cancel, shutdownTimeout: cfg.ShutdownTimeout,
-		metrics: metrics, agentGateway: gateway, agentKeys: agentKeys}
+		metrics: metrics, agentGateway: gateway, agentGRPC: grpcService, agentKeys: agentKeys}
 	runtime.configWG.Add(1)
 	go func() {
 		defer runtime.configWG.Done()

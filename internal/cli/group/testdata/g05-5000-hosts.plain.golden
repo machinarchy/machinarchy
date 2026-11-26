@@ -1,0 +1,60 @@
+WARN 4789 of 5000 hosts succeeded, 211 did not
+  FAILED n-[0050,0100,0150,0200,0250,0300,0350,0400,0450,0500,0550] (+89 more)  exit 1  (100 hosts)
+    build 000 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  FAILED n-[0211,0422,0633,0844,1055,1266] (+17 more)  could not connect (unreachable)  (23 hosts)
+  FAILED n-[0097,0194,0291,0388,0485,0582,0679,0776] (+42 more)  timed out after 60 s  (50 hosts)
+  UNKNOWN n-[0131,0262,0393,0524,0655,0786,0917,1048,1179,1310,1441,1572] (+26 more)  (38 hosts)
+            outcome unknown (the command's supervisor stopped without recording an exit)
+  OK n-[0002,0202,0402,0602,0802,1002,1202,1402,1602,1802,2002,2202] (+13 more)  exit 0  (25 hosts)
+    build 002 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  OK n-[0003,0203,0403,0603,0803,1003,1203,1403,1603,1803,2003,2203] (+13 more)  exit 0  (25 hosts)
+    build 003 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  OK n-[0004,0204,0404,0604,0804,1004,1204,1404,1604,1804,2004,2204] (+13 more)  exit 0  (25 hosts)
+    build 004 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  OK n-[0005,0205,0405,0605,0805,1005,1205,1405,1605,1805,2005,2205] (+13 more)  exit 0  (25 hosts)
+    build 005 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  OK n-[0008,0208,0408,0608,0808,1008,1208,1408,1608,1808,2008,2208] (+13 more)  exit 0  (25 hosts)
+    build 008 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+  OK n-[0010,0210,0410,0610,0810,1010,1210,1410,1610,1810,2010,2210] (+13 more)  exit 0  (25 hosts)
+    build 010 started
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    compiling module with a fairly long log line to fill the window 12345
+    [... 6 more lines]
+
+  WARN A command on a "timed out" or "outcome unknown" host may still have run.
+  196 different outputs among 4789 hosts; none is the majority.
+  and 190 more groups, 4639 hosts
+  Next:  machinarchy run r-4k2p9x1a --groups all
+  Next:  machinarchy run r-4k2p9x1a --retry-failed

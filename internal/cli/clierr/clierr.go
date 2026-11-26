@@ -23,19 +23,40 @@ const (
 	ExitAuth = 3
 	// ExitUnavailable reports an API server, network, or request-timeout failure.
 	ExitUnavailable = 4
+	// ExitWaitTimeout reports that a local wait deadline (--wait-timeout)
+	// elapsed while the work it was watching is still running.
+	ExitWaitTimeout = 5
 	// ExitNotFound reports that a requested resource does not exist.
 	ExitNotFound = 6
 	// ExitConflict reports a conflict or failed precondition.
 	ExitConflict = 7
+	// ExitPartial reports a run that finished with some hosts failed.
+	ExitPartial = 8
+	// ExitAllFailed reports a run that finished with every host failed.
+	ExitAllFailed = 9
 	// ExitInterrupted reports that the process was interrupted locally.
 	ExitInterrupted = 130
 )
 
-// Error is an error with an exit code and an optional remediation hint.
+// Error is an error with an exit code, an optional explanation of the cause
+// and an optional next step. Printed, they are the three parts of the unified
+// format (docs/cli/spec/02-commands.md section 2.3):
+//
+//	Error: what happened     (Err)
+//	Why:   the cause         (Why)
+//	Next:  what to do        (Hint)
+//
+// Hint keeps its historical name: it is the remediation advice.
 type Error struct {
 	Code int
 	Err  error
+	// Why explains the cause, when it is known.
+	Why string
+	// Hint is the next step: the exact command to run, or advice.
 	Hint string
+	// Reported means the command already told the user everything on its own
+	// (a grouped result, an interrupt notice); only the exit code is left.
+	Reported bool
 }
 
 // Error returns the underlying message.
@@ -70,6 +91,28 @@ func (e *Error) ErrorHint() string {
 	return e.Hint
 }
 
+// ErrorWhy returns the explanation of the cause, or an empty string.
+func (e *Error) ErrorWhy() string {
+	if e == nil {
+		return ""
+	}
+
+	return e.Why
+}
+
+// Reported returns an error that carries only an exit code: the command has
+// already printed what the user needs, so nothing more is shown.
+func Reported(code int) error {
+	return &Error{Code: code, Err: fmt.Errorf("exit %d", code), Reported: true}
+}
+
+// IsReported reports whether err came from Reported.
+func IsReported(err error) bool {
+	var coded *Error
+
+	return errors.As(err, &coded) && coded.Reported
+}
+
 // Wrap attaches an exit code and hint to err. It returns nil for a nil err.
 // An error that already carries an exit code is returned unchanged so that the
 // most specific classification wins.
@@ -83,6 +126,20 @@ func Wrap(code int, err error, hint string) error {
 	}
 
 	return &Error{Code: code, Err: err, Hint: hint}
+}
+
+// Detailed attaches an exit code, a cause and a next step to err. Like Wrap,
+// it leaves an error that is already classified unchanged.
+func Detailed(code int, err error, why, next string) error {
+	if err == nil {
+		return nil
+	}
+
+	if _, classified := Classify(err); classified {
+		return err
+	}
+
+	return &Error{Code: code, Err: err, Why: why, Hint: next}
 }
 
 // Newf creates a classified error from a format string.
@@ -129,6 +186,45 @@ func ExitCode(err error) int {
 	code, _ := Classify(err)
 
 	return code
+}
+
+// Why returns the explanation of the cause carried by err, or an empty string.
+func Why(err error) string {
+	var whyer interface{ ErrorWhy() string }
+	if errors.As(err, &whyer) {
+		return whyer.ErrorWhy()
+	}
+
+	return ""
+}
+
+// Name returns the stable, lower-case name of an exit code, used in the
+// machine-readable error of -o json.
+func Name(code int) string {
+	switch code {
+	case ExitOK:
+		return "ok"
+	case ExitUsage:
+		return "usage"
+	case ExitAuth:
+		return "auth"
+	case ExitUnavailable:
+		return "unavailable"
+	case ExitWaitTimeout:
+		return "waitTimeout"
+	case ExitNotFound:
+		return "notFound"
+	case ExitConflict:
+		return "conflict"
+	case ExitPartial:
+		return "partial"
+	case ExitAllFailed:
+		return "allFailed"
+	case ExitInterrupted:
+		return "interrupted"
+	default:
+		return "failure"
+	}
 }
 
 // Hint returns remediation advice carried by err, or an empty string.

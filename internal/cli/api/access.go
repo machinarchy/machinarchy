@@ -41,7 +41,7 @@ type Token struct {
 
 // IssuedToken is a new API token with its secret, shown once.
 type IssuedToken struct {
-	Token
+	Token  `yaml:",inline"`
 	Secret string `json:"token" yaml:"token"`
 }
 
@@ -66,8 +66,8 @@ type EnrollmentToken struct {
 
 // IssuedEnrollmentToken is a new enrolment token with its secret, shown once.
 type IssuedEnrollmentToken struct {
-	EnrollmentToken
-	Token string `json:"token" yaml:"token"`
+	EnrollmentToken `yaml:",inline"`
+	Token           string `json:"token" yaml:"token"`
 }
 
 func (c *HTTPClient) CreateAccessProfile(ctx context.Context, input AccessProfileInput) (*AccessProfile, error) {

@@ -52,7 +52,10 @@ coverage: ## Run race tests and write COVERAGE_FILE (coverage.out); prints the t
 FUZZTIME ?= 30s
 FUZZ_TARGETS := internal/domain:FuzzParseSelector internal/domain:FuzzGlobMatch internal/domain:FuzzQuoteArgv \
 	internal/domain:FuzzSanitizeOutput internal/domain/resource:FuzzParseOperationCursor \
-	internal/domain/resource:FuzzParseResourceID pkg/netpolicy:FuzzParsePrefixes
+	internal/domain/resource:FuzzParseResourceID pkg/netpolicy:FuzzParsePrefixes \
+	internal/cli/sanitize:FuzzClean internal/cli/sanitize:FuzzStream internal/cli/target:FuzzParse \
+	internal/cli/group:FuzzNormalise internal/cli/config:FuzzReadDocument internal/cli/api:FuzzNewError \
+	internal/cli/api:FuzzDecodeResponse
 
 fuzz: ## Run each fuzz target for FUZZTIME (default 30s)
 	@for entry in $(FUZZ_TARGETS); do \

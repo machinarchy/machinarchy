@@ -17,6 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
+	"github.com/machinarchy/machinarchy/internal/agentgateway/bus/memory"
+	natsbus "github.com/machinarchy/machinarchy/internal/agentgateway/bus/nats"
 )
 
 // memStore is an in-memory Store and TokenStore with the same rules as the
@@ -182,7 +184,11 @@ func newFixture(t *testing.T) *fixture {
 func startFixture(t *testing.T, url string, controller []nats.Option, issuer *NATSIssuer, client []nats.Option) *fixture {
 	t.Helper()
 	store := newMemStore()
-	gateway, err := New(store, Config{NATSURL: url, NATSOptions: controller, Signer: key(1), EnrollmentToken: enrollmentToken,
+	natsBus, err := natsbus.New(natsbus.Config{URL: url, Options: controller})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := New(store, Config{Bus: natsBus, Signer: key(1), EnrollmentToken: enrollmentToken,
 		LeaseTTL: 20 * time.Second, Heartbeat: 5 * time.Second, Registerer: prometheus.NewRegistry(), NATSIssuer: issuer})
 	if err != nil {
 		t.Fatal(err)
@@ -391,9 +397,9 @@ func TestPublishCommandIsIdempotent(t *testing.T) {
 }
 
 func TestNewValidatesConfiguration(t *testing.T) {
-	valid := Config{NATSURL: "nats://x:4222", Signer: key(1), EnrollmentToken: enrollmentToken}
+	valid := Config{Bus: memory.New(), Signer: key(1), EnrollmentToken: enrollmentToken}
 	for name, mutate := range map[string]func(*Config){
-		"no url":            func(c *Config) { c.NATSURL = "" },
+		"no bus":            func(c *Config) { c.Bus = nil },
 		"no key":            func(c *Config) { c.Signer = nil },
 		"short token":       func(c *Config) { c.EnrollmentToken = "short" },
 		"heartbeat > ttl/2": func(c *Config) { c.LeaseTTL, c.Heartbeat = 20*time.Second, 15*time.Second },

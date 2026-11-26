@@ -1,7 +1,6 @@
 package commands_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,93 +42,34 @@ func accessServer(t *testing.T) *apiServer {
 	})
 }
 
-func lastBody(t *testing.T, server *apiServer) map[string]any {
-	t.Helper()
-	var body map[string]any
-	if err := json.Unmarshal(server.last(t).Body, &body); err != nil {
-		t.Fatal(err)
-	}
-	return body
-}
-
-func TestAccessCommands(t *testing.T) {
+// The old resource-verb commands were removed with no aliases (M3); their
+// replacements are covered by the access, hosts and envs tests.
+func TestOldResourceCommandsAreGone(t *testing.T) {
 	server := accessServer(t)
 	config := writeConfig(t, server.URL, "owner-session")
 
-	t.Run("create profile agent", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "create", "profile", "agents", "--connector", "agent")
-		spec, _ := lastBody(t, server)["spec"].(map[string]any)
-		if got.code != 0 || !strings.Contains(got.stdout, "prof-1") || spec["connectorKind"] != "agent" || spec["username"] != nil {
-			t.Fatalf("result %+v, spec %v", got, spec)
+	for _, args := range [][]string{
+		{"get", "hosts"}, {"get", "profiles"},
+		{"create", "host", "x"}, {"create", "profile", "x"}, {"create", "agent-token"},
+		{"delete", "host", "x"}, {"delete", "profile", "x"}, {"delete", "agent-token", "x"},
+		{"label", "host", "x", "a=b"}, {"trust", "host", "x"},
+	} {
+		got := execute(t, nil, "", append([]string{"--config", config}, args...)...)
+		if got.code != clierr.ExitUsage || got.stdout != "" {
+			t.Errorf("%v: result = %+v, want a usage error", args, got)
 		}
-		if bad := execute(t, nil, "", "--config", config, "create", "profile", "x", "--connector", "agent", "--username", "root"); bad.code != clierr.ExitUsage {
-			t.Fatalf("agent profile with a username = %+v", bad)
-		}
-	})
+	}
+	if n := server.count(); n != 0 {
+		t.Errorf("the server received %d requests", n)
+	}
+}
 
-	t.Run("create profile ssh resolves the secret by name", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "create", "profile", "lab", "--connector", "ssh", "--username", "testuser",
-			"--secret", "lab-key", "--auth", "private-key", "--supervisor", "setsid")
-		spec, _ := lastBody(t, server)["spec"].(map[string]any)
-		credential, _ := spec["credential"].(map[string]any)
-		if got.code != 0 || spec["username"] != "testuser" || spec["authenticationMethod"] != "private-key" ||
-			credential["id"] != "sec-1" || credential["version"] != float64(3) {
-			t.Fatalf("result %+v, spec %v", got, spec)
-		}
-		if missing := execute(t, nil, "", "--config", config, "create", "profile", "x", "--connector", "ssh", "--username", "u"); missing.code != clierr.ExitUsage {
-			t.Fatalf("ssh profile without --secret = %+v", missing)
-		}
-		if unknown := execute(t, nil, "", "--config", config, "create", "profile", "x", "--connector", "ssh", "--username", "u", "--secret", "nope"); unknown.code != clierr.ExitNotFound {
-			t.Fatalf("unknown secret = %+v", unknown)
-		}
-	})
-
-	t.Run("create token shows the secret once; -q prints it alone", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "operator", "--expires-hours", "720")
-		if body := lastBody(t, server); got.code != 0 || body["role"] != "operator" || body["expiresInHours"] != float64(720) ||
-			!strings.Contains(got.stdout, "shown only now") || !strings.HasSuffix(got.stdout, "mch_pat_secret\n") {
-			t.Fatalf("result %+v, body %v", got, body)
-		}
-		if quiet := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "operator", "-q"); quiet.stdout != "mch_pat_secret\n" {
-			t.Fatalf("-q = %q", quiet.stdout)
-		}
-		if bad := execute(t, nil, "", "--config", config, "create", "token", "ci", "--role", "owner"); bad.code != clierr.ExitUsage {
-			t.Fatalf("owner role = %+v", bad)
-		}
-	})
-
-	t.Run("get tokens never shows secrets", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "get", "tokens")
-		if got.code != 0 || !strings.Contains(got.stdout, "ci") || strings.Contains(got.stdout, "mch_pat_secret") {
-			t.Fatalf("result %+v", got)
-		}
-	})
-
-	t.Run("create agent-token binds to the named host", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "create", "agent-token", "--host", "web-01", "--hostname", "web-01.example")
-		body := lastBody(t, server)
-		if got.code != 0 || body["hostId"] != "host-1" || body["hostname"] != "web-01.example" || body["ttlSeconds"] != float64(3600) ||
-			!strings.HasSuffix(got.stdout, "mae_secret\n") {
-			t.Fatalf("result %+v, body %v", got, body)
-		}
-		if bad := execute(t, nil, "", "--config", config, "create", "agent-token"); bad.code != clierr.ExitUsage {
-			t.Fatalf("no --host = %+v", bad)
-		}
-	})
-
-	t.Run("get agent-tokens shows who used them", func(t *testing.T) {
-		got := execute(t, nil, "", "--config", config, "get", "agent-tokens")
-		if got.code != 0 || !strings.Contains(got.stdout, "used by agent-9") || strings.Contains(got.stdout, "mae_secret") {
-			t.Fatalf("result %+v", got)
-		}
-	})
-
-	t.Run("delete profile and token", func(t *testing.T) {
-		if got := execute(t, nil, "", "--config", config, "delete", "profile", "agents", "--yes"); got.code != 0 || server.last(t).Method != http.MethodDelete {
-			t.Fatalf("delete profile = %+v", got)
-		}
-		if got := execute(t, nil, "", "--config", config, "delete", "token", "7", "--yes"); got.code != 0 || server.last(t).Path != "/api/v1/tokens/7" {
-			t.Fatalf("delete token = %+v", got)
-		}
-	})
+// `get agent-tokens` stays: it is where the agent ID for `hosts revoke-agent` comes from.
+func TestGetAgentTokensShowsWhoUsedThem(t *testing.T) {
+	server := accessServer(t)
+	config := writeConfig(t, server.URL, "owner-session")
+	got := execute(t, nil, "", "--config", config, "get", "agent-tokens")
+	if got.code != 0 || !strings.Contains(got.stdout, "used by agent-9") || strings.Contains(got.stdout, "mae_secret") {
+		t.Fatalf("result %+v", got)
+	}
 }

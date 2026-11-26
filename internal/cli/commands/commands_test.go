@@ -35,10 +35,13 @@ func isolate(t *testing.T) {
 
 	t.Setenv("MACHINARCHY_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
 	for _, name := range []string{
-		"MACHINARCHY_CLI_CONTEXT", "MACHINARCHY_CLI_ENV", "MACHINARCHY_CLI_OUTPUT",
-		"MACHINARCHY_CLI_VERBOSE", "MACHINARCHY_CLI_SERVER", "MACHINARCHY_CLI_TOKEN",
-		"MACHINARCHY_CLI_REQUEST_TIMEOUT", "MACHINARCHY_CLI_QUIET", "MACHINARCHY_CLI_NO_HEADERS",
-		"MACHINARCHY_CLI_NO_INPUT", "MACHINARCHY_CLI_YES",
+		"MACHINARCHY_CONTEXT", "MACHINARCHY_ENV", "MACHINARCHY_OUTPUT",
+		"MACHINARCHY_VERBOSE", "MACHINARCHY_SERVER", "MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT", "MACHINARCHY_QUIET", "MACHINARCHY_NO_HEADERS",
+		"MACHINARCHY_NO_INPUT", "MACHINARCHY_YES",
+		"MACHINARCHY_ENV", "MACHINARCHY_OUTPUT", "MACHINARCHY_VERBOSE", "MACHINARCHY_SERVER", "MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT", "MACHINARCHY_QUIET", "MACHINARCHY_NO_HEADERS", "MACHINARCHY_NO_INPUT",
+		"MACHINARCHY_PLAIN", "MACHINARCHY_NO_DEPRECATION_WARNINGS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -64,22 +67,14 @@ func execute(t *testing.T, builder cli.APIClientBuilder, stdin string, args ...s
 func writeConfig(t *testing.T, server, token string) string {
 	t.Helper()
 
-	content := fmt.Sprintf(`apiVersion: machinarchy.io/v1
-current-context: test
-clusters:
-  test:
-    server: %s
-users:
-  test:
-    token: %s
-contexts:
-  test:
-    cluster: test
-    user: test
-`, server, token)
-
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("version: 2\nactive: test\nservers:\n  test:\n    url: %s\n", server)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Both credentials hold the same secret, so a command works whether it runs
+	// with the saved API token or, as an owner command does, the saved session.
+	credentials := fmt.Sprintf("version: 2\nservers:\n  test:\n    session:\n      kind: session\n      secret: %s\n    token:\n      kind: token\n      secret: %s\n", token, token)
+	if err := os.WriteFile(config.CredentialsPath(path), []byte(credentials), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,6 +96,9 @@ type fakeClient struct {
 	outputs   map[string]string // "op/host" -> the full stream, served in 6-byte steps
 	deleted   []string
 	trusted   []string
+	moves     []string
+	createdIn []int
+	oldServer bool // ignores environments on hosts, like a server before C-01
 	calls     int
 }
 
@@ -141,7 +139,11 @@ func (f *fakeClient) GetHost(_ context.Context, id string) (*api.Host, error) {
 }
 
 func (f *fakeClient) CreateHost(_ context.Context, input api.HostInput) (*api.Host, error) {
-	host := api.Host{Metadata: api.HostMetadata{ID: fmt.Sprint(len(f.hosts) + 100), Name: input.Name, Labels: input.Labels, Revision: 1}, Spec: input.Spec}
+	host := api.Host{Metadata: api.HostMetadata{ID: fmt.Sprint(len(f.hosts) + 100), Name: input.Name, Labels: input.Labels, Revision: 1, Generation: 1}, Spec: input.Spec}
+	f.createdIn = append(f.createdIn, input.EnvironmentID)
+	if !f.oldServer {
+		host.Metadata.EnvironmentID = input.EnvironmentID
+	}
 	f.hosts = append(f.hosts, host)
 	return &host, nil
 }
@@ -167,6 +169,23 @@ func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint
 		}
 	}
 	return nil, &api.Error{Status: 404, Message: "resource not found"}
+}
+
+func (f *fakeClient) MoveHost(_ context.Context, id string, revision, generation uint64, _ api.HostSpec, environmentID int) error {
+	f.moves = append(f.moves, fmt.Sprintf("%s->%d", id, environmentID))
+	for i := range f.hosts {
+		if f.hosts[i].Metadata.ID == id {
+			if f.hosts[i].Metadata.Revision != revision || f.hosts[i].Metadata.Generation != generation {
+				return &api.Error{Status: 409, Message: "resource revision conflict"}
+			}
+			if !f.oldServer {
+				f.hosts[i].Metadata.EnvironmentID = environmentID
+				f.hosts[i].Metadata.Revision++
+			}
+			return nil
+		}
+	}
+	return &api.Error{Status: 404, Message: "resource not found"}
 }
 
 func (f *fakeClient) SetHostLabels(_ context.Context, id string, revision uint64, labels map[string]string) (*api.Host, error) {
@@ -303,17 +322,6 @@ func dataLines(output string) []string {
 	return strings.Split(trimmed, "\n")
 }
 
-func names(lines []string) []string {
-	var found []string
-	for _, line := range lines {
-		if fields := strings.Fields(line); len(fields) > 0 {
-			found = append(found, fields[0])
-		}
-	}
-
-	return found
-}
-
 // ---- registration and compatibility ---------------------------------------
 
 func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
@@ -321,19 +329,20 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 	root := cli.NewRootCommand(cli.Options{Groups: commands.DefaultGroups()})
 
 	want := map[string][]string{
-		"get":            {"agent-tokens", "hosts", "operations", "profiles", "tokens"},
-		"create":         {"agent-token", "host", "profile", "token"},
-		"delete":         {"agent-token", "host", "profile", "token"},
-		"label":          {"host"},
-		"trust":          {"host"},
+		"envs":           {"add", "remove", "use"},
+		"get":            {"agent-tokens"},
 		"run":            nil,
-		"cancel":         {"operation"},
-		"logs":           {"operation"},
-		"config":         {"current-context", "get-contexts", "set-cluster", "set-context", "set-credentials", "use-context"},
+		"config":         {"path", "show"},
+		"tokens":         {"create", "revoke"},
+		"logout":         nil,
+		"whoami":         nil,
+		"switch":         nil,
 		"runtime-config": {"get", "history", "publish", "rollback", "status", "validate"},
 		"secret":         {"create", "delete", "list", "rewrap", "rotate", "versions"},
 		"version":        nil,
 		"login":          nil,
+		"access":         {"add", "remove", "show"},
+		"hosts":          {"add", "enroll", "move", "remove", "revoke-agent", "show", "tag", "trust"},
 	}
 
 	var top []string
@@ -365,10 +374,6 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(children, ",") {
 			t.Errorf("%s subcommands = %v, want %v", name, got, children)
 		}
-	}
-
-	if command, _, err := root.Find([]string{"get", "host"}); err != nil || command.Name() != "hosts" {
-		t.Errorf("the \"host\" alias no longer resolves: %v", err)
 	}
 }
 
@@ -433,10 +438,10 @@ func TestHelpWorksForEveryCommand(t *testing.T) {
 	}
 }
 
-func TestGetHostsHelpHasExamples(t *testing.T) {
-	got := execute(t, nil, "", "get", "hosts", "--help")
+func TestHostsHelpHasExamples(t *testing.T) {
+	got := execute(t, nil, "", "hosts", "--help")
 
-	if !strings.Contains(got.stdout, "Examples:") || !strings.Contains(got.stdout, "machinarchy get hosts") {
+	if !strings.Contains(got.stdout, "Examples:") || !strings.Contains(got.stdout, "machinarchy hosts show") {
 		t.Fatalf("help lacks examples:\n%s", got.stdout)
 	}
 }
@@ -449,6 +454,10 @@ func TestVersion(t *testing.T) {
 
 		if got.code != 0 || !strings.HasPrefix(got.stdout, "machinarchy ") {
 			t.Fatalf("result = %+v", got)
+		}
+		// N-10: a pipe gets no logotype and no escape codes.
+		if strings.ContainsAny(got.stdout, "◆*\x1b") {
+			t.Errorf("output to a pipe has a logotype or colour:\n%q", got.stdout)
 		}
 		for _, want := range []string{"commit:", "built:", "go:", "platform:", runtime.GOOS + "/" + runtime.GOARCH} {
 			if !strings.Contains(got.stdout, want) {
@@ -500,9 +509,9 @@ func TestVersion(t *testing.T) {
 	})
 }
 
-// ---- get hosts -------------------------------------------------------------
+// ---- hosts list -------------------------------------------------------------
 
-func TestGetHosts(t *testing.T) {
+func TestHostsList(t *testing.T) {
 	cfg := writeConfig(t, "http://127.0.0.1:1", "tok")
 	run := func(t *testing.T, client *fakeClient, args ...string) result {
 		t.Helper()
@@ -511,7 +520,7 @@ func TestGetHosts(t *testing.T) {
 	}
 
 	t.Run("lists hosts as a table", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts")
+		got := run(t, fixtures(), "hosts")
 
 		if got.code != 0 || got.stderr != "" {
 			t.Fatalf("result = %+v", got)
@@ -520,114 +529,56 @@ func TestGetHosts(t *testing.T) {
 		if len(lines) != 6 || !strings.HasPrefix(lines[0], "NAME") {
 			t.Fatalf("output:\n%s", got.stdout)
 		}
-		if first := strings.Fields(lines[1]); strings.Join(first, "|") != "web-01|1|1|10.0.0.1:22|Active|-|-" {
-			t.Errorf("first row = %v", first)
-		}
 	})
 
-	t.Run("json", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "-o", "json")
-
+	t.Run("json and yaml keep the API field names", func(t *testing.T) {
+		got := run(t, fixtures(), "hosts", "-o", "json")
 		var decoded []map[string]any
 		if err := json.Unmarshal([]byte(got.stdout), &decoded); err != nil || len(decoded) != 5 {
 			t.Fatalf("err = %v, hosts = %d\n%s", err, len(decoded), got.stdout)
 		}
-	})
-
-	t.Run("yaml", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "-o", "yaml")
+		got = run(t, fixtures(), "hosts", "-o", "yaml")
 		if got.code != 0 || !strings.Contains(got.stdout, "name: web-01") {
 			t.Fatalf("result = %+v", got)
 		}
 	})
 
-	t.Run("one host by name and by id through the alias", func(t *testing.T) {
-		byName := run(t, fixtures(), "get", "hosts", "web-01")
-		byID := run(t, fixtures(), "get", "host", "3")
-
-		if got := names(dataLines(byName.stdout)); strings.Join(got, ",") != "NAME,web-01" {
-			t.Errorf("by name = %v\n%s", got, byName.stdout)
+	t.Run("follows every page and passes the selector", func(t *testing.T) {
+		client := fixtures()
+		client.pageSize = 2
+		got := run(t, client, "hosts", "-q")
+		if got.stdout != "web-01\nweb-02\ndb-01\ndup\ndup\n" || client.calls != 3 {
+			t.Fatalf("stdout = %q after %d calls", got.stdout, client.calls)
 		}
-		if got := names(dataLines(byID.stdout)); strings.Join(got, ",") != "NAME,db-01" {
-			t.Errorf("by id = %v\n%s", got, byID.stdout)
-		}
-
-		asJSON := run(t, fixtures(), "get", "hosts", "web-01", "-o", "json")
-		var object map[string]any
-		if err := json.Unmarshal([]byte(asJSON.stdout), &object); err != nil || object["metadata"].(map[string]any)["id"] != "1" {
-			t.Errorf("single JSON = %s (%v)", asJSON.stdout, err)
-		}
-	})
-
-	t.Run("a missing host is exit 6", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "nope")
-
-		if got.code != clierr.ExitNotFound || !strings.Contains(got.stderr, `host "nope" was not found`) {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("an ambiguous host is a usage error", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "dup")
-
-		if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "is ambiguous") {
-			t.Fatalf("result = %+v", got)
+		got = run(t, fixtures(), "hosts", "-l", "tier=web", "-q")
+		if got.stdout != "web-01\nweb-02\n" {
+			t.Fatalf("selector stdout = %q", got.stdout)
 		}
 	})
 
 	t.Run("environment filter by name, shorthand and id", func(t *testing.T) {
-		for _, args := range [][]string{
-			{"get", "hosts", "--env", "prod"},
-			{"get", "hosts", "-n", "PROD"},
-			{"get", "hosts", "--env", "1"},
-		} {
-			got := run(t, fixtures(), args...)
-			if gotNames := names(dataLines(got.stdout)); strings.Join(gotNames, ",") != "NAME,web-01,web-02,dup" {
-				t.Errorf("%v = %v\n%s", args, gotNames, got.stdout)
+		for _, args := range [][]string{{"hosts", "--env", "prod"}, {"hosts", "-n", "PROD"}, {"hosts", "--env", "1"}} {
+			got := run(t, fixtures(), append(args, "-q")...)
+			if got.stdout != "web-01\nweb-02\ndup\n" {
+				t.Errorf("%v = %q", args, got.stdout)
 			}
 		}
 	})
 
-	t.Run("an environment narrows an otherwise ambiguous name", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "dup", "--env", "dev", "-q")
-		if got.code != 0 || got.stdout != "5\n" {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
 	t.Run("an unknown environment is exit 6", func(t *testing.T) {
-		got := run(t, fixtures(), "get", "hosts", "--env", "staging")
+		got := run(t, fixtures(), "hosts", "--env", "staging")
 
 		if got.code != clierr.ExitNotFound || !strings.Contains(got.stderr, `environment "staging" was not found`) {
 			t.Fatalf("result = %+v", got)
 		}
 	})
 
-	t.Run("no-headers and quiet", func(t *testing.T) {
-		noHeaders := run(t, fixtures(), "get", "hosts", "--no-headers")
-		if lines := dataLines(noHeaders.stdout); len(lines) != 5 || strings.HasPrefix(lines[0], "NAME") {
-			t.Errorf("--no-headers output:\n%s", noHeaders.stdout)
-		}
-
-		quiet := run(t, fixtures(), "get", "hosts", "-q")
-		if quiet.stdout != "1\n2\n3\n4\n5\n" {
-			t.Errorf("-q output = %q", quiet.stdout)
-		}
-
-		quietJSON := run(t, fixtures(), "get", "hosts", "-q", "-o", "json")
-		if !strings.HasPrefix(quietJSON.stdout, "[") {
-			t.Errorf("-q must not alter JSON documents: %q", quietJSON.stdout)
-		}
-	})
-
-	t.Run("an empty inventory keeps the original table message", func(t *testing.T) {
-		got := run(t, &fakeClient{}, "get", "hosts")
-
-		if got.code != 0 || !strings.Contains(got.stdout, "No resources found.") {
+	t.Run("an empty inventory prints a message", func(t *testing.T) {
+		got := run(t, &fakeClient{}, "hosts")
+		if got.code != 0 || got.stdout == "" {
 			t.Fatalf("result = %+v", got)
 		}
-
-		asJSON := run(t, &fakeClient{}, "get", "hosts", "-o", "json")
+		asJSON := run(t, &fakeClient{}, "hosts", "-o", "json")
 		if strings.TrimSpace(asJSON.stdout) != "null" && strings.TrimSpace(asJSON.stdout) != "[]" {
 			t.Errorf("empty JSON = %q", asJSON.stdout)
 		}
@@ -640,11 +591,7 @@ func TestGetHosts(t *testing.T) {
 			return fixtures(), nil
 		}
 
-		for _, args := range [][]string{
-			{"get", "hosts", "-o", "xml"},
-			{"get", "hosts", "a", "b"},
-			{"get", "nope"},
-		} {
+		for _, args := range [][]string{{"hosts", "-o", "xml"}, {"hosts", "--status", "bogus"}, {"get", "hosts"}, {"create", "host"}, {"label", "host"}} {
 			got := execute(t, builder, "", append([]string{"--config", cfg}, args...)...)
 			if got.code != clierr.ExitUsage {
 				t.Errorf("%v: exit code = %d, stderr %q", args, got.code, got.stderr)
@@ -662,7 +609,7 @@ func TestGetHosts(t *testing.T) {
 			wantCode int
 			wantHint string
 		}{
-			{"unauthorized", &api.Error{Status: 401, Message: "expired"}, clierr.ExitAuth, "set-credentials"},
+			{"unauthorized", &api.Error{Status: 401, Message: "expired"}, clierr.ExitAuth, "machinarchy login"},
 			{"forbidden", &api.Error{Status: 403, Message: "no"}, clierr.ExitAuth, "permitted"},
 			{"server error", &api.Error{Status: 502, Message: "bad gateway"}, clierr.ExitUnavailable, "Retry later"},
 			{"unreachable", clierr.Newf(clierr.ExitUnavailable, "check the URL", "cannot reach the API server"), clierr.ExitUnavailable, "check the URL"},
@@ -670,12 +617,12 @@ func TestGetHosts(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				got := run(t, &fakeClient{err: test.err}, "get", "hosts")
+				got := run(t, &fakeClient{err: test.err}, "hosts")
 
 				if got.code != test.wantCode {
 					t.Fatalf("exit code = %d, want %d (stderr %q)", got.code, test.wantCode, got.stderr)
 				}
-				if !strings.Contains(got.stderr, "Error: list hosts: ") || !strings.Contains(got.stderr, test.wantHint) {
+				if !strings.Contains(got.stderr, "Error: ") || !strings.Contains(got.stderr, test.wantHint) {
 					t.Errorf("stderr = %q", got.stderr)
 				}
 				if got.stdout != "" {
@@ -685,152 +632,13 @@ func TestGetHosts(t *testing.T) {
 		}
 	})
 
-	t.Run("a missing context explains how to set one up", func(t *testing.T) {
-		got := execute(t, fake(fixtures()), "", "--config", filepath.Join(t.TempDir(), "absent.yaml"), "get", "hosts")
+	t.Run("no server explains how to sign in", func(t *testing.T) {
+		got := execute(t, fake(fixtures()), "", "--config", filepath.Join(t.TempDir(), "absent.yaml"), "hosts")
 
-		if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "config set-cluster") {
+		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "machinarchy login YOUR-SERVER-URL") {
 			t.Fatalf("result = %+v", got)
 		}
 	})
-
-	t.Run("the get group prints help", func(t *testing.T) {
-		got := execute(t, nil, "", "get")
-		if got.code != 0 || !strings.Contains(got.stdout, "hosts") {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-}
-
-// ---- config commands -------------------------------------------------------
-
-func TestConfigCommandsEndToEnd(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
-	step := func(stdin string, args ...string) result {
-		t.Helper()
-
-		return execute(t, nil, stdin, append([]string{"--config", path}, args...)...)
-	}
-
-	// Mixed case and dots are preserved exactly: the config document is parsed
-	// as YAML, not through Viper's case-folding key handling.
-	for _, command := range []struct {
-		stdin string
-		args  []string
-	}{
-		{"", []string{"config", "set-cluster", "Prod.EU", "--server", "https://api.example.com/"}},
-		{"", []string{"config", "set-cluster", "Lab", "--server", "http://lab.example.test", "--insecure-http"}},
-		{"tok-abc123\n", []string{"config", "set-credentials", "Ops.User", "--token-stdin"}},
-		{"", []string{"config", "set-context", "Prod.EU", "--cluster", "Prod.EU", "--user", "Ops.User", "--env", "Staging"}},
-		{"", []string{"config", "use-context", "Prod.EU"}},
-	} {
-		if got := step(command.stdin, command.args...); got.code != 0 {
-			t.Fatalf("%v: %+v", command.args, got)
-		}
-	}
-
-	t.Run("credentials are never echoed", func(t *testing.T) {
-		got := step("tok-abc123\n", "config", "set-credentials", "Again", "--token-stdin")
-
-		if got.code != 0 || strings.Contains(got.stdout+got.stderr, "tok-abc123") {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("current context", func(t *testing.T) {
-		if got := step("", "config", "current-context"); got.code != 0 || got.stdout != "Prod.EU\n" {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("get contexts preserves the exact names", func(t *testing.T) {
-		got := step("", "config", "get-contexts")
-
-		for _, want := range []string{"Prod.EU", "Ops.User", "Staging", "*"} {
-			if !strings.Contains(got.stdout, want) {
-				t.Errorf("output lacks %q:\n%s", want, got.stdout)
-			}
-		}
-		if strings.Contains(got.stdout, "prod.eu") {
-			t.Errorf("a context name was case-folded:\n%s", got.stdout)
-		}
-	})
-
-	t.Run("the file is owner-only and keeps the original spelling", func(t *testing.T) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "Prod.EU:") || !strings.Contains(string(data), "https://api.example.com") {
-			t.Errorf("config file:\n%s", data)
-		}
-		if runtime.GOOS != "windows" {
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode := info.Mode().Perm(); mode != 0o600 {
-				t.Errorf("config file mode = %04o, want 0600", mode)
-			}
-		}
-	})
-
-	t.Run("a command resolves the saved context", func(t *testing.T) {
-		var target config.Target
-		builder := func(resolved config.Target) (api.Client, error) {
-			target = resolved
-			return &fakeClient{envs: []api.Environment{{ID: 1, Name: "Staging"}}}, nil
-		}
-
-		got := execute(t, builder, "", "--config", path, "get", "hosts", "--env", "")
-		if got.code != 0 {
-			t.Fatalf("result = %+v", got)
-		}
-		if target.ContextName != "Prod.EU" || target.Server != "https://api.example.com" || target.Token != "tok-abc123" || target.Environment != "Staging" {
-			t.Fatalf("target = %+v", target)
-		}
-	})
-}
-
-func TestConfigCommandErrorsAreUsageErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-
-	tests := []struct {
-		name    string
-		stdin   string
-		args    []string
-		message string
-	}{
-		{"set-cluster without server", "", []string{"config", "set-cluster", "x"}, "--server is required"},
-		{"set-cluster with a bad URL", "", []string{"config", "set-cluster", "x", "--server", "localhost"}, "absolute http:// or https:// URL"},
-		{"set-cluster with remote plain http", "", []string{"config", "set-cluster", "x", "--server", "http://api.example.test"}, "--insecure-http"},
-		{"use-context unknown", "", []string{"config", "use-context", "nope"}, `context "nope" does not exist`},
-		{"current-context unset", "", []string{"config", "current-context"}, "no current context is selected"},
-		{"set-credentials without a source", "", []string{"config", "set-credentials", "x"}, "provide exactly one of"},
-		{"set-credentials with both sources", "t", []string{"config", "set-credentials", "x", "--token", "t", "--token-stdin"}, "provide exactly one of"},
-		{"set-credentials with an invalid token", "has space", []string{"config", "set-credentials", "x", "--token-stdin"}, "API token is invalid"},
-		{"set-context referencing nothing", "", []string{"config", "set-context", "x", "--cluster", "c", "--user", "u"}, `cluster "c" does not exist`},
-		{"set-context without references", "", []string{"config", "set-context", "x"}, "--cluster and --user are required"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := execute(t, nil, test.stdin, append([]string{"--config", path}, test.args...)...)
-
-			if got.code != clierr.ExitUsage {
-				t.Fatalf("exit code = %d, want %d (stderr %q)", got.code, clierr.ExitUsage, got.stderr)
-			}
-			if !strings.Contains(got.stderr, test.message) {
-				t.Errorf("stderr = %q, want %q", got.stderr, test.message)
-			}
-			if strings.Contains(got.stderr, "has space") {
-				t.Errorf("the rejected token leaked: %q", got.stderr)
-			}
-		})
-	}
-
-	if _, err := os.Stat(path); err == nil {
-		t.Error("a failed command created a config file")
-	}
 }
 
 // ---- management commands ---------------------------------------------------
@@ -947,21 +755,21 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 	})
 
 	t.Run("the server URL and token can come from the environment", func(t *testing.T) {
-		server := newAPIServer(t, jsonReply(200, `{"revision":1}`))
+		server := newAPIServer(t, jsonReply(200, `{"items":[]}`))
 		isolate(t)
-		t.Setenv("MACHINARCHY_CLI_SERVER", server.URL)
-		t.Setenv("MACHINARCHY_CLI_TOKEN", "env-token")
+		t.Setenv("MACHINARCHY_SERVER", server.URL)
+		t.Setenv("MACHINARCHY_TOKEN", "env-token")
 
 		var out, errOut bytes.Buffer
 		code := cli.Run(context.Background(), cli.Options{
 			Streams: cli.IOStreams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
 			Groups:  commands.DefaultGroups(),
-		}, []string{"--config", writeConfig(t, "http://127.0.0.1:1", "file-token"), "runtime-config", "status"})
+		}, []string{"--config", writeConfig(t, "http://127.0.0.1:1", "file-token"), "hosts", "-o", "json"})
 
 		if code != 0 {
 			t.Fatalf("code = %d, stderr = %q", code, errOut.String())
 		}
-		if request := server.last(t); request.Auth != "Bearer env-token" || request.Path != "/api/v1/runtime-config/status" {
+		if request := server.last(t); request.Auth != "Bearer env-token" || request.Path != "/api/v1/managed/hosts" {
 			t.Errorf("request = %+v", request)
 		}
 	})
@@ -996,7 +804,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		got := execute(t, nil, `{"a":1}`, "--config", writeConfig(t, server.URL, "tok"),
 			"runtime-config", "publish", "--expected-revision", "1")
 
-		if got.code != clierr.ExitConflict || !strings.Contains(got.stderr, "revision conflict") || !strings.Contains(got.stderr, "Hint: ") {
+		if got.code != clierr.ExitConflict || !strings.Contains(got.stderr, "revision conflict") || !strings.Contains(got.stderr, "Next:  ") {
 			t.Fatalf("result = %+v", got)
 		}
 	})
@@ -1018,7 +826,7 @@ func TestManagementCommandsAgainstARealServer(t *testing.T) {
 		server := newAPIServer(t, jsonReply(401, `{"error":"token expired"}`))
 
 		got := execute(t, nil, "", "--config", writeConfig(t, server.URL, "tok"), "runtime-config", "get")
-		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "set-credentials") {
+		if got.code != clierr.ExitAuth || !strings.Contains(got.stderr, "Next:  machinarchy login") {
 			t.Fatalf("result = %+v", got)
 		}
 	})
@@ -1145,280 +953,8 @@ func TestNoCommandErrorLeaksTheToken(t *testing.T) {
 	unreachable := newAPIServer(t, jsonReply(200, `{}`))
 	address := unreachable.URL
 	unreachable.Close()
-	got := execute(t, nil, "", "--config", writeConfig(t, address, token), "-v", "get", "hosts")
+	got := execute(t, nil, "", "--config", writeConfig(t, address, token), "-v", "hosts")
 	if strings.Contains(got.stdout+got.stderr, token) {
 		t.Errorf("a network failure leaked the token:\n%s%s", got.stdout, got.stderr)
 	}
-}
-
-// ---- managed host and operation commands (B8b) -----------------------------
-
-func TestManagedCommands(t *testing.T) {
-	cfg := writeConfig(t, "http://127.0.0.1:1", "tok")
-	run := func(t *testing.T, client *fakeClient, args ...string) result {
-		t.Helper()
-		return execute(t, fake(client), "", append([]string{"--config", cfg}, args...)...)
-	}
-
-	t.Run("get hosts follows every page and passes the selector", func(t *testing.T) {
-		client := fixtures()
-		client.pageSize = 2
-		got := run(t, client, "get", "hosts", "-q")
-		if got.stdout != "1\n2\n3\n4\n5\n" || client.calls != 3 {
-			t.Fatalf("stdout = %q after %d calls", got.stdout, client.calls)
-		}
-		got = run(t, fixtures(), "get", "hosts", "-l", "tier=web", "-q")
-		if got.stdout != "1\n2\n" {
-			t.Fatalf("selector stdout = %q", got.stdout)
-		}
-	})
-
-	t.Run("create host resolves the profile by name", func(t *testing.T) {
-		client := fixtures()
-		got := run(t, client, "create", "host", "web-09", "--endpoint", "10.0.0.9:22", "--profile", "deploy", "--label", "tier=web", "-q")
-		if got.code != 0 || got.stdout != "105\n" {
-			t.Fatalf("result = %+v", got)
-		}
-		created := client.hosts[len(client.hosts)-1]
-		if created.Spec.AccessProfileID != "p-1" || created.Spec.AccessTarget.Endpoint != "10.0.0.9:22" || created.Metadata.Labels["tier"] != "web" {
-			t.Fatalf("created = %+v", created)
-		}
-		missing := run(t, fixtures(), "create", "host", "x", "--endpoint", "h:22", "--profile", "nope")
-		if missing.code != clierr.ExitNotFound {
-			t.Fatalf("unknown profile = %+v", missing)
-		}
-		usage := run(t, fixtures(), "create", "host", "x", "--endpoint", "h:22")
-		if usage.code != clierr.ExitUsage {
-			t.Fatalf("missing profile = %+v", usage)
-		}
-		// A host reached through its agent has no SSH endpoint.
-		client = fixtures()
-		if got := run(t, client, "create", "host", "agent-01", "--profile", "deploy", "-q"); got.code != 0 {
-			t.Fatalf("host without endpoint = %+v", got)
-		}
-		if created := client.hosts[len(client.hosts)-1]; created.Spec.AccessTarget.Endpoint != "" {
-			t.Fatalf("created = %+v", created)
-		}
-	})
-
-	t.Run("delete host confirms and sends the revision", func(t *testing.T) {
-		client := fixtures()
-		if got := run(t, client, "delete", "host", "web-01"); got.code != clierr.ExitUsage || len(client.deleted) != 0 {
-			t.Fatalf("unconfirmed delete = %+v, deleted %v", got, client.deleted)
-		}
-		if got := run(t, client, "delete", "host", "web-01", "--yes"); got.code != 0 || strings.Join(client.deleted, ",") != "1@1" {
-			t.Fatalf("delete = %+v, deleted %v", got, client.deleted)
-		}
-	})
-
-	t.Run("label host sets and removes labels", func(t *testing.T) {
-		client := fixtures()
-		got := run(t, client, "label", "host", "web-01", "canary=yes", "tier-", "-o", "json")
-		if got.code != 0 {
-			t.Fatalf("result = %+v", got)
-		}
-		labels := client.hosts[0].Metadata.Labels
-		if labels["canary"] != "yes" || labels["tier"] != "" || len(labels) != 1 {
-			t.Fatalf("labels = %v", labels)
-		}
-		if bad := run(t, fixtures(), "label", "host", "web-01", "oops"); bad.code != clierr.ExitUsage {
-			t.Fatalf("bad label = %+v", bad)
-		}
-	})
-
-	t.Run("trust host approves exactly the observed keys after confirmation", func(t *testing.T) {
-		const ed, ecdsa = "SHA256:ed25519ed25519ed25519ed25519ed25519ed25", "SHA256:ecdsaecdsaecdsaecdsaecdsaecdsaecdsaecdsaec"
-		pending := func(host api.Host) api.Host {
-			host.Metadata.Generation = 4
-			host.Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
-			host.Status.ObservedHostKeys = []api.ObservedHostKey{{Algorithm: "ssh-ed25519", Fingerprint: ed}, {Algorithm: "ecdsa-sha2-nistp256", Fingerprint: ecdsa}}
-			return host
-		}
-		client := fixtures()
-		client.hosts[0] = pending(client.hosts[0])
-		if got := run(t, client, "trust", "host", "web-01"); got.code != clierr.ExitUsage || len(client.trusted) != 0 ||
-			!strings.Contains(got.stderr+got.stdout, ed) {
-			t.Fatalf("unconfirmed trust = %+v (it must show the keys and change nothing)", got)
-		}
-		if got := run(t, client, "trust", "host", "web-01", "--yes"); got.code != 0 || strings.Join(client.trusted, ";") != "1="+ed+","+ecdsa {
-			t.Fatalf("trust = %+v, trusted %v", got, client.trusted)
-		}
-		// web-01 now trusts keys: changing them needs --replace.
-		if got := run(t, client, "trust", "host", "web-01", "--yes"); got.code != clierr.ExitUsage || len(client.trusted) != 1 ||
-			!strings.Contains(got.stderr, "--replace") {
-			t.Fatalf("re-trust without --replace = %+v", got)
-		}
-		if got := run(t, client, "trust", "host", "web-01", "--replace", "--fingerprint", ecdsa, "--yes"); got.code != 0 || client.trusted[1] != "1="+ecdsa {
-			t.Fatalf("replace = %+v, trusted %v", got, client.trusted)
-		}
-		if got := run(t, client, "trust", "host", "web-02", "--yes"); got.code != clierr.ExitUsage {
-			t.Fatalf("a host with no observed keys = %+v", got)
-		}
-	})
-
-	t.Run("trust host --all-pending approves only pending hosts that match", func(t *testing.T) {
-		client := fixtures()
-		for i := range client.hosts {
-			client.hosts[i].Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "HostKeyPendingApproval"}}
-			client.hosts[i].Status.ObservedHostKeys = []api.ObservedHostKey{{Fingerprint: "SHA256:key-" + client.hosts[i].Metadata.ID}}
-		}
-		client.hosts[1].Status.Conditions[0].Reason = "SSHVerified" // web-02 is not pending
-		if got := run(t, client, "trust", "host", "--all-pending", "--selector", "tier=web", "--yes"); got.code != 0 {
-			t.Fatalf("all-pending = %+v", got)
-		}
-		if strings.Join(client.trusted, ";") != "1=SHA256:key-1" {
-			t.Fatalf("trusted %v, want only the pending web host", client.trusted)
-		}
-		for _, args := range [][]string{{"trust", "host"}, {"trust", "host", "web-01", "--all-pending"}, {"trust", "host", "--all-pending", "--replace"}} {
-			if got := run(t, client, args...); got.code != clierr.ExitUsage {
-				t.Errorf("%v = %+v, want a usage error", args, got)
-			}
-		}
-	})
-
-	t.Run("run previews, confirms, and binds to the preview", func(t *testing.T) {
-		client := fixtures()
-		if got := run(t, client, "run", "-l", "tier=web", "--", "uptime"); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
-			t.Fatalf("unconfirmed run = %+v", got)
-		}
-		got := run(t, client, "run", "-l", "tier=web", "--yes", "--", "uptime", "-p")
-		if got.code != 0 || !strings.Contains(got.stdout, "op-1") {
-			t.Fatalf("run = %+v", got)
-		}
-		submitted := client.submitted[0]
-		if submitted.ExpectTargetsHash != "hash-2" || strings.Join(submitted.Run.Argv, " ") != "uptime -p" || submitted.Targets.Selector != "tier=web" {
-			t.Fatalf("submitted = %+v", submitted)
-		}
-		for _, args := range [][]string{
-			{"run", "--yes", "--", "uptime"},    // no selection
-			{"run", "-l", "tier=web", "uptime"}, // program not after --
-			{"run", "--host", "ghost", "--yes", "--", "uptime"},
-		} {
-			if got := run(t, fixtures(), args...); got.code == 0 {
-				t.Errorf("%v succeeded: %+v", args, got)
-			}
-		}
-	})
-
-	t.Run("run --wait prints per-host results", func(t *testing.T) {
-		got := run(t, fixtures(), "run", "--host", "web-01", "--yes", "--wait", "--", "uptime")
-		if got.code != 0 || !strings.Contains(got.stdout, "web-01") || !strings.Contains(got.stdout, "up 3 days") {
-			t.Fatalf("result = %+v", got)
-		}
-	})
-
-	t.Run("run detaches unless it waits for a short command", func(t *testing.T) {
-		client := fixtures()
-		got := run(t, client, "run", "-l", "tier=web", "--yes", "--", "backup.sh")
-		if got.code != 0 || !strings.Contains(got.stdout, "logs operation op-1 --follow") {
-			t.Fatalf("detached run = %+v", got)
-		}
-		if spec := client.submitted[0].Run; !spec.Detach || spec.Concurrency < 1 {
-			t.Fatalf("run without --wait submitted %+v, want detached", spec)
-		}
-		client = fixtures()
-		run(t, client, "run", "--host", "web-01", "--yes", "--wait", "--", "uptime")
-		if spec := client.submitted[0].Run; spec.Detach || spec.Concurrency != 1 {
-			t.Fatalf("run --wait submitted %+v, want attached", spec)
-		}
-		for _, args := range [][]string{
-			{"run", "--host", "web-01", "--yes", "--wait", "--timeout", "3600", "--", "uptime"},
-			{"run", "--host", "web-01", "--yes", "--wait", "--detach", "--", "uptime"},
-		} {
-			client = fixtures()
-			run(t, client, args...)
-			if !client.submitted[0].Run.Detach {
-				t.Fatalf("%v submitted an attached run", args)
-			}
-		}
-	})
-
-	t.Run("run fans out to --concurrency hosts", func(t *testing.T) {
-		client := fixtures()
-		run(t, client, "run", "-l", "tier=web", "--yes", "--wait", "--", "uptime")
-		if got := client.submitted[0].Run.Concurrency; got != 2 { // two web hosts, default 5
-			t.Fatalf("default attached concurrency = %d, want 2 (capped by the hosts)", got)
-		}
-		client = fixtures()
-		run(t, client, "run", "-l", "tier=web", "--yes", "--wait", "--concurrency", "1", "--", "uptime")
-		if got := client.submitted[0].Run.Concurrency; got != 1 {
-			t.Fatalf("--concurrency 1 submitted %d", got)
-		}
-		for _, value := range []string{"0", "21", "-3"} {
-			client := fixtures()
-			if got := run(t, client, "run", "-l", "tier=web", "--yes", "--concurrency", value, "--", "uptime"); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
-				t.Errorf("--concurrency %s = %+v, want a usage error", value, got)
-			}
-		}
-	})
-
-	t.Run("run --capability submits a capability Operation", func(t *testing.T) {
-		client := fixtures()
-		got := run(t, client, "run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", `{"service":"nginx.service"}`, "--timeout", "45")
-		if got.code != 0 || !strings.Contains(got.stdout, "op-1") {
-			t.Fatalf("capability run = %+v", got)
-		}
-		submitted := client.submitted[0]
-		if submitted.Run != nil || submitted.Capability == nil || submitted.Capability.Name != "service.status" ||
-			string(submitted.Capability.Input) != `{"service":"nginx.service"}` || submitted.Capability.TimeoutSeconds != 45 || submitted.ExpectTargetsHash != "hash-2" {
-			t.Fatalf("submitted = %+v", submitted)
-		}
-		for _, args := range [][]string{
-			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--", "uptime"},    // a program as well
-			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", "[1]"},  // input not an object
-			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--input", "{bad"}, // input not JSON
-			{"run", "-l", "tier=web", "--yes", "--capability", "service.status", "--detach"},
-			{"run", "--yes", "--capability", "service.status"}, // no selection
-		} {
-			client := fixtures()
-			if got := run(t, client, args...); got.code != clierr.ExitUsage || len(client.submitted) != 0 {
-				t.Errorf("%v = %+v, want a usage error", args, got)
-			}
-		}
-	})
-
-	t.Run("logs follows a target's output", func(t *testing.T) {
-		client := fixtures()
-		zero := 0
-		client.ops = map[string]*api.Operation{"op-7": {ID: "op-7", Status: api.OperationStatus{State: "PartiallySucceeded", Targets: []api.OperationTarget{
-			{Spec: api.OperationTargetSpec{HostID: "h1", DisplayName: "web-01"}, State: "Running"},
-			{Spec: api.OperationTargetSpec{HostID: "h2", DisplayName: "web-02"}, State: "Succeeded", Result: &api.TargetResult{ExitCode: &zero}},
-		}}}}
-		client.outputs = map[string]string{"op-7/h1/stdout": "line1\nline2\nline3\n", "op-7/h2/stdout": "ok\n", "op-7/h1/stderr": "warn\n"}
-		got := run(t, client, "logs", "operation", "op-7", "--host", "web-01", "--follow")
-		if got.code != 0 || got.stdout != "line1\nline2\nline3\n" {
-			t.Fatalf("follow = %+v", got)
-		}
-		if got := run(t, client, "logs", "operation", "op-7", "--host", "h1", "--stream", "stderr"); got.stdout != "warn\n" {
-			t.Fatalf("stderr by host ID = %+v", got)
-		}
-		// Without --host every target is printed with a header.
-		if got := run(t, client, "logs", "operation", "op-7"); !strings.Contains(got.stdout, "==> web-01 (Running) <==\nline1\n") ||
-			!strings.Contains(got.stdout, "==> web-02 (Succeeded) <==\nok\n") {
-			t.Fatalf("all targets = %q", got.stdout)
-		}
-		for _, args := range [][]string{
-			{"logs", "operation", "op-7", "--follow"},          // several targets need --host
-			{"logs", "operation", "op-7", "--stream", "stdin"}, // bad stream
-		} {
-			if got := run(t, client, args...); got.code != clierr.ExitUsage {
-				t.Errorf("%v = %+v, want a usage error", args, got)
-			}
-		}
-		if got := run(t, client, "logs", "operation", "op-7", "--host", "db-01"); got.code != clierr.ExitNotFound {
-			t.Errorf("unknown host = %+v", got)
-		}
-	})
-
-	t.Run("operations and profiles", func(t *testing.T) {
-		if got := run(t, fixtures(), "get", "operations"); !strings.Contains(got.stdout, "op-9") || !strings.Contains(got.stdout, "Succeeded=2") {
-			t.Fatalf("operations = %+v", got)
-		}
-		if got := run(t, fixtures(), "get", "profiles"); !strings.Contains(got.stdout, "deploy") {
-			t.Fatalf("profiles = %+v", got)
-		}
-		if got := run(t, fixtures(), "cancel", "operation", "op-3"); !strings.Contains(got.stdout, "op-3") {
-			t.Fatalf("cancel = %+v", got)
-		}
-	})
 }

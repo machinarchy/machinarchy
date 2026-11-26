@@ -21,6 +21,7 @@ import (
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
 	"github.com/machinarchy/machinarchy/docs"
+	"github.com/machinarchy/machinarchy/internal/buildinfo"
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/domain"
 	"github.com/machinarchy/machinarchy/internal/service"
@@ -166,6 +167,7 @@ func (s *Server) registerOperationalRoutes(e *echo.Echo, apiDocs, metrics bool) 
 	e.GET("/healthz", s.liveHandler)
 	e.GET("/healthz/live", s.liveHandler)
 	e.GET("/healthz/ready", s.readyHandler)
+	e.GET("/api/v1/version", versionHandler)
 	if metrics {
 		e.GET("/metrics", s.metricsEndpoint)
 	}
@@ -267,6 +269,21 @@ func NewOperationsServer(database DatabaseReadiness, dependencies ...ReadinessCh
 		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 	}
 	return s, nil
+}
+
+// versionHandler reports the server release and the API generations it serves
+// so a CLI can name an incompatible server. Public, like the health checks.
+// @Summary Server version and supported API range
+// @Tags Operations
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/version [get]
+func versionHandler(c echo.Context) error {
+	return c.JSON(http.StatusOK, echo.Map{
+		"version": buildinfo.Version,
+		"apiMin":  buildinfo.APIMin,
+		"apiMax":  buildinfo.APIMax,
+	})
 }
 
 // liveHandler reports whether the process is shutting down.

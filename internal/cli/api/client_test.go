@@ -345,7 +345,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 		wantMessage  string
 		wantHintPart string
 	}{
-		{"unauthorized", 401, `{"error":"invalid token"}`, nil, clierr.ExitAuth, "invalid token", "set-credentials"},
+		{"unauthorized", 401, `{"error":"invalid token"}`, nil, clierr.ExitAuth, "invalid token", "machinarchy login"},
 		{"forbidden", 403, `{"error":"owner role required"}`, nil, clierr.ExitAuth, "owner role required", "human owner session"},
 		{"not found via framework message", 404, `{"message":"Not Found"}`, nil, clierr.ExitNotFound, "Not Found", "Check the identifier"},
 		{"conflict", 409, `{"error":"stale revision"}`, nil, clierr.ExitConflict, "stale revision", "up-to-date revision"},
@@ -387,7 +387,7 @@ func TestAPIErrorsAreTypedClassifiedAndHelpful(t *testing.T) {
 			if apiErr.Method != http.MethodGet || apiErr.Path != "/api/v1/environments" {
 				t.Errorf("request = %s %s", apiErr.Method, apiErr.Path)
 			}
-			hint := clierr.Hint(err)
+			hint := strings.TrimSpace(clierr.Why(err) + " " + clierr.Hint(err))
 			if test.wantHintPart != "" && !strings.Contains(hint, test.wantHintPart) {
 				t.Errorf("hint = %q, want it to contain %q", hint, test.wantHintPart)
 			}
@@ -594,6 +594,10 @@ func TestUnreachableServerErrorsAreClearAndSafe(t *testing.T) {
 	}
 	if clierr.Hint(err) == "" {
 		t.Error("expected a hint")
+	}
+	// The hint must name only commands that exist (get-contexts was removed in M2).
+	if strings.Contains(clierr.Hint(err), "get-contexts") || !strings.Contains(clierr.Hint(err), "machinarchy whoami") {
+		t.Errorf("hint = %q", clierr.Hint(err))
 	}
 }
 
@@ -921,5 +925,64 @@ func TestTargetOutputRequest(t *testing.T) {
 	}
 	if out.Text != "tail\n" || out.Next != 47 || !out.Live {
 		t.Fatalf("decoded = %+v", out)
+	}
+}
+
+// K-04 (version skew, no C-11): JSON of the wrong shape names an update; text
+// that is not JSON names the address. Both are exit 4.
+func TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress(t *testing.T) {
+	var target struct {
+		Items []string `json:"items"`
+	}
+	skew := decodeResponse(200, "/api/v1/x", []byte(`{"items":{"a":1}}`), &target)
+	page := decodeResponse(200, "/api/v1/x", []byte(`<html>sign in</html>`), &target)
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{"wrong shape": {skew, "Update the CLI"}, "not JSON": {page, "points at the Machinarchy API"}} {
+		var coded *clierr.Error
+		if !errors.As(tc.err, &coded) || coded.ExitCode() != clierr.ExitUnavailable || !strings.Contains(coded.Hint, tc.want) {
+			t.Errorf("%s: %v (want hint containing %q)", name, tc.err, tc.want)
+		}
+	}
+}
+
+// C-11: after a decode failure the CLI asks /api/v1/version and names an
+// incompatible server; a compatible, old (404) or garbled answer keeps the
+// generic message. The version call carries no token.
+func TestDecodeFailureNamesIncompatibleServer(t *testing.T) {
+	versionBody := func(body string, status int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/version" {
+				if r.Header.Get("Authorization") != "" {
+					t.Errorf("token sent to the version endpoint")
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte(`<html>x</html>`))
+		}
+	}
+	for name, tc := range map[string]struct {
+		handler http.HandlerFunc
+		want    string
+	}{
+		"incompatible":    {versionBody(`{"version":"9.0.0\u001b[31m","apiMin":7,"apiMax":9}`, 200), "API version 7-9"},
+		"compatible":      {versionBody(`{"version":"1","apiMin":1,"apiMax":1}`, 200), "points at the Machinarchy API"},
+		"old server 404":  {versionBody(`not found`, 404), "points at the Machinarchy API"},
+		"garbled version": {versionBody(`{"apiMin":"x"}`, 200), "points at the Machinarchy API"},
+	} {
+		client := newClient(t, tc.handler)
+		var out struct{ A []string }
+		err := client.get(context.Background(), "/api/v1/x", &out)
+		var coded *clierr.Error
+		if !errors.As(err, &coded) || coded.ExitCode() != clierr.ExitUnavailable {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := err.Error() + " " + coded.Hint; !strings.Contains(got, tc.want) || strings.Contains(got, "\x1b") {
+			t.Errorf("%s: %q lacks %q or has a control character", name, got, tc.want)
+		}
 	}
 }

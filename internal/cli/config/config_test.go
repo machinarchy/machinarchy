@@ -1,94 +1,59 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/pflag"
 
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 )
 
-const sampleConfig = `apiVersion: machinarchy.io/v1
-current-context: local
-clusters:
-  local:
-    server: https://file.example:8080/
-users:
-  local:
-    token: file-token
-contexts:
-  local:
-    cluster: local
-    user: local
-    environment: staging
-`
-
-// isolateEnvironment clears every variable the CLI reads so the developer's
-// shell cannot influence a test.
-func isolateEnvironment(t *testing.T) {
-	t.Helper()
-
-	for _, name := range []string{
-		"MACHINARCHY_CONFIG",
-		"MACHINARCHY_CLI_CONTEXT",
-		"MACHINARCHY_CLI_ENV",
-		"MACHINARCHY_CLI_OUTPUT",
-		"MACHINARCHY_CLI_VERBOSE",
-		"MACHINARCHY_CLI_SERVER",
-		"MACHINARCHY_CLI_TOKEN",
-		"MACHINARCHY_CLI_REQUEST_TIMEOUT",
-		"MACHINARCHY_CLI_QUIET",
-		"MACHINARCHY_CLI_NO_HEADERS",
-		"MACHINARCHY_CLI_NO_INPUT",
-		"MACHINARCHY_CLI_YES",
-	} {
-		t.Setenv(name, "")
-	}
-}
-
-func newFlags(t *testing.T, args ...string) *pflag.FlagSet {
+func flagSet(t *testing.T, args ...string) *pflag.FlagSet {
 	t.Helper()
 
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	flags.String("context", "", "")
+	flags.StringP("output", "o", "", "")
 	flags.String("server", "", "")
 	flags.String("env", "", "")
-	flags.String("output", "", "")
 	flags.String("request-timeout", "", "")
-	flags.Bool("verbose", false, "")
 	flags.Bool("quiet", false, "")
 	flags.Bool("no-headers", false, "")
 	flags.Bool("no-input", false, "")
-	flags.Bool("yes", false, "")
-
+	flags.Bool("verbose", false, "")
 	if err := flags.Parse(args); err != nil {
-		t.Fatalf("parse flags: %v", err)
+		t.Fatal(err)
 	}
 
 	return flags
 }
 
-func writeConfig(t *testing.T, content string) string {
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"SERVER", "ENV", "OUTPUT", "TOKEN", "REQUEST_TIMEOUT", "QUIET", "NO_HEADERS", "NO_INPUT", "VERBOSE", "PLAIN"} {
+		t.Setenv("MACHINARCHY_"+name, "")
+	}
+}
+
+func writeFile(t *testing.T, content string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+		t.Fatal(err)
 	}
 
 	return path
 }
 
-func loadSample(t *testing.T, args ...string) *Store {
+func load(t *testing.T, content string, args ...string) *Store {
 	t.Helper()
+	clearEnv(t)
 
-	store, err := Load(writeConfig(t, sampleConfig), newFlags(t, args...))
+	store, err := Load(writeFile(t, content), flagSet(t, args...))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -96,525 +61,287 @@ func loadSample(t *testing.T, args ...string) *Store {
 	return store
 }
 
-func TestLoadMissingFileYieldsEmptyDocument(t *testing.T) {
-	isolateEnvironment(t)
+func TestLoadMissingEmptyAndValidFiles(t *testing.T) {
+	clearEnv(t)
 
-	store, err := Load(filepath.Join(t.TempDir(), "absent.yaml"), newFlags(t))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	missing, err := Load(filepath.Join(t.TempDir(), "absent.yaml"), flagSet(t))
+	if err != nil || len(missing.ServerNames()) != 0 || missing.ActiveName() != "" {
+		t.Fatalf("a missing file is an empty config: %+v, %v", missing, err)
 	}
 
-	if names := store.ContextNames(); len(names) != 0 {
-		t.Fatalf("ContextNames = %v, want none", names)
+	empty := load(t, "  \n")
+	if len(empty.ServerNames()) != 0 {
+		t.Fatal("an empty file is an empty config")
 	}
-	if store.CurrentContext() != "" {
-		t.Fatalf("CurrentContext = %q, want empty", store.CurrentContext())
+
+	store := load(t, "version: 2\nactive: lab\nservers:\n  lab:\n    url: https://lab.example/\n    env: production\n  Prod.EU:\n    url: http://localhost:8080\n    insecure-http: true\n")
+	if got := strings.Join(store.ServerNames(), ","); got != "Prod.EU,lab" {
+		t.Fatalf("names = %q", got)
+	}
+	lab, ok := store.Server("lab")
+	if !ok || lab.URL != "https://lab.example/" || lab.Env != "production" || store.ActiveName() != "lab" {
+		t.Fatalf("lab = %+v, active %q", lab, store.ActiveName())
 	}
 }
 
-func TestNamesArePreservedExactly(t *testing.T) {
-	isolateEnvironment(t)
+func TestLoadRefusesWhatItCannotTrust(t *testing.T) {
+	clearEnv(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	store, err := Load(path, newFlags(t))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	// Mixed case and dots are exactly what Viper's key handling would mangle.
-	if err := store.SetCluster("Prod.EU", "https://api.example.com", false); err != nil {
-		t.Fatalf("SetCluster: %v", err)
-	}
-	if err := store.SetUser("Ops.User", "token-value"); err != nil {
-		t.Fatalf("SetUser: %v", err)
-	}
-	if err := store.SetContext("Prod.EU", "Prod.EU", "Ops.User", "Env.One"); err != nil {
-		t.Fatalf("SetContext: %v", err)
-	}
-	if err := store.UseContext("Prod.EU"); err != nil {
-		t.Fatalf("UseContext: %v", err)
-	}
-
-	reloaded, err := Load(path, newFlags(t))
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-
-	names := reloaded.ContextNames()
-	if len(names) != 1 || names[0] != "Prod.EU" {
-		t.Fatalf("ContextNames = %v, want [Prod.EU]", names)
-	}
-	if reloaded.CurrentContext() != "Prod.EU" {
-		t.Fatalf("CurrentContext = %q", reloaded.CurrentContext())
-	}
-	if _, ok := reloaded.Cluster("Prod.EU"); !ok {
-		t.Fatal("cluster Prod.EU was not preserved")
-	}
-	if user, ok := reloaded.User("Ops.User"); !ok || user.Token != "token-value" {
-		t.Fatalf("user Ops.User = %+v, %v", user, ok)
-	}
-
-	target, err := reloaded.Resolve()
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if target.Server != "https://api.example.com" || target.Environment != "Env.One" {
-		t.Fatalf("target = %+v", target)
-	}
-}
-
-func TestResolvePrecedence(t *testing.T) {
-	tests := []struct {
-		name       string
-		env        map[string]string
-		args       []string
-		wantServer string
-		wantToken  string
-		wantEnv    string
+	tests := map[string]struct {
+		content string
+		want    string
 	}{
-		{
-			name:       "config file only",
-			wantServer: "https://file.example:8080",
-			wantToken:  "file-token",
-			wantEnv:    "staging",
-		},
-		{
-			name:       "environment beats file",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_TOKEN": "env-token", "MACHINARCHY_CLI_ENV": "prod"},
-			wantServer: "https://env.example",
-			wantToken:  "env-token",
-			wantEnv:    "prod",
-		},
-		{
-			name:       "flag beats environment",
-			env:        map[string]string{"MACHINARCHY_CLI_SERVER": "https://env.example", "MACHINARCHY_CLI_ENV": "prod"},
-			args:       []string{"--server", "https://flag.example/", "--env", "dev"},
-			wantServer: "https://flag.example",
-			wantToken:  "file-token",
-			wantEnv:    "dev",
-		},
+		"not yaml":       {"servers: [unterminated", "it is not valid YAML"},
+		"future version": {"version: 9\n", "has version 9; this CLI reads version 2"},
+		"bad URL":        {"version: 2\nservers:\n  lab:\n    url: localhost\n", `server "lab" in the CLI config has an invalid URL`},
+		"bad name":       {"version: 2\nservers:\n  \"-bad name\":\n    url: https://x.example\n", "is not a valid server name"},
+		"bad default":    {"defaults:\n  server: https://x.example\n", "defaults.server cannot be saved"},
 	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			isolateEnvironment(t)
-			for key, value := range test.env {
-				t.Setenv(key, value)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeFile(t, tc.content), flagSet(t))
+			if err == nil || !strings.Contains(err.Error()+clierr.Why(err), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
-
-			target, err := loadSample(t, test.args...).Resolve()
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
-
-			if target.Server != test.wantServer {
-				t.Errorf("server = %q, want %q", target.Server, test.wantServer)
-			}
-			if target.Token != test.wantToken {
-				t.Errorf("token = %q, want %q", target.Token, test.wantToken)
-			}
-			if target.Environment != test.wantEnv {
-				t.Errorf("environment = %q, want %q", target.Environment, test.wantEnv)
-			}
-			if target.ContextName != "local" {
-				t.Errorf("context = %q, want local", target.ContextName)
-			}
-			if target.RequestTimeout != DefaultRequestTimeout {
-				t.Errorf("timeout = %s, want default", target.RequestTimeout)
+			if code, _ := clierr.Classify(err); code != clierr.ExitUsage {
+				t.Fatalf("exit code = %d", code)
 			}
 		})
 	}
-}
 
-func TestResolveErrorsAreClassifiedAndHelpful(t *testing.T) {
-	t.Run("no context", func(t *testing.T) {
-		isolateEnvironment(t)
-
-		store, err := Load(filepath.Join(t.TempDir(), "absent.yaml"), newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-
-		_, err = store.Resolve()
-		if err == nil {
-			t.Fatal("Resolve succeeded without a context")
-		}
-		if clierr.ExitCode(err) != clierr.ExitUsage {
-			t.Errorf("exit code = %d, want %d", clierr.ExitCode(err), clierr.ExitUsage)
-		}
-		if !strings.Contains(err.Error(), "no active context") {
-			t.Errorf("message = %q", err.Error())
-		}
-		if !strings.Contains(clierr.Hint(err), "config set-cluster") {
-			t.Errorf("hint = %q, want setup instructions", clierr.Hint(err))
-		}
-	})
-
-	t.Run("unknown context", func(t *testing.T) {
-		isolateEnvironment(t)
-
-		_, err := loadSample(t, "--context", "nope").Resolve()
-		if err == nil || !strings.Contains(err.Error(), `context "nope" does not exist`) {
-			t.Fatalf("error = %v", err)
-		}
-		if clierr.ExitCode(err) != clierr.ExitUsage {
-			t.Errorf("exit code = %d", clierr.ExitCode(err))
-		}
-	})
-
-	t.Run("missing token", func(t *testing.T) {
-		isolateEnvironment(t)
-
-		path := writeConfig(t, strings.Replace(sampleConfig, "token: file-token", `token: ""`, 1))
-		store, err := Load(path, newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-
-		_, err = store.Resolve()
-		if err == nil || !strings.Contains(err.Error(), "no API token configured") {
-			t.Fatalf("error = %v", err)
-		}
-		if clierr.ExitCode(err) != clierr.ExitUsage {
-			t.Errorf("exit code = %d", clierr.ExitCode(err))
-		}
-	})
-
-	t.Run("invalid token is never echoed", func(t *testing.T) {
-		isolateEnvironment(t)
-		t.Setenv("MACHINARCHY_CLI_TOKEN", "secret part two")
-
-		_, err := loadSample(t).Resolve()
-		if err == nil {
-			t.Fatal("Resolve accepted a token containing whitespace")
-		}
-		if strings.Contains(err.Error(), "secret") || strings.Contains(clierr.Hint(err), "secret") {
-			t.Fatalf("error leaks the token: %q / %q", err.Error(), clierr.Hint(err))
-		}
-	})
-
-	t.Run("unknown cluster", func(t *testing.T) {
-		isolateEnvironment(t)
-
-		path := writeConfig(t, strings.Replace(sampleConfig, "cluster: local", "cluster: gone", 1))
-		store, err := Load(path, newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if _, err := store.Resolve(); err == nil || !strings.Contains(err.Error(), `unknown cluster "gone"`) {
-			t.Fatalf("error = %v", err)
-		}
-	})
-}
-
-func TestRequestTimeout(t *testing.T) {
-	tests := []struct {
-		name    string
-		env     string
-		args    []string
-		want    time.Duration
-		wantErr bool
-	}{
-		{name: "default", want: DefaultRequestTimeout},
-		{name: "environment", env: "5s", want: 5 * time.Second},
-		{name: "flag beats environment", env: "5s", args: []string{"--request-timeout", "2m"}, want: 2 * time.Minute},
-		{name: "not a duration", args: []string{"--request-timeout", "banana"}, wantErr: true},
-		{name: "zero", args: []string{"--request-timeout", "0s"}, wantErr: true},
-		{name: "negative", args: []string{"--request-timeout", "-1s"}, wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			isolateEnvironment(t)
-			if test.env != "" {
-				t.Setenv("MACHINARCHY_CLI_REQUEST_TIMEOUT", test.env)
-			}
-
-			got, err := loadSample(t, test.args...).RequestTimeout()
-			if test.wantErr {
-				if err == nil {
-					t.Fatalf("RequestTimeout = %s, want error", got)
-				}
-				if clierr.ExitCode(err) != clierr.ExitUsage {
-					t.Fatalf("exit code = %d, want %d", clierr.ExitCode(err), clierr.ExitUsage)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("RequestTimeout: %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("RequestTimeout = %s, want %s", got, test.want)
-			}
-		})
+	directory := t.TempDir()
+	if _, err := Load(directory, flagSet(t)); err == nil {
+		t.Fatal("a directory was accepted")
 	}
 }
 
-func TestOutputAndBooleanSettings(t *testing.T) {
-	isolateEnvironment(t)
+// The older format is named and refused; nothing is converted.
+func TestLoadRefusesTheOlderFormat(t *testing.T) {
+	clearEnv(t)
 
-	store := loadSample(t)
-	if got := store.OutputExplicit(); got != "" {
-		t.Fatalf("OutputExplicit = %q, want empty so commands apply their own default", got)
+	path := writeFile(t, "apiVersion: machinarchy.io/v1\ncurrent-context: lab\nclusters:\n  lab:\n    server: https://x.example\nusers:\n  lab:\n    token: OLD-TOKEN\ncontexts:\n  lab: {cluster: lab, user: lab}\n")
+	_, err := Load(path, flagSet(t))
+	if err == nil {
+		t.Fatal("the older format was accepted")
 	}
-	if got := store.OutputFormat(); got != "table" {
-		t.Fatalf("OutputFormat = %q, want table", got)
+	for _, want := range []string{"older format that this version no longer reads"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
 	}
-	if store.Quiet() || store.NoHeaders() || store.NoInput() || store.Verbose() {
-		t.Fatal("boolean settings should default to false")
-	}
-
-	t.Setenv("MACHINARCHY_CLI_OUTPUT", "JSON")
-	t.Setenv("MACHINARCHY_CLI_QUIET", "true")
-	t.Setenv("MACHINARCHY_CLI_NO_INPUT", "true")
-
-	store = loadSample(t, "--no-headers")
-	if got := store.OutputExplicit(); got != "json" {
-		t.Fatalf("OutputExplicit = %q, want json (normalised)", got)
-	}
-	if !store.Quiet() || !store.NoHeaders() || !store.NoInput() {
-		t.Fatalf("quiet=%v noHeaders=%v noInput=%v, want all true", store.Quiet(), store.NoHeaders(), store.NoInput())
-	}
-
-	var nilStore *Store
-	if nilStore.Quiet() || nilStore.NoHeaders() || nilStore.NoInput() || nilStore.OutputExplicit() != "" {
-		t.Fatal("a nil store must report defaults")
+	if !strings.Contains(clierr.Hint(err), "mv \""+path+"\" \""+path+".old\"") || strings.Contains(err.Error()+clierr.Why(err)+clierr.Hint(err), "OLD-TOKEN") {
+		t.Errorf("next = %q", clierr.Hint(err))
 	}
 }
 
-func TestLoadRejectsDamagedFiles(t *testing.T) {
-	isolateEnvironment(t)
-
-	tests := []struct {
-		name string
-		path func(t *testing.T) string
-	}{
-		{"malformed yaml", func(t *testing.T) string { return writeConfig(t, "contexts: [unterminated") }},
-		{"wrong shape", func(t *testing.T) string { return writeConfig(t, "- a\n- list\n") }},
-		{"oversized", func(t *testing.T) string { return writeConfig(t, strings.Repeat("#", maxConfigSize+16)) }},
-		{"directory", func(t *testing.T) string { return t.TempDir() }},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := Load(test.path(t), newFlags(t))
-			if err == nil {
-				t.Fatal("Load succeeded for a damaged config")
-			}
-			if clierr.ExitCode(err) != clierr.ExitUsage {
-				t.Fatalf("exit code = %d, want %d", clierr.ExitCode(err), clierr.ExitUsage)
-			}
-			if clierr.Hint(err) == "" {
-				t.Fatal("a damaged config should come with a hint")
-			}
-		})
-	}
-}
-
-func TestLoadSettingsIgnoresDamagedFile(t *testing.T) {
-	isolateEnvironment(t)
-	t.Setenv("MACHINARCHY_CONFIG", writeConfig(t, "contexts: [unterminated"))
-	t.Setenv("MACHINARCHY_CLI_OUTPUT", "yaml")
-
-	store, err := LoadSettings(newFlags(t))
-	if err != nil {
-		t.Fatalf("LoadSettings: %v", err)
-	}
-	if got := store.OutputExplicit(); got != "yaml" {
-		t.Fatalf("OutputExplicit = %q, want yaml", got)
-	}
-	if err := store.SetCluster("x", "http://x", false); err == nil {
-		t.Fatal("a settings-only store must refuse to write a config file")
-	}
-}
-
-func TestSavedFilesAreOwnerOnly(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permission bits are not meaningful on Windows")
-	}
-	isolateEnvironment(t)
-
+func TestSaveServerActivateRemove(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
-	store, err := Load(path, newFlags(t))
+	clearEnv(t)
+	store, err := Load(path, flagSet(t))
 	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if err := store.SetCluster("local", "http://localhost:8080", false); err != nil {
-		t.Fatalf("SetCluster: %v", err)
+		t.Fatal(err)
 	}
 
-	fileInfo, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat file: %v", err)
+	if err := store.SaveServer("lab", Server{URL: "https://lab.example/"}); err != nil {
+		t.Fatal(err)
 	}
-	if mode := fileInfo.Mode().Perm(); mode != 0o600 {
-		t.Errorf("file mode = %04o, want 0600", mode)
+	if err := store.SaveServer("Prod.EU", Server{URL: "https://eu.example", InsecureHTTP: false, CAFile: "ca/Prod.EU.pem", Env: "eu"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.ActiveName() != "Prod.EU" {
+		t.Fatalf("a saved server becomes the active one, got %q", store.ActiveName())
+	}
+	if err := store.Activate("lab"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Activate("nope"); err == nil || !strings.Contains(clierr.Why(err), "saved servers: Prod.EU, lab") {
+		t.Fatalf("Activate(nope) = %v", err)
 	}
 
-	dirInfo, err := os.Stat(filepath.Dir(path))
+	// The file is private, keeps names exactly, and trims the trailing slash.
+	reloaded, err := Load(path, flagSet(t))
 	if err != nil {
-		t.Fatalf("stat dir: %v", err)
+		t.Fatal(err)
 	}
-	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
-		t.Errorf("directory mode = %04o, want 0700", mode)
+	if server, _ := reloaded.Server("lab"); server.URL != "https://lab.example" || reloaded.ActiveName() != "lab" {
+		t.Fatalf("reloaded = %+v, active %q", server, reloaded.ActiveName())
+	}
+	if server, _ := reloaded.Server("Prod.EU"); server.CAFile != "ca/Prod.EU.pem" || server.Env != "eu" {
+		t.Fatalf("Prod.EU = %+v", server)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %v, %v", info, err)
+		}
+		dir, err := os.Stat(filepath.Dir(path))
+		if err != nil || dir.Mode().Perm() != 0o700 {
+			t.Fatalf("directory mode = %v, %v", dir, err)
+		}
+	}
+
+	if err := reloaded.RemoveServer("lab"); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.ActiveName() != "" || len(reloaded.ServerNames()) != 1 {
+		t.Fatalf("after removing the active server: %q, %v", reloaded.ActiveName(), reloaded.ServerNames())
+	}
+	if err := reloaded.RemoveServer("never-saved"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, bad := range []struct{ name, url string }{{"", "https://x.example"}, {"has space", "https://x.example"}, {"ok", "not a url"}} {
+		if err := store.SaveServer(bad.name, Server{URL: bad.url}); err == nil {
+			t.Errorf("SaveServer(%q, %q) was accepted", bad.name, bad.url)
+		}
 	}
 }
 
-func TestPermissionWarnings(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permission bits are not meaningful on Windows")
+func TestSaveWithoutAPath(t *testing.T) {
+	store, err := LoadSettings(flagSet(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	isolateEnvironment(t)
-
-	t.Run("loose file with token warns without leaking it", func(t *testing.T) {
-		path := writeConfig(t, sampleConfig)
-		if err := os.Chmod(path, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		store, err := Load(path, newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-
-		warnings := store.Warnings()
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "chmod 600") {
-			t.Fatalf("warnings = %v", warnings)
-		}
-		if strings.Contains(warnings[0], "file-token") {
-			t.Fatal("warning leaks the token")
-		}
-	})
-
-	t.Run("owner-only file does not warn", func(t *testing.T) {
-		store, err := Load(writeConfig(t, sampleConfig), newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if warnings := store.Warnings(); len(warnings) != 0 {
-			t.Fatalf("warnings = %v, want none", warnings)
-		}
-	})
-
-	t.Run("loose file without tokens does not warn", func(t *testing.T) {
-		path := writeConfig(t, "apiVersion: machinarchy.io/v1\n")
-		if err := os.Chmod(path, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		store, err := Load(path, newFlags(t))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if warnings := store.Warnings(); len(warnings) != 0 {
-			t.Fatalf("warnings = %v, want none", warnings)
-		}
-	})
+	if err := store.SaveServer("lab", Server{URL: "https://x.example"}); err == nil {
+		t.Fatal("a store without a file path saved something")
+	}
 }
 
-func TestValidateServer(t *testing.T) {
-	valid := []string{"http://localhost:8080", "https://api.example.com", "https://api.example.com/prefix", "  http://x  "}
-	for _, server := range valid {
-		if err := ValidateServer(server); err != nil {
-			t.Errorf("ValidateServer(%q) = %v, want nil", server, err)
+func TestNormalizeURLAndDefaultServerName(t *testing.T) {
+	for in, want := range map[string]string{
+		"machinarchy.example.com":          "https://machinarchy.example.com",
+		"https://machinarchy.example.com/": "https://machinarchy.example.com",
+		"http://localhost:8080":            "http://localhost:8080",
+		"  https://x.example/api/  ":       "https://x.example/api",
+	} {
+		if got, err := NormalizeURL(in); err != nil || got != want {
+			t.Errorf("NormalizeURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "ftp://x.example", "https://user:pw@x.example", "https://x.example?q=1", "https://x.example#f"} {
+		if _, err := NormalizeURL(bad); err == nil {
+			t.Errorf("NormalizeURL(%q) was accepted", bad)
 		}
 	}
 
-	invalid := []string{"", "localhost:8080", "ftp://example.com", "https://", "https://user:pass@example.com", "https://example.com?x=1", "https://example.com#frag"}
-	for _, server := range invalid {
-		err := ValidateServer(server)
-		if err == nil {
-			t.Errorf("ValidateServer(%q) = nil, want error", server)
-			continue
+	for in, want := range map[string]string{
+		"https://machinarchy.example.com": "machinarchy-example-com",
+		"http://localhost:8080":           "localhost-8080",
+		"http://127.0.0.1:52566":          "127-0-0-1-52566",
+		"https://[::1]:8443":              "1-8443",
+		"nonsense":                        "server",
+	} {
+		if got := DefaultServerName(in); got != want {
+			t.Errorf("DefaultServerName(%q) = %q, want %q", in, got, want)
 		}
-		if clierr.ExitCode(err) != clierr.ExitUsage {
-			t.Errorf("ValidateServer(%q) exit code = %d", server, clierr.ExitCode(err))
+		if got := DefaultServerName(in); !serverNamePattern.MatchString(got) {
+			t.Errorf("DefaultServerName(%q) = %q is not a valid server name", in, got)
 		}
+	}
+	if long := DefaultServerName("https://" + strings.Repeat("a", 100) + ".example"); len(long) > 63 {
+		t.Errorf("a long name was not cut: %d", len(long))
+	}
+}
+
+func TestCheckTransport(t *testing.T) {
+	for _, ok := range []string{"https://machinarchy.example", "http://localhost:8080", "http://127.0.0.1:1", "http://[::1]:1", "http://app.localhost"} {
+		if err := CheckTransport(ok, false); err != nil {
+			t.Errorf("CheckTransport(%q) = %v", ok, err)
+		}
+	}
+	err := CheckTransport("http://machinarchy.example", false)
+	if err == nil || !strings.Contains(err.Error(), "refusing to send your credentials over plain http:// to machinarchy.example") ||
+		!strings.Contains(clierr.Hint(err), "machinarchy login http://machinarchy.example --insecure-http") {
+		t.Fatalf("err = %v / %q", err, clierr.Hint(err))
+	}
+	if err := CheckTransport("http://machinarchy.example", true); err != nil {
+		t.Fatalf("an explicit opt-in must be honoured: %v", err)
 	}
 }
 
 func TestValidateToken(t *testing.T) {
-	valid := []string{"abc", "mch_pat_0123456789abcdef", "eyJhbGciOi.eyJzdWIi.sig-_"}
-	for _, token := range valid {
-		if err := ValidateToken(token); err != nil {
-			t.Errorf("ValidateToken(%q) = %v, want nil", token, err)
-		}
+	if err := ValidateToken("mch_pat_abc123"); err != nil {
+		t.Fatal(err)
 	}
-
-	invalid := []string{"", "has space", "tab\there", "line\nbreak", "carriage\rreturn", "nul\x00byte", "del\x7fbyte", strings.Repeat("a", MaxTokenBytes+1)}
-	for _, token := range invalid {
-		if err := ValidateToken(token); err == nil {
-			t.Errorf("ValidateToken(%q) = nil, want error", token)
+	for name, token := range map[string]string{"empty": "", "space": "a b", "newline": "a\nb", "tab": "a\tb", "DEL": "a\x7fb", "oversized": strings.Repeat("x", MaxTokenBytes+1)} {
+		err := ValidateToken(token)
+		if err == nil {
+			t.Errorf("%s: the token was accepted", name)
+		} else if strings.Contains(err.Error(), "a b") {
+			t.Errorf("%s: the error echoes the token", name)
 		}
 	}
 }
 
-func TestPlainHTTPTokenTransport(t *testing.T) {
-	const remote = `apiVersion: machinarchy.io/v1
-current-context: c
-clusters:
-  c:
-    server: http://api.example.test:8080
-%s
-users:
-  c:
-    token: file-token
-contexts:
-  c:
-    cluster: c
-    user: c
-`
-	for _, tc := range []struct {
-		name    string
-		cluster string // extra cluster line
-		env     map[string]string
-		args    []string
-		wantErr bool
-	}{
-		{name: "remote http refused", wantErr: true},
-		{name: "remote http with cluster opt-in", cluster: "    insecure-http: true"},
-		{name: "opt-in does not cover an overriding server", cluster: "    insecure-http: true", args: []string{"--server", "http://other.example.test"}, wantErr: true},
-		{name: "environment override to remote http refused", env: map[string]string{"MACHINARCHY_CLI_SERVER": "http://env.example.test"}, wantErr: true},
-		{name: "loopback IP over http", args: []string{"--server", "http://127.0.0.1:8080"}},
-		{name: "IPv6 loopback over http", args: []string{"--server", "http://[::1]:8080"}},
-		{name: "localhost over http", args: []string{"--server", "http://localhost:8080"}},
-		{name: "dev name under .localhost", args: []string{"--server", "http://api.localhost:8080"}},
-		{name: "https anywhere", args: []string{"--server", "https://api.example.test"}},
-		{name: "look-alike host refused", args: []string{"--server", "http://localhost.example.test"}, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			isolateEnvironment(t)
-			for key, value := range tc.env {
-				t.Setenv(key, value)
-			}
-			store, err := Load(writeConfig(t, fmt.Sprintf(remote, tc.cluster)), newFlags(t, tc.args...))
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
-			_, err = store.Resolve()
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("Resolve() error = %v, wantErr %v", err, tc.wantErr)
-			}
-			if err != nil && !strings.Contains(err.Error(), "plain http://") {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
+func TestIsLoopbackHost(t *testing.T) {
+	for host, want := range map[string]bool{"localhost": true, "LOCALHOST.": true, "app.localhost": true, "127.0.0.1": true, "127.9.9.9": true, "::1": true,
+		"10.0.0.1": false, "example.com": false, "localhost.example.com": false, "": false} {
+		if got := IsLoopbackHost(host); got != want {
+			t.Errorf("IsLoopbackHost(%q) = %v, want %v", host, got, want)
+		}
 	}
 }
 
-func TestSetClusterRequiresOptInForRemoteHTTP(t *testing.T) {
-	isolateEnvironment(t)
-	store, err := Load(filepath.Join(t.TempDir(), "config.yaml"), newFlags(t))
+func TestRequestTimeoutAndOutputSettings(t *testing.T) {
+	store := load(t, "")
+	if timeout, err := store.RequestTimeout(); err != nil || timeout != DefaultRequestTimeout {
+		t.Fatalf("default timeout = %v, %v", timeout, err)
+	}
+	if store.OutputExplicit() != "" || store.OutputFormat() != "table" {
+		t.Fatalf("output = %q / %q", store.OutputExplicit(), store.OutputFormat())
+	}
+
+	flagged := load(t, "", "-o", " JSON ", "--request-timeout", "7s", "--quiet", "--no-headers", "--no-input", "--verbose")
+	if timeout, _ := flagged.RequestTimeout(); timeout.Seconds() != 7 || flagged.OutputExplicit() != "json" || flagged.OutputFormat() != "json" ||
+		!flagged.Quiet() || !flagged.NoHeaders() || !flagged.NoInput() || !flagged.Verbose() {
+		t.Fatalf("flags were not honoured: %+v", flagged)
+	}
+
+	for _, bad := range []string{"banana", "-5s", "0s"} {
+		if _, err := load(t, "", "--request-timeout", bad).RequestTimeout(); err == nil {
+			t.Errorf("timeout %q was accepted", bad)
+		}
+	}
+
+	var nilStore *Store
+	if timeout, err := nilStore.RequestTimeout(); err != nil || timeout != DefaultRequestTimeout || nilStore.Quiet() || nilStore.OutputExplicit() != "" || nilStore.Path() != "" || nilStore.ActiveName() != "" {
+		t.Fatal("a nil store must read as defaults")
+	}
+}
+
+func TestLoadSettingsIgnoresADamagedFile(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MACHINARCHY_OUTPUT", "yaml")
+
+	store, err := LoadSettings(flagSet(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCluster("remote", "http://api.example.test", false); err == nil {
-		t.Fatal("plain http to a remote host was accepted without --insecure-http")
+	if store.OutputExplicit() != "yaml" || store.Path() != "" {
+		t.Fatalf("output = %q, path = %q", store.OutputExplicit(), store.Path())
 	}
-	if err := store.SetCluster("remote", "http://api.example.test", true); err != nil {
-		t.Fatalf("opt-in refused: %v", err)
+}
+
+func TestPaths(t *testing.T) {
+	t.Setenv("MACHINARCHY_CONFIG", "")
+	if got, err := ResolvePath("  /tmp/explicit.yaml "); err != nil || got != "/tmp/explicit.yaml" {
+		t.Fatalf("explicit = %q, %v", got, err)
 	}
-	if err := store.SetCluster("local", "http://127.0.0.1:8080", false); err != nil {
-		t.Fatalf("loopback refused: %v", err)
+	t.Setenv("MACHINARCHY_CONFIG", "/tmp/from-env.yaml")
+	if got, err := ResolvePath(""); err != nil || got != "/tmp/from-env.yaml" {
+		t.Fatalf("env = %q, %v", got, err)
+	}
+	if got, _ := ResolvePath("/tmp/flag.yaml"); got != "/tmp/flag.yaml" {
+		t.Fatalf("a flag beats the variable: %q", got)
+	}
+
+	for in, want := range map[string]string{
+		"/home/u/.machinarchy/config.yaml": "/home/u/.machinarchy/config.credentials.yaml",
+		"/tmp/cli.yml":                     "/tmp/cli.credentials.yml",
+		"/tmp/noext":                       "/tmp/noext.credentials",
+	} {
+		if got := CredentialsPath(in); got != want {
+			t.Errorf("CredentialsPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -42,9 +42,11 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 	keyFile := secretFile(t, work, "signing.key", base64.StdEncoding.EncodeToString(seed))
 
 	port := freePort(t)
+	grpcPort := freePort(t)
 	common := []string{
 		"MACHINARCHY_ENVIRONMENT=development",
 		fmt.Sprintf("MACHINARCHY_LISTEN_ADDR=127.0.0.1:%d", port),
+		fmt.Sprintf("MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR=127.0.0.1:%d", grpcPort),
 		"MACHINARCHY_DATABASE_PATH=" + filepath.Join(work, "data", "machinarchy.db"),
 		"MACHINARCHY_OPERATOR_TOKEN=" + randomText(t, 24),
 		"MACHINARCHY_ENCRYPTION_SECRET=" + randomText(t, 24),
@@ -112,9 +114,7 @@ func TestControllerSigningKeyRotation(t *testing.T) {
 	token := hostToken(t, client, hostID, hostname)
 	agent := start(t, agentBinary, []string{
 		"MACHINARCHY_ENVIRONMENT=development",
-		"MACHINARCHY_AGENT_NAME=e2e-rotation",
-		"MACHINARCHY_AGENT_NATS_URL=" + ns.URL,
-		"MACHINARCHY_AGENT_NATS_CREDENTIALS_FILE=" + ns.BootstrapCredentials(t),
+		fmt.Sprintf("MACHINARCHY_AGENT_SERVER_URL=http://127.0.0.1:%d", grpcPort),
 		"MACHINARCHY_AGENT_CONTROLLER_PUBLIC_KEY=" + strings.Join(announced.PublicKeys, ","),
 		"MACHINARCHY_AGENT_ENROLLMENT_TOKEN_FILE=" + secretFile(t, work, "agent.token", token),
 		"MACHINARCHY_AGENT_STATE_FILE=" + filepath.Join(work, "agent", "state.json"),

@@ -7,3 +7,11 @@ var (
 	Commit    = "unknown"
 	BuildTime = "unknown"
 )
+
+// API generations. The controller serves, and the CLI speaks, every generation
+// from APIMin to APIMax; raise APIMax for an additive break-free change only
+// when the CLI also learns it, and APIMin when an old shape is dropped.
+const (
+	APIMin = 1
+	APIMax = 1
+)

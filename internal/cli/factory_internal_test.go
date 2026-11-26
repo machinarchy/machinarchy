@@ -10,10 +10,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 
+	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/config"
+	"github.com/machinarchy/machinarchy/internal/cli/ui"
 )
 
 func clearEnvironment(t *testing.T) {
@@ -21,10 +25,10 @@ func clearEnvironment(t *testing.T) {
 
 	t.Setenv("MACHINARCHY_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
 	for _, name := range []string{
-		"MACHINARCHY_CLI_CONTEXT", "MACHINARCHY_CLI_ENV", "MACHINARCHY_CLI_OUTPUT",
-		"MACHINARCHY_CLI_VERBOSE", "MACHINARCHY_CLI_SERVER", "MACHINARCHY_CLI_TOKEN",
-		"MACHINARCHY_CLI_REQUEST_TIMEOUT", "MACHINARCHY_CLI_QUIET", "MACHINARCHY_CLI_NO_HEADERS",
-		"MACHINARCHY_CLI_NO_INPUT", "MACHINARCHY_CLI_YES",
+		"MACHINARCHY_CONTEXT", "MACHINARCHY_ENV", "MACHINARCHY_OUTPUT",
+		"MACHINARCHY_VERBOSE", "MACHINARCHY_SERVER", "MACHINARCHY_TOKEN",
+		"MACHINARCHY_REQUEST_TIMEOUT", "MACHINARCHY_QUIET", "MACHINARCHY_NO_HEADERS",
+		"MACHINARCHY_NO_INPUT", "MACHINARCHY_YES",
 	} {
 		t.Setenv(name, "")
 	}
@@ -40,6 +44,10 @@ func globalFlags(t *testing.T, args ...string) *pflag.FlagSet {
 	flags.Bool("no-headers", false, "")
 	flags.Bool("no-input", false, "")
 	flags.Bool("yes", false, "")
+	flags.String("confirm", "", "")
+	flags.StringSlice("confirm-env", nil, "")
+	flags.Bool("dry-run", false, "")
+	flags.Bool("plain", false, "")
 	if err := flags.Parse(args); err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
@@ -161,7 +169,7 @@ func TestRequireConfirmation(t *testing.T) {
 
 func TestEnvironmentCannotSupplyConfirmation(t *testing.T) {
 	clearEnvironment(t)
-	t.Setenv("MACHINARCHY_CLI_YES", "true")
+	t.Setenv("MACHINARCHY_YES", "true")
 
 	factory := &Factory{
 		Streams:    IOStreams{In: strings.NewReader(""), Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
@@ -172,7 +180,7 @@ func TestEnvironmentCannotSupplyConfirmation(t *testing.T) {
 	}
 
 	if factory.Yes() {
-		t.Fatal("MACHINARCHY_CLI_YES must not enable --yes")
+		t.Fatal("MACHINARCHY_YES must not enable --yes")
 	}
 	if _, err := factory.Confirm("Proceed?"); err == nil {
 		t.Fatal("Confirm succeeded without an explicit --yes")
@@ -257,18 +265,24 @@ func TestOutputFormatAndPrinterDefaults(t *testing.T) {
 	})
 }
 
-func TestLoadingWarnsAboutLooseConfigPermissions(t *testing.T) {
+// A credentials file that other users can read is refused, not tolerated: the
+// command stops and says how to fix it, without printing the token.
+func TestLooseCredentialPermissionsStopTheCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
 	clearEnvironment(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := "users:\n  me:\n    token: super-secret-token\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	credentials := config.CredentialsPath(path)
+	if err := os.WriteFile(path, []byte("version: 2\nactive: me\nservers:\n  me:\n    url: https://machinarchy.example\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
+	if err := os.WriteFile(credentials, []byte("version: 2\nservers:\n  me:\n    token:\n      kind: token\n      secret: super-secret-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(credentials, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,11 +292,12 @@ func TestLoadingWarnsAboutLooseConfigPermissions(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if !strings.Contains(errOut.String(), "Warning: ") || !strings.Contains(errOut.String(), "chmod 600") {
-		t.Fatalf("stderr = %q, want a permissions warning", errOut.String())
+	_, err := factory.NewAPIClient(context.Background())
+	if err == nil {
+		t.Fatal("a credentials file readable by other users was used")
 	}
-	if strings.Contains(errOut.String(), "super-secret-token") {
-		t.Fatal("the warning leaks the token")
+	if !strings.Contains(clierr.Hint(err), "chmod 600 "+credentials) || strings.Contains(err.Error()+clierr.Why(err)+clierr.Hint(err), "super-secret-token") {
+		t.Fatalf("err = %v, next = %q", err, clierr.Hint(err))
 	}
 }
 
@@ -320,17 +335,17 @@ func TestReportError(t *testing.T) {
 		{
 			name: "classified usage error keeps its own hint", err: clierr.Newf(clierr.ExitUsage, "custom hint", "bad value"),
 			started: true, wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Error: bad value\n", "Hint: custom hint\n"}, wantAbsent: []string{"--help"},
+			wantPresent: []string{"Error: bad value\n", "Next:  custom hint\n"}, wantAbsent: []string{"--help"},
 		},
 		{
 			name: "usage error without a hint points at help", err: clierr.Usagef("bad value"),
 			started: true, wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Error: bad value\n", "Hint: Run 'machinarchy --help'"},
+			wantPresent: []string{"Error: bad value\n", "Next:  machinarchy --help\n"},
 		},
 		{
 			name: "usage error in a subcommand points at that command's help", err: clierr.Usagef("pick one with --host"),
 			started: true, path: "machinarchy logs operation", wantCode: clierr.ExitUsage,
-			wantPresent: []string{"Hint: Run 'machinarchy logs operation --help' for its usage."}, wantAbsent: []string{"available commands"},
+			wantPresent: []string{"Next:  machinarchy logs operation --help\n"}, wantAbsent: []string{"available commands"},
 		},
 		{
 			name: "unclassified error before the command ran is a usage error", err: errors.New("unknown flag: --x"),
@@ -340,7 +355,7 @@ func TestReportError(t *testing.T) {
 		{
 			name: "unclassified error while running is a plain failure", err: errors.New("boom"),
 			started: true, wantCode: clierr.ExitFailure,
-			wantPresent: []string{"Error: boom\n"}, wantAbsent: []string{"Hint:", "--help"},
+			wantPresent: []string{"Error: boom\n"}, wantAbsent: []string{"Next:", "--help"},
 		},
 		{
 			name: "interrupt", err: context.Canceled, started: true, wantCode: clierr.ExitInterrupted,
@@ -353,7 +368,7 @@ func TestReportError(t *testing.T) {
 		{
 			name: "multi-line hints are preserved", err: clierr.Newf(clierr.ExitAuth, "line one\nline two", "denied"),
 			started: true, wantCode: clierr.ExitAuth,
-			wantPresent: []string{"Hint: line one\nline two\n"},
+			wantPresent: []string{"Next:  line one\n       line two\n"},
 		},
 		{
 			name: "percent signs in messages are not treated as formats", err: clierr.Newf(clierr.ExitFailure, "use 100%s", "%s", "50%d done"),
@@ -366,7 +381,7 @@ func TestReportError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var buffer bytes.Buffer
 
-			code := reportError(&buffer, test.err, test.started, test.path)
+			code := reportError(&buffer, test.err, test.started, test.path, presentation{})
 
 			if code != test.wantCode {
 				t.Fatalf("exit code = %d, want %d", code, test.wantCode)
@@ -385,5 +400,163 @@ func TestReportError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConfirmTyped(t *testing.T) {
+	t.Run("--confirm with the right name", func(t *testing.T) {
+		factory, _ := newFactory(t, "", false, "--confirm", "ci")
+		if err := factory.ConfirmTyped("Revoke ci?", "ci"); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("--confirm with another name", func(t *testing.T) {
+		factory, _ := newFactory(t, "", false, "--confirm", "other")
+		err := factory.ConfirmTyped("Revoke ci?", "ci")
+		if err == nil || !strings.Contains(err.Error(), `--confirm is "other", but this is about "ci"`) || clierr.Hint(err) != "--confirm ci" {
+			t.Fatalf("err = %v / %q", err, clierr.Hint(err))
+		}
+	})
+
+	t.Run("--yes is not enough, with or without a terminal", func(t *testing.T) {
+		for _, terminal := range []bool{false, true} {
+			args := []string{"--yes"}
+			if terminal {
+				args = append(args, "--no-input")
+			}
+			factory, _ := newFactory(t, "ci\n", terminal, args...)
+			err := factory.ConfirmTyped("Revoke ci?", "ci")
+			if err == nil || !strings.Contains(err.Error(), "this needs confirmation, and --yes is not enough here") || clierr.Hint(err) != "--confirm ci" {
+				t.Fatalf("terminal %v: err = %v", terminal, err)
+			}
+		}
+	})
+
+	t.Run("typing the name on a terminal", func(t *testing.T) {
+		factory, errOut := newFactory(t, "ci\n", true)
+		if err := factory.ConfirmTyped("Revoke ci?", "ci"); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !strings.Contains(errOut.String(), "Revoke ci?\nType \"ci\" to confirm: ") {
+			t.Fatalf("prompt = %q", errOut.String())
+		}
+	})
+
+	t.Run("a wrong answer, and the end of input, abort", func(t *testing.T) {
+		for _, input := range []string{"nope\n", ""} {
+			factory, _ := newFactory(t, input, true)
+			err := factory.ConfirmTyped("Revoke ci?", "ci")
+			if err == nil || !strings.Contains(err.Error(), "aborted; nothing was changed") {
+				t.Fatalf("input %q: err = %v", input, err)
+			}
+		}
+	})
+}
+
+func TestReadSecretAndPrompter(t *testing.T) {
+	t.Run("nothing is asked without a terminal", func(t *testing.T) {
+		factory, _ := newFactory(t, "x\n", false)
+		if _, err := factory.ReadSecret("Password: "); !errors.Is(err, ErrNoTerminal) {
+			t.Fatalf("ReadSecret err = %v", err)
+		}
+		if factory.Prompter().Interactive {
+			t.Fatal("the prompter must not be interactive")
+		}
+	})
+
+	t.Run("--no-input stops the prompts on a terminal", func(t *testing.T) {
+		factory, _ := newFactory(t, "x\n", true, "--no-input")
+		if _, err := factory.ReadSecret("Password: "); !errors.Is(err, ErrNoTerminal) {
+			t.Fatalf("ReadSecret err = %v", err)
+		}
+		if factory.Prompter().Interactive {
+			t.Fatal("the prompter must not be interactive")
+		}
+	})
+
+	t.Run("a terminal gets a prompter that shares one reader", func(t *testing.T) {
+		factory, _ := newFactory(t, "first\nsecond\n", true)
+		prompter := factory.Prompter()
+		if !prompter.Interactive || prompter.ReadSecret == nil {
+			t.Fatalf("prompter = %+v", prompter)
+		}
+		one, err := prompter.Line("One", "")
+		two, err2 := factory.Prompter().Line("Two", "")
+		if err != nil || err2 != nil || one != "first" || two != "second" {
+			t.Fatalf("answers = %q, %q (%v, %v): a second prompter must not lose buffered input", one, two, err, err2)
+		}
+	})
+
+	t.Run("an injected hidden reader is used on a terminal", func(t *testing.T) {
+		factory, _ := newFactory(t, "", true)
+		factory.readSecret = func(prompt string) (string, error) { return "typed:" + prompt, nil }
+		if got, err := factory.ReadSecret("Password: "); err != nil || got != "typed:Password: " {
+			t.Fatalf("ReadSecret = %q, %v", got, err)
+		}
+	})
+
+	t.Run("a terminal that is not a file cannot hide typing", func(t *testing.T) {
+		factory, _ := newFactory(t, "", true)
+		if _, err := factory.ReadSecret("Password: "); !errors.Is(err, ErrNoTerminal) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestClockHostnameAndCredentialsAccessors(t *testing.T) {
+	factory, _ := newFactory(t, "", false)
+
+	before := time.Now()
+	if got := factory.Now(); got.Before(before) {
+		t.Fatalf("Now = %v", got)
+	}
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	factory.now = func() time.Time { return fixed }
+	if !factory.Now().Equal(fixed) {
+		t.Fatal("the injected clock was ignored")
+	}
+
+	if name, err := factory.Hostname(); err != nil || name == "" {
+		t.Fatalf("Hostname = %q, %v", name, err)
+	}
+	factory.hostname = func() (string, error) { return "box", nil }
+	if name, _ := factory.Hostname(); name != "box" {
+		t.Fatalf("Hostname = %q", name)
+	}
+
+	if factory.Credentials() != nil {
+		t.Fatal("commands that skip the config have no credential store")
+	}
+	var nilFactory *Factory
+	if nilFactory.Style() != (ui.Style{}) {
+		t.Fatal("a nil factory has the zero style")
+	}
+}
+
+func TestNewManagementClientNeedsAManagementClient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("version: 2\nactive: lab\nservers:\n  lab:\n    url: https://machinarchy.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.CredentialsPath(path), []byte("version: 2\nservers:\n  lab:\n    session:\n      kind: session\n      secret: s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearEnvironment(t)
+
+	factory := &Factory{
+		Streams:       IOStreams{In: strings.NewReader(""), Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+		ClientBuilder: func(config.Target) (api.Client, error) { return nil, nil },
+	}
+	if err := factory.LoadConfig(path, globalFlags(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.NewManagementClient(context.Background()); err == nil {
+		t.Fatal("a nil client was accepted")
+	}
+
+	factory.ClientBuilder = func(config.Target) (api.Client, error) { return struct{ api.Client }{}, nil }
+	if _, err := factory.NewManagementClient(context.Background()); err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Fatalf("err = %v", err)
 	}
 }

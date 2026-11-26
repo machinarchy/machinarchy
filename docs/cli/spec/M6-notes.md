@@ -1,0 +1,95 @@
+# M6 notes
+
+## 6.3 Controller version endpoint: PROPOSAL for the owner (not implemented)
+
+Checked 2026-11-26: the controller has no version endpoint and no `X-Machinarchy-Version` header (`rg` over `internal/` and `cmd/` found none); `GET /healthz/ready` reports the process only (`06-api-matrix.md`).
+
+Proposal (C-11): `GET /api/v1/version`, public or any role, returning `{"version":"1.4.0","apiMin":1,"apiMax":2}` from `internal/buildinfo` plus a constant for the API generation; optionally the same value as `X-Machinarchy-Version` on every response. The CLI would read it once per command on the first failure to decode (not on every call), compare against its own range, and print `This server speaks API version X; this CLI supports Y` with the update hint (O-20, exit 4). Cost: one handler, one constant, one test; no data model change. Needs owner approval before any controller change.
+
+Until then: decode failures split into "wrong shape" (update the CLI) and "not JSON" (check the address); `commands.md` "Supported servers" says same release. K-04 as written (old commands keep working) is not implemented by project rule (no legacy); see M4-notes.
+
+## 6.6 Hardening
+
+**Fuzz targets (CLI).** Sanitiser `FuzzClean`, `FuzzStream`; target parser `FuzzParse`; normaliser `FuzzNormalise`; v1/v2 config reader `FuzzReadDocument` (`config/fuzz_test.go`); API error decoder `FuzzNewError` and success decoder `FuzzDecodeResponse` (`api/fuzz_test.go`). Each ran 10-20 s locally with no finding. Wired into `make fuzz` via `FUZZ_TARGETS` in `mk/checks.mk` (owner approved).
+
+**Scans.** `make vuln` (govulncheck with the repo allowlist): no unaccepted vulnerabilities in called code. gosec runs inside golangci-lint (0 issues).
+
+**Review against `04-security.md` (evidence = test names under `internal/cli`).**
+
+| Threat | Evidence |
+|---|---|
+| T1 password | `TestLoginWithPasswordFromStdin`, `TestWrongPassword`, `TestLoginDoesNotFollowRedirects` |
+| T2 token leak | `TestTokenIsNeverInTheProcessList`, `TestNoCommandErrorLeaksTheToken`, `TestNoSecretIsEverVisible`, `TestSecretsAreNeverFlags`, `TestTokensCreatePrintsTheTokenOnlyOnce` |
+| T3 at rest | `TestLaxPermissionsAreRefused`, `TestLooseCredentialPermissionsStopTheCommand`, `TestCredentialNeverPrintsItsSecret`, `FuzzReadDocument`. Plaintext file remains (keychain Q5 open) |
+| T4 host key | `TestHostsTrustNeverFollowsYes`, `TestHostsTrustTypedPrefix`, `TestHostsTrustFingerprint`, `TestHostsTrustReplace`. Limit stays: fingerprint comes from the controller |
+| T5 argv | as T2; `run` text warning is help only |
+| T6 TLS/HTTP | `TestHTTPClientTrustsAConfiguredCA`, `TestEndpointCAFileErrors`, `TestRedirectsAreNotFollowed`, `TestLoginRemembersInsecureHTTPPerServer`, `TestIsLoopbackHost` |
+| T7 impersonation | `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress`, `TestSavedCredentialsNeverGoToAnotherServer`. Env/flag server-differs warning not re-verified |
+| T8 escapes | `TestErrorTextIsSanitised`, `TestServerMessagesAreSanitised`, `TestRunOutputIsSanitised`, `TestHostNamesInTheRenderedOutputAreSanitised`, `FuzzClean`, `FuzzStream`, `FuzzNewError` |
+| T9 expired/forbidden | `TestExpiredAndRevokedCredentials`, `TestOwnerOnlyActionWithAnOperatorToken` |
+| T10 malformed responses | `FuzzDecodeResponse`, `FuzzNewError`, client size/redirect tests; install blob is built by the CLI (`TestHostsEnroll*`) |
+| T11/T12 production | `TestHostsInProtectedEnvNeedTheEnvName`, `TestRunCancelInAProtectedEnv`, `TestRunRetryInAProtectedEnv`. Protected is local-only (C-02) |
+| T13 wrong place | `TestSavedCredentialsNeverGoToAnotherServer`, `TestOwnerCommandsUseTheSessionEvenWithATokenSaved` |
+| T14 CI | `TestHostsTrustNeverFollowsYes`, CI tests from 6.2 |
+| T15 binary | README checksum/attestation steps (6.4); no self-update. Protocol pin open (no `protocol/v0.1.0`) |
+| T16 completion | `TestCompletionNeverFailsLoudlyOrOffersUnsafeNames`; 800 ms budget and no-prompt rule not re-measured |
+
+Not covered by evidence: pty behaviour, Windows permission warning (skipped on Windows), real controller TLS.
+
+**Removal stubs (R+1).** Not prepared: the no-legacy rule removed old commands outright, so there is no R/R+1 window and K-13 text is not implemented; old commands fail as unknown (`TestOldTrustHostCommandIsGone`).
+
+## 6.7 Full acceptance run (2026-11-26)
+
+**Run (all pass):** gofmt (no files), `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race -count=1 ./...`, `make smoke` (end to end against the monolith), `make vuln`.
+
+**ID coverage.** 179 test IDs are defined in `09-acceptance-tests.md`. A search of `internal/cli`, `cmd` and `scripts` finds 109 referenced by ID in test code. 70 are **not referenced by ID**; some are covered under other test names (for example S-02/S-04 by the T2/T3 tests listed in 6.6), but that mapping was not verified per ID, so they are reported as **unmapped**, not as passing:
+
+A-01 A-02 A-03 B-01 B-02 B-04 B-06 B-07 B-08 B-11 B-13 B-18 B-21 C-02 C-03 C-04 C-06 C-10 C-12 G-16 G-18 G-20 H-07..H-12 K-01..K-03 K-05..K-09 K-11..K-15 O-01 O-02 O-15 O-20 O-32..O-38 S-02 S-04 S-05 S-10 S-11 S-12 S-15 S-16 S-17 S-18 S-19 S-20 S-21 S-29 S-31 U-09 U-10 U-12.
+
+**Release-blocking set.** G-04, G-05 and K-04 are referenced by tests that pass (K-04 only as the wrong-shape/not-JSON message; the "old commands keep working" part is not implemented by the no-legacy rule). **Unmapped S-series IDs above must be mapped or written before release.** A-01 (five-minute test) is **not run**: it needs a clean machine and a lab server (step 6.8).
+
+**Not run:** Postgres store tests, pty/`script` layers (P: O-15 second Ctrl+C, redrawn progress, hidden-input prompts), SSH lab (L), real agent and NATS (A-02, C-07/Q1), Windows (Q6), CI nightly layers.
+
+**6.7 follow-up: S-series mapping (by reading the tests; IDs are not in the test names).**
+
+| ID | Covered by | Note |
+|---|---|---|
+| S-02 | `TestLoginWithAPrivateCertificate` (login_test.go: CA saved to `ca/lab.pem`) | later-commands-only-for-that-server not separately asserted |
+| S-04 | `TestLoginRefusesPlainHTTPToAnotherHost`, `TestLoginRemembersInsecureHTTPPerServer` | home-screen warning not asserted |
+| S-05, S-18 | `TestNoSecretIsEverVisible` (login `-v`, config show, whoami, tokens, hosts, errors) | `access show -o json` not in its list |
+| S-10, S-11, S-12 | `TestHostsTrustNeverFollowsYes` (`--all-pending --no-input`), `TestHostsTrustFingerprint` (unseen/malformed/control bytes; observed key accepted) | |
+| S-15 | `TestRunOutputIsSanitised` (`--raw` to a pipe passes bytes) | |
+| S-16 | **not tested**: needs a pty; refusal exists in `runshow.go` | layer P, not run |
+| S-17 | new `TestRunJSONOutputIsEscaped` | |
+| S-19, S-20, S-21 | `TestHostsRemoveIsInventoryOnlyAndGuarded` (`--yes` alone refused, `--confirm` accepted), `TestConfirmTyped` | `y` answer and `--no-input` wording not separately asserted |
+| S-29 | `TestOversizedResponses`, `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress` | |
+| S-31 | not applicable: the CLI does not consume server-supplied install info (C-07 absent); the blob is built from CLI-validated fields | revisit when C-07/gateway transport lands |
+
+Still unmapped outside S: A-01..03, B-*, C-*, G-16/18/20, H-07..12, K-*, O-*, U-09/10/12 (see list above); unmapped is not the same as untested.
+
+## 6.9 Scorecard re-measured (2026-11-26)
+
+Method: `bin/machinarchy` built from this branch and a clean `HOME`, against kubectl v1.27.1 (same client as the spec's table; `kubectl version --client`). Evidence is command output run today unless a test name is given. "Unmeasured" means no evidence exists.
+
+| Criterion (`07-brand.md` s8) | Target | Measured now | Result |
+|---|---|---|---|
+| Top-level commands in `--help` | 10 | **14** listed (hosts, login, run, access, envs, tokens, logout, switch, whoami, get, help, runtime-config, secret, version; `completion` is hidden). kubectl: 42 | **Target missed** (14 vs 10); still far fewer than kubectl |
+| Output with no server reachable | one four-part error with next step | Signed out: `Error: you are not signed in to any server` + `Next: machinarchy login YOUR-SERVER-URL`, exit 3. Credential, server down: `Error: list hosts: cannot reach the API server at http://localhost:1: ... connection refused` + `Next:` line, exit 4. Two parts (error, next), no separate `Why:`. kubectl: five repeated `memcache.go` lines plus an error | **Clearer than kubectl; "four-part" not met** for this error. F11 found and fixed: the `Next:` named the removed `config get-contexts` |
+| Typo help | corrected command at any depth | `hostz` -> `Why: "hosts" is the closest command.` `Next: machinarchy hosts` (top level). `hosts lst` -> only `Next: machinarchy hosts --help`, **no suggestion** at depth 2. kubectl: `Did you mean this? set get` | **Parity at top level; target missed at depth** |
+| Missing argument | every error ends with a runnable command | `hosts trust` -> `Error: give a host NAME, or --all-pending` / `Next: machinarchy hosts trust --help`; `run` signed out -> `Next: machinarchy login ...` | Met for the cases tried (2); not checked for every error |
+| First-time sign-in | `login`, device token, expiry shown | `login` is in `--help`; flow run in `M6-usability.md` (scripted and owner sessions) | Met; expiry text seen in the scripted run only |
+| Concepts a beginner meets | one: server | Help shows `switch`, `whoami`, `-n/--env`. A beginner also meets **environments** | **Two concepts (server, environment)**, spec said one |
+| Destructive command safety | typed confirmation, protected envs, `--dry-run` | `envs remove --help`: typed name, `--yes` not enough, `--confirm-env` for protected; global `--dry-run` flag exists (`root.go`). Tests: `TestHostsRemoveIsInventoryOnlyAndGuarded`, `TestHostsInProtectedEnvNeedTheEnvName`, `TestHostsTrustNeverFollowsYes`. kubectl help shows no confirmation | Met |
+| Multi-target execution | preview-bound, grouped result, exit codes | Owner session: preview, `Run it? [y/N]`, `1 of 1 hosts succeeded`. Grouping of identical output and exit 8/9 covered by run tests in the full suite (6.7/today); **not run live on several hosts** | Partly measured (1 host live) |
+| Output formats | table, json, yaml | `-o xml` -> `unsupported output format "xml"; choose table, json, or yaml` | Met; **kubectl wins** (more formats) |
+| Shell completion | bash, zsh, fish, dynamic names | `completion` offers bash, fish, powershell, zsh; dynamic names `TestCompletionOffersNamesFromTheServer`, `TestCompletionNeverFailsLoudlyOrOffersUnsafeNames`. 800 ms budget **not re-measured** (`--help` takes 0.02 s) | Met, budget unmeasured |
+| Extensibility | none | kubectl lists plugin, apply, diff, explain, wait, auth, debug, rollout, top (run today) | **kubectl wins** (unchanged) |
+| Watching | `run ID --follow` only | `run --help` lists `--follow` | As specified; kubectl wins on breadth |
+| Safety defaults for execution | preview, env scope, typed confirm | Preview and confirm seen in the owner session. The run header showed `[localhost-8081 · none]` / `Hosts  no env 1`: a run went ahead with **no environment selected** (F9) | Partly met; F9 open |
+| Time to first managed thing | five-minute test A-01 | Owner session reached the end state; **time not recorded**; no fresh-user session | **Unmeasured** |
+
+**Verification run today (all pass):** gofmt (no files), `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race -count=1 ./...`, `make smoke`.
+
+**Not run:** Postgres store tests, pty layers, the SSH lab through automation, real agent/NATS, Windows, kubectl behaviour on newer versions.
+
+**Findings carried to Phase 7:** top-level count 14 vs target 10; typo suggestion missing at depth 2; unreachable error has no `Why:`; two concepts; F9 (`no env`); A-01 unmeasured. The spec's target column was **not** amended; owner decides whether to change the targets or the CLI.

@@ -1,0 +1,65 @@
+{
+  "total": 14,
+  "exit": 0,
+  "counts": {
+    "succeeded": 14,
+    "failed": 0,
+    "timedOut": 0,
+    "unknown": 0,
+    "cancelled": 0,
+    "running": 0,
+    "pending": 0
+  },
+  "drift": {
+    "kind": "dominant",
+    "deviant": 3,
+    "majority": 11,
+    "groups": 3
+  },
+  "classes": [
+    {
+      "class": "succeeded",
+      "hosts": 14,
+      "groups": [
+        {
+          "hosts": [
+            "web-01",
+            "web-02",
+            "web-04",
+            "web-05",
+            "web-06",
+            "web-07",
+            "web-08",
+            "web-09",
+            "web-11",
+            "web-12",
+            "web-14"
+          ],
+          "count": 11,
+          "exitCode": 0,
+          "stdout": "nginx version: nginx/1.24.0",
+          "differs": false
+        },
+        {
+          "hosts": [
+            "web-10",
+            "web-13"
+          ],
+          "count": 2,
+          "exitCode": 0,
+          "stdout": "nginx version: nginx/1.22.1",
+          "differs": true
+        },
+        {
+          "hosts": [
+            "web-03"
+          ],
+          "count": 1,
+          "exitCode": 0,
+          "stdout": "nginx version: nginx/1.24.0 (Debian)",
+          "differs": true
+        }
+      ]
+    }
+  ]
+}

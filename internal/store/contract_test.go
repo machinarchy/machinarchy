@@ -356,7 +356,7 @@ func testEnvironments(t *testing.T, f *fixture) {
 		t.Fatalf("the same name in another workspace must be allowed: %v", err)
 	}
 
-	if list, err := f.stores.Environments.ListEnvironments(ctx, 1); err != nil || len(list) != 1 || list[0].Description != "prod" {
+	if list, err := f.stores.Environments.ListEnvironments(ctx, 1); err != nil || len(list) != 2 || list[1].Description != "prod" || list[0].Name != domain.DefaultEnvironmentName {
 		t.Errorf("workspace 1 environments = %+v, %v", list, err)
 	}
 	if _, err := f.stores.Environments.GetEnvironmentByID(ctx, other, production.ID); !errors.Is(err, domain.ErrEnvironmentNotFound) {
@@ -392,6 +392,27 @@ func testEnvironments(t *testing.T, f *fixture) {
 	staging := &domain.Environment{WorkspaceID: 1, Name: "staging"}
 	if err := f.stores.Environments.CreateEnvironment(ctx, staging); err != nil {
 		t.Fatal(err)
+	}
+
+	// Protection is stored, and each change of it is audited with the new value.
+	staging.Protected = true
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil {
+		t.Fatalf("protect: %v", err)
+	}
+	if got, err := f.stores.Environments.GetEnvironmentByID(ctx, 1, staging.ID); err != nil || !got.Protected {
+		t.Errorf("protected environment = %+v, %v", got, err)
+	}
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil { // no change, no event
+		t.Fatal(err)
+	}
+	staging.Protected = false
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil {
+		t.Fatalf("unprotect: %v", err)
+	}
+	events, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditEnvironmentProtection})
+	if err != nil || len(events) != 2 || events[0].Details["protected"] != "false" || events[1].Details["protected"] != "true" ||
+		events[0].TargetID != fmt.Sprint(staging.ID) {
+		t.Errorf("protection audit events = %+v, %v", events, err)
 	}
 	staging.Name = "production"
 	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); !errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
@@ -491,8 +512,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 1 {
-		t.Fatalf("applied migrations = %d, want the single baseline", before)
+	if before != 3 {
+		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

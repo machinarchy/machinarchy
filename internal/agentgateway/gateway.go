@@ -13,17 +13,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
+	"github.com/machinarchy/machinarchy/internal/agentgateway/bus"
 )
 
-// Config configures the gateway. NATSOptions carries authentication and TLS.
+// Config configures the gateway.
 type Config struct {
-	NATSURL     string
-	NATSOptions []nats.Option
+	// Bus is the controller-internal command and result bus (ADR-059).
+	Bus bus.Bus
 	// Signer signs everything the gateway sends: a local Ed25519 key or a
 	// key held by a KMS provider (Phase 16 / K-phases). Agents pin its public
 	// key.
@@ -48,11 +47,10 @@ const (
 	DefaultLeaseTTL        = time.Minute
 	DefaultHeartbeat       = 15 * time.Second
 	DefaultCommandLifetime = 5 * time.Minute
-	streamDuplicateWindow  = 15 * time.Minute
 )
 
 // ErrUnavailable reports that the gateway is not connected or not running.
-var ErrUnavailable = errors.New("agent gateway is not available")
+var ErrUnavailable = bus.ErrUnavailable
 
 // Gateway serves registration, lease renewal and results, and sends commands.
 type Gateway struct {
@@ -61,8 +59,7 @@ type Gateway struct {
 	logger  *slog.Logger
 	metrics *gatewayMetrics
 
-	js        jetstream.JetStream
-	connected atomic.Bool
+	bus bus.Bus
 
 	results atomic.Pointer[ResultHandler]
 }
@@ -99,8 +96,8 @@ func (g *Gateway) signer() crypto.Signer {
 
 // New validates cfg and creates a Gateway; Start connects it.
 func New(store Store, cfg Config) (*Gateway, error) {
-	if store == nil || cfg.NATSURL == "" || cfg.Signer == nil {
-		return nil, errors.New("agent gateway requires a store, a NATS URL and an Ed25519 signer")
+	if store == nil || cfg.Bus == nil || cfg.Signer == nil {
+		return nil, errors.New("agent gateway requires a store, a bus and an Ed25519 signer")
 	}
 	if public, ok := cfg.Signer.Public().(ed25519.PublicKey); !ok || len(public) != ed25519.PublicKeySize {
 		return nil, errors.New("the agent gateway signer must hold an Ed25519 key")
@@ -134,7 +131,7 @@ func New(store Store, cfg Config) (*Gateway, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	g := &Gateway{cfg: cfg, store: store, logger: cfg.Logger.With("component", "agent-gateway"),
+	g := &Gateway{cfg: cfg, store: store, bus: cfg.Bus, logger: cfg.Logger.With("component", "agent-gateway"),
 		metrics: newMetrics(cfg.Registerer)}
 	return g, nil
 }
@@ -163,94 +160,31 @@ func newMetrics(registerer prometheus.Registerer) *gatewayMetrics {
 	return m
 }
 
-// Start connects to NATS, provisions the command stream and serves until ctx
-// ends; it then drains the connection.
+// Start serves registration, renewal and results over the bus until ctx
+// ends.
 func (g *Gateway) Start(ctx context.Context) error {
-	options := append([]nats.Option{nats.Name("machinarchy-agent-gateway"), nats.Timeout(g.cfg.ConnectTimeout),
-		nats.MaxReconnects(-1),
-		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			g.connected.Store(false)
-			g.logger.Warn("agent gateway disconnected from NATS", "error", err)
-		}),
-		nats.ReconnectHandler(func(*nats.Conn) {
-			g.connected.Store(true)
-			g.logger.Info("agent gateway reconnected to NATS")
-		}),
-		// Keep replies to the controller (JetStream API answers included) out
-		// of the _INBOX namespace that enrolling agents may read.
-		nats.CustomInboxPrefix(agentv1.ControllerInboxPrefix)}, g.cfg.NATSOptions...)
-	nc, err := nats.Connect(g.cfg.NATSURL, options...)
-	if err != nil {
-		return fmt.Errorf("connect agent gateway to NATS: %w", err)
-	}
-	if g.js, err = jetstream.New(nc); err != nil {
-		nc.Close()
-		return fmt.Errorf("open JetStream: %w", err)
-	}
-	setupCtx, cancel := context.WithTimeout(ctx, g.cfg.ConnectTimeout)
-	_, err = g.js.CreateOrUpdateStream(setupCtx, jetstream.StreamConfig{
-		Name: agentv1.CommandStream, Subjects: []string{agentv1.SubjectAllCommands}, Storage: jetstream.FileStorage,
-		MaxAge: 24 * time.Hour, Duplicates: streamDuplicateWindow,
-	})
-	cancel()
-	if err != nil {
-		nc.Close()
-		return fmt.Errorf("provision agent command stream: %w", err)
-	}
-	var subs []*nats.Subscription
-	for subject, handler := range map[string]nats.MsgHandler{
-		agentv1.SubjectRegister:   g.onRegister,
-		agentv1.SubjectLeaseRenew: g.onRenew,
-		agentv1.SubjectAllResults: g.onResult,
-	} {
-		sub, err := nc.QueueSubscribe(subject, "machinarchy-agent-gateway", handler)
-		if err != nil {
-			nc.Close()
-			return fmt.Errorf("subscribe %s: %w", subject, err)
-		}
-		subs = append(subs, sub)
-	}
-	if err := nc.Flush(); err != nil {
-		nc.Close()
-		return fmt.Errorf("flush agent gateway subscriptions: %w", err)
-	}
-	g.connected.Store(true)
-	g.logger.Info("agent gateway serving", "nats_url", nc.ConnectedUrlRedacted())
-
-	<-ctx.Done()
-	g.connected.Store(false)
-	for _, sub := range subs {
-		if err := sub.Unsubscribe(); err != nil {
-			g.logger.Debug("unsubscribe agent gateway subject", "subject", sub.Subject, "error", err)
-		}
-	}
-	if err := nc.Drain(); err != nil {
-		g.logger.Warn("drain agent gateway connection", "error", err)
-		nc.Close()
-	}
-	return nil
+	return g.bus.Serve(ctx, bus.Handlers{Register: g.handleRegister, Renew: g.handleRenew, Result: g.handleResult})
 }
 
 // ReadinessName names the gateway's readiness check.
 func (g *Gateway) ReadinessName() string { return "agent-gateway" }
 
-// CheckReadiness reports whether the gateway is connected to NATS.
+// CheckReadiness reports whether the bus is serving.
 func (g *Gateway) CheckReadiness(context.Context) error {
-	if !g.connected.Load() {
+	if !g.bus.Ready() {
 		return ErrUnavailable
 	}
 	return nil
 }
 
-func (g *Gateway) reply(msg *nats.Msg, kind agentv1.Kind, body agentv1.Body) {
+// seal signs body for an agent; nil means the message could not be sealed.
+func (g *Gateway) seal(kind agentv1.Kind, body agentv1.Body) []byte {
 	payload, err := agentv1.SealWith(g.signer(), kind, body)
 	if err != nil {
 		g.logger.Error("seal agent reply", "kind", kind, "error", err)
-		return
+		return nil
 	}
-	if err := msg.Respond(payload); err != nil {
-		g.logger.Warn("send agent reply", "kind", kind, "error", err)
-	}
+	return payload
 }
 
 func (g *Gateway) newLease(now time.Time) (*agentv1.Lease, error) {
@@ -269,11 +203,11 @@ func randomID(prefix string) (string, error) {
 	return prefix + hex.EncodeToString(raw), nil
 }
 
-func (g *Gateway) onRegister(msg *nats.Msg) {
-	request, err := agentv1.OpenRegisterRequest(msg.Data)
+func (g *Gateway) handleRegister(_ context.Context, data []byte) []byte {
+	request, err := agentv1.OpenRegisterRequest(data)
 	if err != nil {
 		g.metrics.registrations.WithLabelValues("invalid").Inc()
-		return // an unauthenticated message gets no answer
+		return nil // an unauthenticated message gets no answer
 	}
 	response := &agentv1.RegisterResponse{ProtocolVersion: agentv1.ProtocolVersion, RequestID: request.RequestID}
 	// Per-host tokens are checked and consumed by the store, atomically with
@@ -307,33 +241,30 @@ func (g *Gateway) onRegister(msg *nats.Msg) {
 	}
 	// Both refusals look the same to the agent, so a client cannot tell a
 	// bad token from a revoked identity; the log and metric tell them apart.
-	refuse := func(outcome, message string) {
+	refuse := func(outcome, message string) []byte {
 		g.metrics.registrations.WithLabelValues(outcome).Inc()
 		g.logger.Warn(message, "hostname", request.Hostname)
 		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorEnrollmentRejected}
-		g.reply(msg, agentv1.KindRegisterResponse, response)
+		return g.seal(agentv1.KindRegisterResponse, response)
 	}
 	if errors.Is(err, ErrEnrollmentRejected) {
-		refuse("rejected", "agent enrollment rejected")
-		return
+		return refuse("rejected", "agent enrollment rejected")
 	}
 	if errors.Is(err, ErrAgentRevoked) {
-		refuse("revoked", "revoked agent tried to enrol again")
-		return
+		return refuse("revoked", "revoked agent tried to enrol again")
 	}
 	if err != nil {
 		g.metrics.registrations.WithLabelValues("error").Inc()
 		g.logger.Error("agent registration failed", "hostname", request.Hostname, "error", err)
 		response.AgentID, response.HostID, response.NATSUserJWT = "", "", ""
 		response.Error = &agentv1.Error{Code: agentv1.ErrorUnavailable, Retryable: true}
-		g.reply(msg, agentv1.KindRegisterResponse, response)
-		return
+		return g.seal(agentv1.KindRegisterResponse, response)
 	}
 	response.Lease = lease
 	g.metrics.registrations.WithLabelValues("registered").Inc()
 	g.logger.Info("agent registered", "agent_id", response.AgentID, "hostname", request.Hostname, "version", request.AgentVersion)
-	g.reply(msg, agentv1.KindRegisterResponse, response)
+	return g.seal(agentv1.KindRegisterResponse, response)
 }
 
 // natsCredential returns the agent's NATS user JWT, or "" when the gateway
@@ -345,23 +276,11 @@ func (g *Gateway) natsCredential(agentKey ed25519.PublicKey, agentID string, now
 	return g.cfg.NATSIssuer.mint(agentKey, agentID, now)
 }
 
-// provision creates the agent's durable pull consumer (M-6).
+// provision creates the agent's durable command queue (M-6).
 func (g *Gateway) provision(agentID string) error {
-	subject, err := agentv1.CommandSubject(agentID)
-	if err != nil {
-		return err
-	}
-	name, err := agentv1.CommandConsumer(agentID)
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), g.cfg.ConnectTimeout)
 	defer cancel()
-	_, err = g.js.CreateOrUpdateConsumer(ctx, agentv1.CommandStream, jetstream.ConsumerConfig{
-		Durable: name, FilterSubject: subject, AckPolicy: jetstream.AckExplicitPolicy,
-		AckWait: 30 * time.Second, MaxDeliver: 20, DeliverPolicy: jetstream.DeliverAllPolicy,
-	})
-	return err
+	return g.bus.EnsureAgent(ctx, agentID)
 }
 
 // keyFor returns a live agent's public key for signature checks.
@@ -373,7 +292,7 @@ func (g *Gateway) keyFor(agentID string) (ed25519.PublicKey, bool) {
 	return agent.PublicKey, true
 }
 
-func (g *Gateway) onRenew(msg *nats.Msg) {
+func (g *Gateway) handleRenew(_ context.Context, data []byte) []byte {
 	var request agentv1.RenewRequest
 	var agentKey ed25519.PublicKey
 	keyFor := func(agentID string) (ed25519.PublicKey, bool) {
@@ -381,9 +300,9 @@ func (g *Gateway) onRenew(msg *nats.Msg) {
 		agentKey = key
 		return key, ok
 	}
-	if err := agentv1.OpenFromAgent(agentv1.KindRenewRequest, msg.Data, agentv1.MaxControlMessageBytes, keyFor, &request); err != nil {
+	if err := agentv1.OpenFromAgent(agentv1.KindRenewRequest, data, agentv1.MaxControlMessageBytes, keyFor, &request); err != nil {
 		g.metrics.renewals.WithLabelValues("invalid").Inc()
-		return
+		return nil
 	}
 	response := &agentv1.RenewResponse{ProtocolVersion: agentv1.ProtocolVersion, RequestID: request.RequestID, AgentID: request.AgentID}
 	now := time.Now().UTC()
@@ -412,7 +331,7 @@ func (g *Gateway) onRenew(msg *nats.Msg) {
 		response.Error = &agentv1.Error{Code: agentv1.ErrorUnavailable, Retryable: true}
 		g.metrics.renewals.WithLabelValues("error").Inc()
 	}
-	g.reply(msg, agentv1.KindRenewResponse, response)
+	return g.seal(agentv1.KindRenewResponse, response)
 }
 
 // keyForRenewal also accepts revoked agents, so they learn they are revoked
@@ -425,14 +344,18 @@ func (g *Gateway) keyForRenewal(agentID string) (ed25519.PublicKey, bool) {
 	return agent.PublicKey, true
 }
 
-func (g *Gateway) onResult(msg *nats.Msg) {
+func (g *Gateway) handleResult(_ context.Context, subjectAgentID string, data []byte) {
+	g.processResult(subjectAgentID, data)
+}
+
+func (g *Gateway) processResult(subjectAgentID string, data []byte) {
 	var result agentv1.Result
-	if err := agentv1.OpenFromAgent(agentv1.KindResult, msg.Data, agentv1.MaxResultMessageBytes, g.keyFor, &result); err != nil {
+	if err := agentv1.OpenFromAgent(agentv1.KindResult, data, agentv1.MaxResultMessageBytes, g.keyFor, &result); err != nil {
 		g.metrics.results.WithLabelValues("invalid").Inc()
 		return
 	}
-	// The subject must match the signer, so one agent cannot report for another.
-	if expected, err := agentv1.ResultSubject(result.AgentID); err != nil || msg.Subject != expected {
+	// The transport-authenticated agent must match the signer, so one agent cannot report for another.
+	if subjectAgentID != result.AgentID {
 		g.metrics.results.WithLabelValues("invalid").Inc()
 		return
 	}
@@ -457,7 +380,7 @@ func (g *Gateway) onResult(msg *nats.Msg) {
 }
 
 func (g *Gateway) send(ctx context.Context, agentID string, cmd agentv1.Command) error {
-	if !g.connected.Load() || g.js == nil {
+	if !g.bus.Ready() {
 		return ErrUnavailable
 	}
 	now := time.Now().UTC()
@@ -479,7 +402,7 @@ func (g *Gateway) CommandLifetime() time.Duration { return g.cfg.CommandLifetime
 // JetStream stored it; publishing the same command again within the
 // duplicate window is ignored by JetStream (ADR-057, M-7).
 func (g *Gateway) PublishCommand(ctx context.Context, cmd agentv1.Command) error {
-	if !g.connected.Load() || g.js == nil {
+	if !g.bus.Ready() {
 		return ErrUnavailable
 	}
 	cmd.ProtocolVersion = agentv1.ProtocolVersion
@@ -487,11 +410,7 @@ func (g *Gateway) PublishCommand(ctx context.Context, cmd agentv1.Command) error
 	if err != nil {
 		return err
 	}
-	subject, err := agentv1.CommandSubject(cmd.AgentID)
-	if err != nil {
-		return err
-	}
-	_, err = g.js.Publish(ctx, subject, payload, jetstream.WithMsgID(cmd.CommandID))
+	err = g.bus.Publish(ctx, cmd.AgentID, cmd.CommandID, payload)
 	outcome := "published"
 	if err != nil {
 		outcome = "error"

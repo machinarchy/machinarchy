@@ -1,19 +1,45 @@
 # CLI troubleshooting
 
-CLI failures are printed as readable text on stderr. For command syntax, run `machinarchy COMMAND --help`. If `config set-context` is called without its required name, the CLI prints a local setup sequence and its expected syntax.
+CLI failures are printed as readable text on stderr: what happened (`Error:`), why when it is known (`Why:`), and the command to run next (`Next:`). For command syntax, run `machinarchy COMMAND --help`.
 
-## No active context configured
+## "You are not signed in"
 
-Create a cluster, store a user token, create a context, and select it:
+Sign in; the command asks for what it needs:
 
 ```sh
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local
-go run ./cmd/machinarchy config use-context local
+go run ./cmd/machinarchy login http://localhost:8080
 ```
 
 To use a separate file, pass the same `--config PATH` to each command or set `MACHINARCHY_CONFIG`.
+
+## "The CLI config ... is in an older format"
+
+Earlier versions kept contexts, clusters and users in the config file. This version does not read that format and does not copy its tokens. Move the file aside and sign in again:
+
+```sh
+mv "$HOME/.config/.machinarchy/config.yaml" "$HOME/.config/.machinarchy/config.yaml.old"
+go run ./cmd/machinarchy login http://localhost:8080
+```
+
+## "This needs an owner signed in with a password"
+
+`tokens`, `secret`, `runtime-config`, `hosts trust`, `access add` and a few more act as the workspace owner, and an API token can never be the owner. The command stops before sending anything. Sign in with the password; the session is used for these commands and the saved device token for everything else:
+
+```sh
+go run ./cmd/machinarchy login
+```
+
+## "The credentials file can be read by other users"
+
+The CLI will not use a credentials file that others can read. Run the `chmod 600` command it prints.
+
+## "The certificate ... is not trusted"
+
+The server's certificate was not signed by an authority this computer trusts. If it is your own server, give its CA (the CLI trusts it for that server only; there is no switch that turns certificate checking off):
+
+```sh
+go run ./cmd/machinarchy login https://machinarchy.lab --ca-file ca.pem
+```
 
 ## Login fails with `Invalid credentials`
 
@@ -34,11 +60,12 @@ refused:
 
 ## Unauthorized response
 
-An HTTP 401 (exit code 3) usually means the token is missing, expired, or belongs to a different API deployment. Session tokens expire; API tokens can be revoked. Log in to the intended deployment, update the matching named credentials, and confirm that the context selects that user and cluster:
+An HTTP 401 (exit code 3) means the server did not accept the credential: a login session expired (24 hours by default), a token expired or was revoked, or the credential belongs to a different server. Sign in again and check who and where you are:
 
 ```sh
-go run ./cmd/machinarchy config get-contexts
-go run ./cmd/machinarchy --context local get hosts
+go run ./cmd/machinarchy login
+go run ./cmd/machinarchy whoami
+go run ./cmd/machinarchy switch
 ```
 
 Do not paste tokens into issue reports or logs.
@@ -51,10 +78,10 @@ Check that the API is reachable and that the configured server URL is its base U
 
 ```sh
 curl -i http://localhost:8080/healthz/ready
-go run ./cmd/machinarchy --verbose get hosts
+go run ./cmd/machinarchy --verbose hosts
 ```
 
-Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_CLI_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
+Connection failures and timeouts exit with code 4. The CLI applies a 30-second timeout to each request; raise it for a slow server with `--request-timeout 2m` or `MACHINARCHY_REQUEST_TIMEOUT=2m`. Ctrl-C and SIGTERM cancel the request and exit with code 130.
 
 If the error says the server did not return JSON, or reports a redirect, the configured URL probably points at a proxy, a login page, or an `http://` address that forwards to `https://`. The CLI does not follow redirects so that it never sends your token somewhere unexpected.
 
@@ -63,7 +90,7 @@ If the error says the server did not return JSON, or reports a redirect, the con
 `--env` / `-n` accepts the environment name or numeric ID. Names are matched without case sensitivity. If names collide, use the ID:
 
 ```sh
-go run ./cmd/machinarchy get hosts -n 3
+go run ./cmd/machinarchy hosts -n 3
 ```
 
 ## Unsupported output format
@@ -71,7 +98,7 @@ go run ./cmd/machinarchy get hosts -n 3
 The supported formats are `table`, `json`, and `yaml`:
 
 ```sh
-go run ./cmd/machinarchy get hosts -o yaml
+go run ./cmd/machinarchy hosts -o yaml
 ```
 
 ## Malformed or unreadable config

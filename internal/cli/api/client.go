@@ -16,8 +16,8 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/machinarchy/machinarchy/internal/buildinfo"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
@@ -27,6 +27,10 @@ import (
 const (
 	maxResponseBytes int64 = 16 << 20
 
+	// versionSkewHint is for an answer that is valid JSON of the wrong shape:
+	// the usual cause is a server and a CLI of different releases.
+	versionSkewHint = "The server answered in a way this CLI does not understand. Update the CLI, or check the address: " +
+		"this CLI supports servers of the same release (docs/cli/commands.md, section \"Supported servers\")."
 	invalidResponseHint = "The server did not return the expected JSON. Check that the server URL points at the Machinarchy API and not at a proxy or web page."
 )
 
@@ -35,6 +39,23 @@ type Environment struct {
 	ID          int    `json:"id" yaml:"id"`
 	Name        string `json:"name" yaml:"name"`
 	Description string `json:"description" yaml:"description"`
+	// Protected is nil when the server does not report it (a server that
+	// predates server-held protection); the CLI then keeps its local guard.
+	Protected *bool `json:"protected,omitempty" yaml:"protected,omitempty"`
+}
+
+// ServerProtected reports whether the server holds the environment as protected.
+func (e Environment) ServerProtected() bool { return e.Protected != nil && *e.Protected }
+
+// ServerEnforcesProtection reports whether the server reports protection at
+// all, judged from its environments (every workspace has "default").
+func ServerEnforcesProtection(environments []Environment) bool {
+	for _, environment := range environments {
+		if environment.Protected != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Client is the narrow HTTP contract resource commands depend on, making
@@ -45,6 +66,7 @@ type Client interface {
 	GetHost(context.Context, string) (*Host, error)
 	CreateHost(context.Context, HostInput) (*Host, error)
 	DeleteHost(context.Context, string, uint64) error
+	MoveHost(ctx context.Context, id string, revision, generation uint64, spec HostSpec, environmentID int) error
 	SetHostLabels(context.Context, string, uint64, map[string]string) (*Host, error)
 	TrustHostKeys(context.Context, string, uint64, []string, bool) (*Host, error)
 	ListEnvironments(context.Context) ([]Environment, error)
@@ -82,6 +104,9 @@ type HTTPClient struct {
 	http        *http.Client
 	userAgent   string
 	maxResponse int64
+	// confirmed returns the protected environments the user has confirmed in
+	// this invocation; the guarded calls send them as confirmEnvironment.
+	confirmed func() []string
 }
 
 // Option customises an HTTPClient.
@@ -97,6 +122,19 @@ func WithHTTPClient(client *http.Client) Option {
 			c.http = client
 		}
 	}
+}
+
+// WithConfirmedEnvs supplies the environment names the user confirmed, sent
+// with host changes and runs so the server can enforce protected environments.
+func WithConfirmedEnvs(confirmed func() []string) Option {
+	return func(c *HTTPClient) { c.confirmed = confirmed }
+}
+
+func (c *HTTPClient) confirmedEnvs() []string {
+	if c.confirmed == nil {
+		return nil
+	}
+	return c.confirmed()
 }
 
 // WithUserAgent overrides the User-Agent header.
@@ -150,6 +188,13 @@ func NewHTTPClient(target config.Target, opts ...Option) (*HTTPClient, error) {
 	configured := *client.http
 	if configured.Timeout == 0 {
 		configured.Timeout = timeout
+	}
+	if configured.Transport == nil && target.CAFile != "" {
+		transport, err := transportFor(target.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		configured.Transport = transport
 	}
 	configured.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -252,7 +297,79 @@ func (c *HTTPClient) request(ctx context.Context, method, endpoint string, paylo
 			fmt.Errorf("API response from %s exceeds %d bytes", displayPath, limit), "")
 	}
 
-	return decodeResponse(response.StatusCode, displayPath, body, destination)
+	if err := decodeResponse(response.StatusCode, displayPath, body, destination); err != nil {
+		return c.explainDecodeFailure(ctx, err)
+	}
+
+	return nil
+}
+
+// explainDecodeFailure runs only after a response failed to decode. It asks the
+// public version endpoint (C-11) and, when the server's API range excludes the
+// one this CLI speaks, replaces the generic message with one naming both. An
+// old server (no endpoint), an unreachable one or a compatible one keeps the
+// original error.
+func (c *HTTPClient) explainDecodeFailure(ctx context.Context, original error) error {
+	endpoint := c.baseURL.JoinPath("/api/v1/version")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return original
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", c.userAgent)
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return original
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return original
+	}
+
+	var info struct {
+		Version string `json:"version"`
+		APIMin  *int   `json:"apiMin"`
+		APIMax  *int   `json:"apiMax"`
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
+	if err != nil || json.Unmarshal(body, &info) != nil || info.APIMin == nil || info.APIMax == nil {
+		return original
+	}
+	if *info.APIMax >= buildinfo.APIMin && *info.APIMin <= buildinfo.APIMax {
+		return original
+	}
+
+	return clierr.Wrap(clierr.ExitUnavailable,
+		fmt.Errorf("incompatible server: this server speaks API version %s (release %s); this CLI supports %s",
+			apiRange(*info.APIMin, *info.APIMax), sanitiseVersion(info.Version), apiRange(buildinfo.APIMin, buildinfo.APIMax)),
+		"Use a CLI of the same release as the server, or update whichever is older (docs/cli/commands.md, section \"Supported servers\").")
+}
+
+func apiRange(lo, hi int) string {
+	if lo == hi {
+		return strconv.Itoa(lo)
+	}
+
+	return fmt.Sprintf("%d-%d", lo, hi)
+}
+
+// sanitiseVersion keeps a server-supplied release string printable and short.
+func sanitiseVersion(v string) string {
+	out := make([]rune, 0, len(v))
+	for _, r := range v {
+		if len(out) >= 32 {
+			break
+		}
+		if r > ' ' && r < 0x7f {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return "unknown"
+	}
+
+	return string(out)
 }
 
 // decorate applies the headers every request carries. It is the only place
@@ -323,7 +440,7 @@ func (c *HTTPClient) transportError(ctx context.Context, method, endpoint string
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		return clierr.Wrap(clierr.ExitUnavailable,
 			fmt.Errorf("%s %s timed out after %s", method, endpoint, c.http.Timeout),
-			"The server did not respond in time. Increase --request-timeout (or MACHINARCHY_CLI_REQUEST_TIMEOUT), or check that the server is healthy.")
+			"The server did not respond in time. Increase --request-timeout (or MACHINARCHY_REQUEST_TIMEOUT), or check that the server is healthy.")
 	}
 
 	// The URL error repeats the full request URL; report only the cause.
@@ -335,7 +452,7 @@ func (c *HTTPClient) transportError(ctx context.Context, method, endpoint string
 
 	return clierr.Wrap(clierr.ExitUnavailable,
 		fmt.Errorf("cannot reach the API server at %s: %w", c.baseURL.Scheme+"://"+c.baseURL.Host, cause),
-		"Check the server URL ('machinarchy config get-contexts' or --server) and that the API is running.")
+		"Check the server URL ('machinarchy whoami' shows it; --server changes it) and that the API is running.")
 }
 
 func decodeResponse(status int, endpoint string, body []byte, destination any) error {
@@ -354,8 +471,14 @@ func decodeResponse(status int, endpoint string, body []byte, destination any) e
 	}
 
 	if err := json.Unmarshal(body, destination); err != nil {
+		hint := invalidResponseHint
+		var shape *json.UnmarshalTypeError
+		if errors.As(err, &shape) && json.Valid(body) {
+			hint = versionSkewHint
+		}
+
 		return clierr.Wrap(clierr.ExitUnavailable,
-			fmt.Errorf("decode API response from %s: %w", endpoint, err), invalidResponseHint)
+			fmt.Errorf("decode API response from %s: %w", endpoint, err), hint)
 	}
 
 	return nil
@@ -411,43 +534,4 @@ func (c *HTTPClient) RewrapSecrets(ctx context.Context, oldKeyID string, batchSi
 }
 func (c *HTTPClient) DeleteSecret(ctx context.Context, id string) error {
 	return c.request(ctx, http.MethodDelete, "/api/v1/secrets/"+url.PathEscape(id), nil, nil)
-}
-
-// Login exchanges a username and password for a session token
-// (POST /api/auth/login). The password is sent only in the request body.
-func Login(ctx context.Context, server string, timeout time.Duration, username, password string) (string, error) {
-	if timeout <= 0 {
-		timeout = config.DefaultRequestTimeout
-	}
-	body, err := json.Marshal(map[string]string{"username": username, "password": password})
-	if err != nil {
-		return "", err
-	}
-	path := "/api/auth/login"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+path, bytes.NewReader(body))
-	if err != nil {
-		return "", clierr.Usage(fmt.Errorf("build login request: %w", err))
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", defaultUserAgent())
-	response, err := (&http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
-	if err != nil {
-		return "", clierr.Wrap(clierr.ExitUnavailable, fmt.Errorf("sign in: %w", err), "Check the server URL and that the server is running.")
-	}
-	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("read login response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return "", newError(response, http.MethodPost, path, data)
-	}
-	var reply struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(data, &reply); err != nil || reply.Token == "" {
-		return "", errors.New("the login response carries no token")
-	}
-	return reply.Token, nil
 }

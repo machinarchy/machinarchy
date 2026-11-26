@@ -35,5 +35,6 @@ func run() int {
 			ErrOut: os.Stderr,
 		},
 		Groups: commands.DefaultGroups(),
+		Home:   commands.Home,
 	}, nil)
 }

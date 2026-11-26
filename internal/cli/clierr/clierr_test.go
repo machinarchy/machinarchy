@@ -88,3 +88,63 @@ func TestClassifyReportsUnclassified(t *testing.T) {
 		t.Fatalf("Classify(plain) = (%d, %v), want (%d, false)", code, ok, ExitFailure)
 	}
 }
+
+func TestNewExitCodes(t *testing.T) {
+	t.Parallel()
+
+	want := map[int]string{
+		ExitOK: "ok", ExitFailure: "failure", ExitUsage: "usage", ExitAuth: "auth", ExitUnavailable: "unavailable",
+		ExitWaitTimeout: "waitTimeout", ExitNotFound: "notFound", ExitConflict: "conflict",
+		ExitPartial: "partial", ExitAllFailed: "allFailed", ExitInterrupted: "interrupted",
+	}
+	if ExitWaitTimeout != 5 || ExitPartial != 8 || ExitAllFailed != 9 {
+		t.Fatalf("codes = %d, %d, %d; want 5, 8, 9", ExitWaitTimeout, ExitPartial, ExitAllFailed)
+	}
+	for code, name := range want {
+		if got := Name(code); got != name {
+			t.Errorf("Name(%d) = %q, want %q", code, got, name)
+		}
+	}
+}
+
+func TestDetailedKeepsWhyAndNext(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("wrapped: %w", Detailed(ExitAuth, errors.New("denied"), "the session expired", "machinarchy login"))
+	if Why(err) != "the session expired" || Hint(err) != "machinarchy login" {
+		t.Fatalf("why = %q, next = %q", Why(err), Hint(err))
+	}
+	if code, ok := Classify(err); !ok || code != ExitAuth {
+		t.Fatalf("Classify = %d, %v", code, ok)
+	}
+	if Why(errors.New("plain")) != "" {
+		t.Fatal("a plain error has no why")
+	}
+	if Detailed(ExitAuth, nil, "x", "y") != nil {
+		t.Fatal("Detailed(nil) must be nil")
+	}
+}
+
+func TestDetailedKeepsTheMostSpecificClassification(t *testing.T) {
+	t.Parallel()
+
+	inner := Newf(ExitConflict, "retry", "stale")
+	if got := Detailed(ExitUsage, inner, "why", "next"); !errors.Is(got, inner) {
+		t.Fatal("an already classified error must be returned unchanged")
+	}
+}
+
+// A reported error carries only the exit code: the command said the rest.
+func TestReported(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []int{ExitPartial, ExitAllFailed, ExitInterrupted, ExitWaitTimeout} {
+		err := Reported(code)
+		if got, classified := Classify(err); got != code || !classified || !IsReported(err) {
+			t.Errorf("Reported(%d): code %d classified %v reported %v", code, got, classified, IsReported(err))
+		}
+	}
+	if IsReported(Newf(ExitFailure, "", "x")) || IsReported(nil) {
+		t.Error("an ordinary error is not reported")
+	}
+}

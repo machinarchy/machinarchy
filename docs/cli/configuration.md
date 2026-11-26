@@ -1,146 +1,156 @@
-# CLI configuration and contexts
+# CLI configuration, servers and credentials
 
-## Config file location
+## Files
 
-The CLI reads a YAML file. Its path is selected in this order:
+The CLI keeps two files side by side. Their location is chosen in this order:
 
 1. `--config PATH`
 2. `MACHINARCHY_CONFIG`
-3. The operating system's user config directory, under `.machinarchy/config.yaml` (for example `~/.config/.machinarchy/config.yaml` on Linux)
+3. The operating system's user config directory, under `.machinarchy/config.yaml` (for example `~/.config/.machinarchy/config.yaml` on Linux, `~/Library/Application Support/.machinarchy/config.yaml` on macOS)
 
-Use `--config` consistently when managing or using a non-default config file. For example:
+| File | Holds | Mode |
+| --- | --- | --- |
+| `config.yaml` | The servers you have signed in to, which one is active, saved defaults. **No secrets.** | `0600` in a `0700` directory |
+| `config.credentials.yaml` | The credentials: a login session and/or an API token per server. | `0600`, written atomically |
+| `ca/NAME.pem` | A copy of the certificate authority you gave with `--ca-file` for a server. | `0600` |
 
-```sh
-go run ./cmd/machinarchy --config ./dev-cli.yaml config get-contexts
-```
+The credentials file sits next to the config file with `.credentials` before the extension (`cli.yaml` → `cli.credentials.yaml`). `machinarchy config path` prints both paths and `machinarchy config show` prints everything that is saved with every secret replaced by `***`; both are hidden commands for support and scripts.
 
-If the default config file does not exist, commands that need an API context (such as `get hosts`) report that no context is selected. `config get-contexts` can still show an empty context list. The first config write creates the parent directory and file.
+A credentials file that other users can read is **refused**, not tolerated: the command stops and prints `chmod 600 PATH`. A file that is damaged, too large, or written by a newer CLI also stops the command; the CLI never falls back to something less safe.
 
-## Context model
-
-A context connects three things:
-
-- A **cluster** stores the Machinarchy API base URL.
-- A **user** stores the API bearer token.
-- A **context** selects a cluster, a user, and optionally a default Machinarchy environment.
-
-This allows, for example, `local`, `staging`, and `production` contexts to use different endpoints and credentials. `config use-context` changes the persisted default. `--context NAME` selects a context for only one invocation.
-
-## Recommended setup
-
-With a username and password, `login` creates the cluster, user and context in one step and stores the session token:
+A config file in the format of earlier versions (contexts, clusters and users) is not read. The CLI names it, says that its tokens were not copied, and prints the two commands that move it aside and sign in again:
 
 ```sh
-go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
+mv "$HOME/.config/.machinarchy/config.yaml" "$HOME/.config/.machinarchy/config.yaml.old"
+machinarchy login YOUR-SERVER-URL
 ```
 
-With an API token, put it in an environment variable without committing it to a file and configure the context by hand:
+## Servers
 
-```sh
-export MACHINARCHY_USER_TOKEN='paste-the-JWT-here'
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local
-go run ./cmd/machinarchy config use-context local
-unset MACHINARCHY_USER_TOKEN
-```
-
-Use `printf '%s'` rather than `echo` so the token is not modified by an extra newline. `--token-stdin` accepts at most 64 KiB.
-
-## YAML format
-
-The CLI can create this structure through the `config` commands. A hand-written example is:
+A **server** is a Machinarchy API you have signed in to: a name, an address, and the choices made for it (`insecure-http`, a CA file, a default environment). `login` saves one and makes it active; `switch` changes the active one.
 
 ```yaml
-apiVersion: machinarchy.io/v1
-current-context: local
-clusters:
-  local:
-    server: http://localhost:8080
-users:
-  local:
-    token: replace-with-a-user-jwt
-contexts:
-  local:
-    cluster: local
-    user: local
-    environment: development
+version: 2
+active: lab
+servers:
+  lab:
+    url: https://machinarchy.example.com
+    env: production        # optional default environment
+  home:
+    url: http://localhost:8080
+    insecure-http: true
+    ca-file: ca/home.pem
 ```
 
-Prefer the commands over editing the token field directly. The config file stores the bearer token in plaintext, protected by filesystem permissions. Do not commit it or include it in support bundles.
+Server names are letters, digits, `.`, `_` and `-` (up to 63 characters). A name you do not choose is derived from the address (`machinarchy-example-com`, `localhost-8080`).
+
+## Credentials and which one a command uses
+
+Each saved server can hold two credentials: a **login session** (from an email and password, 24 hours by default) and an **API token** (a *device token* that "stay signed in" created, or a token you supplied with `login --with-token`).
+
+A command uses, in this order:
+
+1. `MACHINARCHY_TOKEN`, if set (never saved to disk)
+2. the saved API token
+3. the saved login session
+
+A credential that is known to have expired is skipped. A command that acts as the workspace **owner** (`tokens`, `secret`, `runtime-config`, `hosts trust`, `access add`, `get agent-tokens` and others) uses the saved login session and nothing else: an API token can never be an owner. With only a token it stops before sending anything:
+
+```text
+Error: this needs an owner signed in with a password; you are using an API token (device-laptop, operator)
+Why:   API tokens can never act as the owner
+Next:  machinarchy login
+```
+
+**A saved credential is only ever sent to the server it was saved for.** `--server NAME` (or `MACHINARCHY_SERVER`) picks another saved server. `--server https://other.example`, an address that is not saved, is for that one command and takes no saved credential: use `MACHINARCHY_TOKEN=... machinarchy --server https://other.example ...` or `machinarchy login https://other.example`.
+
+## Secrets are never accepted as flags
+
+A password is typed without echo or read from stdin with `--password-stdin`. A token is typed without echo or read from stdin with `login --with-token`. There is no `--token`, `--password` or `--secret` flag; `tokens create` prints a new token once, or writes it to a private file with `--out`. A credential prints as `***` in every error, log and output format; the only place a token is ever shown is the output of `tokens create`, once.
+
+## TLS and plain HTTP
+
+Servers are reached with TLS verification on. There is no flag that turns it off. For a private CA or a self-signed certificate, give the CA when you sign in:
+
+```sh
+machinarchy login https://machinarchy.lab --ca-file ca.pem
+```
+
+The CA is copied next to the config and trusted for that server only. Plain `http://` to a host that is not on this computer is refused, because a sign-in can be read on the network; on a network you trust, opt in per server with `machinarchy login http://host:8080 --insecure-http`. Redirects are never followed, so a credential is not replayed to another location.
 
 ## Environment variables and precedence
 
-Settings are resolved in this order, highest priority first:
+Global options are resolved in this order, highest priority first:
 
-1. Command-line flags
-2. `MACHINARCHY_CLI_*` environment variables
-3. The selected context in the config file (server, token, default environment)
-4. Built-in defaults
+1. A flag on the command line
+2. The environment variable `MACHINARCHY_<NAME>`
+3. A saved default under `defaults:` in the config file (below)
+4. The option's built-in default
 
-The config file is read as plain YAML, so context, cluster, and user names are preserved exactly as written (`Prod.EU` stays `Prod.EU`). Each environment variable is the upper-cased flag name with `-` replaced by `_`:
+Each variable is the upper-cased flag name with `-` replaced by `_`. A variable that is set but empty counts as not set.
 
 | Variable | Purpose |
 | --- | --- |
-| `MACHINARCHY_CLI_CONTEXT` | Select a context for the process |
-| `MACHINARCHY_CLI_ENV` | Override the context's default environment filter |
-| `MACHINARCHY_CLI_OUTPUT` | Set output format (`table`, `json`, or `yaml`) |
-| `MACHINARCHY_CLI_VERBOSE` | Enable debug logging (`true` or `false`) |
-| `MACHINARCHY_CLI_SERVER` | Override the selected context's server for this process |
-| `MACHINARCHY_CLI_TOKEN` | Override the selected context's token for this process |
-| `MACHINARCHY_CLI_REQUEST_TIMEOUT` | Per-request HTTP timeout, for example `10s` or `2m` (default `30s`) |
-| `MACHINARCHY_CLI_QUIET` | Suppress status output (`true` or `false`) |
-| `MACHINARCHY_CLI_NO_HEADERS` | Omit table headers (`true` or `false`) |
-| `MACHINARCHY_CLI_NO_INPUT` | Never prompt (`true` or `false`) |
+| `MACHINARCHY_SERVER` | A saved server name, or an address for this command only |
+| `MACHINARCHY_TOKEN` | An API token for this command only; used before any saved credential |
+| `MACHINARCHY_ENV` | Override the server's default environment filter |
+| `MACHINARCHY_OUTPUT` | Set output format (`table`, `json`, or `yaml`) |
+| `MACHINARCHY_VERBOSE` | Enable debug logging (`true` or `false`) |
+| `MACHINARCHY_REQUEST_TIMEOUT` | Per-request HTTP timeout, for example `10s` or `2m` (default `30s`) |
+| `MACHINARCHY_QUIET` | Suppress status output (`true` or `false`) |
+| `MACHINARCHY_NO_HEADERS` | Omit table headers (`true` or `false`) |
+| `MACHINARCHY_NO_INPUT` | Never prompt (`true` or `false`) |
+| `MACHINARCHY_PLAIN` | Plain output: no colour, symbols or flavour text (`true` or `false`) |
 
-The config path has its separate `MACHINARCHY_CONFIG` variable. For API server and token, the process environment overrides the current context's stored values.
+The config path has its separate `MACHINARCHY_CONFIG` variable.
 
-`--yes` is deliberately **not** available as an environment variable or config setting. Skipping a confirmation must be an explicit choice on each command line.
+`--yes`, `--confirm`, `--confirm-env` and `--dry-run` are deliberately **not** available as environment variables or saved defaults. Each is an answer to one invocation, and a standing "yes" would defeat the confirmation it answers.
+
+### Saved defaults
+
+A few options can be saved in the config file so they apply when neither a flag nor a variable is given:
+
+```yaml
+defaults:
+  output: json
+  plain: true
+  request-timeout: 60s
+```
+
+Allowed keys: `no-headers`, `no-input`, `output`, `plain`, `quiet`, `request-timeout`, `verbose`. Anything else (including `server`, `token`, `env`, `yes`) is refused when the file is read, with exit code 2 and the list of allowed keys; a boolean that is not `true` or `false` is refused too.
 
 A value that cannot be used (for example `--output xml` or `--request-timeout banana`) fails immediately with exit code 2, before any command runs.
 
-Global flags:
+## Global flags
 
 | Flag | Meaning |
 | --- | --- |
 | `--config PATH` | Use a particular CLI config file |
-| `--context NAME` | Use a context for one invocation |
+| `--server NAME-OR-ADDRESS` | A saved server, or an address for this command only (needs `MACHINARCHY_TOKEN`) |
 | `--env NAME_OR_ID`, `-n` | Filter hosts by Machinarchy environment |
 | `--output FORMAT`, `-o FORMAT` | Select `table`, `json`, or `yaml` output. Without it each command uses its own default (lists are tables; the existing `runtime-config` and `secret` commands print JSON). |
 | `--verbose`, `-v` | Emit debug-level structured logs to stderr |
-| `--server URL` | Use this API server instead of the context's server |
 | `--request-timeout DURATION` | Timeout for each API request (default `30s`) |
 | `--quiet`, `-q` | Suppress status output; print only identifiers where a command supports it |
 | `--no-headers` | Omit table headers |
 | `--no-input` | Never prompt; fail with exit code 2 if input or confirmation would be needed |
-| `--yes`, `-y` | Pre-confirm destructive or sensitive actions (flag only) |
+| `--yes`, `-y` | Pre-confirm destructive or sensitive actions (flag only). It never answers a "type the name" confirmation. |
+| `--plain` | Plain output: no colour, symbols or flavour text. Also on when `MACHINARCHY_PLAIN` is true or `defaults.plain` is true. |
+
+`--dry-run`, `--confirm NAME` and `--confirm-env ENV` are accepted but hidden: they belong to commands that do not exist yet. A command that does not support `--dry-run` refuses it (exit 2) instead of ignoring it, so a "dry run" can never change anything. `--confirm NAME` answers the "type the name" confirmation of `tokens revoke` in a script.
+
+Colour is used only on a terminal, and not when `NO_COLOR` is set or `TERM=dumb`. Symbols such as ✔ and ✖ are used only when the locale is UTF-8 (`LC_ALL`, `LC_CTYPE` or `LANG`); otherwise the words `OK` and `FAILED` are printed. `--plain` turns all of it off.
 
 `secret delete`, `secret rewrap` and `runtime-config rollback` ask for confirmation; `--yes` skips the prompt and `--no-input` makes them fail instead of prompting.
 
-`config set-cluster` has its own `--server` flag, and `config set-context` has its own `--env` flag; on those commands the flag sets the value being stored rather than overriding the active context.
-
-## Config file security
-
-The config file stores bearer tokens in plaintext. New files are created with mode `0600` in a `0700` directory. If an existing config file that contains tokens is readable by other users, the CLI prints a warning to stderr (it keeps working) and shows the command to fix it:
+## Several servers
 
 ```sh
-chmod 600 ~/.config/.machinarchy/config.yaml
+machinarchy login https://machinarchy.example.com --name prod
+machinarchy login https://staging.example.com --name staging
+machinarchy switch                    # list them and choose one
+machinarchy switch staging            # make staging the active server
+machinarchy --server prod hosts   # one command on another server
 ```
 
-The CLI never prints tokens in output, errors, warnings, or verbose logs, and never follows HTTP redirects, so a token is not replayed to another location.
-
-## Managing multiple contexts
-
-```sh
-go run ./cmd/machinarchy config set-cluster staging --server https://api.staging.example.com
-printf '%s' "$STAGING_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials staging --token-stdin
-go run ./cmd/machinarchy config set-context staging --cluster staging --user staging --env production
-go run ./cmd/machinarchy config get-contexts
-go run ./cmd/machinarchy config use-context staging
-```
-
-Use `--context staging` to make a one-command choice without changing the saved current context:
-
-```sh
-go run ./cmd/machinarchy --context staging get hosts
-```
+`switch` lists every saved server with an `*` on the active one and whether you are signed in.

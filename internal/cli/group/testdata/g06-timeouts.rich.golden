@@ -1,0 +1,7 @@
+⚠ 11 of 14 hosts succeeded, 3 did not
+  ✖ web-[03,07-08]  timed out after 60 s  (3 hosts)
+  ✔ web-[01-02,04-06,09-14]  exit 0  (11 hosts)
+    done
+
+  ⚠ A command on a "timed out" or "outcome unknown" host may still have run.
+  Next:  machinarchy run r-4k2p9x1a --retry-failed

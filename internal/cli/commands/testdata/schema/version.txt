@@ -1,0 +1,6 @@
+$ object
+$.buildTime string
+$.commit string
+$.goVersion string
+$.platform string
+$.version string

@@ -18,6 +18,7 @@ import (
 
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
+	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 )
 
 // Format is a supported output format.
@@ -226,6 +227,9 @@ func printYAML(writer io.Writer, value any) (err error) {
 	return encoder.Encode(value)
 }
 
+// tableValue makes a cell one line of safe text: terminal escape sequences and
+// control characters are removed (the value may come from a server or a host),
+// and line breaks and tabs become spaces.
 func tableValue(value string) string {
-	return strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(value)
+	return sanitize.Line(value)
 }

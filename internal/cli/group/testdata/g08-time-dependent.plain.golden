@@ -1,0 +1,5 @@
+OK 14 of 14 hosts succeeded
+  OK web-[01-14]  exit 0  each printed different output  (14 hosts)
+
+  every host printed something different (normal for time-dependent output)
+  Next:  machinarchy run r-4k2p9x1a --host web-01

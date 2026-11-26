@@ -46,6 +46,53 @@ More in [docs/architecture.md](docs/architecture.md) and the
 - NATS with JetStream only if you use agents.
 - For development tools: golangci-lint v2, swag v1.16.4, Docker with BuildKit.
 
+## Install the CLI
+
+Release binaries are `machinarchy-<os>-<arch>` for Linux and macOS, `amd64` and
+`arm64`, with a `checksums.txt` and a GitHub build attestation. Windows binaries
+are not published (owner decision pending). Download the binary and
+`checksums.txt` from the [latest release](https://github.com/machinarchy/machinarchy/releases),
+then verify before installing (Linux; on macOS use `shasum -a 256 -c -`):
+
+```sh
+grep -E '  machinarchy-linux-amd64$' checksums.txt | sha256sum --check -
+gh attestation verify machinarchy-linux-amd64 --repo machinarchy/machinarchy \
+  --signer-workflow machinarchy/machinarchy/.github/workflows/release.yml
+sudo install -m 0755 machinarchy-linux-amd64 /usr/local/bin/machinarchy
+machinarchy version
+```
+
+Do not install a binary whose checksum does not match. `machinarchy version`
+prints the version, commit, platform and Go version (`-o json` for scripts);
+there is no `--version` flag.
+
+**Upgrade:** repeat the same steps with the new release, then run
+`machinarchy version`. Saved servers and credentials stay as they are. If the
+CLI answers "Update the CLI", the server is newer than the CLI; see
+[supported servers](docs/cli/commands.md). Release notes list breaking changes.
+
+## Five-minute path
+
+From an installed CLI and a running server to your first command on a host.
+Every line below is checked to be a valid command by `TestDocsExamplesParse`.
+
+```sh
+machinarchy login https://machinarchy.example.com
+machinarchy envs add staging
+machinarchy envs use staging
+machinarchy access add deploy-key --how ssh-key --user deploy --key-file ~/.ssh/id_ed25519
+machinarchy hosts add web-01 10.0.0.5 --access deploy-key
+machinarchy hosts trust web-01
+machinarchy run --on web-01 -- uptime
+```
+
+`login` asks for your email and password (typed without echo). `hosts add`
+waits for the first connection; `hosts trust` shows the SSH host key the server
+saw and asks you to type part of its fingerprint, which you compare with the
+key on the machine. Each command prints the next one to run. Scripts and CI:
+[docs/cli/ci.md](docs/cli/ci.md). Coming from the old commands:
+[docs/cli/migration.md](docs/cli/migration.md).
+
 ## Build
 
 ```sh
@@ -69,11 +116,11 @@ Set `MACHINARCHY_BOOTSTRAP_ADMIN_PASSWORD` for the first start to create the
 owner account (`admin`). Then, with the CLI:
 
 ```sh
-go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
-go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy login http://localhost:8080 --name local --email admin
+go run ./cmd/machinarchy hosts
 ```
 
-The same through `make`: `make run-monolith` and `make run-cli ARGS="get hosts"`.
+The same through `make`: `make run-monolith` and `make run-cli ARGS="hosts"`.
 These targets load `.env` (or `ENV_FILE=…`) themselves and ignore settings
 exported in your shell.
 

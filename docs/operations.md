@@ -200,6 +200,12 @@ see [rotating the controller signing key](#rotating-the-controller-signing-key).
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT` | Public key (`A...`) of the NATS account the agents use. With the signing key below, every agent gets its own NATS user JWT. **Required in production.** |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE` | Seed (`SA...`, file `0600`) of a signing key listed in that account's JWT. The gateway signs agent JWTs with it. |
 | `MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL` | Agent JWT lifetime, default `1h` (5m–24h, at least twice the heartbeat). Renewals refresh it. After a revocation, the agent keeps NATS access only until its current JWT expires. |
+| `MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR` | Listen address (`host:port`) of the agent-facing gRPC service (ADR-059). Off when empty. The service speaks HTTP/2; behind a proxy it must pass gRPC through. |
+| `MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE` / `_KEY_FILE` | TLS certificate and key for that listener, set together. **Required in production**; without them the listener is plaintext (development only, logged as a warning). |
+
+#### Agent gRPC service
+
+Agents reach the controller through one gRPC service (`machinarchy.agent.v1.AgentGateway`) and never see the internal broker. `Register` (single-use, hostname-bound enrolment token) and `Renew` return signed leases; `Commands` is a stream the agent opens with a signed request that names its current lease, then receives signed commands and acknowledges each one; `SendResult` carries signed results and needs a live lease. A revoked agent's stream is closed, an expired lease is refused, an agent only ever receives its own commands, and calls are rate limited per client address and per agent (messages are capped at 512 KiB, open streams at 10000). Commands queued while an agent is away are delivered when it reconnects. The agent client and CLI changes follow in steps 8.4 and 8.5; until then agents still use the NATS path.
 
 #### Rotating the controller signing key
 
@@ -269,7 +275,7 @@ or execution settings, and its hosts need no endpoint:
 curl -s -X POST https://machinarchy.example/api/v1/managed/access-profiles \
   -H "Authorization: Bearer $OWNER_SESSION" -H 'Content-Type: application/json' \
   -d '{"name":"agents","spec":{"connectorKind":"agent","enabled":true}}' | jq -r .id
-machinarchy create host web-01 --profile agents --label tier=web
+machinarchy hosts add web-01 --agent --tag tier=web
 ```
 
 An owner then issues one token per host. It is single-use, expires after 1
@@ -295,6 +301,24 @@ state (never the secret), and `DELETE /api/v1/agents/enrollment-tokens/{id}`
 revokes an unused one. Issuing and revoking are audited, and an agent's
 `agent.registered` event names the token it used.
 
+**Getting the agent binary.** The controller does not serve or point at agent
+downloads (no install endpoint, gap C-07: not built). Agent releases are published by the agent repository:
+`machinarchy-agent_<tag>_linux_{amd64,arm64}.tar.gz` and one `checksums.txt`, with a GitHub
+build attestation, at <https://github.com/machinarchy/machinarchy-agent/releases>. Download
+the archive for the host's architecture and the `checksums.txt` of the **same tag**, then verify
+before installing:
+
+```sh
+grep -F "  machinarchy-agent_<tag>_linux_amd64.tar.gz" checksums.txt | sha256sum --check -
+gh attestation verify machinarchy-agent_<tag>_linux_amd64.tar.gz --repo machinarchy/machinarchy-agent
+```
+
+The full install steps (systemd unit, environment file, rollback) are in the agent repository's
+`docs/deployment/systemd.md`, which ships inside the archive as `INSTALL.md`. The values to put in the agent's
+environment come from `machinarchy hosts add NAME --agent` or `hosts enroll NAME` (the install blob: server URL,
+controller public key, one-time token). Use an agent release whose protocol the controller supports; a version
+mismatch shows up when the agent registers.
+
 The gateway provisions the `MACHINARCHY_AGENT_COMMANDS` JetStream stream (file
 storage, 24h max age, 15 min duplicate window) and one durable consumer per
 agent. JetStream must be enabled on the NATS server.
@@ -305,7 +329,7 @@ Agent work is an Operation like an SSH run ([ADR-057](adr/ADR-057-capability-ope
 `POST /api/v1/managed/operations` with `capability` instead of `run`, or
 
 ```sh
-machinarchy run -l tier=web --capability service.status --input '{"service":"nginx.service"}' --wait
+machinarchy run --on tier=web --do service.status service=nginx.service
 ```
 
 It needs the same permission as a run, every target must be on an `agent`
@@ -415,7 +439,7 @@ follows the egress policy. The Access Profile's `hostKeyPolicy` then decides:
 | Policy | What happens | Use |
 |---|---|---|
 | `tofu` | The keys seen on first contact (every algorithm the host offers) are pinned automatically and audited as `resource_host.host_key_trusted` with `source=tofu`. Allowed only with private-key authentication; a password profile falls back to `approve`. | Networks you trust at enrolment time |
-| `approve` | The Host waits with `HostKeyPendingApproval` and `status.observedHostKeys`. An owner runs `machinarchy trust host NAME`, or `--all-pending [--selector …]` for many hosts, which shows the fingerprints and trusts exactly those. | Production default |
+| `approve` | The Host waits with `HostKeyPendingApproval` and `status.observedHostKeys`. An owner runs `machinarchy hosts trust NAME` (typed check of the key, or `--fingerprint` in a script), or `--all-pending [-l TAGS]` to be asked about each host in turn; `--yes` never approves a key. | Production default |
 | `ca` | Hosts present SSH host certificates signed by a CA listed in the profile's `hostCertificateAuthorities` (authorized_keys format), for the dialed host name. No per-host data. | Fleets with an SSH CA |
 | `pinned` | Only fingerprints set in `spec.accessTarget.trust` are trusted, and nothing is scanned. | Keys verified out of band |
 
@@ -427,7 +451,7 @@ development and `approve` in production by default, or `pinned`.
   that is not trusted, the Host becomes `HostKeyChanged`, and the condition
   names both the presented and the trusted fingerprints. Nothing is sent to
   the host. An owner must check the change out of band and run
-  `machinarchy trust host NAME --replace`.
+  `machinarchy hosts trust NAME --replace`.
 - **Moving a Host clears its trust.** Changing a Host's endpoint (owner only)
   clears its trusted keys, unless new ones are sent with the change, and the
   new endpoint is scanned again.
@@ -455,7 +479,7 @@ loop. To exempt the controller, use `PerSourcePenaltyExemptList` in
 
 ## Detached execution
 
-A run with `detach: true` (the CLI's default without `--wait`) does not keep an SSH session open.
+A run with `detach: true` (the CLI's `run --detach`, and any run with a timeout over 15 minutes) does not keep an SSH session open.
 
 **How it runs:**
 - One short session per host starts the command under a supervisor and returns at once.
@@ -501,7 +525,7 @@ Prefer `systemd`: cancel and timeout then also kill processes that left the comm
 
 **Output.**
 - Each stream keeps its first and last 15 KiB plus the total size.
-- `GET …/operations/{id}/targets/{hostId}/output?stream=&from=` serves it by byte offset, live while the command runs. `machinarchy logs operation ID --follow` uses it.
+- `GET …/operations/{id}/targets/{hostId}/output?stream=&from=` serves it by byte offset, live while the command runs. `machinarchy run ID --host NAME --follow` uses it.
 - New output appears at the poll interval: 5 s for the first minute, then up to 30 s.
 - Only callers allowed to run commands can read output; readers see the `progress` sizes only.
 

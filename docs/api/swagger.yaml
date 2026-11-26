@@ -7,6 +7,42 @@ definitions:
           $ref: '#/definitions/agents.signingKeyView'
         type: array
     type: object
+  agents.agentList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/agents.agentView'
+        type: array
+    type: object
+  agents.agentView:
+    properties:
+      agentVersion:
+        type: string
+      architecture:
+        type: string
+      capabilities:
+        items:
+          type: string
+        type: array
+      connected:
+        description: Connected is true while the agent holds an unexpired, unrevoked
+          lease.
+        type: boolean
+      hostname:
+        type: string
+      id:
+        type: string
+      lastSeenAt:
+        type: string
+      leaseExpiresAt:
+        type: string
+      os:
+        type: string
+      registeredAt:
+        type: string
+      revokedAt:
+        type: string
+    type: object
   agents.controllerKeyResponse:
     properties:
       nextPublicKey:
@@ -128,6 +164,29 @@ definitions:
     required:
     - password
     type: object
+  auth.MeResponse:
+    properties:
+      authMethod:
+        description: AuthMethod is "session" (a login session) or "api_token".
+        type: string
+      email:
+        type: string
+      expiresAt:
+        description: ExpiresAt is when the API token stops working.
+        type: string
+      id:
+        type: integer
+      role:
+        allOf:
+        - $ref: '#/definitions/domain.Role'
+        description: Role is the caller's effective role in the workspace.
+      tokenId:
+        type: integer
+      tokenName:
+        type: string
+      username:
+        type: string
+    type: object
   auth.MessageResponse:
     properties:
       message:
@@ -248,6 +307,11 @@ definitions:
         type: integer
       name:
         type: string
+      protected:
+        description: |-
+          Protected environments need a confirmation (ConfirmedEnvironments) for
+          host changes and runs; the server enforces it for every client.
+        type: boolean
     type: object
   domain.IssuedAPIToken:
     properties:
@@ -342,6 +406,11 @@ definitions:
       name:
         example: production
         type: string
+      protected:
+        description: |-
+          Protected is optional: absent keeps the current value (false on create).
+          Only the workspace owner may set it to false on a protected environment.
+        type: boolean
     required:
     - name
     type: object
@@ -354,6 +423,10 @@ definitions:
     type: object
   managedresource.hostRequest:
     properties:
+      environmentId:
+        description: EnvironmentID is optional; absent means the workspace's default
+          environment.
+        type: integer
       labels:
         additionalProperties:
           type: string
@@ -365,6 +438,17 @@ definitions:
     type: object
   managedresource.hostUpdateRequest:
     properties:
+      confirmEnvironment:
+        description: |-
+          ConfirmEnvironment names the protected environment(s) the host is in or
+          moves to: a name or a list of names.
+        items:
+          type: string
+        type: array
+      environmentId:
+        description: EnvironmentID is optional; absent means the host stays where
+          it is.
+        type: integer
       generation:
         type: integer
       revision:
@@ -385,6 +469,13 @@ definitions:
     properties:
       capability:
         $ref: '#/definitions/resource.CapabilitySpec'
+      confirmEnvironment:
+        description: |-
+          ConfirmEnvironment names every protected environment the targets are in
+          (a name or a list); a missing one is refused with 409.
+        items:
+          type: string
+        type: array
       expectTargetsHash:
         type: string
       hostIds:
@@ -419,6 +510,11 @@ definitions:
     type: object
   managedresource.trustRequest:
     properties:
+      confirmEnvironment:
+        description: ConfirmEnvironment names the host's environment when it is protected.
+        items:
+          type: string
+        type: array
       fingerprints:
         description: |-
           Fingerprints are the exact SHA256:… fingerprints to trust, normally the
@@ -1062,7 +1158,6 @@ definitions:
     type: object
   resource.TargetState:
     enum:
-    - Lost
     - Pending
     - Running
     - Succeeded
@@ -1070,9 +1165,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
+    - Lost
     type: string
     x-enum-varnames:
-    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -1080,6 +1175,7 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
+    - TargetLost
   secret.RewrapCounts:
     properties:
       remaining:
@@ -1253,8 +1349,7 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/agents.agentList'
         "401":
           description: Unauthorized
           schema:
@@ -2031,6 +2126,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httperr.Body'
       security:
       - BearerAuth: []
       summary: Create a managed host
@@ -2155,6 +2254,10 @@ paths:
             $ref: '#/definitions/httperr.Body'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "422":
+          description: Unprocessable Entity
           schema:
             $ref: '#/definitions/httperr.Body'
       security:
@@ -2533,7 +2636,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/domain.UserResponse'
+            $ref: '#/definitions/auth.MeResponse'
         "401":
           description: Unauthorized
           schema:
@@ -3348,6 +3451,19 @@ paths:
       summary: Revoke an API token
       tags:
       - API tokens
+  /api/v1/version:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Server version and supported API range
+      tags:
+      - Operations
   /healthz:
     get:
       produces:

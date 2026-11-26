@@ -38,6 +38,7 @@ const (
 var matrix = map[string]access{
 	"GET /healthz":         public,
 	"GET /healthz/live":    public,
+	"GET /api/v1/version":  public,
 	"GET /healthz/ready":   public,
 	"GET /metrics":         public,
 	"POST /api/auth/login": public, "POST /api/auth/logout": public, "POST /api/auth/signup": public,

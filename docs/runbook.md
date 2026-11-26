@@ -71,7 +71,7 @@ For a detached target that failed to start:
 - `TimedOut` / `timeout`: the command exceeded `timeoutSeconds`.
 - `Failed` with an exit code: the program ran and failed; read stdout/stderr.
 - `Failed` / `remote_execution_failed`: SSH connection or authentication
-  failed. Check the host's `Ready` condition (`get hosts`), its endpoint and
+  failed. Check the host's `Ready` condition (`hosts`), its endpoint and
   trusted key, and the Access Profile's secret version.
 - `Failed` / `access_profile_unavailable`: the profile or its pinned revision
   was deleted or disabled after submission.
@@ -84,11 +84,11 @@ The Host controller verifies SSH with the bound Access Profile. Read
 - egress denied: the endpoint is outside `MACHINARCHY_SSH_ALLOWED_CIDRS` or
   its port is not allowed;
 - `HostKeyPendingApproval`: the keys were scanned and wait for an owner. Check
-  them out of band if you can, then `machinarchy trust host NAME` (or
-  `--all-pending`);
+  them out of band if you can, then `machinarchy hosts trust NAME` (or
+  `--all-pending`, which asks about each host);
 - `HostKeyChanged`: the host presents a key that is not trusted. Nothing was
   sent to it. This may be a reinstalled host or someone in the middle: verify
-  the new key out of band before `machinarchy trust host NAME --replace`. The
+  the new key out of band before `machinarchy hosts trust NAME --replace`. The
   change is audited once as `resource_host.host_key_changed`, with the
   presented and trusted fingerprints, and counted in
   `host_key_events_total{event="changed"}`;

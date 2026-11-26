@@ -1,6 +1,8 @@
 # Machinarchy CLI
 
-The `machinarchy` CLI connects to a Machinarchy API and lets you inspect resources using a kubectl-style command structure. It uses named contexts to keep API endpoints, credentials, and default environments together.
+The `machinarchy` CLI connects to a Machinarchy API and lets you inspect and manage resources using a kubectl-style command structure. It remembers the servers you have signed in to and keeps their credentials in a private file.
+
+Installing a release binary, verifying its checksum and upgrading are described in the project [README](../../README.md#install-the-cli).
 
 ## Build and run
 
@@ -21,9 +23,9 @@ Or through `make` (it loads `.env` first; exported variables such as
 `MACHINARCHY_CONFIG` still apply):
 
 ```sh
-make run-cli ARGS="get hosts"
-make run-cli ARGS="create host web-01 --endpoint 10.0.0.5:22 --profile deploy --label tier=web"
-make run-cli ARGS='run --host web-01 --yes -- sh -c "echo hi"'
+make run-cli ARGS="hosts"
+make run-cli ARGS="hosts add web-01 10.0.0.5 --access deploy --no-input --tag tier=web"
+make run-cli ARGS='run --on web-01 --yes -- uptime'
 ```
 
 All CLI arguments go in `ARGS`, quoted as one value; quotes inside it are
@@ -33,75 +35,83 @@ The CLI does not start the API. Start the API or monolith separately; the projec
 
 ## Quick setup
 
-Log in. The first login names the server and creates the context; the password prompt does not echo:
+Sign in. The command asks for what it needs; the password is typed without echo:
 
 ```sh
-go run ./cmd/machinarchy login --server http://localhost:8080 --context local --username admin
-go run ./cmd/machinarchy get hosts
+go run ./cmd/machinarchy login http://localhost:8080 --name local
+go run ./cmd/machinarchy whoami
+go run ./cmd/machinarchy hosts
 ```
 
-With an API token instead of a password (for example one from `machinarchy create token`), configure the context by hand, sending the token through standard input so it does not appear in shell history or process arguments:
+On a terminal it also offers to "stay signed in" with a 90-day device token. With an API token instead of a password (for example one from `machinarchy tokens create`), read it from stdin so it does not appear in shell history or process arguments:
 
 ```sh
-go run ./cmd/machinarchy config set-cluster local --server http://localhost:8080
-printf '%s' "$MACHINARCHY_USER_TOKEN" | go run ./cmd/machinarchy config set-credentials local --token-stdin
-go run ./cmd/machinarchy config set-context local --cluster local --user local
-go run ./cmd/machinarchy config use-context local
-go run ./cmd/machinarchy get hosts
+printf '%s' "$TOKEN" | go run ./cmd/machinarchy login http://localhost:8080 --name local --with-token
 ```
 
-The CLI creates its config file on the first `config` write. See [configuration](configuration.md) for context setup, file format, and precedence rules.
+In a script or CI, set `MACHINARCHY_SERVER` and `MACHINARCHY_TOKEN` instead; nothing is saved. See [configuration](configuration.md) for the files, which credential a command uses, and the precedence rules.
 
 ## Command overview
 
 ```text
-machinarchy get hosts [name-or-id]
-machinarchy config current-context
-machinarchy config get-contexts
-machinarchy config use-context NAME
-machinarchy config set-cluster NAME --server URL [--insecure-http]
-machinarchy config set-credentials NAME --token-stdin
-machinarchy config set-context NAME --cluster CLUSTER --user USER [--env ENVIRONMENT]
-machinarchy trust host NAME-OR-ID [--replace] [--fingerprint SHA256:...]
-machinarchy trust host --all-pending [--selector SELECTOR]
-machinarchy run (-l SELECTOR | --host NAME... | --all) [--timeout SECONDS] [--wait] [--detach] -- PROGRAM [ARG...]
-machinarchy logs operation ID [--host NAME-OR-ID] [--stream stdout|stderr] [--follow]
+machinarchy hosts [--status ready|attention|all] | hosts show|tag|remove NAME | hosts add|enroll|trust ...
+machinarchy login [SERVER] [--with-token] [--name NAME] [--email EMAIL --password-stdin] [--stay-signed-in]
+machinarchy logout [--everywhere]
+machinarchy whoami
+machinarchy switch [SERVER]
+machinarchy tokens | tokens create NAME --role reader|operator [--expires 90d] [--out FILE] | tokens revoke NAME
+machinarchy hosts trust NAME [--replace] [--fingerprint SHA256:...]
+machinarchy hosts trust --all-pending [-l TAGS]
+machinarchy run --on TARGET [--except TARGET] [--timeout 60s] [--detach] -- PROGRAM [ARG...]
+machinarchy run --on TARGET --do CAPABILITY [KEY=VALUE...]
+machinarchy run | run ID | run ID --host NAME [--follow] | run ID --retry-failed | run ID --cancel
 ```
 
-`run` without `--wait` is **detached**:
+`run` waits by default and shows the result grouped (hosts that printed the same are one line); exit 0, 8 (some failed) or 9 (all failed). It is **detached** with `--detach` or a `--timeout` above 15 minutes:
 
 - each host's command starts under a supervisor (`systemd-run` when usable, otherwise `setsid`) and the SSH session ends at once, so a command may run up to 24 hours (`--timeout`);
-- the controller polls the hosts, and a controller restart loses nothing;
-- `logs operation ID --follow` prints the output as it arrives;
+- the controller polls the hosts, and a controller restart loses nothing; Ctrl+C while watching only stops the watching;
+- `run ID --follow` watches it, `run ID --host NAME --follow` prints one host's output as it arrives;
 - a stream keeps its first and last 15 KiB, and a skipped middle part shows as one `[… N bytes omitted …]` line.
 
-With `--wait` the session stays open (at most 15 minutes) unless the timeout is longer or `--detach` is given. Reading output needs the right to run commands: readers see states and exit codes, not output.
+Reading output needs the right to run commands: readers see states and exit codes, not output. The full description is in [commands.md](commands.md#running-programs).
 
-`trust host` (owner only) shows the SSH host keys the controller observed for a
-host and, after confirmation, trusts exactly those keys. `--all-pending`
-approves every host waiting with `HostKeyPendingApproval`. A host that already
-trusts keys is changed only with `--replace`: check the new key out of band
-first. Hosts whose Access Profile uses `tofu` or `ca` need no approval (see
+`hosts trust` (owner only) shows the SSH host keys the controller observed for a
+host. On a terminal you approve by typing `yes` after comparing the key with the
+key on the machine; the `--yes` flag never answers this. In a script, pass `--fingerprint SHA256:...` of a key you
+checked; it must be one the controller saw (all observed keys are trusted
+together, because the controller refuses an incomplete set). A host that
+already trusts keys is changed only with `--replace`: type the first 8
+characters of the new key and the host's name (`--confirm NAME` in a script),
+and check the key out of band first. A host in a locally protected env also
+needs the env's name. `--all-pending` asks about each waiting host in turn, needs
+a terminal and is refused with `--no-input`. Hosts whose Access Profile uses
+`tofu` or `ca` need no approval (see
 [operations](../operations.md#ssh-host-keys)).
 
-The `get hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
+The `hosts` command supports table, JSON, and YAML output. `--env` / `-n` filters by Machinarchy environment name or numeric ID. The current API does not support server-side environment filtering, so the CLI fetches hosts and environments and filters the hosts locally.
 
 The CLI refuses to send its token over plain `http://` to a host that is not
 loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`): use `https://`.
-For a trusted lab network, opt in per cluster with `--insecure-http`. The
-opt-in does not cover a server given with `--server` or
-`MACHINARCHY_CLI_SERVER`.
+For a trusted lab network, opt in per server with `login --insecure-http`. The
+opt-in belongs to that saved server: an address given with `--server` or
+`MACHINARCHY_SERVER` never inherits it, and a saved credential is never sent to
+an address that is not a saved server.
 
-**New here?** Follow the [full user guide](user-full-guide.md): a step-by-step lab with three SSH servers, from login and CLI context to hosts, host-key trust, detached runs with `logs --follow`, cancel and cleanup.
+**New here?** Follow the five-minute path in the [README](../../README.md#five-minute-path), or the [full user guide](user-full-guide.md): a lab with three SSH servers, from login to hosts, host-key trust, detached runs, cancel and cleanup. Scripts: [CI](ci.md). Coming from the old commands: [migration](migration.md). Every error and what to do: [messages](messages.md).
+
+The design record is in [spec/](spec/) (see `M1-notes.md` to `M6-notes.md` for what was built and where it differs); where they disagree, these pages and `--help` describe the implemented behaviour.
 
 See [commands and flags](commands.md) for details and [example-cli.md](example-cli.md) for end-to-end recipes.
 
 ## Security notes
 
-- Prefer `config set-credentials NAME --token-stdin`; `--token TOKEN` is available but may expose secrets through shell history or process inspection.
-- The config file contains bearer tokens in plaintext. The CLI creates its parent directory with owner-only permissions and writes the config with mode `0600`; protect backups and any copied config files accordingly.
-- Use HTTPS for remote API servers. HTTP is useful for local development but sends the bearer token without transport encryption.
-- Treat `--verbose` output as operational logs. Current debug logging records the selected context and environment, not the token.
+- A password or a token is never a flag: it is typed without echo or read from stdin. A credential prints as `***` in every error, log and output format; `tokens create` shows a new token once.
+- Credentials live in their own file (`config.credentials.yaml`, mode `0600`, in a `0700` directory), apart from the settings. The CLI refuses a credentials file that other users can read. Protect backups and any copied config files accordingly.
+- A saved credential is sent only to the server it was saved for, over TLS with certificate verification that cannot be switched off (`login --ca-file` trusts a private CA for one server). Plain `http://` to a host that is not on this computer needs `--insecure-http`.
+- Commands that act as the owner use the login session only: an API token can never be an owner, and the CLI says so before sending anything.
+- Text that comes from a server or a remote host (host names, command output, error messages) is cleaned of terminal escape sequences and control characters before it is printed, so a remote command cannot clear your screen or write to your clipboard. `-o json` and `-o yaml` escape control characters instead.
+- Treat `--verbose` output as operational logs. Debug logging records the selected server and environment, never a credential.
 
 ## Extending the command tree
 
@@ -112,7 +122,7 @@ For example, a future `apply` command can be registered in the core group withou
 ## Further reading
 
 - [Full user guide: a three-host SSH lab](user-full-guide.md)
-- [Configuration and contexts](configuration.md)
+- [Configuration, servers and credentials](configuration.md)
 - [Commands and flags](commands.md)
 - [Troubleshooting](troubleshooting.md)
 - [Runnable CLI examples](example-cli.md)

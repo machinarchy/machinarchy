@@ -7,7 +7,7 @@
 #   make build                build all binaries into ./bin
 #   make verify               format, tidy, vet, lint and test
 #   make dev-up / dev-down    start or stop infrastructure and applications
-#   make run-cli ARGS="get hosts"
+#   make run-cli ARGS="hosts"
 #
 # Requires GNU Make 3.81 or newer (the macOS default works). The targets are
 # split by topic under mk/:

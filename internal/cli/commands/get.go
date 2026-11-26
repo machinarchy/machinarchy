@@ -3,193 +3,29 @@ package commands
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/machinarchy/machinarchy/internal/cli"
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
-	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/spf13/cobra"
 )
 
 // maxListPages bounds how many pages a command follows (500 items each).
 const maxListPages = 200
 
-// NewGetCommand registers resource read commands.
+// NewGetCommand registers the one remaining read command: agent-tokens (the source of the agent ID that
+// `hosts revoke-agent` needs until the server reports it per host, C-09).
 func NewGetCommand(factory *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "get",
-		Short: "Display one or more resources",
-		Args:  cobra.NoArgs,
-	}
-	command.AddCommand(newGetHostsCommand(factory), newGetProfilesCommand(factory), newGetOperationsCommand(factory),
-		newGetTokensCommand(factory), newGetAgentTokensCommand(factory))
-	return command
-}
-
-func newGetHostsCommand(factory *cli.Factory) *cobra.Command {
-	var selector string
-	command := &cobra.Command{
-		Use:     "hosts [name-or-id]",
-		Aliases: []string{"host"},
-		Short:   "List managed hosts or display one",
-		Args:    cobra.MaximumNArgs(1),
-		Example: "  machinarchy get hosts\n  machinarchy get hosts -l tier=web\n  machinarchy get hosts web-01 -o yaml\n  machinarchy get hosts --env production",
-		RunE: func(command *cobra.Command, args []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			query := api.HostQuery{Selector: selector}
-			if query.EnvironmentID, err = resolveEnvironment(command.Context(), client, factory.Config().Environment()); err != nil {
-				return err
-			}
-			hosts, err := listAllHosts(command.Context(), client, query)
-			if err != nil {
-				return fmt.Errorf("list hosts: %w", err)
-			}
-			if len(args) == 1 {
-				host, err := pickHost(hosts, args[0])
-				if err != nil {
-					return err
-				}
-				return printer.Host(host)
-			}
-			return printer.Hosts(hosts)
-		},
-	}
-	command.Flags().StringVarP(&selector, "selector", "l", "", "Filter by selector, for example tier=web,region in (eu,us)")
-	return command
-}
-
-func newGetProfilesCommand(factory *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "profiles",
-		Aliases: []string{"profile", "access-profiles"},
-		Short:   "List Access Profiles (credential references, never secret values)",
+		Use:     "get",
+		Short:   "Display one or more resources",
 		Args:    cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			profiles, err := collect(func(cursor string) (api.Page[api.AccessProfile], error) {
-				return client.ListAccessProfiles(command.Context(), cursor)
-			})
-			if err != nil {
-				return fmt.Errorf("list access profiles: %w", err)
-			}
-			if printer.Format() != output.FormatTable {
-				return printer.Document(profiles)
-			}
-			rows := make([][]string, 0, len(profiles))
-			for _, profile := range profiles {
-				rows = append(rows, []string{profile.Name, profile.ID, strconv.FormatUint(profile.CurrentRevision, 10), profile.Description})
-			}
-			return printer.Table([]string{"NAME", "ID", "REVISION", "DESCRIPTION"}, rows)
-		},
+		Example: "  machinarchy get agent-tokens",
 	}
-}
-
-func newGetOperationsCommand(factory *cli.Factory) *cobra.Command {
-	var state string
-	var limit int
-	command := &cobra.Command{
-		Use:     "operations [id]",
-		Aliases: []string{"operation", "ops", "runs"},
-		Short:   "List recent operations or display one with per-host results",
-		Args:    cobra.MaximumNArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			printer, err := factory.Printer(command.OutOrStdout(), output.FormatTable)
-			if err != nil {
-				return err
-			}
-			client, err := factory.NewAPIClient(command.Context())
-			if err != nil {
-				return err
-			}
-			if len(args) == 1 {
-				op, err := client.GetOperation(command.Context(), args[0])
-				if err != nil {
-					return fmt.Errorf("get operation: %w", err)
-				}
-				return printOperation(printer, op)
-			}
-			page, err := client.ListOperations(command.Context(), api.OperationQuery{State: state, Limit: limit})
-			if err != nil {
-				return fmt.Errorf("list operations: %w", err)
-			}
-			if printer.Format() != output.FormatTable {
-				return printer.Document(page.Items)
-			}
-			rows := make([][]string, 0, len(page.Items))
-			for _, op := range page.Items {
-				rows = append(rows, []string{op.ID, op.State, targetCounts(op.Targets), op.CreatedAt.Local().Format(time.DateTime)})
-			}
-			return printer.Table([]string{"ID", "STATE", "TARGETS", "CREATED"}, rows)
-		},
-	}
-	command.Flags().StringVar(&state, "state", "", "Only operations in this state, for example Running")
-	command.Flags().IntVar(&limit, "limit", 20, "Number of operations to show (newest first)")
+	command.AddCommand(newGetAgentTokensCommand(factory))
 	return command
-}
-
-func printOperation(printer *output.Printer, op *api.Operation) error {
-	if printer.Format() != output.FormatTable {
-		return printer.Document(op)
-	}
-	rows := make([][]string, 0, len(op.Status.Targets))
-	for _, target := range op.Status.Targets {
-		exit, detail := "-", ""
-		if target.Result != nil {
-			if target.Result.ExitCode != nil {
-				exit = strconv.Itoa(*target.Result.ExitCode)
-			}
-			detail = target.Result.ErrorClass
-			for _, text := range []string{target.Result.Stdout, target.Result.Stderr, target.Result.Output} {
-				if detail == "" {
-					detail = firstLine(text)
-				}
-			}
-		}
-		rows = append(rows, []string{target.Spec.DisplayName, target.State, exit, detail})
-	}
-	if err := printer.Table([]string{"HOST", "STATE", "EXIT", "OUTPUT"}, rows); err != nil {
-		return err
-	}
-	return printer.Table([]string{"OPERATION", "STATE"}, [][]string{{op.ID, op.Status.State}})
-}
-
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	if len(line) > 80 {
-		line = line[:77] + "..."
-	}
-	return line
-}
-
-func targetCounts(counts map[string]int) string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
-	}
-	return strings.Join(parts, ",")
 }
 
 // collect follows nextCursor until the last page.
@@ -207,7 +43,7 @@ func collect[T any](fetch func(cursor string) (api.Page[T], error)) ([]T, error)
 		}
 		cursor = page.NextCursor
 	}
-	return nil, clierr.Usagef("the result has more than %d pages; narrow it with a selector", maxListPages)
+	return nil, clierr.Usagef("the result has more than %d pages; narrow it with tags", maxListPages)
 }
 
 func listAllHosts(ctx context.Context, client api.Client, query api.HostQuery) ([]api.Host, error) {
