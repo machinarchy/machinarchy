@@ -84,3 +84,29 @@ func TestQueuedOperationCancellation(t *testing.T) {
 }
 
 func intPointer(value int) *int { return &value }
+
+// C-05: the target cap is final at MaxOperationTargets; one more is refused.
+func TestOperationTargetCapIsFinal(t *testing.T) {
+	now := time.Now().UTC()
+	build := func(n int) error {
+		targets := make([]OperationTargetSpec, n)
+		for i := range targets {
+			id, err := NewResourceID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			targets[i] = OperationTargetSpec{HostID: id, HostGeneration: 1, DisplayName: "h"}
+		}
+		_, err := NewRunOperation(1, ActorRef{UserID: 5}, OperationSpec{
+			Targets: targets,
+			Run:     &RunSpec{Argv: []string{"/usr/bin/true"}, TimeoutSeconds: 30, Concurrency: 1},
+		}, now)
+		return err
+	}
+	if err := build(MaxOperationTargets); err != nil {
+		t.Fatalf("%d targets refused: %v", MaxOperationTargets, err)
+	}
+	if err := build(MaxOperationTargets + 1); !errors.Is(err, ErrInvalidResource) {
+		t.Fatalf("%d targets: err = %v, want ErrInvalidResource", MaxOperationTargets+1, err)
+	}
+}

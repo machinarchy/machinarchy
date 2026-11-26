@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — C-05/C-06: operation target cap decided as final at 200 (branch ai/p10-controller-gaps)
+
+- **Decision (owner, option A):** `MaxOperationTargets` stays 200; C-06 (`summary` and `targets` endpoints) is not built. No controller behaviour changed. A raise would need C-06 and a 500/5,000-host load test; no such lab exists.
+- **Changed:** matrix C-05/C-06, `docs/cli/commands.md` wording, a comment in `runutil.go`; new test `TestOperationTargetCapIsFinal` (200 accepted, 201 refused). The CLI refusal at 201 hosts was already tested (`runs_test.go`).
+- **Checks run:** gofmt, `go vet`, `go test -race ./internal/domain/resource/ ./internal/cli/...`. Not run: Postgres tests, smoke, e2e, any load test (no lab).
+
 ## 2026-11-26 — C-11: server version and API range at `GET /api/v1/version` (branch ai/p10-controller-gaps)
 
 - **Implemented (controller, additive):** public `GET /api/v1/version` (no auth, registered with the health routes) returns `{"version","apiMin","apiMax"}`; the range constants `buildinfo.APIMin/APIMax` (both 1) are new. No `X-Machinarchy-Version` header (owner-approved shape). `docs/api/swagger.*` regenerated.

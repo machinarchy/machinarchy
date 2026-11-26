@@ -31,7 +31,7 @@ const (
 	// defaultAttachedConcurrency is the default fan-out of a run that is watched.
 	defaultAttachedConcurrency = 5
 	// maxRunTargets is the most hosts one run can target (the controller's
-	// MaxOperationTargets; C-05 proposes raising it).
+	// MaxOperationTargets; C-05 decided: final).
 	maxRunTargets = 200
 	// runIDPrefixMin is the shortest run ID prefix the CLI resolves.
 	runIDPrefixMin = 6
