@@ -10,7 +10,7 @@ Until then: decode failures split into "wrong shape" (update the CLI) and "not J
 
 ## 6.6 Hardening
 
-**Fuzz targets (CLI).** Sanitiser `FuzzClean`, `FuzzStream`; target parser `FuzzParse`; normaliser `FuzzNormalise`; v1/v2 config reader `FuzzReadDocument` (`config/fuzz_test.go`); API error decoder `FuzzNewError` and success decoder `FuzzDecodeResponse` (`api/fuzz_test.go`). Each ran 10-20 s locally with no finding. **Not wired into `make fuzz`/CI**: `FUZZ_TARGETS` in `mk/checks.mk` lists no `internal/cli` target, and editing that file needs owner approval. One line per target would do it.
+**Fuzz targets (CLI).** Sanitiser `FuzzClean`, `FuzzStream`; target parser `FuzzParse`; normaliser `FuzzNormalise`; v1/v2 config reader `FuzzReadDocument` (`config/fuzz_test.go`); API error decoder `FuzzNewError` and success decoder `FuzzDecodeResponse` (`api/fuzz_test.go`). Each ran 10-20 s locally with no finding. Wired into `make fuzz` via `FUZZ_TARGETS` in `mk/checks.mk` (owner approved).
 
 **Scans.** `make vuln` (govulncheck with the repo allowlist): no unaccepted vulnerabilities in called code. gosec runs inside golangci-lint (0 issues).
 

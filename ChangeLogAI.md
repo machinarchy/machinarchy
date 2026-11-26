@@ -1,5 +1,9 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.6 follow-up: CLI fuzz targets in `make fuzz` (branch ai/p6-automation-docs-hardening)
+
+- **Changed** `mk/checks.mk` (owner approved): `FUZZ_TARGETS` now lists the seven `internal/cli` fuzz targets, so `make fuzz` and the CI fuzz smoke run them. Checks run: `make fuzz FUZZTIME=3s` pass. Not run: CI itself.
+
 ## 2026-11-26 — CLI M6 step 6.6: hardening (branch ai/p6-automation-docs-hardening)
 
 - **Tests added:** fuzz targets `FuzzReadDocument` (`internal/cli/config/fuzz_test.go`), `FuzzNewError` and `FuzzDecodeResponse` (`internal/cli/api/fuzz_test.go`); the sanitiser, target parser and normaliser fuzz targets already existed. No code under test changed.
