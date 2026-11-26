@@ -46,6 +46,31 @@ More in [docs/architecture.md](docs/architecture.md) and the
 - NATS with JetStream only if you use agents.
 - For development tools: golangci-lint v2, swag v1.16.4, Docker with BuildKit.
 
+## Install the CLI
+
+Release binaries are `machinarchy-<os>-<arch>` for Linux and macOS, `amd64` and
+`arm64`, with a `checksums.txt` and a GitHub build attestation. Windows binaries
+are not published (owner decision pending). Download the binary and
+`checksums.txt` from the [latest release](https://github.com/machinarchy/machinarchy/releases),
+then verify before installing (Linux; on macOS use `shasum -a 256 -c -`):
+
+```sh
+grep -E '  machinarchy-linux-amd64$' checksums.txt | sha256sum --check -
+gh attestation verify machinarchy-linux-amd64 --repo machinarchy/machinarchy \
+  --signer-workflow machinarchy/machinarchy/.github/workflows/release.yml
+sudo install -m 0755 machinarchy-linux-amd64 /usr/local/bin/machinarchy
+machinarchy version
+```
+
+Do not install a binary whose checksum does not match. `machinarchy version`
+prints the version, commit, platform and Go version (`-o json` for scripts);
+there is no `--version` flag.
+
+**Upgrade:** repeat the same steps with the new release, then run
+`machinarchy version`. Saved servers and credentials stay as they are. If the
+CLI answers "Update the CLI", the server is newer than the CLI; see
+[supported servers](docs/cli/commands.md). Release notes list breaking changes.
+
 ## Build
 
 ```sh

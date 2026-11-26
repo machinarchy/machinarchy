@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.4: install and upgrade docs (branch ai/p6-automation-docs-hardening)
+
+- **Docs only:** `README.md` section "Install the CLI" (checksum and attestation verification, `machinarchy version`, upgrade procedure); pointer in `docs/cli/README.md`. Verified against `.github/workflows/release.yml`: `publish-assets` already builds linux/darwin amd64/arm64, writes `checksums.txt` and attests; no workflow or script was changed.
+- **Not done:** Windows build (Q6, owner decision, documented as not published); `--version` flag does not exist (not added); agent protocol pin waits for `protocol/v0.1.0` (agent repo only has `v0.0.1`). Checks: no doc link checker in the repo; none run.
+
 ## 2026-11-26 — CLI M6 step 6.3: version-skew messaging and C-11 proposal (branch ai/p6-automation-docs-hardening)
 
 - **Changed** `internal/cli/api/client.go`: a response that is valid JSON of the wrong shape now says "Update the CLI" (exit 4); text that is not JSON keeps the "check the address" hint. Test `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress`.

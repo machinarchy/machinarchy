@@ -2,6 +2,8 @@
 
 The `machinarchy` CLI connects to a Machinarchy API and lets you inspect and manage resources using a kubectl-style command structure. It remembers the servers you have signed in to and keeps their credentials in a private file.
 
+Installing a release binary, verifying its checksum and upgrading are described in the project [README](../../README.md#install-the-cli).
+
 ## Build and run
 
 Run from the repository root with Go installed:
