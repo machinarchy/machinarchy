@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-27 — Fix: huge `Retry-After` overflowed to a negative pause (found by CI fuzz smoke; branch feat/task-first-cli-gateway-transport)
+
+- **Fixed:** `internal/cli/api/errors.go`: `seconds * time.Second` wrapped negative for values above about 9.2e9 seconds, so `RetryAfter` could be negative; the value is now capped (24 h) before it is multiplied. Regression seeds added to `FuzzNewError` (`fuzz_test.go`); verified the seed fails on the old code (`retry-after out of range: -1s`) and passes now.
+- **Checks run:** `go test -race -count=1 ./internal/cli/api/` pass. Not run: the 15 s `make fuzz` in full.
+- **Known, not fixed here:** CI job "e2e" fails because CI builds the agent from `machinarchy-agent` `main` (`AGENT_REF`), which still uses NATS; the gateway-transport agent commit (1c1b3ee) is only on a local agent branch. It needs that agent change merged (or `MACHINARCHY_AGENT_REF` pointed at it) first.
+
 ## 2026-11-26 — 14.1: C-07 not built; docs say where the agent binary comes from (branch ai/p10-controller-gaps)
 
 - **Decision (owner, option C):** no `GET /api/v1/agents/install`. The controller has no source for agent release data, releases are per platform in the agent repository, and the agent-repo `install.sh` (Q10) does not exist yet. No controller or CLI change; revisit as option A (operator-configured manifest, `.plan/14.1.md`) when `install.sh` exists.

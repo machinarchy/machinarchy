@@ -13,6 +13,8 @@ func FuzzNewError(f *testing.F) {
 	f.Add(`{"error":"nope"}`, "req-1", "5", 400)
 	f.Add(`{"detail":"x","title":1,"nested":{"a":[1]}}`, "", "-1", 500)
 	f.Add("<html>\x1b[31mred\x1b[0m</html>", "id\x1b]0;x\x07", "999999999999999999999", 502)
+	f.Add(`{"error":"x"}`, "", "9223372036854775807", 429)
+	f.Add(`{"error":"x"}`, "", "9223372036", 503)
 	f.Add(`[1,2`, "", "", 0)
 	f.Add(`{"error":"\u001b[2J\u0000"}`, "\n", "3", 403)
 

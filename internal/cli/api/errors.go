@@ -153,9 +153,12 @@ func newError(response *http.Response, method, path string, body []byte) *Error 
 	}
 
 	if seconds, err := strconv.Atoi(strings.TrimSpace(response.Header.Get("Retry-After"))); err == nil && seconds > 0 {
-		apiErr.RetryAfter = time.Duration(seconds) * time.Second
-		if apiErr.RetryAfter > maxRetryAfter {
+		// Cap before multiplying: a huge value would overflow the Duration
+		// and wrap to a negative pause.
+		if seconds > int(maxRetryAfter/time.Second) {
 			apiErr.RetryAfter = maxRetryAfter
+		} else {
+			apiErr.RetryAfter = time.Duration(seconds) * time.Second
 		}
 	}
 
