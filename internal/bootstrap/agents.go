@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/machinarchy/machinarchy/internal/agentgateway"
+	natsbus "github.com/machinarchy/machinarchy/internal/agentgateway/bus/nats"
 	"github.com/machinarchy/machinarchy/internal/agentkeys"
 	"github.com/machinarchy/machinarchy/internal/config"
 	"github.com/machinarchy/machinarchy/internal/store"
@@ -55,8 +56,12 @@ func newAgentGateway(ctx context.Context, cfg config.AgentGatewayConfig, stores 
 		}
 		issuer = &agentgateway.NATSIssuer{Account: cfg.NATSAccount, Signer: signer, TTL: cfg.AgentJWTTTL}
 	}
+	natsBus, err := natsbus.New(natsbus.Config{URL: cfg.NATSURL, Options: options, Logger: slog.Default()})
+	if err != nil {
+		return nil, nil, fmt.Errorf("configure agent gateway bus: %w", err)
+	}
 	gateway, err := agentgateway.New(stores.Agents, agentgateway.Config{
-		NATSURL: cfg.NATSURL, NATSOptions: options, Signer: keys.Signer(), EnrollmentToken: cfg.EnrollmentToken,
+		Bus: natsBus, Signer: keys.Signer(), EnrollmentToken: cfg.EnrollmentToken,
 		LeaseTTL: cfg.LeaseTTL, Heartbeat: cfg.Heartbeat, Logger: slog.Default(), Registerer: registry,
 		NATSIssuer: issuer,
 	})

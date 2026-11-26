@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"github.com/machinarchy/machinarchy-agent/protocol/agentv1"
+	"github.com/machinarchy/machinarchy/internal/agentgateway/bus/memory"
 
 	"github.com/machinarchy/machinarchy/internal/testutil/natstest"
 )
@@ -102,7 +103,7 @@ func TestNATSIssuerValidation(t *testing.T) {
 	account, _ := nkeys.CreateAccount()
 	accountPublic, _ := account.PublicKey()
 	user, _ := nkeys.CreateUser()
-	valid := Config{NATSURL: "nats://x:4222", Signer: key(1), EnrollmentToken: enrollmentToken}
+	valid := Config{Bus: memory.New(), Signer: key(1), EnrollmentToken: enrollmentToken}
 	for name, tc := range map[string]struct {
 		issuer *NATSIssuer
 		ok     bool

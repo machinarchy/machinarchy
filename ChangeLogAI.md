@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-26 — Phase 8 step 8.2: agent gateway uses a `Bus` interface with a NATS adapter (branch ai/p8-gateway-transport)
+
+- **Refactor, behavior unchanged:** `internal/agentgateway` no longer imports nats-io (except `natsjwt.go`). New `bus` package (`Bus`: Serve, EnsureAgent, Publish, Ready), `bus/nats` (the moved JetStream code: stream, per-agent durable consumer AckWait 30s / MaxDeliver 20, publish with message-ID dedupe, inbox prefix, result subject to agent identity), `bus/memory` (in-process bus) and `bus/bustest` (shared contract). `Config.NATSURL`/`NATSOptions` are replaced by `Config.Bus`; `internal/bootstrap/agents.go` builds the NATS adapter. Register, renew and result handling is now transport-neutral byte handlers in the gateway (the base for the gRPC front in 8.3).
+- **Deviations:** the interface lives in `internal/agentgateway/bus` (not `agentgateway/bus.go`) to avoid an import cycle with the adapter; no adapter config key was added because there is only one adapter. The NATS adapter does not test ack-timeout redelivery (fixed 30s); the in-memory bus does.
+- **Tests added:** contract suite run against the in-memory bus and the NATS adapter (order, offline queue, isolation, idempotent message ID, nack redelivery, result identity), plus a test that nats-io is imported only in `bus/nats` and `natsjwt.go`.
+- **Checks run:** `go build ./...`, `go vet ./...`, `golangci-lint run` on agentgateway and bootstrap (0 issues), `go test -race -count=1 ./internal/agentgateway/...`, `go test -race ./test/e2e/...`, `go test -race ./test/ha/...` and `go test ./internal/...` pass. Not run: Postgres store tests, real agent, multi-node HA beyond the harness.
+
 ## 2026-11-26 — Phase 8 step 8.1: ADR-059 gateway-only agent transport (branch ai/p8-gateway-transport)
 
 - **Docs only (planned, not implemented):** added `docs/adr/ADR-059-agent-gateway-transport.md` (status Accepted, owner approved) with the owner's answers to Q7-Q10 (no legacy NATS agents, gRPC, current delivery guarantees kept, owner tags the protocol release), the transport-neutral flow, a kept/changed/dropped table of current guarantees and a threat list. Linked from `docs/adr/README.md` and `docs/architecture.md`.
