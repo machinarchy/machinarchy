@@ -324,3 +324,29 @@ func TestProgressZeroTotal(t *testing.T) {
 		t.Fatalf("zero-total progress = %q", out.String())
 	}
 }
+
+// A character device such as /dev/null is not a terminal: asking it a question
+// would only read end-of-file.
+func TestIsTerminalReader(t *testing.T) {
+	t.Parallel()
+
+	if IsTerminalReader(strings.NewReader("")) {
+		t.Fatal("a string reader is not a terminal")
+	}
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skip("no null device")
+	}
+	defer func() { _ = null.Close() }()
+	if IsTerminalReader(null) {
+		t.Fatal("/dev/null is not a terminal")
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close(); _ = writer.Close() }()
+	if IsTerminalReader(reader) {
+		t.Fatal("a pipe is not a terminal")
+	}
+}

@@ -36,7 +36,7 @@ type document struct {
 }
 
 // Where returns the file path.
-func (f *File) Where() string { return "file " + f.path }
+func (f *File) Where() string { return "a private file" }
 
 // Get returns the credentials saved for server.
 func (f *File) Get(server string) (Entry, error) {

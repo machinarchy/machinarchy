@@ -235,7 +235,7 @@ func TestSlotOfAndWhere(t *testing.T) {
 		t.Fatal("SlotOf is wrong")
 	}
 	store, path := newStore(t)
-	if store.Where() != "file "+path {
+	if store.Where() != "a private file" || strings.Contains(store.Where(), path) {
 		t.Fatalf("Where = %q", store.Where())
 	}
 }

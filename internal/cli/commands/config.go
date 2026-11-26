@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -193,14 +194,19 @@ func printShow(command *cobra.Command, doc showDocument) error {
 			if c.value == nil {
 				continue
 			}
-			expiry := "no expiry known"
-			if c.value.ExpiresAt != nil {
-				expiry = "expires " + c.value.ExpiresAt.Local().Format("2006-01-02 15:04")
+			details := []string{string(c.value.Kind), "secret " + c.value.Secret}
+			if c.value.Name != "" {
+				details = append(details, "name "+sanitize.Line(c.value.Name))
 			}
-			if c.value.Expired {
-				expiry = "expired"
+			switch {
+			case c.value.Expired:
+				details = append(details, "expired")
+			case c.value.ExpiresAt != nil:
+				details = append(details, "expires "+c.value.ExpiresAt.Local().Format("2006-01-02 15:04"))
+			default:
+				details = append(details, "no expiry known")
 			}
-			if err := line("  %-8s %s (%s) %s, %s", c.label+":", c.value.Kind, c.value.Secret, sanitize.Line(c.value.Name), expiry); err != nil {
+			if err := line("  %-8s %s", c.label+":", strings.Join(details, ", ")); err != nil {
 				return err
 			}
 		}

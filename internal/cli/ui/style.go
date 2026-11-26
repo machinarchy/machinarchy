@@ -59,6 +59,17 @@ func IsTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(file.Fd())) // #nosec G115 -- a file descriptor fits in int
 }
 
+// IsTerminalReader reports whether r is an interactive terminal. A character
+// device such as /dev/null is not one, although it is a "char device".
+func IsTerminalReader(r io.Reader) bool {
+	file, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+
+	return term.IsTerminal(int(file.Fd())) // #nosec G115 -- a file descriptor fits in int
+}
+
 // Width returns the usable line width for w: the terminal's width, else the
 // COLUMNS variable, else 80. It is never below 40.
 func Width(getenv func(string) string, w io.Writer) int {

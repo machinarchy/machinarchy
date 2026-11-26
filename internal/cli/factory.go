@@ -337,15 +337,7 @@ func (f *Factory) interactive() bool {
 	return check(f.Streams.In)
 }
 
-func isTerminal(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
+func isTerminal(reader io.Reader) bool { return ui.IsTerminalReader(reader) }
 
 // NewAPIClient resolves the server and the credential this command runs with
 // and constructs its API client. A command marked AnnotationOwner gets the

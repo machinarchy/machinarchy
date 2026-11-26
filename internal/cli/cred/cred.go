@@ -100,6 +100,7 @@ type Store interface {
 	Put(server string, c Credential) error
 	// Delete removes the given slots, or both when none is given.
 	Delete(server string, slots ...Slot) error
-	// Where says where credentials are kept, for `config show`.
+	// Where says in words what kind of place credentials are kept in, for
+	// `config show` ("a private file"); the path is shown separately.
 	Where() string
 }

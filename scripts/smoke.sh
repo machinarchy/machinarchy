@@ -38,10 +38,7 @@ token=$(curl -sf "$api/api/auth/login" -H 'Content-Type: application/json' \
 	fail "login"
 export XDG_CONFIG_HOME="$work"
 cli() { "$root/bin/machinarchy" --config "$work/cli.yaml" "$@"; }
-cli config set-cluster smoke --server "$api" >/dev/null
-printf '%s' "$token" | cli config set-credentials smoke --token-stdin >/dev/null
-cli config set-context smoke --cluster smoke --user smoke >/dev/null
-cli config use-context smoke >/dev/null
+printf '%s' "smoke-admin-password" | cli login "$api" --name smoke --email admin --password-stdin --no-stay-signed-in >/dev/null
 
 step "secret and Access Profile"
 # -o json: the default output is a line for people, not data for scripts.
