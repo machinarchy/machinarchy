@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.3](https://github.com/machinarchy/machinarchy/compare/v0.0.2...v0.0.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* task-first CLI, gateway-only agent transport and controller changes (#PR) ([5328ee2](https://github.com/machinarchy/machinarchy/commit/5328ee26f30b6b7effa5edc0108dced26326e1d0))
+
 ## [0.0.2](https://github.com/machinarchy/machinarchy/compare/v0.0.1...v0.0.2) (2026-11-25)
 
 
