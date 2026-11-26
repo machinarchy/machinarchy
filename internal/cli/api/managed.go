@@ -197,7 +197,11 @@ type Page[T any] struct {
 type HostQuery struct {
 	Selector      string
 	EnvironmentID int
-	Cursor        string
+	// Phase is Pending, Active or Deleting; empty means any.
+	Phase  string
+	Cursor string
+	// Limit is the page size (server maximum 500); 0 uses the server default.
+	Limit int
 }
 
 // OperationQuery filters GET /managed/operations.
@@ -231,8 +235,14 @@ func (c *HTTPClient) ListHosts(ctx context.Context, query HostQuery) (Page[Host]
 	if query.EnvironmentID > 0 {
 		values.Set("environment", strconv.Itoa(query.EnvironmentID))
 	}
+	if query.Phase != "" {
+		values.Set("phase", query.Phase)
+	}
 	if query.Cursor != "" {
 		values.Set("cursor", query.Cursor)
+	}
+	if query.Limit > 0 {
+		values.Set("limit", strconv.Itoa(query.Limit))
 	}
 	var page Page[Host]
 	err := c.get(ctx, withQuery(managedPath("hosts"), values), &page)
