@@ -133,7 +133,19 @@ machinarchy envs remove old-lab               # type the name; in a script: --co
 
 `envs use` only changes the CLI config; the env must exist on the server. `--protected` is a **local guard**: this server cannot enforce protected environments yet, so the guard lives in the CLI config of this computer and protects you from your own typing mistakes, not from other people, other computers or other tools. It is shown as `yes (local)`. `envs remove` is confirmed by typing the env's name (`--confirm NAME` in a script, `--yes` is not enough); a locally protected env also needs `--confirm-env NAME` in a script. Removing an env clears it as the active env and drops its local guard; this command deletes no host. Moving a host between envs needs controller support (gap C-01) and arrives with `hosts move`.
 
-## Managing hosts
+## Hosts
+
+```sh
+machinarchy hosts                             # NAME ENV ADDRESS HOW STATUS TAGS
+machinarchy hosts --status attention          # everything that is not ready (or: ready, all)
+machinarchy hosts show web-01                 # status, env, address, access, conditions, host keys, recent runs
+machinarchy hosts tag web-01 tier=web canary- # KEY=VALUE sets, KEY- removes
+machinarchy hosts remove web-01               # type the name; in a script: --confirm web-01
+```
+
+`STATUS` is one of `ready`, `waiting for key approval`, `key changed`, `checking`, `cannot connect` or `needs attention`, worked out from the host's conditions (`hosts show` and `-o json` show the raw reasons). `HOW` is `ssh` or `agent` (from the access entry). Tags follow the controller's rules (letters, digits, `.`, `_`, `-`; keys may also hold `/`; at most 63 characters; `name`, `id`, `status`, `environment` and a few more are reserved); the CLI checks them before sending, and a host that changed meanwhile is reported as "the host changed", not overwritten. `hosts remove` takes the host out of the inventory **only**: an installed agent is not uninstalled or revoked, the access entry and credentials are kept, and the machine is not touched; the output says so. A host in a locally protected env (`envs add --protected`) also needs the env's name (typed, or `--confirm-env ENV` in a script) for `tag` and `remove`. `hosts move NAME --env ENV` checks the names and then refuses: the server cannot change a host's env yet (gap C-01). `hosts add`, `hosts trust` and the agent commands follow in later steps; the older `get hosts`, `label host` and `delete host` still work until step 3.8.
+
+## Managing hosts (older commands)
 
 ```sh
 go run ./cmd/machinarchy get profiles

@@ -209,6 +209,13 @@ func init() {
 		Primary: "Access entry {name} removed.",
 		Why:     "The stored key or password was not retired and still exists on the server.",
 		Next:    "machinarchy secret list"})
+	register(Message{ID: "host.tagged", Kind: KindSuccess,
+		Primary: "Tags of {host}: {tags}.",
+		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.removed", Kind: KindSuccess,
+		Primary: "Host {host} removed from the inventory.",
+		Why:     "Only the inventory entry is gone. Not done: an installed agent was not uninstalled or revoked, the access entry and its credentials were kept, and the machine was not touched.",
+		Next:    "machinarchy access"})
 	register(Message{ID: "token.created", Kind: KindSuccess,
 		Primary: "Token {name} created ({role}, expires {expires}). It is shown only once:"})
 	register(Message{ID: "token.created_file", Kind: KindSuccess,
