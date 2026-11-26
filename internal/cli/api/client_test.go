@@ -923,3 +923,23 @@ func TestTargetOutputRequest(t *testing.T) {
 		t.Fatalf("decoded = %+v", out)
 	}
 }
+
+// K-04 (version skew, no C-11): JSON of the wrong shape names an update; text
+// that is not JSON names the address. Both are exit 4.
+func TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress(t *testing.T) {
+	var target struct {
+		Items []string `json:"items"`
+	}
+	skew := decodeResponse(200, "/api/v1/x", []byte(`{"items":{"a":1}}`), &target)
+	page := decodeResponse(200, "/api/v1/x", []byte(`<html>sign in</html>`), &target)
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{"wrong shape": {skew, "Update the CLI"}, "not JSON": {page, "points at the Machinarchy API"}} {
+		var coded *clierr.Error
+		if !errors.As(tc.err, &coded) || coded.ExitCode() != clierr.ExitUnavailable || !strings.Contains(coded.Hint, tc.want) {
+			t.Errorf("%s: %v (want hint containing %q)", name, tc.err, tc.want)
+		}
+	}
+}

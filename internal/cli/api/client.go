@@ -26,6 +26,10 @@ import (
 const (
 	maxResponseBytes int64 = 16 << 20
 
+	// versionSkewHint is for an answer that is valid JSON of the wrong shape:
+	// the usual cause is a server and a CLI of different releases.
+	versionSkewHint = "The server answered in a way this CLI does not understand. Update the CLI, or check the address: " +
+		"this CLI supports servers of the same release (docs/cli/commands.md, section \"Supported servers\")."
 	invalidResponseHint = "The server did not return the expected JSON. Check that the server URL points at the Machinarchy API and not at a proxy or web page."
 )
 
@@ -360,8 +364,14 @@ func decodeResponse(status int, endpoint string, body []byte, destination any) e
 	}
 
 	if err := json.Unmarshal(body, destination); err != nil {
+		hint := invalidResponseHint
+		var shape *json.UnmarshalTypeError
+		if errors.As(err, &shape) && json.Valid(body) {
+			hint = versionSkewHint
+		}
+
 		return clierr.Wrap(clierr.ExitUnavailable,
-			fmt.Errorf("decode API response from %s: %w", endpoint, err), invalidResponseHint)
+			fmt.Errorf("decode API response from %s: %w", endpoint, err), hint)
 	}
 
 	return nil

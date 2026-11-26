@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.3: version-skew messaging and C-11 proposal (branch ai/p6-automation-docs-hardening)
+
+- **Changed** `internal/cli/api/client.go`: a response that is valid JSON of the wrong shape now says "Update the CLI" (exit 4); text that is not JSON keeps the "check the address" hint. Test `TestDecodeFailureSaysWhetherToUpdateOrCheckTheAddress`.
+- **Docs:** `docs/cli/commands.md` "Supported servers" (same release); `docs/cli/spec/M6-notes.md` holds the C-11 proposal (`GET /api/v1/version`). **No controller change was made**; it needs owner approval.
+- **Limitations:** the CLI cannot compare versions (O-20 not implemented); a wrong-shape answer can also come from a proxy. K-04 (old commands keep working) stays unimplemented by the no-legacy rule.
+
 ## 2026-11-26 — CLI M6 step 6.2: CI behaviour tests and docs (branch ai/p6-automation-docs-hardening)
 
 - **Added** `commands/ci_test.go`: N-04/N-05 sweep (every prompting command exits 2 naming a flag, with no terminal and with `--no-input`, sending nothing that changes), N-06 (`MACHINARCHY_TOKEN/SERVER/NO_INPUT/OUTPUT` honoured, config dir stays empty), N-07 (JSON error on stderr, stdout empty), N-08 (`hosts -q`), S-30/N-09 (`--dry-run` on every changing command sends no non-GET request). N-03 already existed (`errors_test.go`). No production code changed: the audit (`.plan/6.2.md`, local) found no gap in behaviour.
