@@ -119,6 +119,43 @@ func TestAccessListAndShow(t *testing.T) {
 	}
 }
 
+// A server that returns credential material in an access entry must not make
+// `access show` print it in any format: the output is built from a fixed set
+// of fields, not from the raw response.
+func TestAccessShowNeverEchoesCredentialFields(t *testing.T) {
+	const leak = "LEAKEDCREDENTIAL"
+	server := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/managed/access-profiles":
+			_, _ = w.Write([]byte(`{"items":[{"id":"prof-2","name":"deploy","currentRevision":2}]}`))
+		case "/api/v1/managed/access-profiles/prof-2":
+			_, _ = w.Write([]byte(`{"id":"prof-2","name":"deploy","currentRevision":2,"password":"` + leak + `","privateKey":"` + leak + `",` +
+				`"spec":{"connectorKind":"ssh","username":"deploy","authenticationMethod":"password","hostKeyPolicy":"approve",` +
+				`"password":"` + leak + `","token":"` + leak + `","credential":{"id":"sec-1","version":1,"value":"` + leak + `"}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	})
+	config := writeConfig(t, server.URL, "tok")
+
+	for _, args := range [][]string{
+		{"access", "show", "deploy"},
+		{"access", "show", "deploy", "-o", "json"},
+		{"access", "show", "deploy", "-o", "yaml"},
+		{"access"},
+		{"access", "-o", "json"},
+	} {
+		got := execute(t, nil, "", append([]string{"--config", config}, args...)...)
+		if got.code != 0 {
+			t.Fatalf("%v = %+v", args, got)
+		}
+		if strings.Contains(got.stdout+got.stderr, leak) || strings.Contains(got.stdout+got.stderr, "sec-1") {
+			t.Fatalf("%v printed credential material: %+v", args, got)
+		}
+	}
+}
+
 func TestAccessAddKeyNeverPrintsTheKey(t *testing.T) {
 	server := accessEntriesServer(t, false)
 	config := writeConfig(t, server.URL, "tok")

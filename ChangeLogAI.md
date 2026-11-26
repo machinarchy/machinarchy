@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-26 — 12.1: test that `access` never echoes credential fields (branch ai/p10-controller-gaps)
+
+- **Added:** `TestAccessShowNeverEchoesCredentialFields` (`internal/cli/commands/accessentries_test.go`): a server returning `password`, `privateKey`, `token` and a credential `value` in an access entry must not leak them, nor the secret id, through `access show` (table, json, yaml) or `access` list (table, json). Closes the Phase 7.4 gap "redaction not asserted". Test only; no behaviour change (the output is built from fixed fields).
+- **Checks run:** gofmt, `golangci-lint run ./internal/cli/commands/...` (0 issues), `go test -race -count=1 ./internal/cli/...` pass. Not run: Postgres tests, `make smoke`, e2e.
+
 ## 2026-11-26 — 11.1: host-key condition messages name `hosts trust` (branch ai/p10-controller-gaps)
 
 - **Changed:** `internal/hostaccess/reconciler.go`: the `HostKeyPendingApproval` and `HostKeyChanged` condition messages now say `machinarchy hosts trust NAME [--replace]` instead of the removed `machinarchy trust host`. Message text only; no behaviour or API shape change. `rescan_test.go` asserts both messages.
