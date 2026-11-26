@@ -393,6 +393,27 @@ func testEnvironments(t *testing.T, f *fixture) {
 	if err := f.stores.Environments.CreateEnvironment(ctx, staging); err != nil {
 		t.Fatal(err)
 	}
+
+	// Protection is stored, and each change of it is audited with the new value.
+	staging.Protected = true
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil {
+		t.Fatalf("protect: %v", err)
+	}
+	if got, err := f.stores.Environments.GetEnvironmentByID(ctx, 1, staging.ID); err != nil || !got.Protected {
+		t.Errorf("protected environment = %+v, %v", got, err)
+	}
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil { // no change, no event
+		t.Fatal(err)
+	}
+	staging.Protected = false
+	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); err != nil {
+		t.Fatalf("unprotect: %v", err)
+	}
+	events, err := f.stores.Audit.ListAuditEvents(ctx, 1, domain.AuditFilter{Action: domain.AuditEnvironmentProtection})
+	if err != nil || len(events) != 2 || events[0].Details["protected"] != "false" || events[1].Details["protected"] != "true" ||
+		events[0].TargetID != fmt.Sprint(staging.ID) {
+		t.Errorf("protection audit events = %+v, %v", events, err)
+	}
 	staging.Name = "production"
 	if err := f.stores.Environments.UpdateEnvironment(ctx, staging); !errors.Is(err, domain.ErrEnvironmentAlreadyExists) {
 		t.Errorf("rename onto an existing name error = %v, want ErrEnvironmentAlreadyExists", err)
@@ -491,8 +512,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 2 {
-		t.Fatalf("applied migrations = %d, want the baseline and the default environment", before)
+	if before != 3 {
+		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

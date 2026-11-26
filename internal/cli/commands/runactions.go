@@ -291,7 +291,7 @@ func cancelRun(command *cobra.Command, f *cli.Factory, client api.Client, id str
 func protectedEnvsOfRun(ctx context.Context, f *cli.Factory, client api.Client, index envIndex, op *api.Operation) ([]string, error) {
 	guarded := false
 	for _, name := range index.byID {
-		guarded = guarded || f.Config().LocalProtected(name)
+		guarded = guarded || index.guarded(f, name)
 	}
 	if !guarded {
 		return nil, nil

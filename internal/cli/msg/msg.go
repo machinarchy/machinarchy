@@ -208,6 +208,10 @@ func init() {
 		Primary: "Environment {env} created (protected, local guard).",
 		Why:     "Changes to hosts in {env} on this computer now ask you to type \"{env}\". The guard is not enforced by the server, so it does not stop other people, computers or tools.",
 		Next:    "machinarchy envs use {env}"})
+	register(Message{ID: "env.created_protected_server", Kind: KindSuccess,
+		Primary: "Environment {env} created (protected).",
+		Why:     "The server now refuses host changes and runs in {env} unless the caller confirms \"{env}\", for every client. Only the workspace owner can unprotect it.",
+		Next:    "machinarchy envs use {env}"})
 	register(Message{ID: "env.used", Kind: KindSuccess,
 		Primary: "Active env: {env}.",
 		Why:     "Commands on {server} now work on {env}. To undo: machinarchy envs use any."})

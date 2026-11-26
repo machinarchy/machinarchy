@@ -248,6 +248,11 @@ definitions:
         type: integer
       name:
         type: string
+      protected:
+        description: |-
+          Protected environments need a confirmation (ConfirmedEnvironments) for
+          host changes and runs; the server enforces it for every client.
+        type: boolean
     type: object
   domain.IssuedAPIToken:
     properties:
@@ -342,6 +347,11 @@ definitions:
       name:
         example: production
         type: string
+      protected:
+        description: |-
+          Protected is optional: absent keeps the current value (false on create).
+          Only the workspace owner may set it to false on a protected environment.
+        type: boolean
     required:
     - name
     type: object
@@ -369,6 +379,13 @@ definitions:
     type: object
   managedresource.hostUpdateRequest:
     properties:
+      confirmEnvironment:
+        description: |-
+          ConfirmEnvironment names the protected environment(s) the host is in or
+          moves to: a name or a list of names.
+        items:
+          type: string
+        type: array
       environmentId:
         description: EnvironmentID is optional; absent means the host stays where
           it is.
@@ -393,6 +410,13 @@ definitions:
     properties:
       capability:
         $ref: '#/definitions/resource.CapabilitySpec'
+      confirmEnvironment:
+        description: |-
+          ConfirmEnvironment names every protected environment the targets are in
+          (a name or a list); a missing one is refused with 409.
+        items:
+          type: string
+        type: array
       expectTargetsHash:
         type: string
       hostIds:
@@ -427,6 +451,11 @@ definitions:
     type: object
   managedresource.trustRequest:
     properties:
+      confirmEnvironment:
+        description: ConfirmEnvironment names the host's environment when it is protected.
+        items:
+          type: string
+        type: array
       fingerprints:
         description: |-
           Fingerprints are the exact SHA256:… fingerprints to trust, normally the
@@ -1070,6 +1099,7 @@ definitions:
     type: object
   resource.TargetState:
     enum:
+    - Lost
     - Pending
     - Running
     - Succeeded
@@ -1077,9 +1107,9 @@ definitions:
     - TimedOut
     - Cancelled
     - Interrupted
-    - Lost
     type: string
     x-enum-varnames:
+    - TargetLost
     - TargetPending
     - TargetRunning
     - TargetSucceeded
@@ -1087,7 +1117,6 @@ definitions:
     - TargetTimedOut
     - TargetCancelled
     - TargetInterrupted
-    - TargetLost
   secret.RewrapCounts:
     properties:
       remaining:

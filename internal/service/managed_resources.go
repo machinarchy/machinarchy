@@ -127,6 +127,9 @@ func (s *ManagedResourceService) UpdateHostInEnvironment(ctx context.Context, pr
 			return err
 		}
 	}
+	if err := s.guardHost(ctx, principal.WorkspaceID, id, target); err != nil {
+		return err
+	}
 	if spec.AccessProfileID == "" && target == 0 {
 		return s.hosts.UpdateHostSpec(ctx, principal.WorkspaceID, id, revision, generation, spec, time.Now().UTC())
 	}
@@ -266,11 +269,13 @@ func (s *ManagedResourceService) SubmitCapability(ctx context.Context, principal
 // revisions; every host must use the given connector.
 func (s *ManagedResourceService) operationTargets(ctx context.Context, workspaceID int, hostIDs []resource.ID, connector resource.ConnectorKind) ([]resource.OperationTargetSpec, error) {
 	targets := make([]resource.OperationTargetSpec, 0, len(hostIDs))
+	environmentIDs := make([]int, 0, len(hostIDs))
 	for _, id := range hostIDs {
 		host, err := s.hosts.GetHost(ctx, workspaceID, id)
 		if err != nil {
 			return nil, err
 		}
+		environmentIDs = append(environmentIDs, host.Metadata.EnvironmentID)
 		if host.Spec.Presence != resource.PresenceManaged || host.Spec.AccessProfileID == "" {
 			return nil, resource.ErrInvalidResource
 		}
@@ -290,6 +295,10 @@ func (s *ManagedResourceService) operationTargets(ctx context.Context, workspace
 		}
 		targets = append(targets, resource.OperationTargetSpec{HostID: host.Metadata.ID, HostGeneration: host.Metadata.Generation, DisplayName: host.Metadata.Name,
 			AccessProfileID: profile.ID, AccessProfileRevision: profile.CurrentRevision})
+	}
+	// Checked once the host set is known to be valid.
+	if err := s.guardEnvironments(ctx, workspaceID, environmentIDs...); err != nil {
+		return nil, err
 	}
 	return targets, nil
 }
@@ -454,6 +463,9 @@ func (s *ManagedResourceService) TrustHostKeys(ctx context.Context, principal do
 	}
 	if len(fingerprints) == 0 {
 		return nil, fmt.Errorf("%w: name the host key fingerprints to trust", domain.ErrInvalidInput)
+	}
+	if err := s.guardHost(ctx, principal.WorkspaceID, id); err != nil {
+		return nil, err
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		host, err := s.hosts.GetHost(ctx, principal.WorkspaceID, id)

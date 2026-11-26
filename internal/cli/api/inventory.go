@@ -14,7 +14,7 @@ import (
 // controller key. Hosts, profile list/create and enrolment tokens live in
 // Client and AccessClient; secret creation is ManagementClient.CreateSecret.
 type InventoryClient interface {
-	CreateEnvironment(ctx context.Context, name, description string) (*Environment, error)
+	CreateEnvironment(ctx context.Context, name, description string, protected bool) (*Environment, error)
 	DeleteEnvironment(ctx context.Context, id int) error
 	GetAccessProfile(ctx context.Context, id string) (*AccessProfileDetail, error)
 	ListAgents(ctx context.Context) (json.RawMessage, error)
@@ -44,9 +44,12 @@ type ControllerKey struct {
 	NextPublicKey string   `json:"nextPublicKey,omitempty" yaml:"nextPublicKey,omitempty"`
 }
 
-func (c *HTTPClient) CreateEnvironment(ctx context.Context, name, description string) (*Environment, error) {
+func (c *HTTPClient) CreateEnvironment(ctx context.Context, name, description string, protected bool) (*Environment, error) {
 	var environment Environment
-	body := map[string]string{"name": name, "description": description}
+	body := map[string]any{"name": name, "description": description}
+	if protected {
+		body["protected"] = true // a server that predates the field ignores it
+	}
 	if err := c.request(ctx, http.MethodPost, "/api/v1/environments", body, &environment); err != nil {
 		return nil, err
 	}

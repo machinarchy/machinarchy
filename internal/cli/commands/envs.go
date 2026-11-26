@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -88,17 +89,23 @@ func listEnvs(f *cli.Factory) func(*cobra.Command, []string) error {
 		for _, environment := range environments {
 			row := envRow{Environment: environment, Hosts: counts[environment.ID], Protected: store.LocalProtected(environment.Name),
 				Active: isActiveEnv(active, environment)}
+			serverHeld := environment.ServerProtected()
 			documents = append(documents, row)
 			names = append(names, environment.Name)
-			rows = append(rows, []string{sanitize.Line(environment.Name), strconv.Itoa(row.Hosts), protectedText(row.Protected), activeText(row.Active)})
+			rows = append(rows, []string{sanitize.Line(environment.Name), strconv.Itoa(row.Hosts), protectedText(serverHeld, row.Protected), activeText(row.Active)})
 		}
 
 		return printList(command, f, documents, names, []string{"ENV", "HOSTS", "PROTECTED", "ACTIVE"}, rows)
 	}
 }
 
-func protectedText(protected bool) string {
-	if protected {
+// protectedText says who holds the guard: the server (enforced for every
+// client) or only this computer's local guard.
+func protectedText(server, local bool) string {
+	switch {
+	case server:
+		return "yes"
+	case local:
 		return "yes (local)"
 	}
 
@@ -143,8 +150,9 @@ func newEnvsAddCommand(f *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "add NAME [--description TEXT] [--protected]",
 		Short: "Create an environment",
-		Long: "Creates an environment. --protected adds a guard on this computer only: the servers cannot enforce protected\n" +
-			"environments yet, so it protects you from your own typing mistakes, not from other people, computers or tools.",
+		Long: "Creates an environment. --protected makes the server refuse host changes and runs in it unless the caller confirms\n" +
+			"its name, for every client. A server that predates this keeps a guard on this computer only, which protects you\n" +
+			"from your own typing mistakes, not from other people, computers or tools.",
 		Example: "  machinarchy envs add staging\n  machinarchy envs add production --protected --yes",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -153,23 +161,32 @@ func newEnvsAddCommand(f *cli.Factory) *cobra.Command {
 				return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("%q cannot be the name of an environment", name),
 					`"any" means every env`, "machinarchy envs add NAME")
 			}
-			_, inventory, err := envClients(command.Context(), f)
+			client, inventory, err := envClients(command.Context(), f)
 			if err != nil {
 				return err
 			}
+			existing, err := client.ListEnvironments(command.Context())
+			if err != nil {
+				return fmt.Errorf("list environments: %w", err)
+			}
+			serverHolds := api.ServerEnforcesProtection(existing)
 
-			// Ask before anything is created, so a refusal leaves nothing behind.
-			if protected {
+			// Only a local guard needs an answer first: ask before anything is
+			// created, so a refusal leaves nothing behind.
+			if protected && !serverHolds {
 				if err := f.RequireConfirmation("This server cannot enforce protected environments. Add a local guard on this computer only?\n" +
 					"It protects you from your own typing mistakes, not from other people or other computers."); err != nil {
 					return err
 				}
 			}
-			if _, err := inventory.CreateEnvironment(command.Context(), name, description); err != nil {
+			created, err := inventory.CreateEnvironment(command.Context(), name, description, protected && serverHolds)
+			if err != nil {
 				return fmt.Errorf("create environment: %w", err)
 			}
 			id := "env.created"
-			if protected {
+			if protected && created.ServerProtected() {
+				id = "env.created_protected_server"
+			} else if protected {
 				if err := f.Config().SetLocalProtected(name, true); err != nil {
 					return err
 				}
@@ -180,7 +197,7 @@ func newEnvsAddCommand(f *cli.Factory) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&description, "description", "", "What the environment is for")
-	command.Flags().BoolVar(&protected, "protected", false, "Ask for the env's name before changing it (a guard on this computer only)")
+	command.Flags().BoolVar(&protected, "protected", false, "Make host changes and runs in the env need its name (held by the server; local guard on an older server)")
 
 	return command
 }
@@ -251,7 +268,7 @@ func newEnvsRemoveCommand(f *cli.Factory) *cobra.Command {
 			}
 
 			store := f.Config()
-			protected := store.LocalProtected(environment.Name)
+			protected := environment.ServerProtected() || store.LocalProtected(environment.Name)
 			if err := checkProtectedConfirmation(f, environment.Name, protected); err != nil {
 				return err
 			}
@@ -264,7 +281,7 @@ func newEnvsRemoveCommand(f *cli.Factory) *cobra.Command {
 				return fmt.Errorf("remove environment: %w", err)
 			}
 
-			if protected {
+			if store.LocalProtected(environment.Name) {
 				if err := store.SetLocalProtected(environment.Name, false); err != nil {
 					return err
 				}
@@ -285,11 +302,12 @@ func newEnvsRemoveCommand(f *cli.Factory) *cobra.Command {
 // On a terminal, typing the name (the typed confirmation that follows) answers
 // it.
 func checkProtectedConfirmation(f *cli.Factory, env string, protected bool) error {
-	given := f.ConfirmEnv()
-	if given != "" && given != env {
-		return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("--confirm-env is %q, but this is about %q", given, env), "", "--confirm-env "+env)
+	given := f.ConfirmEnvs()
+	named := slices.Contains(given, env)
+	if len(given) > 0 && !named {
+		return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("--confirm-env is %q, but this is about %q", strings.Join(given, ","), env), "", "--confirm-env "+env)
 	}
-	if !protected || given == env {
+	if !protected || named {
 		return nil
 	}
 	if !f.Prompter().Interactive {

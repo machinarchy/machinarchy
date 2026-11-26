@@ -20,6 +20,7 @@ type Handler struct {
 
 var errorMappings = []httperr.Mapping{
 	httperr.Map(domain.ErrEnvironmentNotFound, http.StatusNotFound, "environment not found"),
+	{Target: domain.ErrEnvironmentUnprotectOwnerOnly, Status: http.StatusForbidden, Code: httperr.CodePermissionDenied, Message: domain.ErrEnvironmentUnprotectOwnerOnly.Error()},
 	{Target: domain.ErrEnvironmentAlreadyExists, Status: http.StatusConflict, Code: httperr.CodeAlreadyExists, Message: "an environment with this name already exists"},
 }
 
@@ -37,6 +38,9 @@ func NewHandler(r domain.EnvironmentStore) *Handler {
 type EnvSavePayload struct {
 	Name        string `json:"name" binding:"required" example:"production"`
 	Description string `json:"description" example:"Primary cluster management environment"`
+	// Protected is optional: absent keeps the current value (false on create).
+	// Only the workspace owner may set it to false on a protected environment.
+	Protected *bool `json:"protected,omitempty"`
 }
 
 // Create godoc
@@ -62,7 +66,7 @@ func (h *Handler) Create(c echo.Context) error {
 		return httperr.Status(c, http.StatusBadRequest, "invalid environment request")
 	}
 
-	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
+	env := &domain.Environment{WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description), Protected: body.Protected != nil && *body.Protected}
 	if err := h.repo.CreateEnvironment(c.Request().Context(), env); err != nil {
 		return respondError(c, err)
 	}
@@ -120,7 +124,18 @@ func (h *Handler) Update(c echo.Context) error {
 		return httperr.Status(c, http.StatusBadRequest, "invalid environment request")
 	}
 
-	env := &domain.Environment{ID: id, WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description)}
+	current, err := h.repo.GetEnvironmentByID(c.Request().Context(), principal.WorkspaceID, id)
+	if err != nil {
+		return respondError(c, err)
+	}
+	protected := current.Protected
+	if body.Protected != nil {
+		protected = *body.Protected
+	}
+	if current.Protected && !protected && principal.Role != domain.RoleOwner {
+		return respondError(c, domain.ErrEnvironmentUnprotectOwnerOnly)
+	}
+	env := &domain.Environment{ID: id, WorkspaceID: principal.WorkspaceID, Name: strings.TrimSpace(body.Name), Description: strings.TrimSpace(body.Description), Protected: protected}
 	if err := h.repo.UpdateEnvironment(c.Request().Context(), env); err != nil {
 		return respondError(c, err)
 	}

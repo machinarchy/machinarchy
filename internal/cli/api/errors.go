@@ -102,6 +102,9 @@ func (e *Error) advice() (why, next string) {
 	case e.Status == http.StatusNotFound:
 		return "The server has no resource with that identifier.",
 			"Check the identifier. If the whole feature is missing, the server may not have it enabled, or --server may point at the wrong address."
+	case e.Status == http.StatusConflict && e.Fields["code"] == "protected_environment_confirmation_required":
+		return "The server holds this environment as protected and the call did not confirm it.",
+			"Type the environment's name when asked, or pass --confirm-env NAME (repeat it for each protected environment)."
 	case e.Status == http.StatusConflict && e.Fields["code"] == "already_exists":
 		return "A resource with that name already exists.",
 			"Choose another name, or look at it with 'machinarchy get'."

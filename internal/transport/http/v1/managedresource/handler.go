@@ -38,6 +38,9 @@ type hostUpdateRequest struct {
 	Revision      uint64            `json:"revision"`
 	Generation    uint64            `json:"generation"`
 	Spec          resource.HostSpec `json:"spec"`
+	// ConfirmEnvironment names the protected environment(s) the host is in or
+	// moves to: a name or a list of names.
+	ConfirmEnvironment domain.ConfirmEnvironment `json:"confirmEnvironment,omitempty"`
 }
 type labelsRequest struct {
 	Revision uint64            `json:"revision"`
@@ -64,6 +67,9 @@ type operationRequest struct {
 	ExpectTargetsHash string                   `json:"expectTargetsHash,omitempty"`
 	Run               *resource.RunSpec        `json:"run,omitempty"`
 	Capability        *resource.CapabilitySpec `json:"capability,omitempty"`
+	// ConfirmEnvironment names every protected environment the targets are in
+	// (a name or a list); a missing one is refused with 409.
+	ConfirmEnvironment domain.ConfirmEnvironment `json:"confirmEnvironment,omitempty"`
 }
 
 // trustRequest approves SSH host keys for a Host.
@@ -75,6 +81,8 @@ type trustRequest struct {
 	Fingerprints []string `json:"fingerprints"`
 	// Replace must be set to change keys the Host already trusts.
 	Replace bool `json:"replace,omitempty"`
+	// ConfirmEnvironment names the host's environment when it is protected.
+	ConfirmEnvironment domain.ConfirmEnvironment `json:"confirmEnvironment,omitempty"`
 }
 type previewRequest struct {
 	Targets domain.TargetRule `json:"targets"`
@@ -94,8 +102,10 @@ func call[T any](c echo.Context, status int, parse func() error, run func(contex
 	}
 	result, err := run(c.Request().Context(), principal)
 	if err != nil {
-		return httperr.FromError(c, err, httperr.Mapping{Target: service.ErrAccessProfileOwnerRequired,
-			Status: http.StatusForbidden, Code: httperr.CodePermissionDenied, Message: "workspace owner permission is required"})
+		return httperr.FromError(c, err, httperr.Mapping{Target: domain.ErrProtectedEnvironmentConfirmation,
+			Status: http.StatusConflict, Code: httperr.CodeProtectedEnvironment, Message: ""},
+			httperr.Mapping{Target: service.ErrAccessProfileOwnerRequired,
+				Status: http.StatusForbidden, Code: httperr.CodePermissionDenied, Message: "workspace owner permission is required"})
 	}
 	if status == http.StatusNoContent {
 		return c.NoContent(status)
@@ -230,6 +240,7 @@ func (h *Handler) UpdateHost(c echo.Context) error {
 	var id resource.ID
 	var request hostUpdateRequest
 	return call(c, http.StatusNoContent, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (any, error) {
+		ctx = domain.WithConfirmedEnvironments(ctx, request.ConfirmEnvironment)
 		return nil, h.service.UpdateHostInEnvironment(ctx, p, id, request.Revision, request.Generation, request.EnvironmentID, request.Spec)
 	})
 }
@@ -255,6 +266,7 @@ func (h *Handler) DeleteHost(c echo.Context) error {
 		if revision <= 0 {
 			return nil, domain.ErrInvalidInput
 		}
+		ctx = domain.WithConfirmedEnvironments(ctx, c.QueryParams()["confirmEnvironment"])
 		return nil, h.service.DeleteHost(ctx, p, id, uint64(revision))
 	})
 }
@@ -302,6 +314,7 @@ func (h *Handler) TrustHostKeys(c echo.Context) error {
 	var id resource.ID
 	var request trustRequest
 	return call(c, http.StatusOK, all(pathID(c, &id), bind(c, &request)), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
+		ctx = domain.WithConfirmedEnvironments(ctx, request.ConfirmEnvironment)
 		return h.service.TrustHostKeys(ctx, p, id, request.Generation, request.Fingerprints, request.Replace)
 	})
 }
@@ -450,6 +463,7 @@ func (h *Handler) ListOperations(c echo.Context) error {
 func (h *Handler) SubmitOperation(c echo.Context) error {
 	var request operationRequest
 	return call(c, http.StatusAccepted, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Operation, error) {
+		ctx = domain.WithConfirmedEnvironments(ctx, request.ConfirmEnvironment)
 		// Permission first: a reader learns nothing about the request's shape.
 		if !p.Role.Allows(domain.PermissionRunsExecute) {
 			return nil, domain.ErrPermissionDenied

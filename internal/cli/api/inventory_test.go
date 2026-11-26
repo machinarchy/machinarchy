@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestInventoryRequests(t *testing.T) {
 		wantURI    string
 		wantBody   string
 	}{
-		{"create environment", func() error { _, err := client.CreateEnvironment(ctx, "prod", "main"); return err },
+		{"create environment", func() error { _, err := client.CreateEnvironment(ctx, "prod", "main", false); return err },
 			http.MethodPost, "/api/v1/environments", `{"description":"main","name":"prod"}`},
 		{"delete environment", func() error { return client.DeleteEnvironment(ctx, 7) },
 			http.MethodDelete, "/api/v1/environments/7", ""},
@@ -86,4 +87,39 @@ func TestInventoryDecoding(t *testing.T) {
 			t.Fatalf("ListAgents = %q, %v", raw, err)
 		}
 	})
+}
+
+// The names the user confirmed travel with every guarded call: the run, a
+// host move, trust and delete. Without any, no field is sent.
+func TestConfirmedEnvironmentsAreSentOnGuardedCalls(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	confirmed := []string{"production", "staging"}
+	client := newClient(t, respond(rec, http.StatusOK, `{}`, nil), WithConfirmedEnvs(func() []string { return confirmed }))
+
+	_, _ = client.SubmitOperation(ctx, OperationInput{Targets: TargetRule{All: true}})
+	if got := string(rec.last(t).Body); !strings.Contains(got, `"confirmEnvironment":["production","staging"]`) {
+		t.Errorf("run body = %s", got)
+	}
+	_ = client.MoveHost(ctx, "h1", 1, 1, HostSpec{}, 2)
+	if got := string(rec.last(t).Body); !strings.Contains(got, `"confirmEnvironment":["production","staging"]`) {
+		t.Errorf("move body = %s", got)
+	}
+	_, _ = client.TrustHostKeys(ctx, "h1", 1, []string{"SHA256:x"}, false)
+	if got := string(rec.last(t).Body); !strings.Contains(got, `"confirmEnvironment":["production","staging"]`) {
+		t.Errorf("trust body = %s", got)
+	}
+	_ = client.DeleteHost(ctx, "h1", 4)
+	if got := rec.last(t).RequestURI; got != "/api/v1/managed/hosts/h1?confirmEnvironment=production&confirmEnvironment=staging&revision=4" {
+		t.Errorf("delete uri = %s", got)
+	}
+	confirmed = nil
+	_, _ = client.SubmitOperation(ctx, OperationInput{Targets: TargetRule{All: true}})
+	if got := string(rec.last(t).Body); strings.Contains(got, "confirmEnvironment") {
+		t.Errorf("run body without confirmation = %s", got)
+	}
+	_, _ = client.CreateEnvironment(ctx, "prod", "", true)
+	if got := string(rec.last(t).Body); !strings.Contains(got, `"protected":true`) {
+		t.Errorf("create protected body = %s", got)
+	}
 }

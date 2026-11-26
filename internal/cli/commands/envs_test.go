@@ -78,10 +78,10 @@ func TestEnvsAdd(t *testing.T) {
 	})
 
 	t.Run("protected needs an answer and creates nothing without one", func(t *testing.T) {
-		before := server.count()
+		before := server.countOf(http.MethodPost, "/api/v1/environments")
 		got := execute(t, nil, "", "--config", config, "envs", "add", "prod2", "--protected")
-		if got.code != clierr.ExitUsage || server.count() != before {
-			t.Fatalf("add --protected without --yes = %+v (%d new requests)", got, server.count()-before)
+		if got.code != clierr.ExitUsage || server.countOf(http.MethodPost, "/api/v1/environments") != before {
+			t.Fatalf("add --protected without --yes = %+v (%d new creates)", got, server.countOf(http.MethodPost, "/api/v1/environments")-before)
 		}
 	})
 

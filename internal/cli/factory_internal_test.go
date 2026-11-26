@@ -45,7 +45,7 @@ func globalFlags(t *testing.T, args ...string) *pflag.FlagSet {
 	flags.Bool("no-input", false, "")
 	flags.Bool("yes", false, "")
 	flags.String("confirm", "", "")
-	flags.String("confirm-env", "", "")
+	flags.StringSlice("confirm-env", nil, "")
 	flags.Bool("dry-run", false, "")
 	flags.Bool("plain", false, "")
 	if err := flags.Parse(args); err != nil {

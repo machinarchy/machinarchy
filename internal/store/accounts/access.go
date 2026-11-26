@@ -186,8 +186,8 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
 	now := time.Now().UTC()
-	id, err := insertID(ctx, s.db, s.bind(`INSERT INTO environments (workspace_id, name, description, created_at) VALUES (?, ?, ?, ?)`),
-		environment.WorkspaceID, environment.Name, environment.Description, sqlx.Time(now))
+	id, err := insertID(ctx, s.db, s.bind(`INSERT INTO environments (workspace_id, name, description, protected, created_at) VALUES (?, ?, ?, ?, ?)`),
+		environment.WorkspaceID, environment.Name, environment.Description, environment.Protected, sqlx.Time(now))
 	if err != nil {
 		if sqlx.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
@@ -201,7 +201,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, environment *domain.Envir
 func scanEnvironment(row interface{ Scan(...any) error }) (*domain.Environment, error) {
 	environment := new(domain.Environment)
 	var createdAt string
-	if err := row.Scan(&environment.ID, &environment.WorkspaceID, &environment.Name, &environment.Description, &createdAt); err != nil {
+	if err := row.Scan(&environment.ID, &environment.WorkspaceID, &environment.Name, &environment.Description, &environment.Protected, &createdAt); err != nil {
 		return nil, err
 	}
 	var err error
@@ -216,7 +216,7 @@ func (s *Store) GetEnvironmentByID(ctx context.Context, workspaceID, id int) (*d
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
-	environment, err := scanEnvironment(s.db.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, name, description, created_at
+	environment, err := scanEnvironment(s.db.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, name, description, protected, created_at
 		FROM environments WHERE id = ? AND workspace_id = ?`), id, workspaceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrEnvironmentNotFound
@@ -232,7 +232,7 @@ func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domai
 	if workspaceID <= 0 {
 		return nil, fmt.Errorf("%w: workspace ID must be positive", domain.ErrInvalidInput)
 	}
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT id, workspace_id, name, description, created_at
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT id, workspace_id, name, description, protected, created_at
 		FROM environments WHERE workspace_id = ? ORDER BY id`), workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
@@ -252,14 +252,21 @@ func (s *Store) ListEnvironments(ctx context.Context, workspaceID int) ([]*domai
 	return environments, nil
 }
 
-// UpdateEnvironment renames or re-describes an environment.
+// UpdateEnvironment renames, re-describes, protects or unprotects an
+// environment. A change of the protection is audited in the same transaction.
 func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Environment) error {
 	if environment == nil || environment.WorkspaceID <= 0 {
 		return fmt.Errorf("%w: environment and workspace are required", domain.ErrInvalidInput)
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update environment transaction: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "update environment")
 	var current string
-	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT name FROM environments WHERE id = ? AND workspace_id = ?`),
-		environment.ID, environment.WorkspaceID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+	var wasProtected bool
+	if err := tx.QueryRowContext(ctx, s.bind(`SELECT name, protected FROM environments WHERE id = ? AND workspace_id = ?`),
+		environment.ID, environment.WorkspaceID).Scan(&current, &wasProtected); errors.Is(err, sql.ErrNoRows) {
 		return domain.ErrEnvironmentNotFound
 	} else if err != nil {
 		return fmt.Errorf("read environment %d: %w", environment.ID, err)
@@ -267,15 +274,28 @@ func (s *Store) UpdateEnvironment(ctx context.Context, environment *domain.Envir
 	if strings.EqualFold(current, domain.DefaultEnvironmentName) && !strings.EqualFold(environment.Name, domain.DefaultEnvironmentName) {
 		return domain.ErrDefaultEnvironment
 	}
-	result, err := s.db.ExecContext(ctx, s.bind(`UPDATE environments SET name = ?, description = ? WHERE id = ? AND workspace_id = ?`),
-		environment.Name, environment.Description, environment.ID, environment.WorkspaceID)
+	result, err := tx.ExecContext(ctx, s.bind(`UPDATE environments SET name = ?, description = ?, protected = ? WHERE id = ? AND workspace_id = ?`),
+		environment.Name, environment.Description, environment.Protected, environment.ID, environment.WorkspaceID)
 	if err != nil {
 		if sqlx.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: %w", domain.ErrEnvironmentAlreadyExists, err)
 		}
 		return fmt.Errorf("update environment %d: %w", environment.ID, err)
 	}
-	return sqlx.RowsAffected(result, domain.ErrEnvironmentNotFound)
+	if err := sqlx.RowsAffected(result, domain.ErrEnvironmentNotFound); err != nil {
+		return err
+	}
+	if wasProtected != environment.Protected {
+		if err := s.appendAudit(ctx, tx, domain.AuditEvent{WorkspaceID: environment.WorkspaceID, Action: domain.AuditEnvironmentProtection,
+			TargetType: domain.AuditTargetEnvironment, TargetID: fmt.Sprint(environment.ID),
+			Details: map[string]string{"name": environment.Name, "protected": fmt.Sprint(environment.Protected)}}); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update environment transaction: %w", err)
+	}
+	return nil
 }
 
 // DeleteEnvironment removes an environment.

@@ -65,6 +65,8 @@ func (s scope) line() string {
 // envIndex is what the CLI knows about the server's envs.
 type envIndex struct {
 	byID map[int]string
+	// serverProtected holds the names the server reports as protected.
+	serverProtected map[string]bool
 }
 
 func loadEnvIndex(ctx context.Context, client api.Client) (envIndex, error) {
@@ -72,12 +74,21 @@ func loadEnvIndex(ctx context.Context, client api.Client) (envIndex, error) {
 	if err != nil {
 		return envIndex{}, fmt.Errorf("list envs: %w", err)
 	}
-	index := envIndex{byID: make(map[int]string, len(environments))}
+	index := envIndex{byID: make(map[int]string, len(environments)), serverProtected: map[string]bool{}}
 	for _, environment := range environments {
 		index.byID[environment.ID] = environment.Name
+		if environment.ServerProtected() {
+			index.serverProtected[environment.Name] = true
+		}
 	}
 
 	return index, nil
+}
+
+// guarded reports whether the env needs its name confirmed: the server holds
+// it as protected or this computer guards it.
+func (e envIndex) guarded(f *cli.Factory, name string) bool {
+	return e.serverProtected[name] || f.Config().LocalProtected(name)
 }
 
 // nameOf is the env name of an env ID, "" for none.
@@ -99,12 +110,12 @@ func activeEnv(ctx context.Context, f *cli.Factory, client api.Client, index env
 }
 
 // protectedEnvsOf lists, in order, the envs of the hosts that this computer
-// guards (envs add --protected).
+// guards (held by the server, or locally on an older server).
 func protectedEnvsOf(f *cli.Factory, index envIndex, hosts []api.Host) []string {
 	var protected []string
 	for _, host := range hosts {
 		name := index.nameOf(host.Metadata.EnvironmentID)
-		if name != "" && f.Config().LocalProtected(name) && !slices.Contains(protected, name) {
+		if name != "" && index.guarded(f, name) && !slices.Contains(protected, name) {
 			protected = append(protected, name)
 		}
 	}
@@ -261,7 +272,7 @@ func limitsLine(r *runRequest) string {
 func confirmRun(f *cli.Factory, r *runRequest, set *api.TargetSet, protected []string, prompt string) error {
 	typed := false
 	for _, env := range protected {
-		byFlag := f.ConfirmEnv() == env
+		byFlag := slices.Contains(f.ConfirmEnvs(), env)
 		if err := confirmProtectedEnv(f, env, true); err != nil {
 			return err
 		}

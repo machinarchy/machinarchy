@@ -28,6 +28,9 @@ const (
 	// newer revision cannot fix).
 	CodeAlreadyExists  = "already_exists"
 	CodeTargetsChanged = "targets_changed"
+	// CodeProtectedEnvironment: a guarded call touched a protected
+	// environment without confirming its name (the message lists the names).
+	CodeProtectedEnvironment = "protected_environment_confirmation_required"
 	// CodeExecutionNotAllowed: the execution policy refuses the command.
 	CodeExecutionNotAllowed = "execution_not_allowed"
 	CodeTooManyRequests     = "too_many_requests"

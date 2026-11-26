@@ -90,6 +90,9 @@ func (s *ManagedResourceService) DeleteHost(ctx context.Context, principal domai
 	if err := authorizeManagedHost(principal); err != nil {
 		return err
 	}
+	if err := s.guardHost(ctx, principal.WorkspaceID, id); err != nil {
+		return err
+	}
 	return s.hosts.DeleteHost(ctx, principal.WorkspaceID, id, revision)
 }
 

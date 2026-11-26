@@ -27,6 +27,7 @@ type apiFixture struct {
 	hosts   []*resource.Host
 	profile *resource.AccessProfile
 	app     *service.ManagedResourceService
+	stores  *store.Stores
 }
 
 // newAPI serves /managed over a real SQLite store. The X-Role header picks
@@ -67,7 +68,7 @@ func newAPI(t *testing.T) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &apiFixture{t: t, profile: profile, app: application}
+	f := &apiFixture{t: t, profile: profile, app: application, stores: stores}
 	for i, tier := range []string{"web", "web", "db"} {
 		host, err := application.CreateHost(ctx, owner, fmt.Sprintf("host-%d", i), map[string]string{"tier": tier},
 			resource.HostSpec{AccessProfileID: profile.ID, AccessTarget: resource.HostAccessTarget{Endpoint: fmt.Sprintf("10.0.0.%d:22", i+1)}})
@@ -284,4 +285,45 @@ func TestHostEnvironmentOverHTTP(t *testing.T) {
 	f.expect(f.do(domain.RoleReader, http.MethodPut, path, update), http.StatusForbidden, "reader move")
 	update["environmentId"] = 1
 	f.expect(f.do(domain.RoleOperator, http.MethodPut, path, update), http.StatusNoContent, "update with the current env")
+}
+
+// A protected environment is enforced for every HTTP client, curl included:
+// no confirmation, a wrong name, or the right one as a string or a list.
+func TestProtectedEnvironmentOverHTTP(t *testing.T) {
+	f := newAPI(t)
+	ctx := context.Background()
+	if err := f.stores.Environments.UpdateEnvironment(ctx, &domain.Environment{ID: 1, WorkspaceID: 1, Name: "default", Protected: true}); err != nil {
+		t.Fatal(err)
+	}
+	host := f.hosts[0]
+	id := string(host.Metadata.ID)
+	refused := func(got response, what string) {
+		t.Helper()
+		f.expect(got, http.StatusConflict, what)
+		if got.body["code"] != "protected_environment_confirmation_required" || !strings.Contains(got.raw, "default") {
+			t.Fatalf("%s: body %s", what, got.raw)
+		}
+	}
+	run := func(extra map[string]any) map[string]any {
+		body := map[string]any{"hostIds": []string{id}, "run": map[string]any{"argv": []string{"uptime"}, "timeoutSeconds": 30, "concurrency": 1}}
+		for k, v := range extra {
+			body[k] = v
+		}
+		return body
+	}
+	refused(f.do(domain.RoleOperator, http.MethodPost, "/managed/operations", run(nil)), "run without confirmation")
+	refused(f.do(domain.RoleOperator, http.MethodPost, "/managed/operations", run(map[string]any{"confirmEnvironment": "prod"})), "run with a wrong name")
+	refused(f.do(domain.RoleOperator, http.MethodPost, "/managed/operations",
+		map[string]any{"targets": map[string]any{"all": true}, "run": map[string]any{"argv": []string{"uptime"}, "timeoutSeconds": 30, "concurrency": 1}}), "bulk run on all")
+	refused(f.do(domain.RoleOperator, http.MethodDelete, fmt.Sprintf("/managed/hosts/%s?revision=%d", id, host.Metadata.Revision), nil), "delete without confirmation")
+	refused(f.do(domain.RoleOperator, http.MethodDelete, fmt.Sprintf("/managed/hosts/%s?revision=%d&confirmEnvironment=x", id, host.Metadata.Revision), nil), "delete with a wrong name")
+	update := map[string]any{"revision": host.Metadata.Revision, "generation": host.Metadata.Generation, "spec": host.Spec}
+	refused(f.do(domain.RoleOperator, http.MethodPut, "/managed/hosts/"+id, update), "update without confirmation")
+	refused(f.do(domain.RoleOwner, http.MethodPost, "/managed/hosts/"+id+"/trust",
+		map[string]any{"generation": host.Metadata.Generation, "fingerprints": []string{"SHA256:" + strings.Repeat("A", 43)}}), "trust without confirmation")
+
+	f.expect(f.do(domain.RoleOperator, http.MethodPost, "/managed/operations", run(map[string]any{"confirmEnvironment": "default"})), http.StatusAccepted, "run confirmed by a string")
+	f.expect(f.do(domain.RoleOperator, http.MethodPost, "/managed/operations", run(map[string]any{"confirmEnvironment": []string{"default"}})), http.StatusAccepted, "run confirmed by a list")
+	update["confirmEnvironment"] = "default"
+	f.expect(f.do(domain.RoleOperator, http.MethodPut, "/managed/hosts/"+id, update), http.StatusNoContent, "confirmed update")
 }

@@ -105,6 +105,9 @@ type OperationInput struct {
 	// exclusive.
 	Run        *RunSpec        `json:"run,omitempty"`
 	Capability *CapabilitySpec `json:"capability,omitempty"`
+	// ConfirmEnvironment lists the protected environments the user confirmed
+	// (set by the client); the server refuses a run that misses one.
+	ConfirmEnvironment []string `json:"confirmEnvironment,omitempty"`
 }
 
 // CapabilitySpec is an agent capability call (ADR-057).
@@ -277,16 +280,22 @@ func (c *HTTPClient) CreateHost(ctx context.Context, input HostInput) (*Host, er
 }
 
 func (c *HTTPClient) DeleteHost(ctx context.Context, id string, revision uint64) error {
-	return c.request(ctx, http.MethodDelete, withQuery(managedPath("hosts", id),
-		url.Values{"revision": {strconv.FormatUint(revision, 10)}}), nil, nil)
+	values := url.Values{"revision": {strconv.FormatUint(revision, 10)}}
+	if confirmed := c.confirmedEnvs(); len(confirmed) > 0 {
+		values["confirmEnvironment"] = confirmed
+	}
+	return c.request(ctx, http.MethodDelete, withQuery(managedPath("hosts", id), values), nil, nil)
 }
 
 // MoveHost sends the host's current spec back with a new environment. A
 // server that predates host environments ignores the field and answers 204 as
 // for any update, so the caller re-reads the host to see whether it moved.
 func (c *HTTPClient) MoveHost(ctx context.Context, id string, revision, generation uint64, spec HostSpec, environmentID int) error {
-	return c.request(ctx, http.MethodPut, managedPath("hosts", id),
-		map[string]any{"revision": revision, "generation": generation, "spec": spec, "environmentId": environmentID}, nil)
+	body := map[string]any{"revision": revision, "generation": generation, "spec": spec, "environmentId": environmentID}
+	if confirmed := c.confirmedEnvs(); len(confirmed) > 0 {
+		body["confirmEnvironment"] = confirmed
+	}
+	return c.request(ctx, http.MethodPut, managedPath("hosts", id), body, nil)
 }
 
 func (c *HTTPClient) SetHostLabels(ctx context.Context, id string, revision uint64, labels map[string]string) (*Host, error) {
@@ -303,8 +312,11 @@ func (c *HTTPClient) SetHostLabels(ctx context.Context, id string, revision uint
 // spec generation is still the one the caller reviewed.
 func (c *HTTPClient) TrustHostKeys(ctx context.Context, id string, generation uint64, fingerprints []string, replace bool) (*Host, error) {
 	var host Host
-	err := c.request(ctx, http.MethodPost, managedPath("hosts", id, "trust"),
-		map[string]any{"generation": generation, "fingerprints": fingerprints, "replace": replace}, &host)
+	body := map[string]any{"generation": generation, "fingerprints": fingerprints, "replace": replace}
+	if confirmed := c.confirmedEnvs(); len(confirmed) > 0 {
+		body["confirmEnvironment"] = confirmed
+	}
+	err := c.request(ctx, http.MethodPost, managedPath("hosts", id, "trust"), body, &host)
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +343,7 @@ func (c *HTTPClient) PreviewTargets(ctx context.Context, rule TargetRule) (*Targ
 
 func (c *HTTPClient) SubmitOperation(ctx context.Context, input OperationInput) (*Operation, error) {
 	var op Operation
+	input.ConfirmEnvironment = c.confirmedEnvs()
 	if err := c.request(ctx, http.MethodPost, managedPath("operations"), input, &op); err != nil {
 		return nil, err
 	}

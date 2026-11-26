@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,9 @@ type Factory struct {
 	Streams       IOStreams
 	Logger        *slog.Logger
 	ClientBuilder APIClientBuilder
+
+	// confirmedEnvs are the protected environments confirmed in this invocation.
+	confirmedEnvs []string
 
 	// Getenv reads the environment for terminal detection (NO_COLOR, TERM,
 	// locale, COLUMNS). Nil selects os.Getenv; tests replace it.
@@ -197,6 +201,34 @@ func (f *Factory) ConfirmName() string {
 	}
 
 	return f.config.ConfirmName()
+}
+
+// ConfirmEnvs returns every --confirm-env.
+func (f *Factory) ConfirmEnvs() []string {
+	if f == nil {
+		return nil
+	}
+
+	return f.config.ConfirmEnvs()
+}
+
+// NoteConfirmedEnv records that the user confirmed the protected environment
+// env in this invocation. The API client sends the recorded names with host
+// changes and runs, which the server checks.
+func (f *Factory) NoteConfirmedEnv(env string) {
+	if f == nil || env == "" || slices.Contains(f.confirmedEnvs, env) {
+		return
+	}
+	f.confirmedEnvs = append(f.confirmedEnvs, env)
+}
+
+// ConfirmedEnvs returns the environments confirmed so far.
+func (f *Factory) ConfirmedEnvs() []string {
+	if f == nil {
+		return nil
+	}
+
+	return slices.Clone(f.confirmedEnvs)
 }
 
 // ConfirmEnv returns the value of --confirm-env.
@@ -394,7 +426,7 @@ func (f *Factory) ClientFor(target config.Target) (api.Client, error) {
 	builder := f.ClientBuilder
 	if builder == nil {
 		builder = func(target config.Target) (api.Client, error) {
-			return api.NewHTTPClient(target)
+			return api.NewHTTPClient(target, api.WithConfirmedEnvs(f.ConfirmedEnvs))
 		}
 	}
 	client, err := builder(target)

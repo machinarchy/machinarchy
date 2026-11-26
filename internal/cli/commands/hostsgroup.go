@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -342,8 +343,13 @@ func valueOrDash(s string) string {
 	return s
 }
 
-// hostEnvName returns the name of the host's env and whether this computer
-// guards it.
+// envGuarded reports whether an env needs its name confirmed: the server holds
+// it as protected (enforced for every client) or this computer guards it.
+func envGuarded(f *cli.Factory, environment api.Environment) bool {
+	return environment.ServerProtected() || f.Config().LocalProtected(environment.Name)
+}
+
+// hostEnvName returns the name of the host's env and whether it is guarded.
 func hostEnvName(ctx context.Context, f *cli.Factory, client api.Client, host api.Host) (string, bool, error) {
 	if host.Metadata.EnvironmentID == 0 {
 		return "", false, nil
@@ -354,26 +360,33 @@ func hostEnvName(ctx context.Context, f *cli.Factory, client api.Client, host ap
 	}
 	for _, environment := range environments {
 		if environment.ID == host.Metadata.EnvironmentID {
-			return environment.Name, f.Config().LocalProtected(environment.Name), nil
+			return environment.Name, envGuarded(f, environment), nil
 		}
 	}
 
 	return "", false, nil
 }
 
-// confirmProtectedEnv applies the local guard: the env's name is typed on a
-// terminal or given with --confirm-env. Nothing is asked for an unprotected env.
+// confirmProtectedEnv applies the guard: the env's name is typed on a
+// terminal or given with --confirm-env. Nothing is asked for an unprotected
+// env. A confirmed env is remembered, so the API client sends it for the
+// server to check (a server-held env is refused without it).
 func confirmProtectedEnv(f *cli.Factory, env string, protected bool) error {
 	if err := checkProtectedConfirmation(f, env, protected); err != nil {
 		return err
 	}
-	if !protected || f.ConfirmEnv() == env {
+	if !protected {
+		return nil
+	}
+	if slices.Contains(f.ConfirmEnvs(), env) {
+		f.NoteConfirmedEnv(env)
 		return nil
 	}
 	answer, err := f.Prompter().Line(fmt.Sprintf("%q is a protected env. Type its name to continue", sanitize.Line(env)), "")
 	if err != nil || strings.TrimSpace(answer) != env {
 		return clierr.Newf(clierr.ExitFailure, "", "aborted; nothing was changed")
 	}
+	f.NoteConfirmedEnv(env)
 
 	return nil
 }
@@ -502,8 +515,12 @@ func newHostsMoveCommand(f *cli.Factory) *cobra.Command {
 					return err
 				}
 			}
-			if f.Config().LocalProtected(target) {
-				if err = confirmProtectedEnv(f, target, true); err != nil {
+			targetName, targetGuarded, err := envIDGuarded(command.Context(), f, client, targetID)
+			if err != nil {
+				return err
+			}
+			if targetGuarded {
+				if err = confirmProtectedEnv(f, targetName, true); err != nil {
 					return err
 				}
 			}
@@ -567,4 +584,20 @@ func newHostsRemoveCommand(f *cli.Factory) *cobra.Command {
 			return printMessage(command, f, msg.Get("host.removed").With(msg.Vars{"host": name}))
 		},
 	}
+}
+
+// envIDGuarded returns the name of the env with this ID and whether it needs
+// its name confirmed.
+func envIDGuarded(ctx context.Context, f *cli.Factory, client api.Client, id int) (string, bool, error) {
+	environments, err := client.ListEnvironments(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("list environments: %w", err)
+	}
+	for _, environment := range environments {
+		if environment.ID == id {
+			return environment.Name, envGuarded(f, environment), nil
+		}
+	}
+
+	return "", false, nil
 }

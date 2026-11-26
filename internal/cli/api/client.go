@@ -38,6 +38,23 @@ type Environment struct {
 	ID          int    `json:"id" yaml:"id"`
 	Name        string `json:"name" yaml:"name"`
 	Description string `json:"description" yaml:"description"`
+	// Protected is nil when the server does not report it (a server that
+	// predates server-held protection); the CLI then keeps its local guard.
+	Protected *bool `json:"protected,omitempty" yaml:"protected,omitempty"`
+}
+
+// ServerProtected reports whether the server holds the environment as protected.
+func (e Environment) ServerProtected() bool { return e.Protected != nil && *e.Protected }
+
+// ServerEnforcesProtection reports whether the server reports protection at
+// all, judged from its environments (every workspace has "default").
+func ServerEnforcesProtection(environments []Environment) bool {
+	for _, environment := range environments {
+		if environment.Protected != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Client is the narrow HTTP contract resource commands depend on, making
@@ -86,6 +103,9 @@ type HTTPClient struct {
 	http        *http.Client
 	userAgent   string
 	maxResponse int64
+	// confirmed returns the protected environments the user has confirmed in
+	// this invocation; the guarded calls send them as confirmEnvironment.
+	confirmed func() []string
 }
 
 // Option customises an HTTPClient.
@@ -101,6 +121,19 @@ func WithHTTPClient(client *http.Client) Option {
 			c.http = client
 		}
 	}
+}
+
+// WithConfirmedEnvs supplies the environment names the user confirmed, sent
+// with host changes and runs so the server can enforce protected environments.
+func WithConfirmedEnvs(confirmed func() []string) Option {
+	return func(c *HTTPClient) { c.confirmed = confirmed }
+}
+
+func (c *HTTPClient) confirmedEnvs() []string {
+	if c.confirmed == nil {
+		return nil
+	}
+	return c.confirmed()
 }
 
 // WithUserAgent overrides the User-Agent header.

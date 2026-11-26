@@ -3873,6 +3873,10 @@
                 },
                 "name": {
                     "type": "string"
+                },
+                "protected": {
+                    "description": "Protected environments need a confirmation (ConfirmedEnvironments) for\nhost changes and runs; the server enforces it for every client.",
+                    "type": "boolean"
                 }
             }
         },
@@ -4018,6 +4022,10 @@
                 "name": {
                     "type": "string",
                     "example": "production"
+                },
+                "protected": {
+                    "description": "Protected is optional: absent keeps the current value (false on create).\nOnly the workspace owner may set it to false on a protected environment.",
+                    "type": "boolean"
                 }
             }
         },
@@ -4056,6 +4064,13 @@
         "managedresource.hostUpdateRequest": {
             "type": "object",
             "properties": {
+                "confirmEnvironment": {
+                    "description": "ConfirmEnvironment names the protected environment(s) the host is in or\nmoves to: a name or a list of names.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "environmentId": {
                     "description": "EnvironmentID is optional; absent means the host stays where it is.",
                     "type": "integer"
@@ -4090,6 +4105,13 @@
             "properties": {
                 "capability": {
                     "$ref": "#/definitions/resource.CapabilitySpec"
+                },
+                "confirmEnvironment": {
+                    "description": "ConfirmEnvironment names every protected environment the targets are in\n(a name or a list); a missing one is refused with 409.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "expectTargetsHash": {
                     "type": "string"
@@ -4144,6 +4166,13 @@
         "managedresource.trustRequest": {
             "type": "object",
             "properties": {
+                "confirmEnvironment": {
+                    "description": "ConfirmEnvironment names the host's environment when it is protected.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "fingerprints": {
                     "description": "Fingerprints are the exact SHA256:… fingerprints to trust, normally the\nHost's status.observedHostKeys as reviewed.",
                     "type": "array",
@@ -5030,24 +5059,24 @@
         "resource.TargetState": {
             "type": "string",
             "enum": [
+                "Lost",
                 "Pending",
                 "Running",
                 "Succeeded",
                 "Failed",
                 "TimedOut",
                 "Cancelled",
-                "Interrupted",
-                "Lost"
+                "Interrupted"
             ],
             "x-enum-varnames": [
+                "TargetLost",
                 "TargetPending",
                 "TargetRunning",
                 "TargetSucceeded",
                 "TargetFailed",
                 "TargetTimedOut",
                 "TargetCancelled",
-                "TargetInterrupted",
-                "TargetLost"
+                "TargetInterrupted"
             ]
         },
         "secret.RewrapCounts": {

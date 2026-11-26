@@ -135,7 +135,7 @@ func newRoot(options Options) (*cobra.Command, *Factory) {
 	// exist yet; they are accepted and hidden so scripts can be written ahead.
 	flags.Bool("dry-run", false, "Show what would happen and change nothing")
 	flags.String("confirm", "", "Answer a type-the-name confirmation without a prompt")
-	flags.String("confirm-env", "", "Answer a protected-environment confirmation without a prompt")
+	flags.StringSlice("confirm-env", nil, "Answer a protected-environment confirmation without a prompt (repeat for each protected env)")
 	for _, name := range []string{"dry-run", "confirm", "confirm-env"} {
 		if err := flags.MarkHidden(name); err != nil {
 			panic(err.Error()) // the flag was defined just above

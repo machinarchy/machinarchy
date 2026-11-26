@@ -200,7 +200,30 @@ func (s *Store) ConfirmEnv() string {
 		return ""
 	}
 
-	return strings.TrimSpace(s.v.GetString("confirm-env"))
+	return strings.Join(s.ConfirmEnvs(), ",")
+}
+
+// ConfirmEnvs returns every --confirm-env given: the flag repeats, one name
+// for each protected environment a call touches.
+func (s *Store) ConfirmEnvs() []string {
+	if s == nil || s.v == nil {
+		return nil
+	}
+	if s.v.flags == nil {
+		return nil
+	}
+	given, err := s.v.flags.GetStringSlice("confirm-env")
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, name := range given {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+
+	return names
 }
 
 // Source reports where the effective value of the option key came from.

@@ -15,15 +15,17 @@ import (
 
 // Audit actions. Details never contain credentials; see SanitizeAuditDetails.
 const (
-	AuditUserCreated         = "user.created"
-	AuditMemberRoleChanged   = "member.role_changed"
-	AuditHostCreated         = "host.created"
-	AuditHostUpdated         = "host.updated"
-	AuditHostDeleted         = "host.deleted"
-	AuditHostLabelsPatched   = "host.labels_patched"
-	AuditResourceHostCreated = "resource_host.created"
-	AuditResourceHostUpdated = "resource_host.updated"
-	AuditResourceHostDeleted = "resource_host.deleted"
+	AuditUserCreated = "user.created"
+	// AuditEnvironmentProtection records an environment protected or unprotected.
+	AuditEnvironmentProtection = "environment.protection_changed"
+	AuditMemberRoleChanged     = "member.role_changed"
+	AuditHostCreated           = "host.created"
+	AuditHostUpdated           = "host.updated"
+	AuditHostDeleted           = "host.deleted"
+	AuditHostLabelsPatched     = "host.labels_patched"
+	AuditResourceHostCreated   = "resource_host.created"
+	AuditResourceHostUpdated   = "resource_host.updated"
+	AuditResourceHostDeleted   = "resource_host.deleted"
 	// AuditResourceHostKeyTrusted records pinned SSH host keys and who trusted them.
 	AuditResourceHostKeyTrusted = "resource_host.host_key_trusted"
 	// AuditSessionRevoked records one login session ended before its expiry
@@ -64,6 +66,7 @@ const (
 	AuditOperationUpdated   = "operation.updated"
 
 	AuditTargetUser         = "user"
+	AuditTargetEnvironment  = "environment"
 	AuditTargetHost         = "host"
 	AuditTargetResourceHost = "resource_host"
 	AuditTargetAPIToken     = "api_token"

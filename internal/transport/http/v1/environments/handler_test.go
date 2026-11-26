@@ -17,6 +17,8 @@ import (
 type fakeEnvironments struct {
 	err        error
 	workspaces []int
+	protected  bool                // the stored environment's protection
+	saved      *domain.Environment // the last environment passed to Update
 }
 
 func (f *fakeEnvironments) CreateEnvironment(_ context.Context, env *domain.Environment) error {
@@ -24,14 +26,19 @@ func (f *fakeEnvironments) CreateEnvironment(_ context.Context, env *domain.Envi
 	env.ID = 5
 	return f.err
 }
-func (f *fakeEnvironments) GetEnvironmentByID(context.Context, int, int) (*domain.Environment, error) {
-	return nil, errors.New("unused")
+func (f *fakeEnvironments) GetEnvironmentByID(_ context.Context, workspaceID, id int) (*domain.Environment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.workspaces = append(f.workspaces, workspaceID)
+	return &domain.Environment{ID: id, WorkspaceID: workspaceID, Name: "x", Protected: f.protected}, nil
 }
 func (f *fakeEnvironments) ListEnvironments(_ context.Context, workspaceID int) ([]*domain.Environment, error) {
 	f.workspaces = append(f.workspaces, workspaceID)
 	return []*domain.Environment{{ID: 1, WorkspaceID: workspaceID, Name: "prod"}}, f.err
 }
 func (f *fakeEnvironments) UpdateEnvironment(_ context.Context, env *domain.Environment) error {
+	f.saved = env
 	f.workspaces = append(f.workspaces, env.WorkspaceID)
 	return f.err
 }
@@ -80,7 +87,7 @@ func TestEnvironmentsAreScopedToTheCallersWorkspace(t *testing.T) {
 			t.Fatalf("a call used workspace %d, want the caller's workspace 3 (calls: %v)", workspace, store.workspaces)
 		}
 	}
-	if len(store.workspaces) != 4 {
+	if len(store.workspaces) != 5 {
 		t.Fatalf("store calls = %v", store.workspaces)
 	}
 }
@@ -115,5 +122,29 @@ func TestEnvironmentErrors(t *testing.T) {
 		if got.Code != tc.want || strings.Contains(got.Body.String(), "db down") {
 			t.Errorf("%s: %d %s, want %d", name, got.Code, got.Body, tc.want)
 		}
+	}
+}
+
+// Protecting is open to anyone who may write the inventory; unprotecting is
+// owner-only, and a PUT that omits the field keeps the protection.
+func TestUnprotectingAnEnvironmentIsOwnerOnly(t *testing.T) {
+	operator := domain.Principal{UserID: 2, WorkspaceID: 1, Role: domain.RoleOperator}
+	owner := domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner}
+	store := &fakeEnvironments{protected: true}
+	if got := call(store, &operator, http.MethodPut, "/api/v1/environments/1", `{"name":"x","protected":false}`); got.Code != http.StatusForbidden || store.saved != nil {
+		t.Fatalf("operator unprotect = %d %s (saved %v)", got.Code, got.Body, store.saved)
+	}
+	if got := call(store, &operator, http.MethodPut, "/api/v1/environments/1", `{"name":"x","description":"d"}`); got.Code != http.StatusOK || !store.saved.Protected {
+		t.Fatalf("PUT without the field = %d %s (saved %+v)", got.Code, got.Body, store.saved)
+	}
+	if got := call(store, &owner, http.MethodPut, "/api/v1/environments/1", `{"name":"x","protected":false}`); got.Code != http.StatusOK || store.saved.Protected {
+		t.Fatalf("owner unprotect = %d %s (saved %+v)", got.Code, got.Body, store.saved)
+	}
+	open := &fakeEnvironments{}
+	if got := call(open, &operator, http.MethodPut, "/api/v1/environments/1", `{"name":"x","protected":true}`); got.Code != http.StatusOK || !open.saved.Protected {
+		t.Fatalf("operator protect = %d %s (saved %+v)", got.Code, got.Body, open.saved)
+	}
+	if got := call(open, &operator, http.MethodPost, "/api/v1/environments", `{"name":"y","protected":true}`); got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"protected":true`) {
+		t.Fatalf("create protected = %d %s", got.Code, got.Body)
 	}
 }
