@@ -37,5 +37,13 @@ Not measured for time or comprehension. Mechanically: the commands and prompts w
 ## Spec changes
 None made. F1 may need a note in `03-ux.md` about the failure text for policy-denied targets; left for the owner.
 
+## Owner session, 2026-11-26 (partial record)
+Run by the project owner, who knows Machinarchy, on a fresh controller (:8081, new SQLite database, lab policy settings) and the SSH lab. This is **not** a fresh-user test.
+- Reached the A-01 end state: `run --on web-01 -- uptime` -> `1 of 1 hosts succeeded`, exit 0, uptime line; `run r-9c1e182c --host web-01` replayed the output.
+- Total time, who else (if anyone) tried it, and the exact outputs of login, add and trust were **not recorded**. A-01's under-5-minutes criterion is **unmeasured**.
+- Problems met on the way (all setup, not CLI guidance): the controller first ran on the existing database because the SQLite variable is `MACHINARCHY_DATABASE_PATH`, not `MACHINARCHY_DATABASE_URL`, so login failed with `Invalid credentials`; then the controller refused `/tmp/m6-lab` until `chmod 700`; both errors are clear but only found with help.
+- **F9:** the run header shows `[localhost-8081 · none]` and `Hosts  no env 1`. No environment was selected, yet the run went ahead. A first-time reader may not know what `no env` means or whether it matters. Needs a decision: either name it ("hosts outside any environment") or require `envs use` first.
+- **F10:** the closing line `The machines complied.` is brand voice (`07-brand.md`) and was not checked for whether a new user finds it clear or odd.
+
 ## Still owed
 A real session with a person who has not used Machinarchy, following the CLI's own guidance on a clean machine, on a controller already allowing the lab targets (or with F1 fixed).

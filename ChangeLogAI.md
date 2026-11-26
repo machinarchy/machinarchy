@@ -1,5 +1,9 @@
 # ChangeLogAI
 
+## 2026-11-26 — CLI M6 step 6.8: owner session recorded (branch ai/p6-automation-docs-hardening)
+
+- **Docs only:** `docs/cli/spec/M6-usability.md` gets a partial record of the owner's lab run (login to `uptime` on web-01 succeeded) and findings F9 (`no env` in the run header with no environment selected) and F10 (brand line unverified). Time and exact outputs were not recorded; A-01 stays unmeasured and the human fresh-user session is still owed. No code changed; no checks run.
+
 ## 2026-11-26 — CLI M6 finding F8: first host key is trusted by typing yes (branch ai/p6-automation-docs-hardening)
 
 - **Behavior changed (owner decision):** `hosts trust` and `hosts add` on a terminal now trust a first SSH host key when the person types `yes` or `y` (Enter or `no` skips). Before, the first 8 characters of the fingerprint were required, which does not scale to many hosts. Unchanged: the `--yes` flag never approves a key; without a terminal `--fingerprint` or `--trust-fingerprint` is still needed; a changed key (`--replace`) still needs the typed prefix and the host name. Security trade-off: typing `yes` is easier to do without comparing the key.
