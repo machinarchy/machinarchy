@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-27 — Fix: flaky `TestWatchAppliesRevisionsFromOtherProcesses` (CI coverage job, release 0.0.3)
+
+- **Fixed:** `internal/runtimeconfig/config.go`: `SnapshotManager.Run` returned `context canceled` when the context was cancelled while the initial `Reload` was still recording process status (the revision was already applied, so the test cancelled at once). Cancellation during the initial load is now a clean stop (`nil`), matching the loop's behavior.
+- **Checks run:** `go test -race -count=20 -run TestWatchApplies ./internal/runtimeconfig` pass. Reproduced under CPU load (8 busy loops, `-cpu 1`): 4/40 failures without the fix, 0/40 with it. Not run: the full `make coverage`.
+
 ## 2026-11-27 — Fix: huge `Retry-After` overflowed to a negative pause (found by CI fuzz smoke; branch feat/task-first-cli-gateway-transport)
 
 - **Fixed:** `internal/cli/api/errors.go`: `seconds * time.Second` wrapped negative for values above about 9.2e9 seconds, so `RetryAfter` could be negative; the value is now capped (24 h) before it is multiplied. Regression seeds added to `FuzzNewError` (`fuzz_test.go`); verified the seed fails on the old code (`retry-after out of range: -1s`) and passes now.

@@ -335,6 +335,9 @@ func (m *SnapshotManager) Run(ctx context.Context, interval time.Duration) error
 		interval = 30 * time.Second
 	}
 	if err := m.Reload(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil // cancelled while the initial load was finishing: a clean stop
+		}
 		return err
 	}
 	heartbeat := time.NewTicker(interval)
