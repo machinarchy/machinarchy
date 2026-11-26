@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-26 — Phase 8 step 8.1: ADR-059 gateway-only agent transport (branch ai/p8-gateway-transport)
+
+- **Docs only (planned, not implemented):** added `docs/adr/ADR-059-agent-gateway-transport.md` (status Proposed) with the owner's answers to Q7-Q10 (no legacy NATS agents, gRPC, current delivery guarantees kept, owner tags the protocol release), the transport-neutral flow, a kept/changed/dropped table of current guarantees and a threat list. Linked from `docs/adr/README.md` and `docs/architecture.md`.
+- **Known limitation:** the agent-repo spec (`agentv1/doc.go`, `transport.md`) is not written; that repo had uncommitted changes that are not part of this work. No code changed.
+- **Checks run:** none applicable (docs only; no doc or link checker in the repo was run).
+
 ## 2026-11-26 — CLI Phase 7 final review report (branch ai/p7-final-review)
 
 - **Docs only:** added `docs/cli/spec/M7-review.md`: verification, audit re-check, breaking changes, security evidence, A-01 and scorecard status, open findings (F7.3-1..3, F3, F9), controller work (C-01, C-02, C-03, C-05/06, C-07, C-09, C-11), next steps. No code changed; A-01 time and fresh-user comprehension remain unmeasured.

@@ -56,6 +56,7 @@ SQLite (single node)  or  PostgreSQL (shared)
 
 ## Known limitations
 
+- Planned: agents will reach the controller only through the agent gateway over gRPC, with the broker as an internal swappable `Bus` ([ADR-059](adr/ADR-059-agent-gateway-transport.md), proposed; nothing built).
 - The agent gateway (controller side of `machinarchy-agent`) does not exist; see `AUDIT/04-agent.md` M-1..M-11.
 - `RunSpec.Concurrency` is stored but targets run one at a time.
 - Metrics cover HTTP and the database pool; the control loop and the operation worker have no metrics yet (AUDIT Q-06).
