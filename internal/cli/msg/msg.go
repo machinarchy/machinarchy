@@ -212,6 +212,21 @@ func init() {
 	register(Message{ID: "host.tagged", Kind: KindSuccess,
 		Primary: "Tags of {host}: {tags}.",
 		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.added", Kind: KindSuccess,
+		Primary: "{host} is ready ({seconds} s).",
+		Lore:    "Another machine joins the hierarchy.",
+		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.added_waiting_key", Kind: KindWarning,
+		Primary: "{host} added. It is waiting for key approval: nothing was trusted.",
+		Why:     "Trust the key only after you compared it with the one on the machine.",
+		Next:    "{next}"})
+	register(Message{ID: "host.added_no_connect", Kind: KindWarning,
+		Primary: "{host} added, but the server cannot connect to it{reason}.",
+		Why:     "Check that {endpoint} is reachable from the server and that the login works.",
+		Next:    "machinarchy hosts show {host}"})
+	register(Message{ID: "host.added_checking", Kind: KindInfo,
+		Primary: "{host} added. It is not ready yet ({status}); stopped waiting after {seconds} s.",
+		Next:    "machinarchy hosts show {host}"})
 	register(Message{ID: "host.trusted", Kind: KindSuccess,
 		Primary: "Key trusted. {host} will be reachable once it reports ready.",
 		Next:    "machinarchy hosts show {host}"})

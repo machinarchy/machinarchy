@@ -503,48 +503,73 @@ func readLimitedStdin(in io.Reader, what string) (string, error) {
 // createAccessWithSecret stores the credential as a secret, then the entry. If
 // the entry cannot be created the new secret is retired again.
 func createAccessWithSecret(command *cobra.Command, f *cli.Factory, name, description, value string, spec map[string]any) error {
-	management, err := f.NewManagementClient(command.Context())
+	profile, err := makeAccessWithSecret(command, f, name, description, value, spec)
 	if err != nil {
 		return err
+	}
+
+	return announceAccess(command, f, profile)
+}
+
+// makeAccessWithSecret is createAccessWithSecret without the success line.
+func makeAccessWithSecret(command *cobra.Command, f *cli.Factory, name, description, value string, spec map[string]any) (*api.AccessProfile, error) {
+	management, err := f.NewManagementClient(command.Context())
+	if err != nil {
+		return nil, err
 	}
 	document, err := json.Marshal(map[string]string{"name": name, "description": "Credential of access entry " + name,
 		"purpose": "ssh-credential", "value": value})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	raw, err := management.CreateSecret(command.Context(), document)
 	if err != nil {
-		return fmt.Errorf("store the credential: %w", err)
+		return nil, fmt.Errorf("store the credential: %w", err)
 	}
 	var created secretMetadata
 	if err := json.Unmarshal(raw, &created); err != nil {
-		return fmt.Errorf("decode the stored credential: %w", err)
+		return nil, fmt.Errorf("decode the stored credential: %w", err)
 	}
 	spec["credential"] = map[string]any{"id": created.ID, "version": created.CurrentVersion}
 
-	if err := createAccess(command, f, name, description, spec); err != nil {
+	profile, err := makeAccess(command, f, name, description, spec)
+	if err != nil {
 		if retireErr := management.DeleteSecret(command.Context(), created.ID); retireErr != nil {
-			return fmt.Errorf("%w (the stored credential %s could not be removed again: %w; remove it with 'machinarchy secret delete %s')",
+			return nil, fmt.Errorf("%w (the stored credential %s could not be removed again: %w; remove it with 'machinarchy secret delete %s')",
 				err, created.ID, retireErr, created.ID)
 		}
 
-		return err
+		return nil, err
 	}
 
-	return nil
+	return profile, nil
 }
 
 func createAccess(command *cobra.Command, f *cli.Factory, name, description string, spec map[string]any) error {
-	_, access, _, err := accessClients(command.Context(), f)
+	profile, err := makeAccess(command, f, name, description, spec)
 	if err != nil {
 		return err
 	}
+
+	return announceAccess(command, f, profile)
+}
+
+func makeAccess(command *cobra.Command, f *cli.Factory, name, description string, spec map[string]any) (*api.AccessProfile, error) {
+	_, access, _, err := accessClients(command.Context(), f)
+	if err != nil {
+		return nil, err
+	}
 	profile, err := access.CreateAccessProfile(command.Context(), api.AccessProfileInput{Name: name, Description: description, Spec: spec})
 	if err != nil {
-		return fmt.Errorf("add access entry: %w", err)
+		return nil, fmt.Errorf("add access entry: %w", err)
 	}
+
+	return profile, nil
+}
+
+func announceAccess(command *cobra.Command, f *cli.Factory, profile *api.AccessProfile) error {
 	if f.Config().Quiet() {
-		_, err = fmt.Fprintln(command.OutOrStdout(), profile.ID)
+		_, err := fmt.Fprintln(command.OutOrStdout(), profile.ID)
 
 		return err
 	}

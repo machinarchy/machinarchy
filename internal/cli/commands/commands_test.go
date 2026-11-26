@@ -334,7 +334,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"version":        nil,
 		"login":          nil,
 		"access":         {"add", "remove", "show"},
-		"hosts":          {"move", "remove", "show", "tag", "trust"},
+		"hosts":          {"add", "move", "remove", "show", "tag", "trust"},
 	}
 
 	var top []string
