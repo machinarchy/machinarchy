@@ -170,6 +170,36 @@ func (b *Bus) EnsureAgent(ctx context.Context, agentID string) error {
 	return err
 }
 
+// Next pulls one command from the agent's durable consumer.
+func (b *Bus) Next(ctx context.Context, agentID string, wait time.Duration) (bus.Delivery, bool, error) {
+	if !b.Ready() {
+		return bus.Delivery{}, false, bus.ErrUnavailable
+	}
+	name, err := agentv1.CommandConsumer(agentID)
+	if err != nil {
+		return bus.Delivery{}, false, err
+	}
+	consumer, err := b.js.Consumer(ctx, agentv1.CommandStream, name)
+	if err != nil {
+		return bus.Delivery{}, false, err
+	}
+	batch, err := consumer.Fetch(1, jetstream.FetchMaxWait(wait))
+	if err != nil {
+		return bus.Delivery{}, false, err
+	}
+	for msg := range batch.Messages() {
+		settle := func(settle func() error, what string) func() {
+			return func() {
+				if err := settle(); err != nil {
+					b.logger.Warn("settle agent command", "action", what, "error", err)
+				}
+			}
+		}
+		return bus.Delivery{Payload: msg.Data(), Ack: settle(msg.Ack, "ack"), Nack: settle(msg.Nak, "nack")}, true, nil
+	}
+	return bus.Delivery{}, false, batch.Error()
+}
+
 // Publish stores payload on the agent's subject with Nats-Msg-Id = msgID and
 // returns after the PubAck; publishing the same ID again within the duplicate
 // window is ignored by JetStream (ADR-057, M-7).

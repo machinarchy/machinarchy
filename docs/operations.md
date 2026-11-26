@@ -200,6 +200,12 @@ see [rotating the controller signing key](#rotating-the-controller-signing-key).
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT` | Public key (`A...`) of the NATS account the agents use. With the signing key below, every agent gets its own NATS user JWT. **Required in production.** |
 | `MACHINARCHY_AGENT_GATEWAY_NATS_ACCOUNT_SIGNING_KEY_FILE` | Seed (`SA...`, file `0600`) of a signing key listed in that account's JWT. The gateway signs agent JWTs with it. |
 | `MACHINARCHY_AGENT_GATEWAY_AGENT_JWT_TTL` | Agent JWT lifetime, default `1h` (5m–24h, at least twice the heartbeat). Renewals refresh it. After a revocation, the agent keeps NATS access only until its current JWT expires. |
+| `MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR` | Listen address (`host:port`) of the agent-facing gRPC service (ADR-059). Off when empty. The service speaks HTTP/2; behind a proxy it must pass gRPC through. |
+| `MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE` / `_KEY_FILE` | TLS certificate and key for that listener, set together. **Required in production**; without them the listener is plaintext (development only, logged as a warning). |
+
+#### Agent gRPC service
+
+Agents reach the controller through one gRPC service (`machinarchy.agent.v1.AgentGateway`) and never see the internal broker. `Register` (single-use, hostname-bound enrolment token) and `Renew` return signed leases; `Commands` is a stream the agent opens with a signed request that names its current lease, then receives signed commands and acknowledges each one; `SendResult` carries signed results and needs a live lease. A revoked agent's stream is closed, an expired lease is refused, an agent only ever receives its own commands, and calls are rate limited per client address and per agent (messages are capped at 512 KiB, open streams at 10000). Commands queued while an agent is away are delivered when it reconnects. The agent client and CLI changes follow in steps 8.4 and 8.5; until then agents still use the NATS path.
 
 #### Rotating the controller signing key
 

@@ -93,6 +93,9 @@ func (r *Runtime) backgroundWorkers(workers ...workerLifecycle) combinedWorkers 
 	if r.agentGateway != nil {
 		workers = append(workers, r.agentGateway)
 	}
+	if r.agentGRPC != nil {
+		workers = append(workers, r.agentGRPC)
+	}
 	return combinedWorkers(workers)
 }
 

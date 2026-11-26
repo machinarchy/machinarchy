@@ -17,6 +17,7 @@ package bus
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Handlers is what the gateway installs when it starts serving.
@@ -34,6 +35,14 @@ type Handlers struct {
 	Result func(ctx context.Context, agentID string, payload []byte)
 }
 
+// Delivery is one command handed to a consumer. Ack removes it from the
+// queue; Nack (or neither, until the ack timeout) redelivers it.
+type Delivery struct {
+	Payload []byte
+	Ack     func()
+	Nack    func()
+}
+
 // Bus is implemented by each adapter.
 type Bus interface {
 	// Serve connects, provisions storage, starts delivering to h, and blocks
@@ -44,6 +53,9 @@ type Bus interface {
 	// Publish stores payload in the agent's queue and returns once it is
 	// durable. msgID makes the call idempotent.
 	Publish(ctx context.Context, agentID, msgID string, payload []byte) error
+	// Next returns the agent's next command, waiting up to wait; false means
+	// none arrived. The gateway streams it to the authenticated agent.
+	Next(ctx context.Context, agentID string, wait time.Duration) (Delivery, bool, error)
 	// Ready reports whether the bus can accept commands.
 	Ready() bool
 }

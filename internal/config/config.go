@@ -193,6 +193,13 @@ type AgentGatewayConfig struct {
 	NATSAccount           string
 	NATSAccountSigningKey []byte // nkey seed (SA...)
 	AgentJWTTTL           time.Duration
+	// GRPCAddr is the listen address of the agent-facing gRPC service
+	// (MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR, ADR-059). Empty: not served.
+	// GRPCCertFile and GRPCKeyFile terminate TLS on it; production requires
+	// them.
+	GRPCAddr     string
+	GRPCCertFile string
+	GRPCKeyFile  string
 }
 
 // Enabled reports whether the gateway is configured.
@@ -947,7 +954,34 @@ func loadAgentGateway(get func(string, ...string) string, environment Environmen
 	if err := loadAgentNATSIssuer(&cfg, get, environment); err != nil {
 		return cfg, err
 	}
+	if err := loadAgentGRPC(&cfg, get, environment); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// loadAgentGRPC reads the agent-facing gRPC listener settings (ADR-059). TLS is
+// never optional in production and a half-configured pair is refused.
+func loadAgentGRPC(cfg *AgentGatewayConfig, get func(string, ...string) string, environment Environment) error {
+	cfg.GRPCAddr = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR"))
+	cfg.GRPCCertFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE"))
+	cfg.GRPCKeyFile = strings.TrimSpace(get("MACHINARCHY_AGENT_GATEWAY_GRPC_KEY_FILE"))
+	if (cfg.GRPCCertFile == "") != (cfg.GRPCKeyFile == "") {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE and _KEY_FILE must be set together")
+	}
+	if cfg.GRPCAddr == "" {
+		if cfg.GRPCCertFile != "" {
+			return errors.New("MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE needs MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR")
+		}
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(cfg.GRPCAddr); err != nil {
+		return errors.New("MACHINARCHY_AGENT_GATEWAY_GRPC_ADDR must be host:port")
+	}
+	if environment == Production && cfg.GRPCCertFile == "" {
+		return errors.New("production requires TLS on the agent gRPC listener: set MACHINARCHY_AGENT_GATEWAY_GRPC_CERT_FILE and _KEY_FILE")
+	}
+	return nil
 }
 
 // loadAgentNATSIssuer reads the NATS account settings that let the gateway

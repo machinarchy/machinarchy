@@ -21,7 +21,8 @@ type Delivery struct {
 // Harness adapts one adapter to the suite. The suite owns Serve.
 type Harness struct {
 	Bus bus.Bus
-	// Next pulls the agent's next command, or reports false after wait.
+	// Next pulls the agent's next command, or reports false after wait. When
+	// nil the suite uses Bus.Next, which the gateway streams to agents.
 	Next func(agentID string, wait time.Duration) (Delivery, bool)
 	// SendResult makes the transport deliver payload as sent by agentID.
 	SendResult func(agentID string, payload []byte)
@@ -41,6 +42,15 @@ func Run(t *testing.T, newHarness func(t *testing.T) *Harness) {
 	start := func(t *testing.T) (*Harness, *results) {
 		t.Helper()
 		h := newHarness(t)
+		if h.Next == nil { // consume through the adapter's own Bus.Next
+			h.Next = func(agentID string, wait time.Duration) (Delivery, bool) {
+				d, ok, err := h.Bus.Next(context.Background(), agentID, wait)
+				if err != nil {
+					t.Fatalf("Bus.Next(%s): %v", agentID, err)
+				}
+				return Delivery{Payload: d.Payload, Ack: d.Ack, Nack: d.Nack}, ok
+			}
+		}
 		got := &results{}
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)

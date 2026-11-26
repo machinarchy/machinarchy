@@ -345,6 +345,10 @@ func (g *Gateway) keyForRenewal(agentID string) (ed25519.PublicKey, bool) {
 }
 
 func (g *Gateway) handleResult(_ context.Context, subjectAgentID string, data []byte) {
+	g.processResult(subjectAgentID, data)
+}
+
+func (g *Gateway) processResult(subjectAgentID string, data []byte) {
 	var result agentv1.Result
 	if err := agentv1.OpenFromAgent(agentv1.KindResult, data, agentv1.MaxResultMessageBytes, g.keyFor, &result); err != nil {
 		g.metrics.results.WithLabelValues("invalid").Inc()

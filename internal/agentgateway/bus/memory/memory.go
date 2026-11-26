@@ -11,11 +11,7 @@ import (
 )
 
 // Delivery is one command handed to a consumer.
-type Delivery struct {
-	Payload []byte
-	Ack     func()
-	Nack    func()
-}
+type Delivery = bus.Delivery
 
 type entry struct {
 	id      string
@@ -105,7 +101,12 @@ func (b *Bus) wake() {
 
 // Next returns the agent's next command, waiting up to wait. A command that is
 // neither acknowledged nor rejected is redelivered after AckWait.
-func (b *Bus) Next(ctx context.Context, agentID string, wait time.Duration) (Delivery, bool) {
+func (b *Bus) Next(ctx context.Context, agentID string, wait time.Duration) (Delivery, bool, error) {
+	d, ok := b.next(ctx, agentID, wait)
+	return d, ok, nil
+}
+
+func (b *Bus) next(ctx context.Context, agentID string, wait time.Duration) (Delivery, bool) {
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for {

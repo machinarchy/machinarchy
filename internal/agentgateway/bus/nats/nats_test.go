@@ -14,7 +14,12 @@ import (
 	natsbus "github.com/machinarchy/machinarchy/internal/agentgateway/bus/nats"
 )
 
-func TestContract(t *testing.T) {
+func TestContract(t *testing.T) { runContract(t, true) }
+
+// TestContractViaBusNext consumes through Bus.Next, as the gateway does.
+func TestContractViaBusNext(t *testing.T) { runContract(t, false) }
+
+func runContract(t *testing.T, independentConsumer bool) {
 	bustest.Run(t, func(t *testing.T) *bustest.Harness {
 		server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
 		if err != nil {
@@ -38,7 +43,7 @@ func TestContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &bustest.Harness{
+		h := &bustest.Harness{
 			Bus: b,
 			Next: func(agentID string, wait time.Duration) (bustest.Delivery, bool) {
 				name, err := agentv1.CommandConsumer(agentID)
@@ -71,5 +76,9 @@ func TestContract(t *testing.T) {
 				_ = nc.Flush()
 			},
 		}
+		if !independentConsumer {
+			h.Next = nil
+		}
+		return h
 	})
 }
