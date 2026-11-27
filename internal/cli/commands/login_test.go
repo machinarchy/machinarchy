@@ -399,3 +399,109 @@ func TestLoginShowsNoCompletionHintWithoutATerminalOrInPlain(t *testing.T) {
 		t.Fatalf("no hint with --plain: %+v", plain)
 	}
 }
+
+func TestLoginInviteOnATerminal(t *testing.T) {
+	server := newAuthServer(t, false)
+	server.addInviteToken("tok-1", "operator")
+	path := configPath(t)
+
+	got := runAuth(t, authRun{terminal: true, config: path, secrets: []string{"tok-1", "a brand new password", "a brand new password"},
+		stdin: server.URL + "\nlab\nalice\nn\n"}, "login", "--invite")
+	if got.code != 0 {
+		t.Fatalf("login --invite = %+v", got)
+	}
+	if strings.Join(got.secretsAsked, "|") != "Invitation token: |Choose a password (12 to 72 characters): |Repeat the password: " {
+		t.Fatalf("hidden prompts = %v (the token and both passwords must be hidden, and the password asked only once for the sign-in)", got.secretsAsked)
+	}
+	if !strings.Contains(got.stdout, "Account alice created with the operator role.") || !strings.Contains(got.stdout, "Signed in to lab as alice.") {
+		t.Fatalf("stdout = %q", got.stdout)
+	}
+	entry := savedCredentials(t, path, "lab")
+	if entry.Session == nil || entry.Session.User != "alice" {
+		t.Fatalf("saved = %+v", entry)
+	}
+	if text := allText(t, path, got); strings.Contains(text, "tok-1") || strings.Contains(text, "a brand new password") {
+		t.Fatal("the token or the password was printed or saved")
+	}
+	// The token went only in the body of the one accept call.
+	if calls := server.saw("POST", "/api/auth/invitations/accept"); len(calls) != 1 || calls[0].Auth != "" {
+		t.Fatalf("accept calls = %+v", calls)
+	}
+	// Spent: a second use is refused.
+	again := runAuth(t, authRun{stdin: "tok-1\nanother password 123\n"}, "login", server.URL, "--invite", "--username", "bob")
+	if again.code != clierr.ExitAuth || !strings.Contains(again.stderr, "invalid or has expired") {
+		t.Fatalf("reused token = %+v", again)
+	}
+}
+
+func TestLoginInviteFromStdin(t *testing.T) {
+	server := newAuthServer(t, false)
+	server.addInviteToken("tok-2", "reader")
+	path := configPath(t)
+
+	got := runAuth(t, authRun{config: path, stdin: "tok-2\r\nanother password 123\n"},
+		"login", server.URL, "--name", "lab", "--invite", "--username", "Carol", "--no-stay-signed-in")
+	if got.code != 0 || !strings.Contains(got.stdout, "Account Carol created with the reader role.") || !strings.Contains(got.stdout, "Signed in to lab as Carol.") {
+		t.Fatalf("login --invite = %+v", got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(server.saw("POST", "/api/auth/invitations/accept")[0].Body, &body); err != nil ||
+		body["token"] != "tok-2" || body["username"] != "Carol" || body["password"] != "another password 123" {
+		t.Fatalf("accept body = %v, %v", body, err)
+	}
+}
+
+func TestLoginInviteRefusals(t *testing.T) {
+	server := newAuthServer(t, false)
+	server.addInviteToken("tok-3", "reader")
+
+	t.Run("a taken username leaves the token usable", func(t *testing.T) {
+		got := runAuth(t, authRun{stdin: "tok-3\nanother password 123\n"}, "login", server.URL, "--invite", "--username", "maxim")
+		if got.code != clierr.ExitUsage || !strings.Contains(got.stderr, "already registered") || !strings.Contains(got.stderr, "--username") {
+			t.Fatalf("taken = %+v", got)
+		}
+		ok := runAuth(t, authRun{stdin: "tok-3\nanother password 123\n"}, "login", server.URL, "--name", "x", "--invite", "--username", "dave", "--no-stay-signed-in")
+		if ok.code != 0 {
+			t.Fatalf("the token must still work after a 409: %+v", ok)
+		}
+	})
+	t.Run("an unknown token", func(t *testing.T) {
+		got := runAuth(t, authRun{stdin: "nope\nanother password 123\n"}, "login", server.URL, "--invite", "--username", "erin")
+		if got.code != clierr.ExitAuth {
+			t.Fatalf("unknown = %+v", got)
+		}
+	})
+	t.Run("a script must say the username and give both lines", func(t *testing.T) {
+		for name, args := range map[string]struct{ stdin, username string }{
+			"no username": {"tok\npassword password\n", ""},
+			"no token":    {"", "frank"},
+			"no password": {"tok\n", "frank"},
+		} {
+			a := []string{"login", server.URL, "--invite"}
+			if args.username != "" {
+				a = append(a, "--username", args.username)
+			}
+			if got := runAuth(t, authRun{stdin: args.stdin}, a...); got.code != clierr.ExitUsage {
+				t.Errorf("%s: %+v", name, got)
+			}
+		}
+	})
+	t.Run("two different passwords create nothing", func(t *testing.T) {
+		server.addInviteToken("tok-4", "reader")
+		before := len(server.saw("POST", "/api/auth/invitations/accept"))
+		got := runAuth(t, authRun{terminal: true, secrets: []string{"tok-4", "first password 123", "other password 123"}, stdin: server.URL + "\nx\nfrank\n"}, "login", "--invite")
+		if got.code != clierr.ExitUsage || len(server.saw("POST", "/api/auth/invitations/accept")) != before {
+			t.Fatalf("mismatch = %+v", got)
+		}
+	})
+	t.Run("--invite excludes the other sign-in methods", func(t *testing.T) {
+		for _, flag := range []string{"--with-token", "--password-stdin"} {
+			if got := runAuth(t, authRun{}, "login", server.URL, "--invite", flag); got.code == 0 || !strings.Contains(got.stderr, "none of the others can be") {
+				t.Errorf("%s: %+v", flag, got)
+			}
+		}
+		if got := runAuth(t, authRun{}, "login", server.URL, "--invite", "--email", "a@b.c"); got.code == 0 || !strings.Contains(got.stderr, "none of the others can be") {
+			t.Errorf("--email: %+v", got)
+		}
+	})
+}

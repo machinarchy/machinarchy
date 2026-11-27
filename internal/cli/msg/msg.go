@@ -306,6 +306,10 @@ func init() {
 		Why:     "Their API tokens were deleted. Their account is kept.",
 		Next:    "machinarchy members"})
 
+	register(Message{ID: "auth.invite_accepted", Kind: KindSuccess,
+		Primary: "Account {user} created with the {role} role.",
+		Why:     "Signing in with it now.",
+		Next:    "machinarchy whoami"})
 	register(Message{ID: "member.invited", Kind: KindSuccess,
 		Primary: "Invitation sent to {email} as {role}; it expires {expires}.",
 		Why:     "If that address already has an account nothing is sent, and the answer looks the same.",

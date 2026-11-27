@@ -51,6 +51,10 @@ type authServer struct {
 	members   []fakeMember // nil until a test calls seedMembers
 	invites   []fakeInvite
 	noMail    bool // /members/invitations POST answers 501
+	// inviteTokens maps a valid invitation token to its role; accounts maps a
+	// username created by accepting one to its password.
+	inviteTokens map[string]string
+	accounts     map[string]string
 }
 
 type fakeInvite struct {
@@ -159,6 +163,8 @@ func (s *authServer) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, `{"status":"ok"}`)
 	case r.URL.Path == "/api/auth/login" && r.Method == http.MethodPost:
 		s.login(w, body, reply)
+	case r.URL.Path == "/api/auth/invitations/accept" && r.Method == http.MethodPost:
+		s.acceptInvitation(body, reply)
 	case r.URL.Path == "/api/auth/logout" && r.Method == http.MethodPost:
 		s.mu.Lock()
 		delete(s.sessions, secret)
@@ -186,9 +192,65 @@ func (s *authServer) login(w http.ResponseWriter, body []byte, reply func(int, s
 		s.sessions[secret] = true
 		s.mu.Unlock()
 		reply(200, fmt.Sprintf(`{"token":%q,"user":{"id":1,"username":"maxim","email":%q}}`, secret, testEmail))
+	case s.accountPassword(identifier) != "" && s.accountPassword(identifier) == request["password"]:
+		s.mu.Lock()
+		secret := fmt.Sprintf("sess-%d", len(s.sessions)+1)
+		s.sessions[secret] = true
+		s.mu.Unlock()
+		reply(200, fmt.Sprintf(`{"token":%q,"user":{"id":7,"username":%q}}`, secret, identifier))
 	default:
 		reply(401, `{"error":"Invalid credentials"}`)
 	}
+}
+
+func (s *authServer) accountPassword(username string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.accounts[username]
+}
+
+// addInviteToken makes token a valid, unused invitation for role.
+func (s *authServer) addInviteToken(token, role string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inviteTokens == nil {
+		s.inviteTokens = map[string]string{}
+	}
+	s.inviteTokens[token] = role
+}
+
+// acceptInvitation fakes the public accept route: an unknown or used token is
+// 404, a taken username 409 (the token stays valid), otherwise the account is
+// created and the token is spent.
+func (s *authServer) acceptInvitation(body []byte, reply func(int, string)) {
+	var request struct{ Token, Username, Password string }
+	_ = json.Unmarshal(body, &request)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	role, ok := s.inviteTokens[request.Token]
+	if !ok {
+		reply(404, `{"error":"invitation is invalid or expired"}`)
+
+		return
+	}
+	if _, taken := s.accounts[request.Username]; taken || request.Username == "maxim" {
+		reply(409, `{"error":"username or email is already registered"}`)
+
+		return
+	}
+	if len(request.Password) < 12 {
+		reply(400, `{"error":"invalid input: password must be between 12 and 72 bytes"}`)
+
+		return
+	}
+	if s.accounts == nil {
+		s.accounts = map[string]string{}
+	}
+	s.accounts[request.Username] = request.Password
+	delete(s.inviteTokens, request.Token)
+	reply(201, fmt.Sprintf(`{"id":7,"username":%q,"role":%q}`, request.Username, role))
 }
 
 // identify says who a credential is: "session", "token" or "" for none.

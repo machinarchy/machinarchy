@@ -1,5 +1,13 @@
 # ChangeLogAI
 
+## 2026-11-27 — 2.5: invitee CLI `machinarchy login SERVER --invite` (branch ai/p2-members)
+
+- **CLI (owner chose the `login --invite` shape; no new top-level command):** `login --invite [--username NAME]` creates the account from an emailed token and signs in. On a terminal the token, the password and its repeat are hidden prompts and the username is asked; without one, stdin carries the token (line 1) and the password (line 2) and `--username` is required. Nothing secret is a flag. Mismatched passwords create nothing. A 404 gets one generic message (invalid, expired, used, replaced or revoked; ask for a new invitation); a 409 (taken username) says the token is still valid. `--invite` excludes `--with-token`, `--email`, `--password-stdin`. New `api.AcceptInvitation` (token and password only in the request body, no redirects followed, like `Login`).
+- **Email text** now leads with `machinarchy login SERVER --invite`, keeping the `curl` line as the no-tool fallback. ADR-060 notes, `docs/cli/commands.md` and `docs/ROADMAP.md` updated.
+- **Tests:** terminal flow (hidden prompts exactly token, password, repeat; no secret printed or saved; token only in the accept body; reuse refused), stdin flow (CRLF, username case kept), refusals (taken username keeps token usable, unknown token, missing username/token/password, password mismatch sends nothing, flag exclusions); the fake server in `authserver_test.go` gained the accept route and accounts.
+- **Checks run:** gofmt, `go build ./...`, `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race ./...` all pass (CLI dependency allowlist test included), `make smoke` OK. Not run: Postgres contract, e2e/HA, `make gosec` (tool/Go version mismatch), a real terminal.
+- **Not done:** add-user without email (2.4); web page; real mail server and PostgreSQL not exercised.
+
 ## 2026-11-27 — 2.3: email invitations, API and CLI `members invite|invites|revoke` (branch ai/p2-members)
 
 - **Owner approved** the ADR-060 design ("let's"): email invitations, no temporary passwords. Status of ADR-060 is now Accepted for invitations; deviations are listed in its implementation notes (mail settings are bootstrap env settings; token in the email body with a `curl` line because there is no web page yet).

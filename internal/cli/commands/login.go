@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -45,6 +46,11 @@ type loginOptions struct {
 	insecureHTTP   bool
 	caFile         string
 	serverArgument string
+	invite         bool
+	username       string
+	// presetPassword is a password already read (the invitation flow), so the
+	// sign-in that follows does not ask again.
+	presetPassword string
 }
 
 // NewLoginCommand signs in to a server: with an email address and password
@@ -62,7 +68,8 @@ func NewLoginCommand(factory *cli.Factory) *cobra.Command {
 		Example: "  machinarchy login https://machinarchy.example.com\n" +
 			"  machinarchy login                      # sign in to the active server again\n" +
 			"  printf '%s' \"$PASSWORD\" | machinarchy login https://machinarchy.example.com --email admin@example.com --password-stdin\n" +
-			"  printf '%s' \"$TOKEN\" | machinarchy login https://machinarchy.example.com --with-token",
+			"  printf '%s' \"$TOKEN\" | machinarchy login https://machinarchy.example.com --with-token\n" +
+			"  machinarchy login https://machinarchy.example.com --invite   # accept an emailed invitation",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if len(args) == 1 {
@@ -89,7 +96,12 @@ func NewLoginCommand(factory *cli.Factory) *cobra.Command {
 	flags.BoolVar(&o.noStay, "no-stay-signed-in", false, "Do not offer to save a device token")
 	flags.BoolVar(&o.insecureHTTP, "insecure-http", false, "Allow plain http:// to a host that is not on this computer (a network you trust)")
 	flags.StringVar(&o.caFile, "ca-file", "", "PEM file with the certificate authority of this server (a private CA or self-signed certificate)")
+	flags.BoolVar(&o.invite, "invite", false, "Accept an emailed invitation: create your account with the one-time token, then sign in")
+	flags.StringVar(&o.username, "username", "", "With --invite: the username to choose")
 	command.MarkFlagsMutuallyExclusive("stay-signed-in", "no-stay-signed-in")
+	command.MarkFlagsMutuallyExclusive("invite", "with-token")
+	command.MarkFlagsMutuallyExclusive("invite", "email")
+	command.MarkFlagsMutuallyExclusive("invite", "password-stdin")
 
 	return command
 }
@@ -143,8 +155,13 @@ func runLogin(command *cobra.Command, f *cli.Factory, o loginOptions) error {
 		return err
 	}
 
-	method, err := chooseMethod(prompter, o)
-	if err != nil {
+	method := methodPassword
+	if o.invite {
+		o, err = acceptInvite(ctx, command, f, prompter, endpoint, o)
+		if err != nil {
+			return err
+		}
+	} else if method, err = chooseMethod(prompter, o); err != nil {
 		return err
 	}
 
@@ -395,6 +412,9 @@ func signInWithPassword(ctx context.Context, command *cobra.Command, f *cli.Fact
 // readPassword reads the password from stdin (--password-stdin) or from a
 // hidden prompt. It is never read from a flag or the environment.
 func readPassword(command *cobra.Command, p *ui.Prompter, o loginOptions) (string, error) {
+	if o.presetPassword != "" {
+		return o.presetPassword, nil
+	}
 	if o.passwordStdin {
 		data, err := io.ReadAll(io.LimitReader(command.InOrStdin(), maxPasswordInput+1))
 		if err != nil {
@@ -659,4 +679,97 @@ func plural(n int, unit string) string {
 	}
 
 	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// acceptInvite redeems an emailed invitation: it reads the token, the
+// username to choose and the new password (twice), creates the account, and
+// returns the options for the sign-in that follows. On a terminal everything
+// is asked, the token and the passwords hidden. Without one, stdin carries the
+// token on its first line and the password on its second, and --username
+// names the account, so no secret is ever a flag:
+//
+//	printf '%s\n%s\n' "$TOKEN" "$PASSWORD" | machinarchy login SERVER --invite --username alice
+func acceptInvite(ctx context.Context, command *cobra.Command, f *cli.Factory, p *ui.Prompter, endpoint api.Endpoint, o loginOptions) (loginOptions, error) {
+	var token, password string
+	username := strings.TrimSpace(o.username)
+
+	if p.Interactive {
+		var err error
+		if token, err = p.Secret("Invitation token"); err != nil {
+			return o, err
+		}
+		if username == "" {
+			if username, err = p.Line("Choose a username", ""); err != nil {
+				return o, err
+			}
+		}
+		if password, err = p.Secret("Choose a password (12 to 72 characters)"); err != nil {
+			return o, err
+		}
+		again, err := p.Secret("Repeat the password")
+		if err != nil {
+			return o, err
+		}
+		if again != password {
+			return o, clierr.Usagef("the two passwords differ; nothing was created")
+		}
+	} else {
+		if username == "" {
+			return o, inputRequired("--username", "printf '%s\\n%s\\n' \"$TOKEN\" \"$PASSWORD\" | machinarchy login SERVER --invite --username alice")
+		}
+		reader := bufio.NewReader(io.LimitReader(command.InOrStdin(), config.MaxTokenBytes+maxPasswordInput+4))
+		var err error
+		if token, err = readLine(reader); err != nil || token == "" {
+			return o, inputRequired("the invitation token on the first line of stdin", "printf '%s\\n%s\\n' \"$TOKEN\" \"$PASSWORD\" | machinarchy login SERVER --invite --username alice")
+		}
+		if password, err = readLine(reader); err != nil || password == "" {
+			return o, inputRequired("the new password on the second line of stdin", "printf '%s\\n%s\\n' \"$TOKEN\" \"$PASSWORD\" | machinarchy login SERVER --invite --username alice")
+		}
+	}
+	token = strings.TrimSpace(token)
+	username = strings.TrimSpace(username)
+	if token == "" || username == "" || password == "" {
+		return o, clierr.Usagef("the token, the username and the password are all required")
+	}
+
+	accepted, err := api.AcceptInvitation(ctx, endpoint, token, username, password)
+	if err != nil {
+		return o, inviteFailed(err)
+	}
+	message := msg.Get("auth.invite_accepted").With(msg.Vars{"user": sanitize.Line(accepted.Username), "role": accepted.Role})
+	if _, err := fmt.Fprint(command.OutOrStdout(), ui.Render(message, f.StyleFor(command.OutOrStdout()))); err != nil {
+		return o, err
+	}
+	o.email, o.presetPassword = accepted.Username, password
+
+	return o, nil
+}
+
+func readLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// inviteFailed explains an invitation the server refused, without saying more
+// than the server does about why a token is not valid.
+func inviteFailed(err error) error {
+	var apiErr *api.Error
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	switch apiErr.Status {
+	case 404:
+		return clierr.Detailed(clierr.ExitAuth, errors.New("the invitation is invalid or has expired"),
+			"the token may be mistyped, already used, replaced by a newer invitation, or revoked",
+			"Ask the person who invited you to send a new invitation.")
+	case 409:
+		return clierr.Detailed(clierr.ExitUsage, errors.New("that username or email is already registered"),
+			"the invitation is still valid", "Run it again with another --username.")
+	}
+
+	return err
 }
