@@ -334,7 +334,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"run":            nil,
 		"config":         {"path", "show"},
 		"tokens":         {"create", "revoke"},
-		"members":        {"remove", "role"},
+		"members":        {"invite", "invites", "remove", "revoke", "role"},
 		"logout":         nil,
 		"whoami":         nil,
 		"switch":         nil,

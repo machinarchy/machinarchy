@@ -420,8 +420,13 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("construct managed resource application service: %w", err)
 	}
 	managedResources.UseEnvironments(r.stores.Environments)
+	invitations, err := newInvitationService(r.stores, cfg)
+	if err != nil {
+		return nil, err
+	}
 	repositories := httpv1.Repositories{
-		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
+		Invitations: invitations,
+		Users:       r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Sessions: r.stores.Sessions, SessionKeys: sessionKeys, SessionTTL: sessionTTL,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, OperationData: operationData(r.stores), ManagedResources: managedResources,
 		Agents:    r.stores.Agents,

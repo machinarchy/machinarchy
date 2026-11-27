@@ -49,6 +49,7 @@ keyring file, and the agent gateway key and enrollment token.
 
 | Setting | Notes |
 |---|---|
+| `MACHINARCHY_SMTP_HOST`, `_PORT`, `_TLS`, `_USERNAME`, `_PASSWORD_FILE`, `_FROM`, `MACHINARCHY_PUBLIC_URL` | Mail for `members invite` ([ADR-060](adr/ADR-060-member-onboarding.md)); off unless `_HOST` is set, then `_FROM` and `MACHINARCHY_PUBLIC_URL` (the address invitees are told to use) are required. `_TLS` is `starttls` (default, port 587; the server must offer it), `tls` (implicit, 465) or `none` (loopback hosts only). The password comes from a `0600` file (`_PASSWORD_FILE`) or `MACHINARCHY_SMTP_PASSWORD`. Without mail, `members invite` answers 501; accepting, listing and revoking still work. |
 | `MACHINARCHY_ENVIRONMENT` | `production` (default) enforces secure cookies, explicit `MACHINARCHY_CORS_ALLOWED_ORIGINS`, PostgreSQL `sslmode=verify-full` and TLS to NATS. |
 | `MACHINARCHY_KMS_PROVIDER` | Root of trust for the Secret Store: `local` (default, built in: root keys from `MACHINARCHY_ENCRYPTION_SECRET[_FILE]` and the keyring file). External KMS providers are optional adapters added later. New key IDs are written as `local:<MACHINARCHY_ENCRYPTION_KEY_ID>`; IDs stored without the prefix keep working. |
 | `MACHINARCHY_METRICS_LISTEN_ADDR` | Serve `/metrics` only on this address (for example `:9090`), not on the API port. Recommended in production; scrape this port from inside the cluster only. |

@@ -313,6 +313,25 @@ definitions:
           host changes and runs; the server enforces it for every client.
         type: boolean
     type: object
+  domain.Invitation:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      invitedBy:
+        type: string
+      role:
+        allOf:
+        - $ref: '#/definitions/domain.Role'
+        enum:
+        - operator
+        - reader
+    type: object
   domain.IssuedAPIToken:
     properties:
       createdAt:
@@ -528,6 +547,53 @@ definitions:
       replace:
         description: Replace must be set to change keys the Host already trusts.
         type: boolean
+    type: object
+  members.AcceptRequest:
+    properties:
+      password:
+        type: string
+      token:
+        type: string
+      username:
+        type: string
+    type: object
+  members.AcceptResponse:
+    properties:
+      email:
+        type: string
+      id:
+        type: integer
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
+      username:
+        type: string
+    type: object
+  members.InviteRequest:
+    properties:
+      email:
+        example: new.person@example.com
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        example: operator
+        type: string
+    type: object
+  members.InviteResponse:
+    properties:
+      email:
+        type: string
+      expiresAt:
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
     type: object
   members.SetRoleRequest:
     properties:
@@ -1250,6 +1316,42 @@ info:
   title: Machinarchy API
   version: "1.0"
 paths:
+  /api/auth/invitations/accept:
+    post:
+      consumes:
+      - application/json
+      description: Public. Creates the account with the invited role; the invitee
+        chooses the username and password. The token works once. An unknown, expired,
+        revoked or used token gets one generic answer.
+      parameters:
+      - description: Token, username and password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.AcceptRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/members.AcceptResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      summary: Accept an invitation
+      tags:
+      - Auth
   /api/auth/login:
     post:
       consumes:
@@ -2805,6 +2907,116 @@ paths:
       security:
       - BearerAuth: []
       summary: Change a member's role
+      tags:
+      - Members
+  /api/v1/members/invitations:
+    get:
+      description: Requires a human workspace owner session. Tokens are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Invitation'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List pending invitations
+      tags:
+      - Members
+    post:
+      consumes:
+      - application/json
+      description: Requires a human workspace owner session. Emails a single-use token
+        that expires after 7 days. The role must be operator or reader. The answer
+        is the same when the address already has an account (nothing is sent), so
+        it does not reveal registered addresses. Needs mail settings (MACHINARCHY_SMTP_*);
+        without them it answers 501.
+      parameters:
+      - description: Invitation
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.InviteRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/members.InviteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Invite a person by email
+      tags:
+      - Members
+  /api/v1/members/invitations/{id}:
+    delete:
+      description: Requires a human workspace owner session. The token stops working
+        at once.
+      parameters:
+      - description: Invitation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: Revoked
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke a pending invitation
       tags:
       - Members
   /api/v1/runtime-config:

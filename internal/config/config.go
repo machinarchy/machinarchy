@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	netmail "net/mail"
 	"net/netip"
 	"net/url"
 	"os"
@@ -99,7 +100,9 @@ type Config struct {
 	ShutdownTimeout        time.Duration
 	Database               DatabaseConfig
 	BootstrapAdmin         BootstrapAdminConfig
-	SSHTargetPolicy        netpolicy.Policy
+	// Mail is the optional outgoing mail setup for invitations (ADR-060).
+	Mail            MailConfig
+	SSHTargetPolicy netpolicy.Policy
 	// SSHHostKeyPolicy is the host-key trust policy for Access Profiles that
 	// do not set one: tofu, approve or pinned (AUDIT/10b §2).
 	SSHHostKeyPolicy string
@@ -213,6 +216,24 @@ type BootstrapAdminConfig struct {
 	Email    string
 	Password string
 }
+
+// MailConfig is the optional SMTP setup used to email member invitations. Mail
+// is on only when Host is set. The password comes from a 0600 file (or the
+// environment, like the bootstrap password) and is never read back by the API.
+type MailConfig struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	From     string
+	// TLS is "starttls" (default), "tls" (implicit TLS) or "none" (loopback only).
+	TLS string
+	// PublicURL is the address of this server that invitees are told to use.
+	PublicURL string
+}
+
+// Enabled reports whether mail delivery is configured.
+func (m MailConfig) Enabled() bool { return m.Host != "" }
 
 // Load reads the configuration from environment variables, applies defaults, and validates the configuration values. It returns a Config struct or an error if validation fails.
 func Load() (Config, error) {
@@ -577,6 +598,12 @@ func loadWithGetter(get func(string, ...string) string) (Config, error) {
 		}
 	}
 
+	mail, err := loadMail(get)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Mail = mail
+
 	targetPolicy, err := loadSSHTargetPolicy(get)
 	if err != nil {
 		return Config{}, err
@@ -886,6 +913,74 @@ func validateMetricsListenAddr(address, apiAddress string) error {
 
 // readSecretFile reads key material from an operator-provided file, which must
 // be a regular file (not a symlink) readable by its owner only (AUDIT X-14).
+// loadMail reads MACHINARCHY_SMTP_* and MACHINARCHY_PUBLIC_URL. Nothing is
+// required unless MACHINARCHY_SMTP_HOST is set.
+func loadMail(get func(string, ...string) string) (MailConfig, error) {
+	mail := MailConfig{Host: strings.TrimSpace(get("MACHINARCHY_SMTP_HOST"))}
+	if mail.Host == "" {
+		return mail, nil
+	}
+	if strings.ContainsAny(mail.Host, " \t\r\n/@") {
+		return MailConfig{}, errors.New("MACHINARCHY_SMTP_HOST must be a host name or address")
+	}
+	mail.TLS = strings.ToLower(get("MACHINARCHY_SMTP_TLS", "starttls"))
+	defaultPort := "587"
+	switch mail.TLS {
+	case "starttls":
+	case "tls":
+		defaultPort = "465"
+	case "none":
+		if ip, err := netip.ParseAddr(mail.Host); mail.Host != "localhost" && (err != nil || !ip.IsLoopback()) {
+			return MailConfig{}, errors.New("MACHINARCHY_SMTP_TLS=none is allowed only for localhost or a loopback address")
+		}
+		defaultPort = "25"
+	default:
+		return MailConfig{}, errors.New("MACHINARCHY_SMTP_TLS must be starttls, tls or none")
+	}
+	port, err := strconv.Atoi(get("MACHINARCHY_SMTP_PORT", defaultPort))
+	if err != nil || port < 1 || port > 65535 {
+		return MailConfig{}, errors.New("MACHINARCHY_SMTP_PORT must be a port number")
+	}
+	mail.Port = port
+	mail.Username = strings.TrimSpace(get("MACHINARCHY_SMTP_USERNAME"))
+	if file := strings.TrimSpace(get("MACHINARCHY_SMTP_PASSWORD_FILE")); file != "" {
+		data, err := readSecretFile(file, "MACHINARCHY_SMTP_PASSWORD_FILE")
+		if err != nil {
+			return MailConfig{}, err
+		}
+		mail.Password = strings.TrimRight(string(data), "\r\n")
+	} else {
+		mail.Password = GetEnv("MACHINARCHY_SMTP_PASSWORD")
+	}
+	if mail.Username != "" && mail.Password == "" {
+		return MailConfig{}, errors.New("MACHINARCHY_SMTP_PASSWORD_FILE is required with MACHINARCHY_SMTP_USERNAME")
+	}
+	mail.From = strings.TrimSpace(get("MACHINARCHY_SMTP_FROM"))
+	if parsed, err := mail.ParseFrom(); err != nil || parsed == "" {
+		return MailConfig{}, errors.New("MACHINARCHY_SMTP_FROM must be a plain email address")
+	}
+	mail.PublicURL = strings.TrimRight(strings.TrimSpace(get("MACHINARCHY_PUBLIC_URL")), "/")
+	parsed, err := url.Parse(mail.PublicURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return MailConfig{}, errors.New("MACHINARCHY_PUBLIC_URL must be an http(s) URL without credentials, query or fragment when mail is configured")
+	}
+	return mail, nil
+}
+
+// ParseFrom returns the bare sender address, or an error when From is not a
+// single plain address.
+func (m MailConfig) ParseFrom() (string, error) {
+	if strings.ContainsAny(m.From, "\r\n<>\"") {
+		return "", errors.New("invalid sender address")
+	}
+	addr, err := netmail.ParseAddress(m.From)
+	if err != nil {
+		return "", err
+	}
+	return addr.Address, nil
+}
+
 func readSecretFile(path, setting string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {

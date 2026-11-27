@@ -42,6 +42,7 @@ var matrix = map[string]access{
 	"GET /healthz/ready":   public,
 	"GET /metrics":         public,
 	"POST /api/auth/login": public, "POST /api/auth/logout": public, "POST /api/auth/signup": public,
+	"POST /api/auth/invitations/accept": public,
 
 	"GET /api/v1/me": authenticated,
 
@@ -54,7 +55,9 @@ var matrix = map[string]access{
 
 	"GET /api/v1/tokens": ownerHuman, "POST /api/v1/tokens": ownerHuman, "DELETE /api/v1/tokens/{id}": ownerHuman,
 	"GET /api/v1/members": ownerHuman, "PUT /api/v1/members/{id}/role": ownerHuman, "DELETE /api/v1/members/{id}": ownerHuman,
-	"GET /api/v1/audit/events": ownerHuman, "GET /api/v1/audit/verify": ownerHuman,
+	"GET /api/v1/members/invitations": ownerHuman, "POST /api/v1/members/invitations": ownerHuman,
+	"DELETE /api/v1/members/invitations/{id}": ownerHuman,
+	"GET /api/v1/audit/events":                ownerHuman, "GET /api/v1/audit/verify": ownerHuman,
 
 	"GET /api/v1/runtime-config": ownerHuman, "PUT /api/v1/runtime-config": ownerHuman,
 	"GET /api/v1/runtime-config/revisions": ownerHuman, "GET /api/v1/runtime-config/revisions/{revision}": ownerHuman,

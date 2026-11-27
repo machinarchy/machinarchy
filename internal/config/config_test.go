@@ -846,3 +846,87 @@ func TestLoadAgentGatewayGRPC(t *testing.T) {
 		t.Fatalf("production plaintext gRPC = %v, want a TLS error", err)
 	}
 }
+
+func TestLoadMail(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		setCommonEnv(t)
+		cfg, err := Load()
+		if err != nil || cfg.Mail.Enabled() {
+			t.Fatalf("mail enabled by default: %+v, %v", cfg.Mail, err)
+		}
+	})
+	mailEnv := func(t *testing.T) {
+		setCommonEnv(t)
+		t.Setenv("MACHINARCHY_SMTP_HOST", "smtp.example.test")
+		t.Setenv("MACHINARCHY_SMTP_FROM", "noreply@example.test")
+		t.Setenv("MACHINARCHY_PUBLIC_URL", "https://machinarchy.example.test/")
+	}
+	t.Run("defaults to STARTTLS on 587", func(t *testing.T) {
+		mailEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := cfg.Mail
+		if !m.Enabled() || m.TLS != "starttls" || m.Port != 587 || m.PublicURL != "https://machinarchy.example.test" {
+			t.Fatalf("mail = %+v", m)
+		}
+	})
+	t.Run("implicit TLS defaults to 465", func(t *testing.T) {
+		mailEnv(t)
+		t.Setenv("MACHINARCHY_SMTP_TLS", "tls")
+		if cfg, err := Load(); err != nil || cfg.Mail.Port != 465 {
+			t.Fatalf("port = %d, %v", cfg.Mail.Port, err)
+		}
+	})
+	t.Run("password comes from a protected file", func(t *testing.T) {
+		mailEnv(t)
+		t.Setenv("MACHINARCHY_SMTP_USERNAME", "mailer")
+		file := t.TempDir() + "/smtp-password"
+		if err := os.WriteFile(file, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("MACHINARCHY_SMTP_PASSWORD_FILE", file)
+		cfg, err := Load()
+		if err != nil || cfg.Mail.Password != "s3cret" {
+			t.Fatalf("password = %q, %v", cfg.Mail.Password, err)
+		}
+		if err := os.Chmod(file, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(); err == nil {
+			t.Fatal("a world-readable SMTP password file was accepted")
+		}
+	})
+	rejects := map[string]map[string]string{
+		"username without password":    {"MACHINARCHY_SMTP_USERNAME": "mailer"},
+		"unencrypted to a remote host": {"MACHINARCHY_SMTP_TLS": "none"},
+		"unknown TLS mode":             {"MACHINARCHY_SMTP_TLS": "maybe"},
+		"bad port":                     {"MACHINARCHY_SMTP_PORT": "70000"},
+		"sender with a name":           {"MACHINARCHY_SMTP_FROM": "Machinarchy <noreply@example.test>"},
+		"sender with a newline":        {"MACHINARCHY_SMTP_FROM": "a@example.test\nBcc: b@example.test"},
+		"no public URL":                {"MACHINARCHY_PUBLIC_URL": ""},
+		"public URL with creds":        {"MACHINARCHY_PUBLIC_URL": "https://u:p@m.example.test"},
+		"public URL not http":          {"MACHINARCHY_PUBLIC_URL": "ftp://m.example.test"},
+		"host with a path":             {"MACHINARCHY_SMTP_HOST": "smtp.example.test/x"},
+	}
+	for name, env := range rejects {
+		t.Run("rejects "+name, func(t *testing.T) {
+			mailEnv(t)
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() accepted it")
+			}
+		})
+	}
+	t.Run("unencrypted is fine on loopback", func(t *testing.T) {
+		mailEnv(t)
+		t.Setenv("MACHINARCHY_SMTP_HOST", "127.0.0.1")
+		t.Setenv("MACHINARCHY_SMTP_TLS", "none")
+		if cfg, err := Load(); err != nil || cfg.Mail.Port != 25 {
+			t.Fatalf("loopback none: %+v, %v", cfg.Mail, err)
+		}
+	})
+}

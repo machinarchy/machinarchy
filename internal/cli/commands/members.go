@@ -20,15 +20,16 @@ import (
 func NewMembersCommand(f *cli.Factory) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "members",
-		Short: "List, change and remove people with access",
+		Short: "List, invite, change and remove people with access",
 		Long: "Shows who has access to this server's workspace and their role (reader, operator or owner). Owners can change a\n" +
 			"role or remove a person. A workspace always keeps at least one owner. Managing members needs an owner signed in\n" +
 			"with a password.",
-		Example: "  machinarchy members\n  machinarchy members role alice operator\n  machinarchy members remove alice",
+		Example: "  machinarchy members\n  machinarchy members role alice operator\n  machinarchy members remove alice\n  machinarchy members invite new.person@example.com --role operator",
 		Args:    cobra.NoArgs,
 		RunE:    listMembers(f),
 	}
-	command.AddCommand(newMembersRoleCommand(f), newMembersRemoveCommand(f))
+	command.AddCommand(newMembersRoleCommand(f), newMembersRemoveCommand(f),
+		newMembersInviteCommand(f), newMembersInvitesCommand(f), newMembersRevokeCommand(f))
 	markOwner(command)
 
 	return command
@@ -156,6 +157,95 @@ func newMembersRemoveCommand(f *cli.Factory) *cobra.Command {
 			}
 
 			return printMessage(command, f, msg.Get("member.removed").With(msg.Vars{"user": sanitize.Line(member.Username)}))
+		},
+	}
+}
+
+func newMembersInviteCommand(f *cli.Factory) *cobra.Command {
+	var role string
+	command := &cobra.Command{
+		Use:   "invite EMAIL",
+		Short: "Invite a person by email",
+		Long: "Emails a one-time invitation token that lets the person choose their own username and password. It works once\n" +
+			"and expires after 7 days. The role is reader (default) or operator; owners are promoted afterwards with\n" +
+			"'members role'. The server must have mail configured. If the address already has an account, nothing is sent\n" +
+			"and the answer looks the same.",
+		Example: "  machinarchy members invite new.person@example.com\n  machinarchy members invite new.person@example.com --role operator",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			role = strings.ToLower(strings.TrimSpace(role))
+			if role != "reader" && role != "operator" {
+				return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("%q is not a role you can invite", sanitize.Line(role)),
+					"an invitation gives reader or operator; promote to owner afterwards", "machinarchy members invite "+args[0]+" --role operator")
+			}
+			client, err := membersClient(command, f)
+			if err != nil {
+				return err
+			}
+			result, err := client.InviteMember(command.Context(), strings.TrimSpace(args[0]), role)
+			if err != nil {
+				return fmt.Errorf("invite: %w", err)
+			}
+
+			return printMessage(command, f, msg.Get("member.invited").With(msg.Vars{
+				"email": sanitize.Line(result.Email), "role": result.Role, "expires": result.ExpiresAt.Local().Format("2006-01-02 15:04")}))
+		},
+	}
+	command.Flags().StringVar(&role, "role", "reader", "Role to give: reader or operator")
+
+	return command
+}
+
+func newMembersInvitesCommand(f *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:     "invites",
+		Short:   "List pending invitations",
+		Long:    "Shows invitations that have not been accepted, revoked or expired. Tokens are never shown.",
+		Example: "  machinarchy members invites",
+		Args:    cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			client, err := membersClient(command, f)
+			if err != nil {
+				return err
+			}
+			invitations, err := client.ListInvitations(command.Context())
+			if err != nil {
+				return fmt.Errorf("list invitations: %w", err)
+			}
+			rows := make([][]string, 0, len(invitations))
+			ids := make([]string, 0, len(invitations))
+			for _, i := range invitations {
+				ids = append(ids, strconv.Itoa(i.ID))
+				rows = append(rows, []string{strconv.Itoa(i.ID), sanitize.Line(i.Email), i.Role, sanitize.Line(i.InvitedBy),
+					i.ExpiresAt.Local().Format("2006-01-02 15:04")})
+			}
+
+			return printList(command, f, invitations, ids, []string{"ID", "EMAIL", "ROLE", "INVITED BY", "EXPIRES"}, rows)
+		},
+	}
+}
+
+func newMembersRevokeCommand(f *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:     "revoke INVITATION_ID",
+		Short:   "Cancel a pending invitation",
+		Long:    "Cancels an invitation so its token stops working at once. Find the ID with 'members invites'.",
+		Example: "  machinarchy members revoke 4",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(strings.TrimSpace(args[0]))
+			if err != nil || id <= 0 {
+				return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("%q is not an invitation ID", sanitize.Line(args[0])), "", "machinarchy members invites")
+			}
+			client, err := membersClient(command, f)
+			if err != nil {
+				return err
+			}
+			if err := client.RevokeInvitation(command.Context(), id); err != nil {
+				return fmt.Errorf("revoke invitation: %w", err)
+			}
+
+			return printMessage(command, f, msg.Get("member.invite_revoked").With(msg.Vars{"id": strconv.Itoa(id)}))
 		},
 	}
 }

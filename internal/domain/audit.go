@@ -20,6 +20,9 @@ const (
 	AuditEnvironmentProtection = "environment.protection_changed"
 	AuditMemberRoleChanged     = "member.role_changed"
 	AuditMemberRemoved         = "member.removed"
+	AuditMemberInvited         = "member.invited"
+	AuditMemberInviteRevoked   = "member.invite_revoked"
+	AuditMemberJoined          = "member.joined"
 	AuditHostCreated           = "host.created"
 	AuditHostUpdated           = "host.updated"
 	AuditHostDeleted           = "host.deleted"
@@ -67,6 +70,7 @@ const (
 	AuditOperationUpdated   = "operation.updated"
 
 	AuditTargetUser         = "user"
+	AuditTargetInvitation   = "member_invitation"
 	AuditTargetEnvironment  = "environment"
 	AuditTargetHost         = "host"
 	AuditTargetResourceHost = "resource_host"

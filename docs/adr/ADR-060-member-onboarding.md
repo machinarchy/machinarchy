@@ -1,6 +1,6 @@
 # ADR-060: Member onboarding: email invitations and owner-added users, no temporary passwords
 
-**Status:** Proposed (owner chose email delivery on 2026-11-27; API shape and mailer settings need owner approval before steps 2.3 and 2.4)
+**Status:** Accepted for invitations (step 2.3, implemented 2026-11-27); the owner-added user flow (step 2.4) is not built yet. Owner chose email delivery and no temporary passwords on 2026-11-27.
 **Date:** 2026-11-27
 **Builds on:** ADR 0001 (production self-registration off), ADR 0003 (shared workspace, owner-managed roles), step 2.1 (member removal)
 
@@ -40,3 +40,14 @@ The usual shortcut for both is a temporary password chosen or shown by the owner
 - Account enumeration through the invite endpoint is closed by uniform responses; the add-user endpoint reveals username conflicts to owners, who can already list members.
 - Inviting owners, multi-workspace invitations and invitation-by-API-token stay out of scope.
 - Implementation is split: 2.3 invitations (mailer, token table, API, CLI), 2.4 add user (reuses the token table and redeem endpoint). Both need negative and security tests: expired, reused, revoked, wrong-workspace and role-tamper tokens, rate limiting, no token in logs or audit.
+
+## Implementation notes (step 2.3, 2026-11-27)
+
+What was built differs from the text above in these ways; the decisions stand.
+
+- **Mail settings are bootstrap settings, not runtime configuration.** `MACHINARCHY_SMTP_*` and `MACHINARCHY_PUBLIC_URL` are read at startup like the bootstrap admin; the SMTP password comes from a `0600` file or the environment and is never read back. Moving them to runtime configuration and the secret store (point 6) stays possible later.
+- **No link yet.** There is no web page to open, so the token is in the email body with a `curl` command for `POST /api/auth/invitations/accept` (request body, never a URL). The fragment-link design (point 5) applies once a page exists; a CLI command for the invitee is a follow-up.
+- **Rate limiting** of redemption is the API-wide per-client limiter; a per-token limit was dropped because 256-bit tokens cannot be guessed. Pending invitations are capped at 100 per workspace.
+- **Storage:** table `member_onboarding` (kind `invite|add`, hash, email, role, creator, expiry) with a unique pending invitation per workspace and email; accepted, revoked and expired rows are deleted, the audit trail keeps the history. `member.link_reissued` and `member.added` belong to step 2.4.
+- **Audit events:** `member.invited`, `member.invite_revoked`, `member.joined` (actor is the new account, source `invitation`); details hold email, role and expiry, never a token or its hash.
+- **Answers:** `POST /members/invitations` returns 202 `{email, role, expiresAt}` with no id; an existing account's address gets the same answer and no email. If sending fails the invitation is revoked and the API answers 502 without SMTP detail; without mail it answers 501.

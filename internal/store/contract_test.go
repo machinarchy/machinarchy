@@ -192,6 +192,8 @@ var contractTests = []struct {
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"member removal", testMemberRemoval},
+	{"invitations", testInvitations},
+	{"invitation limit and concurrency", testInvitationLimitAndConcurrency},
 	{"concurrent owner removal keeps an owner", testConcurrentOwnerRemoval},
 	{"audit trail", testAuditTrail},
 	{"audit events are append-only", testAuditAppendOnly},
@@ -514,8 +516,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 3 {
-		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments", before)
+	if before != 4 {
+		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments and member onboarding", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

@@ -49,6 +49,13 @@ type authServer struct {
 	redirect  string // when set, every request is answered with a redirect there
 	hostCalls int
 	members   []fakeMember // nil until a test calls seedMembers
+	invites   []fakeInvite
+	noMail    bool // /members/invitations POST answers 501
+}
+
+type fakeInvite struct {
+	ID          int
+	Email, Role string
 }
 
 type fakeMember struct {
@@ -272,6 +279,11 @@ func (s *authServer) membersRoute(r *http.Request, body []byte, reply func(int, 
 		}
 	}
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/members"), "/")
+	if rest == "invitations" || strings.HasPrefix(rest, "invitations/") {
+		s.invitationsRoute(r, body, strings.TrimPrefix(strings.TrimPrefix(rest, "invitations"), "/"), reply)
+
+		return
+	}
 	if rest == "" && r.Method == http.MethodGet {
 		var items []string
 		for _, m := range s.members {
@@ -508,4 +520,47 @@ func base64Lines(data []byte) string {
 	b.WriteString(encoded + "\n")
 
 	return b.String()
+}
+
+// invitationsRoute fakes /api/v1/members/invitations (the caller holds s.mu).
+func (s *authServer) invitationsRoute(r *http.Request, body []byte, rest string, reply func(int, string)) {
+	expires := time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	switch {
+	case rest == "" && r.Method == http.MethodPost:
+		var request struct{ Email, Role string }
+		_ = json.Unmarshal(body, &request)
+		if s.noMail {
+			reply(501, `{"error":"email delivery is not configured on this server"}`)
+
+			return
+		}
+		s.invites = append(s.invites, fakeInvite{ID: len(s.invites) + 1, Email: request.Email, Role: request.Role})
+		reply(202, fmt.Sprintf(`{"email":%q,"role":%q,"expiresAt":%q}`, request.Email, request.Role, expires))
+	case rest == "" && r.Method == http.MethodGet:
+		var items []string
+		for _, i := range s.invites {
+			items = append(items, fmt.Sprintf(`{"id":%d,"email":%q,"role":%q,"invitedBy":"maxim","createdAt":%q,"expiresAt":%q}`, i.ID, i.Email, i.Role, time.Now().UTC().Format(time.RFC3339), expires))
+		}
+		reply(200, "["+strings.Join(items, ",")+"]")
+	case r.Method == http.MethodDelete:
+		id, _ := strconv.Atoi(rest)
+		for i, inv := range s.invites {
+			if inv.ID == id {
+				s.invites = append(s.invites[:i], s.invites[i+1:]...)
+				reply(204, "")
+
+				return
+			}
+		}
+		reply(404, `{"error":"invitation not found"}`)
+	default:
+		reply(404, `{"error":"no route"}`)
+	}
+}
+
+func (s *authServer) inviteList() []fakeInvite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]fakeInvite(nil), s.invites...)
 }

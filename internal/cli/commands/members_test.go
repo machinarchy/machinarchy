@@ -116,3 +116,60 @@ func TestMembersRemove(t *testing.T) {
 		}
 	})
 }
+
+func TestMembersInviteListRevoke(t *testing.T) {
+	server, path := memberServer(t)
+
+	got := runAuth(t, authRun{config: path}, "members", "invite", "new.person@example.test", "--role", "operator")
+	if got.code != 0 || !strings.Contains(got.stdout, "Invitation sent to new.person@example.test as operator") {
+		t.Fatalf("invite = %+v", got)
+	}
+	if calls := server.saw("POST", "/api/v1/members/invitations"); len(calls) != 1 || calls[0].Auth != "Bearer sess-owner" {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if invites := server.inviteList(); len(invites) != 1 || invites[0].Role != "operator" {
+		t.Fatalf("invites = %+v", invites)
+	}
+	// The default role is the least one.
+	if got := runAuth(t, authRun{config: path}, "members", "invite", "b@example.test"); got.code != 0 || server.inviteList()[1].Role != "reader" {
+		t.Fatalf("default role: %+v, %+v", got, server.inviteList())
+	}
+
+	list := runAuth(t, authRun{config: path}, "members", "invites")
+	if list.code != 0 || !strings.Contains(list.stdout, "new.person@example.test") || strings.Contains(strings.ToLower(list.stdout), "token") {
+		t.Fatalf("invites = %+v", list)
+	}
+	if json := runAuth(t, authRun{config: path}, "members", "invites", "-o", "json"); json.code != 0 || !strings.Contains(json.stdout, `"email": "b@example.test"`) {
+		t.Fatalf("json = %+v", json)
+	}
+
+	if got := runAuth(t, authRun{config: path}, "members", "revoke", "1"); got.code != 0 || !strings.Contains(got.stdout, "Invitation 1 revoked.") || len(server.inviteList()) != 1 {
+		t.Fatalf("revoke = %+v", got)
+	}
+	if got := runAuth(t, authRun{config: path}, "members", "revoke", "99"); got.code == 0 {
+		t.Fatalf("revoking an unknown invitation must fail: %+v", got)
+	}
+	if got := runAuth(t, authRun{config: path}, "members", "revoke", "abc"); got.code != clierr.ExitUsage {
+		t.Fatalf("a bad id must be a usage error: %+v", got)
+	}
+}
+
+func TestMembersInviteRefusals(t *testing.T) {
+	server, path := memberServer(t)
+
+	if got := runAuth(t, authRun{config: path}, "members", "invite", "a@example.test", "--role", "owner"); got.code != clierr.ExitUsage || len(server.inviteList()) != 0 || len(server.saw("POST", "/api/v1/members/invitations")) != 0 {
+		t.Fatalf("an owner invitation must be refused locally: %+v", got)
+	}
+	server.noMail = true
+	if got := runAuth(t, authRun{config: path}, "members", "invite", "a@example.test"); got.code == 0 || !strings.Contains(got.stderr, "not configured") {
+		t.Fatalf("a server without mail must say so: %+v", got)
+	}
+
+	server.addToken("mch_pat_ci-0001", "ci", "operator")
+	tokenPath := seed(t, server.URL, cred.Credential{Kind: cred.KindDeviceToken, Secret: "mch_pat_ci-0001", User: "maxim", Name: "ci", Role: "operator", ExpiresAt: future()})
+	server.noMail = false
+	before := len(server.saw("POST", "/api/v1/members/invitations"))
+	if got := runAuth(t, authRun{config: tokenPath}, "members", "invite", "a@example.test"); got.code == 0 || len(server.saw("POST", "/api/v1/members/invitations")) != before {
+		t.Fatalf("an API token must be refused locally before anything is sent: %+v", got)
+	}
+}
