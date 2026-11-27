@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-27 — Beta release baseline 0.0.4 (branch ai/beta-manifest-baseline)
+
+- **Why:** `.github/release-please/manifest.beta.json` was `{}`, so Release Please had no baseline on `beta` and opened "chore(beta): release 0.0.3" (PR 21, closed unmerged) from the whole history. It now matches the stable manifest (`0.0.4`), so the next beta should be `0.0.5-beta.1`.
+- **Checks run:** none (config only). Not verified: the version Release Please proposes after this merges.
+
 ## 2026-11-27 — Fix flaky fuzz bound in `group.Normalise` test (branch ai/p6-ssh-host-check)
 
 - **Why:** CI "fuzz smoke" failed on PR 20: `FuzzNormalise` found `[1][1][1][1][1]` (15 bytes, 35 after normalising). Each `[1]` becomes `[<pid>]` (7/3 growth), above the test's `len/4+16` allowance. Not caused by this PR; `Normalise` itself is unchanged and stays idempotent.
