@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.5](https://github.com/machinarchy/machinarchy/compare/v0.0.4...v0.0.5) (2026-11-27)
+
+
+### Bug Fixes
+
+* **hosts:** SSH host check, hosts import and invitation email update  ([#25](https://github.com/machinarchy/machinarchy/issues/25)) ([41eee00](https://github.com/machinarchy/machinarchy/commit/41eee002512c017b4a59cce1a4383689a166b612))
+
 ## [0.0.4](https://github.com/machinarchy/machinarchy/compare/v0.0.3...v0.0.4) (2026-11-26)
 
 
