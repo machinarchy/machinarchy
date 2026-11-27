@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-27 — Fix flaky fuzz bound in `group.Normalise` test (branch ai/p6-ssh-host-check)
+
+- **Why:** CI "fuzz smoke" failed on PR 20: `FuzzNormalise` found `[1][1][1][1][1]` (15 bytes, 35 after normalising). Each `[1]` becomes `[<pid>]` (7/3 growth), above the test's `len/4+16` allowance. Not caused by this PR; `Normalise` itself is unchanged and stays idempotent.
+- **Change:** test bound is now `3*len+16` (a true upper bound), and the failing input is a fuzz seed.
+- **Checks run:** `go test ./internal/cli/group/` and a 10 s `FuzzNormalise` run (20 s, 2.3M execs, passed). Not run: full repo suite.
+
 ## 2026-11-27 — Invitation email: HTML with button, base64 transport, 8 hour token (branch ai/p6-ssh-host-check)
 
 - **Mailer:** the invitation is now `multipart/alternative` (plain text + branded HTML in the Machinarchy palette), both parts `Content-Transfer-Encoding: base64`. The HTML has a button (opens the server URL), the one-time token and, below, the `machinarchy login SERVER --invite` command. The `curl` block was dropped to simplify. The token was already URL-safe base64 (256-bit); unchanged. Values are escaped by `html/template`.

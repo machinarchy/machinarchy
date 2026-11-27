@@ -49,7 +49,7 @@ func TestNormalise(t *testing.T) {
 func FuzzNormalise(f *testing.F) {
 	for _, seed := range []string{
 		"", "a", "2026-11-26T09:14:03Z", "pid=1 [2] 0xdeadbeef", "Nov  6 14:02:11", "123e4567-e89b-12d3-a456-426614174000",
-		"x \t\r\n y", "[", "[12", "Dec", "0x", "pid", "pid=",
+		"x \t\r\n y", "[1][1][1][1][1]", "[", "[12", "Dec", "0x", "pid", "pid=",
 	} {
 		f.Add(seed)
 	}
@@ -59,7 +59,7 @@ func FuzzNormalise(f *testing.F) {
 		if again := Normalise(out); again != out {
 			t.Fatalf("not idempotent: %q -> %q -> %q", in, out, again)
 		}
-		if len(out) > len(in)+len(in)/4+16 {
+		if len(out) > 3*len(in)+16 { // "[1]" becomes "[<pid>]": at most 7/3 growth
 			t.Fatalf("output grew unreasonably: %d -> %d", len(in), len(out))
 		}
 	})
