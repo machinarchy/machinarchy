@@ -1,6 +1,6 @@
 # ADR-060: Member onboarding: email invitations and owner-added users, no temporary passwords
 
-**Status:** Accepted for invitations (step 2.3, implemented 2026-11-27); the owner-added user flow (step 2.4) is not built yet. Owner chose email delivery and no temporary passwords on 2026-11-27.
+**Status:** Accepted and implemented: invitations (step 2.3) and owner-added users (step 2.4), 2026-11-27. Owner chose email delivery and no temporary passwords on 2026-11-27.
 **Date:** 2026-11-27
 **Builds on:** ADR 0001 (production self-registration off), ADR 0003 (shared workspace, owner-managed roles), step 2.1 (member removal)
 
@@ -51,3 +51,11 @@ What was built differs from the text above in these ways; the decisions stand.
 - **Storage:** table `member_onboarding` (kind `invite|add`, hash, email, role, creator, expiry) with a unique pending invitation per workspace and email; accepted, revoked and expired rows are deleted, the audit trail keeps the history. `member.link_reissued` and `member.added` belong to step 2.4.
 - **Audit events:** `member.invited`, `member.invite_revoked`, `member.joined` (actor is the new account, source `invitation`); details hold email, role and expiry, never a token or its hash.
 - **Answers:** `POST /members/invitations` returns 202 `{email, role, expiresAt}` with no id; an existing account's address gets the same answer and no email. If sending fails the invitation is revoked and the API answers 502 without SMTP detail; without mail it answers 501.
+
+## Implementation notes (step 2.4, 2026-11-27)
+
+- **Locked account:** `members add` creates the user and membership in one transaction with password hash `!locked`, which is not a bcrypt hash, so no password can match it. The role is `reader` or `operator` (never owner), like invitations. The `member.added` audit event is in the same transaction.
+- **Same token table and endpoint:** the activation token is a `kind = 'add'` row in `member_onboarding` (24 hours, hash only). It is redeemed at `POST /api/auth/invitations/accept` with the username the owner added; the call sets the first password only while the hash is still `!locked` and the account is in the token's workspace, and records `member.joined` (source `onboarding`). A wrong username changes nothing and keeps the token.
+- **Reissue** (`POST /api/v1/members/{id}/link`, `members link`) replaces the token (audit `member.link_reissued`, old token deleted). It is refused with 409 unless the account is a still-locked operator or reader of that workspace, so it can never reset a working account or an owner.
+- **Email is only recorded:** the add-user flow never sends mail (the optional "send the link by email" of point 4 is not built); the owner hands the token over.
+- **Removing** a not-yet-activated member removes its membership, so its token can no longer activate anything (the account row is kept, like any removed member).

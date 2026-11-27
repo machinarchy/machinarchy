@@ -154,7 +154,7 @@ func (s *invitationService) Accept(ctx context.Context, token, username, passwor
 	if token == "" || len(token) > 256 {
 		return nil, domain.ErrInvitationInvalid
 	}
-	if username == "" || len(username) > 64 || strings.ContainsAny(username, " \t\r\n@") || !validPassword(password) {
+	if !validUsername(username) || !validPassword(password) {
 		return nil, fmt.Errorf("%w: username is required (no spaces or @) and password must be between 12 and 72 bytes", domain.ErrInvalidInput)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -162,4 +162,66 @@ func (s *invitationService) Accept(ctx context.Context, token, username, passwor
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 	return s.store.AcceptInvitation(ctx, HashInvitationToken(token), username, string(hash), s.now())
+}
+
+func (s *invitationService) AddMember(ctx context.Context, principal domain.Principal, username, email string, role domain.Role) (*domain.MemberLink, error) {
+	if ctx == nil {
+		return nil, errors.New("add member context is required")
+	}
+	if err := authorizeMemberAdmin(principal); err != nil {
+		return nil, err
+	}
+	username = strings.ToLower(strings.TrimSpace(username))
+	if !validUsername(username) {
+		return nil, fmt.Errorf("%w: username is required (up to 64 characters, no spaces or @)", domain.ErrInvalidInput)
+	}
+	if role != domain.RoleOperator && role != domain.RoleReader {
+		return nil, fmt.Errorf("%w: an added member's role must be operator or reader", domain.ErrInvalidInput)
+	}
+	if strings.TrimSpace(email) != "" {
+		var err error
+		if email, err = normalizeInviteEmail(email); err != nil {
+			return nil, err
+		}
+	} else {
+		email = ""
+	}
+	token, err := newInvitationToken()
+	if err != nil {
+		return nil, err
+	}
+	expires := s.now().UTC().Add(domain.ActivationTTL)
+	user, err := s.store.AddMember(ctx, domain.NewMember{
+		WorkspaceID: principal.WorkspaceID, Username: username, Email: email, Role: role,
+		CreatedBy: principal.UserID, TokenHash: HashInvitationToken(token), ExpiresAt: expires,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &domain.MemberLink{UserID: user.ID, Username: user.Username, Role: user.Role, Token: token, ExpiresAt: expires}, nil
+}
+
+func (s *invitationService) ReissueLink(ctx context.Context, principal domain.Principal, userID int) (*domain.MemberLink, error) {
+	if ctx == nil {
+		return nil, errors.New("reissue link context is required")
+	}
+	if err := authorizeMemberAdmin(principal); err != nil {
+		return nil, err
+	}
+	if userID <= 0 {
+		return nil, fmt.Errorf("%w: user ID must be positive", domain.ErrInvalidInput)
+	}
+	token, err := newInvitationToken()
+	if err != nil {
+		return nil, err
+	}
+	expires := s.now().UTC().Add(domain.ActivationTTL)
+	if err := s.store.ReissueMemberLink(ctx, principal.WorkspaceID, userID, principal.UserID, HashInvitationToken(token), expires); err != nil {
+		return nil, err
+	}
+	return &domain.MemberLink{UserID: userID, Token: token, ExpiresAt: expires}, nil
+}
+
+func validUsername(username string) bool {
+	return username != "" && len(username) <= 64 && !strings.ContainsAny(username, " \t\r\n@")
 }

@@ -21,6 +21,8 @@ type fakeInvitations struct {
 	revoked   int
 	acceptArg [3]string
 	calls     int
+	added     [3]string
+	linkID    int
 }
 
 func (f *fakeInvitations) Invite(_ context.Context, p domain.Principal, r domain.InvitationRequest) (*domain.Invitation, error) {
@@ -30,6 +32,22 @@ func (f *fakeInvitations) Invite(_ context.Context, p domain.Principal, r domain
 		return nil, f.err
 	}
 	return &domain.Invitation{ID: 0, Email: r.Email, Role: r.Role, ExpiresAt: time.Date(2026, 12, 4, 0, 0, 0, 0, time.UTC)}, nil
+}
+func (f *fakeInvitations) AddMember(_ context.Context, p domain.Principal, user, email string, role domain.Role) (*domain.MemberLink, error) {
+	f.calls++
+	f.principal, f.added = p, [3]string{user, email, string(role)}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.MemberLink{UserID: 12, Username: user, Role: role, Token: "ONE-TIME-TOKEN", ExpiresAt: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}, nil
+}
+func (f *fakeInvitations) ReissueLink(_ context.Context, _ domain.Principal, id int) (*domain.MemberLink, error) {
+	f.calls++
+	f.linkID = id
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.MemberLink{UserID: id, Token: "NEW-TOKEN", ExpiresAt: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}, nil
 }
 func (f *fakeInvitations) List(_ context.Context, p domain.Principal) ([]domain.Invitation, error) {
 	f.calls++
@@ -76,6 +94,8 @@ func TestInvitationOwnerRoutesAreGuarded(t *testing.T) {
 				{http.MethodPost, "/members/invitations", `{"email":"a@example.test","role":"reader"}`},
 				{http.MethodGet, "/members/invitations", ""},
 				{http.MethodDelete, "/members/invitations/1", ""},
+				{http.MethodPost, "/members", `{"username":"a","role":"reader"}`},
+				{http.MethodPost, "/members/3/link", ""},
 			} {
 				if rec := do(e, r[0], r[1], r[2]); rec.Code != http.StatusForbidden {
 					t.Errorf("%s %s = %d, want 403", r[0], r[1], rec.Code)
@@ -164,6 +184,48 @@ func TestAcceptIsPublicAndReturnsNoCredential(t *testing.T) {
 		got := do(invRouter(&fakeInvitations{err: tc.err}, domain.Principal{}), http.MethodPost, "/api/auth/invitations/accept", `{"token":"t","username":"u","password":"p"}`)
 		if got.Code != tc.status {
 			t.Errorf("%s: status = %d, want %d", name, got.Code, tc.status)
+		}
+	}
+}
+
+func TestAddMemberAndLink(t *testing.T) {
+	svc := &fakeInvitations{}
+	e := invRouter(svc, owner)
+
+	rec := do(e, http.MethodPost, "/members", `{"username":"Alice","email":"a@example.test","role":" Reader "}`)
+	if rec.Code != http.StatusCreated || svc.added != [3]string{"Alice", "a@example.test", "reader"} || svc.principal.WorkspaceID != 7 {
+		t.Fatalf("add = %d %s, got %v", rec.Code, rec.Body.String(), svc.added)
+	}
+	if !strings.Contains(rec.Body.String(), `"token":"ONE-TIME-TOKEN"`) || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("the token must be returned once and not cached: %s %v", rec.Body.String(), rec.Header())
+	}
+	rec = do(e, http.MethodPost, "/members/5/link", "")
+	if rec.Code != http.StatusOK || svc.linkID != 5 || !strings.Contains(rec.Body.String(), "NEW-TOKEN") || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("link = %d %s", rec.Code, rec.Body.String())
+	}
+	for _, path := range []string{"/members/abc/link", "/members/0/link"} {
+		if rec := do(e, http.MethodPost, path, ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", path, rec.Code)
+		}
+	}
+	if rec := do(e, http.MethodPost, "/members", `{`); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad json = %d", rec.Code)
+	}
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+	}{
+		"taken":      {domain.ErrUserAlreadyExists, http.StatusConflict},
+		"active":     {domain.ErrMemberActive, http.StatusConflict},
+		"not member": {domain.ErrUserNotFound, http.StatusNotFound},
+		"invalid":    {domain.ErrInvalidInput, http.StatusBadRequest},
+		"unexpected": {errors.New("boom: secret detail"), http.StatusInternalServerError},
+	} {
+		for _, path := range []string{"/members", "/members/5/link"} {
+			got := do(invRouter(&fakeInvitations{err: tc.err}, owner), http.MethodPost, path, `{"username":"a","role":"reader"}`)
+			if got.Code != tc.status || strings.Contains(got.Body.String(), "secret detail") || strings.Contains(got.Body.String(), "token") {
+				t.Errorf("%s %s: %d %s, want %d without detail", name, path, got.Code, got.Body.String(), tc.status)
+			}
 		}
 	}
 }

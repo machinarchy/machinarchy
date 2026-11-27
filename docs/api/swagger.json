@@ -11,7 +11,7 @@
     "paths": {
         "/api/auth/invitations/accept": {
             "post": {
-                "description": "Public. Creates the account with the invited role; the invitee chooses the username and password. The token works once. An unknown, expired, revoked or used token gets one generic answer.",
+                "description": "Public. For an emailed invitation it creates the account with the invited role; the invitee chooses the username and password. For an activation token from an owner-added user, the username must be the one the owner added and the call sets that account's first password. The token works once. An unknown, expired, revoked or used token gets one generic answer.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2318,6 +2318,67 @@
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. Creates the account with the given role (operator or reader) and no password; the response carries a one-time activation token, shown once and valid for 24 hours. Give the username and token to the person: they choose their own password with `POST /api/auth/invitations/accept` or `machinarchy login SERVER --invite`. The account cannot sign in until then.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Members"
+                ],
+                "summary": "Add a user without email",
+                "parameters": [
+                    {
+                        "description": "New member",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/members.AddMemberRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/members.MemberLinkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
             }
         },
         "/api/v1/members/invitations": {
@@ -2512,6 +2573,70 @@
                 "responses": {
                     "204": {
                         "description": "Removed"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/members/{id}/link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. Replaces the previous token, which stops working. Refused with 409 when the account already has a password, so a link can never take over a working account. Shown once.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Members"
+                ],
+                "summary": "Issue a new activation token for a member who has not activated",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/members.MemberLinkResponse"
+                        }
                     },
                     "400": {
                         "description": "Bad Request",
@@ -4642,6 +4767,27 @@
                 }
             }
         },
+        "members.AddMemberRequest": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "example": "alice@example.com"
+                },
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "operator",
+                        "reader"
+                    ],
+                    "example": "reader"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "alice"
+                }
+            }
+        },
         "members.InviteRequest": {
             "type": "object",
             "properties": {
@@ -4674,6 +4820,30 @@
                         "operator",
                         "reader"
                     ]
+                }
+            }
+        },
+        "members.MemberLinkResponse": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "operator",
+                        "reader"
+                    ]
+                },
+                "token": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
                 }
             }
         },

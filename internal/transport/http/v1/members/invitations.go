@@ -31,7 +31,27 @@ func RegisterInvitationRoutes(api, v1 *echo.Group, h *InvitationHandler) {
 	g.POST("", h.Invite)
 	g.GET("", h.List)
 	g.DELETE("/:id", h.Revoke)
+	m := v1.Group("/members", middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
+	m.POST("", h.AddMember)
+	m.POST("/:id/link", h.Link)
 	api.POST("/auth/invitations/accept", h.Accept)
+}
+
+// AddMemberRequest is the body of an owner adding a user without email.
+type AddMemberRequest struct {
+	Username string `json:"username" example:"alice"`
+	Email    string `json:"email,omitempty" example:"alice@example.com"`
+	Role     string `json:"role" enums:"operator,reader" example:"reader"`
+}
+
+// MemberLinkResponse carries a one-time activation token. It is shown once and
+// cannot be read again; a new one replaces it.
+type MemberLinkResponse struct {
+	ID        int       `json:"id"`
+	Username  string    `json:"username,omitempty"`
+	Role      string    `json:"role,omitempty" enums:"operator,reader"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 // InviteRequest is the body of an invitation.
@@ -146,9 +166,76 @@ func (h *InvitationHandler) Revoke(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// AddMember creates an account that cannot sign in yet.
+// @Summary Add a user without email
+// @Description Requires a human workspace owner session. Creates the account with the given role (operator or reader) and no password; the response carries a one-time activation token, shown once and valid for 24 hours. Give the username and token to the person: they choose their own password with `POST /api/auth/invitations/accept` or `machinarchy login SERVER --invite`. The account cannot sign in until then.
+// @Tags Members
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body AddMemberRequest true "New member"
+// @Success 201 {object} MemberLinkResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/members [post]
+func (h *InvitationHandler) AddMember(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	var request AddMemberRequest
+	if err := c.Bind(&request); err != nil {
+		return httperr.Status(c, http.StatusBadRequest, "invalid request body")
+	}
+	link, err := h.service.AddMember(c.Request().Context(), principal, request.Username, request.Email,
+		domain.Role(strings.ToLower(strings.TrimSpace(request.Role))))
+	if err != nil {
+		return respondInvitationError(c, err)
+	}
+	return writeLink(c, http.StatusCreated, link)
+}
+
+// Link issues a new activation token.
+// @Summary Issue a new activation token for a member who has not activated
+// @Description Requires a human workspace owner session. Replaces the previous token, which stops working. Refused with 409 when the account already has a password, so a link can never take over a working account. Shown once.
+// @Tags Members
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Success 200 {object} MemberLinkResponse
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/members/{id}/link [post]
+func (h *InvitationHandler) Link(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		return httperr.Status(c, http.StatusBadRequest, "invalid user ID")
+	}
+	link, err := h.service.ReissueLink(c.Request().Context(), principal, id)
+	if err != nil {
+		return respondInvitationError(c, err)
+	}
+	return writeLink(c, http.StatusOK, link)
+}
+
+func writeLink(c echo.Context, status int, link *domain.MemberLink) error {
+	c.Response().Header().Set("Cache-Control", "no-store")
+	return c.JSON(status, MemberLinkResponse{ID: link.UserID, Username: link.Username, Role: string(link.Role),
+		Token: link.Token, ExpiresAt: link.ExpiresAt})
+}
+
 // Accept redeems an invitation token.
 // @Summary Accept an invitation
-// @Description Public. Creates the account with the invited role; the invitee chooses the username and password. The token works once. An unknown, expired, revoked or used token gets one generic answer.
+// @Description Public. For an emailed invitation it creates the account with the invited role; the invitee chooses the username and password. For an activation token from an owner-added user, the username must be the one the owner added and the call sets that account's first password. The token works once. An unknown, expired, revoked or used token gets one generic answer.
 // @Tags Auth
 // @Accept json
 // @Produce json
@@ -175,6 +262,8 @@ var invitationErrorMappings = []httperr.Mapping{
 	httperr.Map(domain.ErrInvalidInput, http.StatusBadRequest, ""),
 	httperr.Map(domain.ErrInvitationInvalid, http.StatusNotFound, "invitation is invalid or expired"),
 	httperr.Map(domain.ErrInvitationNotFound, http.StatusNotFound, "invitation not found"),
+	httperr.Map(domain.ErrMemberActive, http.StatusConflict, "the account is already active; a new link is only for accounts that have not been activated"),
+	httperr.Map(domain.ErrUserNotFound, http.StatusNotFound, "member not found"),
 	httperr.Map(domain.ErrInvitationLimit, http.StatusConflict, "too many pending invitations; revoke some first"),
 	httperr.Map(domain.ErrUserAlreadyExists, http.StatusConflict, "username or email is already registered"),
 	httperr.Map(domain.ErrMailNotConfigured, http.StatusNotImplemented, "email delivery is not configured on this server"),

@@ -60,4 +60,4 @@ SQLite (single node)  or  PostgreSQL (shared)
 - The agent gateway (controller side of `machinarchy-agent`) does not exist; see `AUDIT/04-agent.md` M-1..M-11.
 - `RunSpec.Concurrency` is stored but targets run one at a time.
 - Metrics cover HTTP and the database pool; the control loop and the operation worker have no metrics yet (AUDIT Q-06).
-- One shared workspace; owners can list, re-role and remove members, but email invitations (`members invite`, ADR-060) are the way in when mail is configured; adding a user without email is planned.
+- One shared workspace; owners can list, re-role and remove members, but email invitations (`members invite`) and owner-added users (`members add`) are the ways in (ADR-060, one-time tokens, no temporary passwords).

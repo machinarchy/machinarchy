@@ -173,3 +173,68 @@ func TestMembersInviteRefusals(t *testing.T) {
 		t.Fatalf("an API token must be refused locally before anything is sent: %+v", got)
 	}
 }
+
+func TestMembersAddThenTheTokenActivatesTheAccount(t *testing.T) {
+	server, path := memberServer(t)
+
+	got := runAuth(t, authRun{config: path}, "members", "add", "dora", "--role", "operator", "--email", "dora@example.test")
+	if got.code != 0 || !strings.Contains(got.stdout, "dora added as operator") || !strings.Contains(got.stdout, "Token:    added-token-103") ||
+		!strings.Contains(got.stdout, "Username: dora") {
+		t.Fatalf("add = %+v", got)
+	}
+	if calls := server.saw("POST", "/api/v1/members"); len(calls) != 1 || calls[0].Auth != "Bearer sess-owner" ||
+		!strings.Contains(string(calls[0].Body), `"email":"dora@example.test"`) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if strings.Contains(got.stderr, "added-token") {
+		t.Errorf("the token must go to stdout only: %q", got.stderr)
+	}
+	// The token is not in the saved config either.
+	if text := allText(t, path, got); strings.Count(text, "added-token-103") != 1 {
+		t.Errorf("the token must appear once, in the output only")
+	}
+
+	// The person activates with login --invite and signs in.
+	login := runAuth(t, authRun{stdin: "added-token-103\nmy chosen password 1\n"},
+		"login", server.URL, "--name", "lab", "--invite", "--username", "dora", "--no-stay-signed-in")
+	if login.code != 0 || !strings.Contains(login.stdout, "Account dora created with the operator role.") {
+		t.Fatalf("activation = %+v", login)
+	}
+
+	if json := runAuth(t, authRun{config: path}, "members", "add", "erin", "-o", "json"); json.code != 0 || !strings.Contains(json.stdout, `"token": "added-token-`) {
+		t.Fatalf("json = %+v", json)
+	}
+}
+
+func TestMembersLink(t *testing.T) {
+	server, path := memberServer(t)
+	runAuth(t, authRun{config: path}, "members", "add", "dora")
+
+	got := runAuth(t, authRun{config: path}, "members", "link", "dora")
+	if got.code != 0 || !strings.Contains(got.stdout, "Token:    relinked-token-103") || len(server.saw("POST", "/api/v1/members/103/link")) != 1 {
+		t.Fatalf("link = %+v", got)
+	}
+	// An account that is already active is refused by the server and reported.
+	if active := runAuth(t, authRun{config: path}, "members", "link", "alice"); active.code == 0 || !strings.Contains(active.stderr, "already active") {
+		t.Fatalf("active account = %+v", active)
+	}
+	if unknown := runAuth(t, authRun{config: path}, "members", "link", "nobody"); unknown.code != clierr.ExitNotFound {
+		t.Fatalf("unknown = %+v", unknown)
+	}
+}
+
+func TestMembersAddRefusals(t *testing.T) {
+	server, path := memberServer(t)
+	if got := runAuth(t, authRun{config: path}, "members", "add", "frank", "--role", "owner"); got.code != clierr.ExitUsage || len(server.saw("POST", "/api/v1/members")) != 0 {
+		t.Fatalf("an owner add must be refused locally: %+v", got)
+	}
+	if got := runAuth(t, authRun{config: path}, "members", "add", "alice"); got.code == 0 || !strings.Contains(got.stderr, "already registered") {
+		t.Fatalf("a taken username = %+v", got)
+	}
+	server.addToken("mch_pat_ci-0001", "ci", "operator")
+	tokenPath := seed(t, server.URL, cred.Credential{Kind: cred.KindDeviceToken, Secret: "mch_pat_ci-0001", User: "maxim", Name: "ci", Role: "operator", ExpiresAt: future()})
+	before := len(server.saw("POST", "/api/v1/members"))
+	if got := runAuth(t, authRun{config: tokenPath}, "members", "add", "frank"); got.code == 0 || len(server.saw("POST", "/api/v1/members")) != before {
+		t.Fatalf("an API token must be refused locally: %+v", got)
+	}
+}

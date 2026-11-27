@@ -764,8 +764,8 @@ func inviteFailed(err error) error {
 	switch apiErr.Status {
 	case 404:
 		return clierr.Detailed(clierr.ExitAuth, errors.New("the invitation is invalid or has expired"),
-			"the token may be mistyped, already used, replaced by a newer invitation, or revoked",
-			"Ask the person who invited you to send a new invitation.")
+			"the token may be mistyped, already used, replaced by a newer one, or revoked; for a person added by an owner, the username must be the one the owner gave you",
+			"Ask the person who invited or added you for a new invitation or token.")
 	case 409:
 		return clierr.Detailed(clierr.ExitUsage, errors.New("that username or email is already registered"),
 			"the invitation is still valid", "Run it again with another --username.")

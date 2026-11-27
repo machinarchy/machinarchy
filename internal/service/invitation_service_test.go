@@ -12,6 +12,9 @@ import (
 )
 
 type invFakeStore struct {
+	added                  []domain.NewMember
+	reissued               []string
+	reissueErr, addErr     error
 	created                []domain.NewInvitation
 	revoked                []int
 	acceptErr              error
@@ -21,6 +24,17 @@ type invFakeStore struct {
 func (f *invFakeStore) CreateInvitation(_ context.Context, n domain.NewInvitation) (*domain.Invitation, error) {
 	f.created = append(f.created, n)
 	return &domain.Invitation{ID: len(f.created), Email: n.Email, Role: n.Role, ExpiresAt: n.ExpiresAt}, nil
+}
+func (f *invFakeStore) AddMember(_ context.Context, m domain.NewMember) (*domain.User, error) {
+	f.added = append(f.added, m)
+	if f.addErr != nil {
+		return nil, f.addErr
+	}
+	return &domain.User{ID: 11, Username: m.Username, Role: m.Role}, nil
+}
+func (f *invFakeStore) ReissueMemberLink(_ context.Context, _, _, _ int, hash string, _ time.Time) error {
+	f.reissued = append(f.reissued, hash)
+	return f.reissueErr
 }
 func (f *invFakeStore) ListInvitations(context.Context, int) ([]domain.Invitation, error) {
 	return nil, nil
@@ -195,5 +209,79 @@ func TestListAndRevokeNeedAHumanOwner(t *testing.T) {
 	}
 	if err := svc.Revoke(context.Background(), invOwner, 0); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Errorf("revoke id 0 = %v", err)
+	}
+}
+
+func TestAddMemberIssuesAHashedOneTimeToken(t *testing.T) {
+	store := &invFakeStore{}
+	svc := newInvSvc(t, store, &invFakeUsers{}, nil) // adding needs no mail
+	link, err := svc.AddMember(context.Background(), invOwner, " Alice ", " Alice@Example.test ", domain.RoleReader)
+	if err != nil || link.Username != "alice" || link.UserID != 11 || len(link.Token) < 43 {
+		t.Fatalf("add = %+v, %v", link, err)
+	}
+	m := store.added[0]
+	if m.Username != "alice" || m.Email != "alice@example.test" || m.TokenHash != HashInvitationToken(link.Token) || m.TokenHash == link.Token {
+		t.Fatalf("stored member = %+v: only the token's hash may be stored", m)
+	}
+	if ttl := time.Until(m.ExpiresAt); ttl < 23*time.Hour || ttl > 24*time.Hour {
+		t.Errorf("activation expires in %v, want about 24h", ttl)
+	}
+	if _, err := svc.AddMember(context.Background(), invOwner, "bob", "", domain.RoleOperator); err != nil || store.added[1].Email != "" {
+		t.Errorf("an email is optional: %v, %+v", err, store.added[1])
+	}
+	again, _ := svc.AddMember(context.Background(), invOwner, "carol", "", domain.RoleReader)
+	if again.Token == link.Token {
+		t.Error("two members got the same token")
+	}
+}
+
+func TestAddMemberRefusals(t *testing.T) {
+	for name, c := range map[string]struct {
+		principal   domain.Principal
+		user, email string
+		role        domain.Role
+		want        error
+	}{
+		"owner role":      {invOwner, "a", "", domain.RoleOwner, domain.ErrInvalidInput},
+		"bad role":        {invOwner, "a", "", "root", domain.ErrInvalidInput},
+		"empty name":      {invOwner, " ", "", domain.RoleReader, domain.ErrInvalidInput},
+		"name with space": {invOwner, "a b", "", domain.RoleReader, domain.ErrInvalidInput},
+		"name with at":    {invOwner, "a@b", "", domain.RoleReader, domain.ErrInvalidInput},
+		"long name":       {invOwner, strings.Repeat("x", 65), "", domain.RoleReader, domain.ErrInvalidInput},
+		"bad email":       {invOwner, "a", "Bob <b@example.test>", domain.RoleReader, domain.ErrInvalidInput},
+		"operator":        {domain.Principal{UserID: 2, WorkspaceID: 1, Role: domain.RoleOperator}, "a", "", domain.RoleReader, domain.ErrPermissionDenied},
+		"api token":       {domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner, APITokenID: 4}, "a", "", domain.RoleReader, domain.ErrPermissionDenied},
+	} {
+		store := &invFakeStore{}
+		svc := newInvSvc(t, store, &invFakeUsers{}, nil)
+		if _, err := svc.AddMember(context.Background(), c.principal, c.user, c.email, c.role); !errors.Is(err, c.want) {
+			t.Errorf("%s: error = %v, want %v", name, err, c.want)
+		}
+		if len(store.added) != 0 {
+			t.Errorf("%s: a refused add reached the store", name)
+		}
+	}
+	store := &invFakeStore{addErr: domain.ErrUserAlreadyExists}
+	if _, err := newInvSvc(t, store, &invFakeUsers{}, nil).AddMember(context.Background(), invOwner, "a", "", domain.RoleReader); !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Errorf("a taken username must pass through: %v", err)
+	}
+}
+
+func TestReissueLink(t *testing.T) {
+	store := &invFakeStore{}
+	svc := newInvSvc(t, store, &invFakeUsers{}, nil)
+	link, err := svc.ReissueLink(context.Background(), invOwner, 11)
+	if err != nil || link.UserID != 11 || store.reissued[0] != HashInvitationToken(link.Token) {
+		t.Fatalf("reissue = %+v, %v, stored %v", link, err, store.reissued)
+	}
+	store.reissueErr = domain.ErrMemberActive
+	if _, err := svc.ReissueLink(context.Background(), invOwner, 11); !errors.Is(err, domain.ErrMemberActive) {
+		t.Errorf("an active account must be refused: %v", err)
+	}
+	if _, err := svc.ReissueLink(context.Background(), invOwner, 0); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Errorf("id 0: %v", err)
+	}
+	if _, err := svc.ReissueLink(context.Background(), domain.Principal{UserID: 1, WorkspaceID: 1, Role: domain.RoleOwner, APITokenID: 2}, 11); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("an API token must be refused: %v", err)
 	}
 }

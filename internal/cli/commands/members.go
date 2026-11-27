@@ -12,6 +12,7 @@ import (
 	"github.com/machinarchy/machinarchy/internal/cli/api"
 	"github.com/machinarchy/machinarchy/internal/cli/clierr"
 	"github.com/machinarchy/machinarchy/internal/cli/msg"
+	"github.com/machinarchy/machinarchy/internal/cli/output"
 	"github.com/machinarchy/machinarchy/internal/cli/sanitize"
 )
 
@@ -29,7 +30,8 @@ func NewMembersCommand(f *cli.Factory) *cobra.Command {
 		RunE:    listMembers(f),
 	}
 	command.AddCommand(newMembersRoleCommand(f), newMembersRemoveCommand(f),
-		newMembersInviteCommand(f), newMembersInvitesCommand(f), newMembersRevokeCommand(f))
+		newMembersInviteCommand(f), newMembersInvitesCommand(f), newMembersRevokeCommand(f),
+		newMembersAddCommand(f), newMembersLinkCommand(f))
 	markOwner(command)
 
 	return command
@@ -248,4 +250,90 @@ func newMembersRevokeCommand(f *cli.Factory) *cobra.Command {
 			return printMessage(command, f, msg.Get("member.invite_revoked").With(msg.Vars{"id": strconv.Itoa(id)}))
 		},
 	}
+}
+
+func newMembersAddCommand(f *cli.Factory) *cobra.Command {
+	var role, email string
+	command := &cobra.Command{
+		Use:   "add USERNAME",
+		Short: "Add a person without email",
+		Long: "Creates an account for a person who cannot be invited by email. The account has no password and cannot sign in\n" +
+			"until its one-time token is used: you get the token once (valid 24 hours) and give the person the username and\n" +
+			"the token, over a channel you trust. They choose their own password with 'machinarchy login SERVER --invite'.\n" +
+			"The role is reader (default) or operator. If the token is lost, 'members link USER' issues a new one.",
+		Example: "  machinarchy members add alice\n  machinarchy members add alice --role operator --email alice@example.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			role = strings.ToLower(strings.TrimSpace(role))
+			if role != "reader" && role != "operator" {
+				return clierr.Detailed(clierr.ExitUsage, fmt.Errorf("%q is not a role you can add", sanitize.Line(role)),
+					"an added person gets reader or operator; promote to owner afterwards", "machinarchy members add "+args[0]+" --role operator")
+			}
+			client, err := membersClient(command, f)
+			if err != nil {
+				return err
+			}
+			link, err := client.AddMember(command.Context(), strings.TrimSpace(args[0]), strings.TrimSpace(email), role)
+			if err != nil {
+				return fmt.Errorf("add member: %w", err)
+			}
+
+			return printLink(command, f, "member.added", link, link.Username, link.Role)
+		},
+	}
+	command.Flags().StringVar(&role, "role", "reader", "Role to give: reader or operator")
+	command.Flags().StringVar(&email, "email", "", "Email address to record for the account (nothing is sent)")
+
+	return command
+}
+
+func newMembersLinkCommand(f *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:   "link USER",
+		Short: "Issue a new one-time token for a person who has not activated",
+		Long: "Replaces the one-time token of a person added with 'members add' who has not chosen a password yet; the old\n" +
+			"token stops working. The server refuses it for an account that already has a password, so it cannot be used to\n" +
+			"take over a working account. USER is a username or an ID.",
+		Example: "  machinarchy members link alice",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			client, err := membersClient(command, f)
+			if err != nil {
+				return err
+			}
+			members, err := client.ListMembers(command.Context())
+			if err != nil {
+				return fmt.Errorf("list members: %w", err)
+			}
+			member, err := findMember(members, args[0])
+			if err != nil {
+				return err
+			}
+			link, err := client.ReissueMemberLink(command.Context(), member.ID)
+			if err != nil {
+				return fmt.Errorf("issue link: %w", err)
+			}
+
+			return printLink(command, f, "member.added", link, member.Username, member.Role)
+		},
+	}
+}
+
+// printLink shows a one-time token: as a document for -o json/yaml, otherwise a
+// message and the token on its own line (stdout only, never saved).
+func printLink(command *cobra.Command, f *cli.Factory, id string, link *api.MemberLink, user, role string) error {
+	printer, err := f.Printer(command.OutOrStdout(), output.FormatTable)
+	if err != nil {
+		return err
+	}
+	if printer.Format() != output.FormatTable {
+		return printer.Document(link)
+	}
+	if err := printMessage(command, f, msg.Get(id).With(msg.Vars{"user": sanitize.Line(user), "role": role,
+		"expires": link.ExpiresAt.Local().Format("2006-01-02 15:04")})); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(command.OutOrStdout(), "\n  Username: %s\n  Token:    %s\n", sanitize.Line(user), link.Token)
+
+	return err
 }

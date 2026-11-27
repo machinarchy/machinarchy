@@ -183,9 +183,9 @@ func (s *Store) AcceptInvitation(ctx context.Context, tokenHash, username, passw
 	defer sqlx.Rollback(tx, s.logger, "accept invitation")
 
 	var id, workspaceID int
-	var email, role, expires string
-	err = tx.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, COALESCE(email, ''), role, expires_at FROM member_onboarding
-		WHERE token_hash = ? AND kind = ?`), tokenHash, kindInvite).Scan(&id, &workspaceID, &email, &role, &expires)
+	var kind, email, role, expires, addedUsername string
+	err = tx.QueryRowContext(ctx, s.bind(`SELECT id, workspace_id, kind, COALESCE(email, ''), role, expires_at, COALESCE(username, '')
+		FROM member_onboarding WHERE token_hash = ?`), tokenHash).Scan(&id, &workspaceID, &kind, &email, &role, &expires, &addedUsername)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrInvitationInvalid
 	}
@@ -202,6 +202,16 @@ func (s *Store) AcceptInvitation(ctx context.Context, tokenHash, username, passw
 	}
 	if err := sqlx.RowsAffected(result, domain.ErrInvitationInvalid); err != nil {
 		return nil, err
+	}
+	if kind == kindAdd {
+		user, err := s.activateAddedMember(ctx, tx, workspaceID, id, addedUsername, username, passwordHash, role, now)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit accept invitation transaction: %w", err)
+		}
+		return user, nil
 	}
 
 	created := now.UTC()

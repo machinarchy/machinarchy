@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// LockedPasswordHash is the password hash of an account added by an owner that
+// has not been activated yet. It is not a bcrypt hash, so no password matches it.
+const LockedPasswordHash = "!locked"
+
+// ActivationTTL is how long an owner-added user's one-time token stays valid.
+const ActivationTTL = 24 * time.Hour
+
 // Invitation limits.
 const (
 	// InvitationTTL is how long an emailed invitation stays valid.
@@ -22,6 +29,9 @@ var (
 	ErrInvitationNotFound = errors.New("invitation not found")
 	// ErrInvitationLimit is returned when the workspace has too many pending invitations.
 	ErrInvitationLimit = errors.New("too many pending invitations")
+	// ErrMemberActive is returned when an activation link is requested for an
+	// account that already has a password.
+	ErrMemberActive = errors.New("the account is already active")
 	// ErrMailNotConfigured is returned when email invitations are requested but
 	// the server has no mail settings.
 	ErrMailNotConfigured = errors.New("email delivery is not configured")
@@ -66,7 +76,38 @@ type InvitationStore interface {
 	// returns ErrInvitationInvalid for an unknown, expired or used token and
 	// ErrUserAlreadyExists when the username or email is taken (the invitation
 	// then stays valid).
+	// AddMember creates a locked account, its membership and an activation
+	// token hash in one transaction (member.added audit event). It returns
+	// ErrUserAlreadyExists when the username or email is taken.
+	AddMember(ctx context.Context, member NewMember) (*User, error)
+	// ReissueMemberLink replaces the activation token of a member who is still
+	// locked. It returns ErrUserNotFound for a non-member and ErrMemberActive
+	// when the account already has a password.
+	ReissueMemberLink(ctx context.Context, workspaceID, userID, createdBy int, tokenHash string, expiresAt time.Time) error
+	// AcceptInvitation consumes an invitation or activation token. For an
+	// invitation it creates the account; for an activation token it sets the
+	// first password of the added member, and username must be that member's.
 	AcceptInvitation(ctx context.Context, tokenHash, username, passwordHash string, now time.Time) (*User, error)
+}
+
+// NewMember is an account an owner adds without email.
+type NewMember struct {
+	WorkspaceID int
+	Username    string
+	Email       string // optional
+	Role        Role
+	CreatedBy   int
+	TokenHash   string
+	ExpiresAt   time.Time
+}
+
+// MemberLink is a one-time activation token, shown once. Token is a secret.
+type MemberLink struct {
+	UserID    int
+	Username  string
+	Role      Role
+	Token     string
+	ExpiresAt time.Time
 }
 
 // Mailer sends the invitation email.
@@ -96,6 +137,12 @@ type InvitationService interface {
 	Invite(ctx context.Context, principal Principal, request InvitationRequest) (*Invitation, error)
 	List(ctx context.Context, principal Principal) ([]Invitation, error)
 	Revoke(ctx context.Context, principal Principal, id int) error
+	// AddMember creates an account that cannot sign in until its one-time token
+	// is used to choose a password. The owner passes the username and token on.
+	AddMember(ctx context.Context, principal Principal, username, email string, role Role) (*MemberLink, error)
+	// ReissueLink issues a new token for a member who has not activated yet; the
+	// old one stops working. It refuses an account that already has a password.
+	ReissueLink(ctx context.Context, principal Principal, userID int) (*MemberLink, error)
 	// Accept redeems a token; it needs no principal.
 	Accept(ctx context.Context, token, username, password string) (*User, error)
 }

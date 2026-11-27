@@ -193,6 +193,7 @@ var contractTests = []struct {
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
 	{"member removal", testMemberRemoval},
 	{"invitations", testInvitations},
+	{"added members", testAddMember},
 	{"invitation limit and concurrency", testInvitationLimitAndConcurrency},
 	{"concurrent owner removal keeps an owner", testConcurrentOwnerRemoval},
 	{"audit trail", testAuditTrail},

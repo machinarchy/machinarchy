@@ -310,6 +310,10 @@ func init() {
 		Primary: "Account {user} created with the {role} role.",
 		Why:     "Signing in with it now.",
 		Next:    "machinarchy whoami"})
+	register(Message{ID: "member.added", Kind: KindSuccess,
+		Primary: "{user} added as {role}. They cannot sign in until they use the one-time token below (valid until {expires}).",
+		Why:     "The token is shown only once. Give the person the username and the token; they run: machinarchy login SERVER --invite (SERVER is this server's address)",
+		Next:    "machinarchy members"})
 	register(Message{ID: "member.invited", Kind: KindSuccess,
 		Primary: "Invitation sent to {email} as {role}; it expires {expires}.",
 		Why:     "If that address already has an account nothing is sent, and the answer looks the same.",

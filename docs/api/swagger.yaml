@@ -571,6 +571,21 @@ definitions:
       username:
         type: string
     type: object
+  members.AddMemberRequest:
+    properties:
+      email:
+        example: alice@example.com
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        example: reader
+        type: string
+      username:
+        example: alice
+        type: string
+    type: object
   members.InviteRequest:
     properties:
       email:
@@ -593,6 +608,22 @@ definitions:
         enum:
         - operator
         - reader
+        type: string
+    type: object
+  members.MemberLinkResponse:
+    properties:
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
+      token:
+        type: string
+      username:
         type: string
     type: object
   members.SetRoleRequest:
@@ -1320,9 +1351,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Public. Creates the account with the invited role; the invitee
-        chooses the username and password. The token works once. An unknown, expired,
-        revoked or used token gets one generic answer.
+      description: Public. For an emailed invitation it creates the account with the
+        invited role; the invitee chooses the username and password. For an activation
+        token from an owner-added user, the username must be the one the owner added
+        and the call sets that account's first password. The token works once. An
+        unknown, expired, revoked or used token gets one generic answer.
       parameters:
       - description: Token, username and password
         in: body
@@ -2815,6 +2848,49 @@ paths:
       summary: List workspace members
       tags:
       - Members
+    post:
+      consumes:
+      - application/json
+      description: 'Requires a human workspace owner session. Creates the account
+        with the given role (operator or reader) and no password; the response carries
+        a one-time activation token, shown once and valid for 24 hours. Give the username
+        and token to the person: they choose their own password with `POST /api/auth/invitations/accept`
+        or `machinarchy login SERVER --invite`. The account cannot sign in until then.'
+      parameters:
+      - description: New member
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.AddMemberRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/members.MemberLinkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Add a user without email
+      tags:
+      - Members
   /api/v1/members/{id}:
     delete:
       description: Requires a human workspace owner session. Deletes the membership
@@ -2855,6 +2931,49 @@ paths:
       security:
       - BearerAuth: []
       summary: Remove a workspace member
+      tags:
+      - Members
+  /api/v1/members/{id}/link:
+    post:
+      description: Requires a human workspace owner session. Replaces the previous
+        token, which stops working. Refused with 409 when the account already has
+        a password, so a link can never take over a working account. Shown once.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/members.MemberLinkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Issue a new activation token for a member who has not activated
       tags:
       - Members
   /api/v1/members/{id}/role:

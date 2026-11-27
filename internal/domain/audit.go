@@ -23,6 +23,8 @@ const (
 	AuditMemberInvited         = "member.invited"
 	AuditMemberInviteRevoked   = "member.invite_revoked"
 	AuditMemberJoined          = "member.joined"
+	AuditMemberAdded           = "member.added"
+	AuditMemberLinkReissued    = "member.link_reissued"
 	AuditHostCreated           = "host.created"
 	AuditHostUpdated           = "host.updated"
 	AuditHostDeleted           = "host.deleted"

@@ -346,6 +346,27 @@ func (s *authServer) membersRoute(r *http.Request, body []byte, reply func(int, 
 
 		return
 	}
+	if rest == "" && r.Method == http.MethodPost {
+		var request struct{ Username, Email, Role string }
+		_ = json.Unmarshal(body, &request)
+		for _, m := range s.members {
+			if m.Username == request.Username {
+				reply(409, `{"error":"username or email is already registered"}`)
+
+				return
+			}
+		}
+		id := 100 + len(s.members)
+		s.members = append(s.members, fakeMember{ID: id, Username: request.Username, Role: request.Role})
+		token := fmt.Sprintf("added-token-%d", id)
+		if s.inviteTokens == nil {
+			s.inviteTokens = map[string]string{}
+		}
+		s.inviteTokens[token] = request.Role
+		reply(201, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"token":%q,"expiresAt":%q}`, id, request.Username, request.Role, token, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)))
+
+		return
+	}
 	if rest == "" && r.Method == http.MethodGet {
 		var items []string
 		for _, m := range s.members {
@@ -372,6 +393,15 @@ func (s *authServer) membersRoute(r *http.Request, body []byte, reply func(int, 
 			}
 			s.members[i].Role = request.Role
 			reply(200, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"createdAt":%q}`, m.ID, m.Username, request.Role, time.Now().UTC().Format(time.RFC3339)))
+		case action == "link" && r.Method == http.MethodPost:
+			if m.Role == "owner" || s.accounts[m.Username] != "" || m.ID < 100 {
+				reply(409, `{"error":"the account is already active; a new link is only for accounts that have not been activated"}`)
+
+				return
+			}
+			token := fmt.Sprintf("relinked-token-%d", m.ID)
+			s.inviteTokens[token] = m.Role
+			reply(200, fmt.Sprintf(`{"id":%d,"token":%q,"expiresAt":%q}`, m.ID, token, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)))
 		case action == "" && r.Method == http.MethodDelete:
 			if m.Role == "owner" && owners < 2 {
 				reply(409, `{"error":"a workspace must keep at least one owner"}`)

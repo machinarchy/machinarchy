@@ -18,6 +18,11 @@ type MembersClient interface {
 	InviteMember(ctx context.Context, email, role string) (*InviteResult, error)
 	ListInvitations(ctx context.Context) ([]Invitation, error)
 	RevokeInvitation(ctx context.Context, id int) error
+	// AddMember creates a member who cannot sign in yet and returns a one-time
+	// activation token, shown once.
+	AddMember(ctx context.Context, username, email, role string) (*MemberLink, error)
+	// ReissueMemberLink replaces the token of a member who has not activated.
+	ReissueMemberLink(ctx context.Context, id int) (*MemberLink, error)
 }
 
 var _ MembersClient = (*HTTPClient)(nil)
@@ -86,4 +91,36 @@ func (c *HTTPClient) ListInvitations(ctx context.Context) ([]Invitation, error) 
 
 func (c *HTTPClient) RevokeInvitation(ctx context.Context, id int) error {
 	return c.request(ctx, http.MethodDelete, "/api/v1/members/invitations/"+strconv.Itoa(id), nil, nil)
+}
+
+// MemberLink is a one-time activation token for a member added by an owner. The
+// token is a secret and is shown only once.
+type MemberLink struct {
+	ID        int       `json:"id" yaml:"id"`
+	Username  string    `json:"username,omitempty" yaml:"username,omitempty"`
+	Role      string    `json:"role,omitempty" yaml:"role,omitempty"`
+	Token     string    `json:"token" yaml:"token"`
+	ExpiresAt time.Time `json:"expiresAt" yaml:"expiresAt"`
+}
+
+func (c *HTTPClient) AddMember(ctx context.Context, username, email, role string) (*MemberLink, error) {
+	body := map[string]string{"username": username, "role": role}
+	if email != "" {
+		body["email"] = email
+	}
+	var link MemberLink
+	if err := c.request(ctx, http.MethodPost, "/api/v1/members", body, &link); err != nil {
+		return nil, err
+	}
+
+	return &link, nil
+}
+
+func (c *HTTPClient) ReissueMemberLink(ctx context.Context, id int) (*MemberLink, error) {
+	var link MemberLink
+	if err := c.request(ctx, http.MethodPost, "/api/v1/members/"+strconv.Itoa(id)+"/link", nil, &link); err != nil {
+		return nil, err
+	}
+
+	return &link, nil
 }
