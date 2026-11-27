@@ -357,6 +357,26 @@ func (c *HTTPClient) TrustHostKeys(ctx context.Context, id string, generation ui
 	return &host, nil
 }
 
+// HostCheck is the server's answer to an on-demand SSH check of a host.
+type HostCheck struct {
+	HostID    string    `json:"hostId" yaml:"hostId"`
+	Ready     bool      `json:"ready" yaml:"ready"`
+	Reachable bool      `json:"reachable" yaml:"reachable"`
+	Reason    string    `json:"reason" yaml:"reason"`
+	Message   string    `json:"message,omitempty" yaml:"message,omitempty"`
+	CheckedAt time.Time `json:"checkedAt" yaml:"checkedAt"`
+}
+
+// CheckHost asks the server to verify a host's SSH access now. It trusts
+// nothing and changes nothing.
+func (c *HTTPClient) CheckHost(ctx context.Context, id string) (*HostCheck, error) {
+	var check HostCheck
+	if err := c.request(ctx, http.MethodPost, managedPath("hosts", id, "check"), nil, &check); err != nil {
+		return nil, err
+	}
+	return &check, nil
+}
+
 func (c *HTTPClient) ListAccessProfiles(ctx context.Context, cursor string) (Page[AccessProfile], error) {
 	var page Page[AccessProfile]
 	values := url.Values{}

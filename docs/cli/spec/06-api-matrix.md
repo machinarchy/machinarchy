@@ -32,6 +32,7 @@ Roles: **any** = reader, operator or owner; **runs** = may execute runs (operato
 | `hosts tag` | set labels | `PATCH /api/v1/managed/hosts/{id}/labels` (`revision`, `labels`) | per service rules | yes | - |
 | `hosts move` | replace host spec/metadata | `PUT /api/v1/managed/hosts/{id}` | owner for profile/endpoint/trust changes | C-01 done: optional `environmentId` (absent = unchanged; unknown = 422); a move is a second revision | none |
 | `hosts trust` | trust host keys | `POST /api/v1/managed/hosts/{id}/trust` (`generation`, `fingerprints`, `replace`) | owner | yes | - |
+| `hosts check` | test SSH access now | `POST /api/v1/managed/hosts/{id}/check` (no body; answer `ready`, `reachable`, `reason`, `message`, `checkedAt`) | operator | no | - |
 | `hosts add --agent`, `hosts enroll` | issue enrolment token | `POST /api/v1/agents/enrollment-tokens` (`hostId`, `hostname`, `ttlSeconds`) | owner session | yes (token shown once) | C-07 for the install command |
 | `hosts enroll --revoke-old` | list / revoke enrolment tokens | `GET /api/v1/agents/enrollment-tokens`, `DELETE /api/v1/agents/enrollment-tokens/{id}` | owner session | yes | - |
 | `hosts add --agent`, `hosts enroll` | controller public key | `GET /api/v1/agents/controller-key` | any (`inventory:read`) | yes (`publicKey`, `publicKeys`, `nextPublicKey`; 503 when no gateway) | - |

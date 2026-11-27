@@ -119,8 +119,10 @@ fingerprints in the message.
 | `ConnectorAtCapacity`, `AccessUnavailable` | the SSH capacity limit is full, or the endpoint is malformed | retry later, or fix the endpoint |
 | `AgentGatewayDisabled`, `AgentNotEnrolled`, `AgentBindingUnavailable`, `AgentDisconnected`, `AgentConnected` | agent hosts only | see the agent runbook section |
 
-These names are what the controller emits today; treat them as stable only
-once Phase 6 step 6.2 records that promise.
+These names are what the controller emits today and no stability promise is
+made for them yet. `machinarchy hosts check NAME` (or `POST
+/api/v1/managed/hosts/{id}/check`) runs the same verification once, on
+demand, and returns the reason; it sends no command and trusts nothing.
 
 `machinarchy_controlmanager_reconciles_total{outcome="retry"}` rising with a
 growing `queue_depth` means many hosts are failing at once (network outage

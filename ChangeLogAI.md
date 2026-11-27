@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-27 — 6.2: on-demand SSH host check (branch ai/p6-ssh-host-check)
+
+- **Owner approved the API shape** (`POST /api/v1/managed/hosts/{id}/check`, no body). Deviation from the spec: agent hosts are not "not applicable"; they answer with their connection state (`AgentConnected`, `AgentDisconnected`, ...). No audit event is written (a check changes nothing); no new rate limiter beyond one running check per host and the SSH capacity limit.
+- **Controller:** `ManagedResourceService.CheckHost` runs the same `HostReconciler` the control manager uses and returns `ready`, `reachable`, `reason`, `message`, `checkedAt`. It needs inventory write (operator or owner), uses a 30 s limit, refuses a second check of the same Host while one runs (409), answers 503 when the process has no checker, and stores nothing: the observation is discarded and a verifier's request to pin keys (tofu) is ignored. Address policy, pinned-key check and capacity limit are those of normal dials; a changed or unknown key fails closed before any credential is offered. `internal/bootstrap/runtime.go` builds the reconciler for both the control manager and the API through `newHostReconciler` (separate connectors, so separate capacity limits).
+- **CLI:** `machinarchy hosts check NAME` prints the reason and the message, exits 1 when not ready, and names the next step (`hosts trust`, with `--replace` for a changed key; never a command that trusts for you). `-o json|yaml` supported. No new top-level command.
+- **Docs:** `docs/api/swagger.*` regenerated (additions only), `docs/cli/commands.md`, `docs/cli/spec/06-api-matrix.md`, `docs/ROADMAP.md` Phase 3, `docs/runbook.md`, `docs/SECURITY.md`.
+- **Tests:** service (authorization, availability, no writes, concurrent check refused), handler over SQLite (401/403/503/400/404/200), authorization matrix entry, SSH test-server integration (trusted key verifies with no command run, changed key fails closed with zero auth attempts and the trusted key kept, approval-pending is not approved, address policy refuses a loopback dial), CLI (ready, not ready for three reasons, refusals, completion).
+- **Checks run:** gofmt, `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race -count=1 ./...` (full repo), `govulncheck ./...`, `make smoke`. Not run: PostgreSQL contract suite, gosec (tool/Go version mismatch), a real-server end-to-end `hosts check`.
+- **Not done:** credential references/rotation, a stability promise for reason names, a per-user rate limit on checks.
+
 ## 2026-11-27 — 6.1: SSH host-key docs sync (branch ai/p6-ssh-host-check)
 
 - **Docs only:** `docs/ROADMAP.md` Phase 3 now lists the shipped host-key workflow (scan, owner trust and replace, key-change audit and metric, fail-closed conditions) and keeps the real gaps (on-demand validation endpoint, credential references/rotation, reason-name stability). `docs/runbook.md` gains a "Host condition reasons" table taken from `internal/hostaccess/reconciler.go`. `docs/SECURITY.md` MITM row no longer says acquisition and rotation are missing.

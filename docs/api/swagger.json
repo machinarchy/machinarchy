@@ -1760,6 +1760,76 @@
                 }
             }
         },
+        "/api/v1/managed/hosts/{id}/check": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Workspace operator or owner. Verifies the Host the way the controller does (address policy, pinned host key,\nauthentication) and answers with the Ready reason. It sends no command, trusts no key and changes nothing;\na changed or unknown key fails closed (HostKeyChanged, HostKeyPendingApproval, HostKeyNotTrusted).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Check a Host's SSH access now",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Host ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.HostCheck"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/managed/hosts/{id}/labels": {
             "patch": {
                 "security": [
@@ -6032,6 +6102,29 @@
                 },
                 "validateOnly": {
                     "type": "boolean"
+                }
+            }
+        },
+        "service.HostCheck": {
+            "type": "object",
+            "properties": {
+                "checkedAt": {
+                    "type": "string"
+                },
+                "hostId": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                },
+                "ready": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
                 }
             }
         },

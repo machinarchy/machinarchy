@@ -14,6 +14,7 @@ func RegisterRoutes(v1 *echo.Group, h *Handler) {
 	g.DELETE("/hosts/:id", h.DeleteHost)
 	g.PATCH("/hosts/:id/labels", h.SetHostLabels)
 	g.POST("/hosts/:id/trust", h.TrustHostKeys)
+	g.POST("/hosts/:id/check", h.CheckHost)
 	g.GET("/access-profiles", h.ListProfiles)
 	g.POST("/access-profiles", h.CreateProfile)
 	g.GET("/access-profiles/:id", h.GetProfile)

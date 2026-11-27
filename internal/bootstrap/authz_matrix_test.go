@@ -80,6 +80,7 @@ var matrix = map[string]access{
 	"GET /api/v1/managed/hosts": readers, "GET /api/v1/managed/hosts/{id}": readers,
 	"POST /api/v1/managed/hosts": writers, "POST /api/v1/managed/hosts/batch": writers, "PUT /api/v1/managed/hosts/{id}": writers,
 	"PATCH /api/v1/managed/hosts/{id}/labels": writers, "DELETE /api/v1/managed/hosts/{id}": writers,
+	"POST /api/v1/managed/hosts/{id}/check": writers,   // opens an outbound SSH connection
 	"POST /api/v1/managed/hosts/{id}/trust": ownerOnly, // trusting keys decides where credentials go (S-02)
 	"GET /api/v1/managed/access-profiles":   readers, "GET /api/v1/managed/access-profiles/{id}": readers,
 	"POST /api/v1/managed/access-profiles": ownerOnly, "PUT /api/v1/managed/access-profiles/{id}": ownerOnly,
