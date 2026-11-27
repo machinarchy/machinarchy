@@ -63,3 +63,4 @@ All ADRs live in this directory; the two earlier directories (`docs/DECISIONS`, 
 | [ADR-057: Agent capabilities run as Operations](ADR-057-capability-operations.md) | Accepted | Phase 17: `OperationKind=Capability`, `agent` connector, per-host enrolment binding, durable dispatch and results; `invoke` removed. |
 | [ADR-058: Keep Echo; track its fixes instead of migrating](ADR-058-keep-echo.md) | Accepted | D-14: Echo v4.16.6 fixes GO-2026-6875 and GO-2026-6872; no migration to `net/http`. |
 | [ADR-059: Agents reach the controller only through the agent gateway](ADR-059-agent-gateway-transport.md) | Accepted | Gateway-only agent transport (gRPC), internal swappable `Bus`; no broker address or credential exposed. |
+| [ADR-060: Member onboarding: email invitations and owner-added users, no temporary passwords](ADR-060-member-onboarding.md) | Proposed | Single-use hashed onboarding tokens; optional SMTP; needs owner approval of API shape before 2.3/2.4. |

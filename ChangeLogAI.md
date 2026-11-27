@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-27 — 2.2: ADR-060 member onboarding (branch ai/p2-members)
+
+- **Added (docs only):** `docs/adr/ADR-060-member-onboarding.md` (Proposed) and its row in `docs/adr/README.md`. Decides two flows, email invitations and owner "add user", both through single-use hashed onboarding tokens delivered as links; no temporary passwords anywhere. Optional SMTP (secret in the secret store), audit events, owner-only issuing, role fixed at issue time.
+- **Not implemented:** no API, CLI, migration or mailer yet (steps 2.3, 2.4). API shape and mailer settings still need owner approval.
+- **Checks run:** none applicable (docs only; no doc/link checker run).
+
 ## 2026-11-27 — 2.1: owners can remove workspace members; CLI `members` (branch ai/p2-members)
 
 - **Controller (owner approved the API shape, audit event chosen, self-removal allowed):** `DELETE /api/v1/members/{id}` (human owner session only; 204, 404 for a non-member or another workspace, 409 `ErrLastOwner`). `UserStore.RemoveWorkspaceMember` deletes the membership in one transaction with the last-owner check (one statement; Postgres advisory lock shared with role changes) and writes a hash-chained `member.removed` audit event (`previous_role`) in the same transaction; the member's API tokens go with the membership through the existing `ON DELETE CASCADE`. The account is kept. An owner may remove themselves while another owner remains. `MemberService.Remove` adds the owner/human guard. `docs/api/swagger.*` regenerated with `make api-docs` (only the new path).
