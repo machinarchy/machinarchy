@@ -32,6 +32,10 @@ type hostRequest struct {
 	Labels        map[string]string `json:"labels,omitempty"`
 	Spec          resource.HostSpec `json:"spec"`
 }
+type hostBatchRequest struct {
+	ValidateOnly bool          `json:"validateOnly,omitempty"`
+	Hosts        []hostRequest `json:"hosts"`
+}
 type hostUpdateRequest struct {
 	// EnvironmentID is optional; absent means the host stays where it is.
 	EnvironmentID int               `json:"environmentId,omitempty"`
@@ -199,6 +203,29 @@ func (h *Handler) CreateHost(c echo.Context) error {
 	var request hostRequest
 	return call(c, http.StatusCreated, bind(c, &request), func(ctx context.Context, p domain.Principal) (*resource.Host, error) {
 		return h.service.CreateHostInEnvironment(ctx, p, request.EnvironmentID, request.Name, request.Labels, request.Spec)
+	})
+}
+
+// @Summary Register up to 100 managed hosts at once
+// @Description Items are independent (partial success) and create-only: an existing name is reported as a conflict. With validateOnly nothing is written. Binding an Access Profile needs the workspace owner, per item. No commands run and no host keys are trusted.
+// @Tags Managed
+// @Produce json
+// @Accept json
+// @Security BearerAuth
+// @Param request body hostBatchRequest true "Request"
+// @Success 200 {object} service.BatchHostsResult
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Router /api/v1/managed/hosts/batch [post]
+func (h *Handler) CreateHostsBatch(c echo.Context) error {
+	var request hostBatchRequest
+	return call(c, http.StatusOK, bind(c, &request), func(ctx context.Context, p domain.Principal) (*service.BatchHostsResult, error) {
+		hosts := make([]service.HostCreate, len(request.Hosts))
+		for i, host := range request.Hosts {
+			hosts[i] = service.HostCreate{Name: host.Name, EnvironmentID: host.EnvironmentID, Labels: host.Labels, Spec: host.Spec}
+		}
+		return h.service.CreateHostsBatch(ctx, p, hosts, request.ValidateOnly)
 	})
 }
 

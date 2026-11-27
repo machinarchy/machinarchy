@@ -8,6 +8,7 @@ func RegisterRoutes(v1 *echo.Group, h *Handler) {
 	g := v1.Group("/managed")
 	g.GET("/hosts", h.ListHosts)
 	g.POST("/hosts", h.CreateHost)
+	g.POST("/hosts/batch", h.CreateHostsBatch)
 	g.GET("/hosts/:id", h.GetHost)
 	g.PUT("/hosts/:id", h.UpdateHost)
 	g.DELETE("/hosts/:id", h.DeleteHost)

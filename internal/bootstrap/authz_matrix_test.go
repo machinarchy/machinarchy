@@ -78,7 +78,7 @@ var matrix = map[string]access{
 	"POST /api/v1/agents/signing-keys/next/activate": ownerHuman, "DELETE /api/v1/agents/signing-keys/next": ownerHuman,
 
 	"GET /api/v1/managed/hosts": readers, "GET /api/v1/managed/hosts/{id}": readers,
-	"POST /api/v1/managed/hosts": writers, "PUT /api/v1/managed/hosts/{id}": writers,
+	"POST /api/v1/managed/hosts": writers, "POST /api/v1/managed/hosts/batch": writers, "PUT /api/v1/managed/hosts/{id}": writers,
 	"PATCH /api/v1/managed/hosts/{id}/labels": writers, "DELETE /api/v1/managed/hosts/{id}": writers,
 	"POST /api/v1/managed/hosts/{id}/trust": ownerOnly, // trusting keys decides where credentials go (S-02)
 	"GET /api/v1/managed/access-profiles":   readers, "GET /api/v1/managed/access-profiles/{id}": readers,
@@ -300,6 +300,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		"POST /api/v1/environments":               map[string]string{"name": "matrix-new"},
 		"PUT /api/v1/environments/{id}":           map[string]string{"name": "matrix"},
 		"POST /api/v1/managed/hosts":              map[string]any{"name": "matrix-new", "spec": map[string]any{"presence": "Managed"}},
+		"POST /api/v1/managed/hosts/batch":        map[string]any{"hosts": []map[string]any{{"name": "matrix-batch", "spec": map[string]any{"presence": "Managed"}}}},
 		"PATCH /api/v1/managed/hosts/{id}/labels": map[string]any{"labels": map[string]string{"tier": "web"}},
 		"POST /api/v1/managed/hosts/{id}/trust": map[string]any{"generation": 1,
 			"fingerprints": []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},

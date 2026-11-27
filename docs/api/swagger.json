@@ -1503,6 +1503,63 @@
                 }
             }
         },
+        "/api/v1/managed/hosts/batch": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Items are independent (partial success) and create-only: an existing name is reported as a conflict. With validateOnly nothing is written. Binding an Access Profile needs the workspace owner, per item. No commands run and no host keys are trusted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Managed"
+                ],
+                "summary": "Register up to 100 managed hosts at once",
+                "parameters": [
+                    {
+                        "description": "Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/managedresource.hostBatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.BatchHostsResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/managed/hosts/{id}": {
             "get": {
                 "security": [
@@ -4696,6 +4753,20 @@
                 }
             }
         },
+        "managedresource.hostBatchRequest": {
+            "type": "object",
+            "properties": {
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/managedresource.hostRequest"
+                    }
+                },
+                "validateOnly": {
+                    "type": "boolean"
+                }
+            }
+        },
         "managedresource.hostRequest": {
             "type": "object",
             "properties": {
@@ -5921,6 +5992,46 @@
                 },
                 "workspaceId": {
                     "type": "integer"
+                }
+            }
+        },
+        "service.BatchHostOutcome": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.BatchHostsResult": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.BatchHostOutcome"
+                    }
+                },
+                "validateOnly": {
+                    "type": "boolean"
                 }
             }
         },

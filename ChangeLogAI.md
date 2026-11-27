@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-27 — 4.1: batch host registration API (branch ai/p4-bulk-host-import)
+
+- **Owner approved the API shape** (`POST /api/v1/managed/hosts/batch`, limit 100, create-only). Deviation: no new per-request chained audit event; each created host already writes a chained `resource.host.created` event in its own transaction, and the request adds a `host.batch_registered` slog line (actor, counts, names). Per-request chained event not built.
+- **Controller:** `POST /api/v1/managed/hosts/batch` with `{validateOnly, hosts[1..100]}` (same item shape as single create). Items are independent (partial success, always 200 with `results[]` of index, name, status `created|valid|conflict|invalid|forbidden|error`, id, error). Create-only: an existing or in-request duplicate name (environment + case-insensitive name) is a `conflict`, never overwritten. `validateOnly` runs all checks and the existing-name lookup, writes nothing. A host bound to an Access Profile needs the owner, per item (`forbidden`); the caller needs inventory write. No command execution, no probe, no host-key trust. Cancelled context stops the loop and reports remaining items `cancelled`. Hosts are created sequentially through the existing store path. Validation errors are echoed (truncated to 200 chars); other errors use fixed messages.
+- **Service:** `ManagedResourceService.CreateHostsBatch`. No migration.
+- **Docs:** `docs/api/swagger.*` regenerated with `make api-docs` (unrelated enum reordering reverted by hand); `docs/cli/spec/06-api-matrix.md`.
+- **Tests:** service (partial success, duplicates, validate-only writes nothing and reports existing, 0/101/100 sizes, reader/anonymous denied, operator profile binding forbidden per item, cancellation), handler over SQLite (401/403/400, preview, apply, re-run all conflicts), authorization matrix entry.
+- **Checks run:** gofmt, `go vet`, `golangci-lint run ./...` (0 issues), `go test -race ./...`, `make smoke`, `govulncheck` pass. Not run: PostgreSQL contract suite, `make gosec` (tool/Go version mismatch), a 100-host benchmark.
+- **Not done:** `hosts import` CLI and YAML/CSV (4.2), async jobs, upsert mode. `docs/ROADMAP.md` still claims batch registration was implemented before this step (stale; Phase 5).
+
 ## 2026-11-27 — 3.2: audit retention, `audit prune` with a verifiable checkpoint (branch ai/p3-audit-export)
 
 - **Owner approved ADR-061 and its API shape.** Nothing is pruned unless an owner runs it; no scheduler; 30-day minimum age; archive first.
