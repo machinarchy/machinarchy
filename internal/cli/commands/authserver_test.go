@@ -48,6 +48,13 @@ type authServer struct {
 	nextID    int
 	redirect  string // when set, every request is answered with a redirect there
 	hostCalls int
+	members   []fakeMember // nil until a test calls seedMembers
+}
+
+type fakeMember struct {
+	ID       int
+	Username string
+	Role     string
 }
 
 type issued struct {
@@ -201,7 +208,7 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	}
 	// Only a login session may manage sessions and tokens.
 	humanOnly := strings.HasPrefix(r.URL.Path, "/api/v1/sessions") || strings.HasPrefix(r.URL.Path, "/api/v1/tokens") ||
-		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
+		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/members") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
 	if humanOnly && kind != "session" {
 		reply(403, `{"error":"a user session is required"}`)
 
@@ -226,6 +233,8 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 		s.listTokens(reply)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/tokens/") && r.Method == http.MethodDelete:
 		s.revokeToken(strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/"), reply)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/members"):
+		s.membersRoute(r, body, reply)
 	case r.URL.Path == "/api/v1/managed/hosts":
 		s.mu.Lock()
 		s.hostCalls++
@@ -235,6 +244,75 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	default:
 		reply(404, `{"error":"no route"}`)
 	}
+}
+
+// seedMembers gives the server a workspace with these members.
+func (s *authServer) seedMembers(members ...fakeMember) {
+	s.mu.Lock()
+	s.members = members
+	s.mu.Unlock()
+}
+
+func (s *authServer) memberList() []fakeMember {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]fakeMember(nil), s.members...)
+}
+
+// membersRoute fakes /api/v1/members: list, role change and removal, keeping at
+// least one owner like the real server.
+func (s *authServer) membersRoute(r *http.Request, body []byte, reply func(int, string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owners := 0
+	for _, m := range s.members {
+		if m.Role == "owner" {
+			owners++
+		}
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/members"), "/")
+	if rest == "" && r.Method == http.MethodGet {
+		var items []string
+		for _, m := range s.members {
+			items = append(items, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"createdAt":%q}`, m.ID, m.Username, m.Role, time.Now().UTC().Format(time.RFC3339)))
+		}
+		reply(200, "["+strings.Join(items, ",")+"]")
+
+		return
+	}
+	idText, action, _ := strings.Cut(rest, "/")
+	id, _ := strconv.Atoi(idText)
+	for i, m := range s.members {
+		if m.ID != id {
+			continue
+		}
+		switch {
+		case action == "role" && r.Method == http.MethodPut:
+			var request struct{ Role string }
+			_ = json.Unmarshal(body, &request)
+			if m.Role == "owner" && request.Role != "owner" && owners < 2 {
+				reply(409, `{"error":"a workspace must keep at least one owner"}`)
+
+				return
+			}
+			s.members[i].Role = request.Role
+			reply(200, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"createdAt":%q}`, m.ID, m.Username, request.Role, time.Now().UTC().Format(time.RFC3339)))
+		case action == "" && r.Method == http.MethodDelete:
+			if m.Role == "owner" && owners < 2 {
+				reply(409, `{"error":"a workspace must keep at least one owner"}`)
+
+				return
+			}
+			s.members = append(s.members[:i], s.members[i+1:]...)
+			reply(204, "")
+		default:
+			reply(404, `{"error":"no route"}`)
+		}
+
+		return
+	}
+	reply(404, `{"error":"member not found"}`)
 }
 
 func (s *authServer) createToken(body []byte, reply func(int, string)) {

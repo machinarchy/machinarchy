@@ -139,4 +139,9 @@ type MemberService interface {
 	// SetRole changes a member's role. It returns ErrUserNotFound when the user is
 	// not a member and ErrLastOwner when the change would leave no owner.
 	SetRole(ctx context.Context, principal Principal, userID int, role Role) (*WorkspaceMember, error)
+	// Remove deletes a member's workspace access and API tokens, not the account.
+	// It returns ErrUserNotFound when the user is not a member and ErrLastOwner
+	// when the member is the only owner. An owner may remove themselves while
+	// another owner remains.
+	Remove(ctx context.Context, principal Principal, userID int) error
 }

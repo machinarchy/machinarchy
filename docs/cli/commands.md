@@ -114,6 +114,16 @@ A token has a role, `reader` or `operator` (never owner), and an expiry: `--expi
 
 `tokens revoke` stops a token at once. It is confirmed by typing the token's name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. When several active tokens share a name it lists their IDs and asks for `--id`. Managing tokens needs an owner's login session; an API token is refused locally before anything is sent.
 
+## Members (owner)
+
+```sh
+machinarchy members                          # list: id, user, email, role, since
+machinarchy members role alice operator      # reader, operator or owner
+machinarchy members remove alice             # type the name; in a script: --confirm alice
+```
+
+`USER` is a username or an ID. `members remove` takes a person's access away at once: the membership and the person's API tokens are deleted, while the account is kept (they can still sign in, but see nothing). It is confirmed by typing the name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. A workspace always keeps one owner: the server refuses to demote or remove the last owner, and an owner may remove themselves while another owner remains. Role changes and removals are recorded in the audit trail. Managing members needs an owner's login session; an API token is refused locally before anything is sent. Inviting people is not part of the CLI yet: new accounts sign up as readers (when signup is enabled) and an owner raises their role.
+
 ## Access (how Machinarchy reaches machines)
 
 ```sh

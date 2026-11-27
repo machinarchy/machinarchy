@@ -61,6 +61,11 @@ type UserStore interface {
 	// ErrLastOwner, without changing anything, when it would remove the
 	// workspace's only owner. The check is atomic with the update.
 	UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, userID int, role Role) error
+	// RemoveWorkspaceMember deletes a membership; the member's API tokens go with
+	// it. It returns ErrUserNotFound when the user is not a member and
+	// ErrLastOwner, without changing anything, when it would remove the
+	// workspace's only owner. The check is atomic with the delete.
+	RemoveWorkspaceMember(ctx context.Context, workspaceID, userID int) error
 	// ListWorkspaceMembers returns up to MaxWorkspaceMembers members ordered by user ID.
 	ListWorkspaceMembers(ctx context.Context, workspaceID int) ([]WorkspaceMember, error)
 	// CountWorkspaceOwners returns how many members hold the owner role.

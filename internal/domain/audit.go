@@ -19,6 +19,7 @@ const (
 	// AuditEnvironmentProtection records an environment protected or unprotected.
 	AuditEnvironmentProtection = "environment.protection_changed"
 	AuditMemberRoleChanged     = "member.role_changed"
+	AuditMemberRemoved         = "member.removed"
 	AuditHostCreated           = "host.created"
 	AuditHostUpdated           = "host.updated"
 	AuditHostDeleted           = "host.deleted"

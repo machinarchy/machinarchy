@@ -53,7 +53,7 @@ var matrix = map[string]access{
 	"PUT /api/v1/environments/{id}": writers, "DELETE /api/v1/environments/{id}": writers,
 
 	"GET /api/v1/tokens": ownerHuman, "POST /api/v1/tokens": ownerHuman, "DELETE /api/v1/tokens/{id}": ownerHuman,
-	"GET /api/v1/members": ownerHuman, "PUT /api/v1/members/{id}/role": ownerHuman,
+	"GET /api/v1/members": ownerHuman, "PUT /api/v1/members/{id}/role": ownerHuman, "DELETE /api/v1/members/{id}": ownerHuman,
 	"GET /api/v1/audit/events": ownerHuman, "GET /api/v1/audit/verify": ownerHuman,
 
 	"GET /api/v1/runtime-config": ownerHuman, "PUT /api/v1/runtime-config": ownerHuman,
@@ -208,6 +208,9 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 	}
 	readerToken, _ := signup("matrixreader")
 	_, operatorID := signup("matrixoperator")
+	// A throwaway member for the owner's DELETE /members/{id}, so the matrix
+	// keeps its operator for the routes that run after it.
+	_, removableID := signup("matrixremovable")
 	c.mustJSON(http.MethodPut, fmt.Sprintf("/api/v1/members/%d/role", operatorID), owner.token, map[string]string{"role": "operator"}, http.StatusOK, nil)
 	c.mustJSON(http.MethodPost, "/api/auth/login", "", map[string]string{"username": "matrixoperator", "password": "matrixoperator-password-123"}, http.StatusOK, &session)
 	operator := principal{name: "operator", token: session.Token, role: domain.RoleOperator}
@@ -356,6 +359,9 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 			target := resolve(path)
 			if route == "DELETE /api/v1/managed/hosts/{id}" {
 				target += "?revision=1"
+			}
+			if route == "DELETE /api/v1/members/{id}" {
+				target = fmt.Sprintf("/api/v1/members/%d", removableID)
 			}
 			status, body := c.call(method, target, p.token, bodies[route])
 			denied := status == http.StatusUnauthorized || status == http.StatusForbidden

@@ -1,5 +1,15 @@
 # ChangeLogAI
 
+## 2026-11-27 — 2.1: owners can remove workspace members; CLI `members` (branch ai/p2-members)
+
+- **Controller (owner approved the API shape, audit event chosen, self-removal allowed):** `DELETE /api/v1/members/{id}` (human owner session only; 204, 404 for a non-member or another workspace, 409 `ErrLastOwner`). `UserStore.RemoveWorkspaceMember` deletes the membership in one transaction with the last-owner check (one statement; Postgres advisory lock shared with role changes) and writes a hash-chained `member.removed` audit event (`previous_role`) in the same transaction; the member's API tokens go with the membership through the existing `ON DELETE CASCADE`. The account is kept. An owner may remove themselves while another owner remains. `MemberService.Remove` adds the owner/human guard. `docs/api/swagger.*` regenerated with `make api-docs` (only the new path).
+- **CLI:** `machinarchy members` (list), `members role USER ROLE`, `members remove USER` (typed name or `--confirm NAME`; `--yes` is not enough; owner-only, API tokens refused locally). `api/members.go`, `commands/members.go`, catalogue messages `member.role_changed`/`member.removed`. The command adds a 15th top-level command (scorecard target 10, see Phase 9.1 deferred).
+- **Docs:** `docs/cli/commands.md` (Members), `docs/ROADMAP.md`, `docs/architecture.md` limitation line.
+- **Tests:** store contract (`member_removal_contract_test.go`: not found, wrong workspace, last owner, tokens gone, account kept, audit event, self-removal, concurrent owner removal keeps one owner), service, HTTP handler (guards, error mapping, 204), CLI (`members_test.go`), command-tree test updated.
+- **Authorization matrix:** `internal/bootstrap/authz_matrix_test.go` gains `DELETE /api/v1/members/{id}` (owner human only; targets a throwaway member so later routes keep their operator).
+- **Checks run:** gofmt, `go build ./...`, `golangci-lint run ./...` (0 issues), `go test -race ./...` all pass (SQLite store contract included), `make smoke` OK. Not run: PostgreSQL store contract (needs `MACHINARCHY_TEST_POSTGRES_URL`; the new advisory-lock path is untested live), e2e/HA, real-terminal prompt.
+- **Not done:** invitations (2.2, needs ADR); login session rows are not deleted on removal; they stop working at once because each request joins the membership (`GetSessionRole`, asserted in the store contract test).
+
 ## 2026-11-27 — Fix: flaky `TestWatchAppliesRevisionsFromOtherProcesses` (CI coverage job, release 0.0.3)
 
 - **Fixed:** `internal/runtimeconfig/config.go`: `SnapshotManager.Run` returned `context canceled` when the context was cancelled while the initial `Reload` was still recording process status (the revision was already applied, so the test cancelled at once). Cancellation during the initial load is now a clean stop (`nil`), matching the loop's behavior.

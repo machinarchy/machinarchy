@@ -2268,6 +2268,67 @@
                 }
             }
         },
+        "/api/v1/members/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. Deletes the membership and the member's API tokens; the account itself is kept. An owner may remove themselves while another owner remains. A workspace must always keep at least one owner. The removal is recorded in the audit trail.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Members"
+                ],
+                "summary": "Remove a workspace member",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/members/{id}/role": {
             "put": {
                 "security": [

@@ -298,6 +298,14 @@ func init() {
 	register(Message{ID: "token.revoked", Kind: KindSuccess,
 		Primary: "Token {name} revoked."})
 
+	register(Message{ID: "member.role_changed", Kind: KindSuccess,
+		Primary: "{user} is now {role}.",
+		Next:    "machinarchy members"})
+	register(Message{ID: "member.removed", Kind: KindSuccess,
+		Primary: "{user} no longer has access.",
+		Why:     "Their API tokens were deleted. Their account is kept.",
+		Next:    "machinarchy members"})
+
 	// Input and confirmation (docs/cli/spec/02-commands.md section 2).
 	register(Message{ID: "input.required", Kind: KindError,
 		Primary: "{flag} is required when nothing can be asked.",

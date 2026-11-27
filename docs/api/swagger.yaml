@@ -2713,6 +2713,48 @@ paths:
       summary: List workspace members
       tags:
       - Members
+  /api/v1/members/{id}:
+    delete:
+      description: Requires a human workspace owner session. Deletes the membership
+        and the member's API tokens; the account itself is kept. An owner may remove
+        themselves while another owner remains. A workspace must always keep at least
+        one owner. The removal is recorded in the audit trail.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Removed
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Remove a workspace member
+      tags:
+      - Members
   /api/v1/members/{id}/role:
     put:
       consumes:

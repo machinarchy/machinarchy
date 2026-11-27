@@ -14,10 +14,11 @@ import (
 )
 
 type fakeService struct {
-	listErr, setErr error
-	gotRole         domain.Role
-	gotID           int
-	gotPrincipal    domain.Principal
+	listErr, setErr, removeErr error
+	removed                    bool
+	gotRole                    domain.Role
+	gotID                      int
+	gotPrincipal               domain.Principal
 }
 
 func (f *fakeService) List(_ context.Context, p domain.Principal) ([]domain.WorkspaceMember, error) {
@@ -34,6 +35,11 @@ func (f *fakeService) SetRole(_ context.Context, p domain.Principal, id int, rol
 		return nil, f.setErr
 	}
 	return &domain.WorkspaceMember{UserID: id, Username: "u", Role: role}, nil
+}
+
+func (f *fakeService) Remove(_ context.Context, p domain.Principal, id int) error {
+	f.gotPrincipal, f.gotID, f.removed = p, id, f.removeErr == nil
+	return f.removeErr
 }
 
 // newRouter mounts the real routes behind the same guards the v1 router uses,
@@ -132,6 +138,46 @@ func TestSetRoleErrorMapping(t *testing.T) {
 			rec := do(e, http.MethodPut, tc.path, tc.body)
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status == http.StatusInternalServerError && strings.Contains(rec.Body.String(), "deadline") {
+				t.Error("unexpected errors must not leak internal details")
+			}
+		})
+	}
+}
+
+func TestRemoveGuardAndErrorMapping(t *testing.T) {
+	for name, principal := range map[string]domain.Principal{
+		"operator":  {UserID: 2, WorkspaceID: 7, Role: domain.RoleOperator},
+		"api token": {UserID: 1, WorkspaceID: 7, Role: domain.RoleOwner, APITokenID: 5},
+	} {
+		svc := &fakeService{}
+		if rec := do(newRouter(svc, principal), http.MethodDelete, "/members/2", ""); rec.Code != http.StatusForbidden || svc.gotID != 0 {
+			t.Errorf("%s: status = %d (service reached: %v), want 403 and no service call", name, rec.Code, svc.gotID != 0)
+		}
+	}
+	tests := []struct {
+		name   string
+		err    error
+		path   string
+		status int
+	}{
+		{"removed", nil, "/members/5", http.StatusNoContent},
+		{"bad id", nil, "/members/abc", http.StatusBadRequest},
+		{"zero id", nil, "/members/0", http.StatusBadRequest},
+		{"not found", domain.ErrUserNotFound, "/members/5", http.StatusNotFound},
+		{"last owner", domain.ErrLastOwner, "/members/1", http.StatusConflict},
+		{"denied", domain.ErrPermissionDenied, "/members/5", http.StatusForbidden},
+		{"unexpected", context.DeadlineExceeded, "/members/5", http.StatusInternalServerError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(newRouter(&fakeService{removeErr: tc.err}, owner), http.MethodDelete, tc.path, "")
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status == http.StatusNoContent && rec.Body.Len() != 0 {
+				t.Errorf("204 must have no body, got %q", rec.Body.String())
 			}
 			if tc.status == http.StatusInternalServerError && strings.Contains(rec.Body.String(), "deadline") {
 				t.Error("unexpected errors must not leak internal details")

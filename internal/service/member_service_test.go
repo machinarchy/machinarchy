@@ -12,6 +12,9 @@ type memberFakeUsers struct {
 	domain.UserStore
 	members     []domain.WorkspaceMember
 	updateErr   error
+	removeErr   error
+	removeCalls int
+	lastRemove  struct{ workspaceID, userID int }
 	updateCalls int
 	lastUpdate  struct {
 		workspaceID, userID int
@@ -29,6 +32,12 @@ func (f *memberFakeUsers) UpdateWorkspaceMemberRole(_ context.Context, workspace
 	f.updateCalls++
 	f.lastUpdate.workspaceID, f.lastUpdate.userID, f.lastUpdate.role = workspaceID, userID, role
 	return f.updateErr
+}
+
+func (f *memberFakeUsers) RemoveWorkspaceMember(_ context.Context, workspaceID, userID int) error {
+	f.removeCalls++
+	f.lastRemove.workspaceID, f.lastRemove.userID = workspaceID, userID
+	return f.removeErr
 }
 
 func newMemberFake() *memberFakeUsers {
@@ -140,4 +149,56 @@ func TestMemberServiceListUsesCallerWorkspace(t *testing.T) {
 	if err != nil || len(members) != 2 {
 		t.Fatalf("List() = %v, %v", members, err)
 	}
+}
+
+func TestMemberServiceRemove(t *testing.T) {
+	ctx := context.Background()
+
+	for name, principal := range map[string]domain.Principal{
+		"operator":  {UserID: 3, WorkspaceID: 7, Role: domain.RoleOperator},
+		"api token": {UserID: 1, WorkspaceID: 7, Role: domain.RoleOwner, APITokenID: 9},
+	} {
+		users := newMemberFake()
+		svc, _ := NewMemberService(users)
+		if err := svc.Remove(ctx, principal, 2); !errors.Is(err, domain.ErrPermissionDenied) || users.removeCalls != 0 {
+			t.Errorf("%s: err = %v, store calls = %d; want denied and no store call", name, err, users.removeCalls)
+		}
+	}
+
+	t.Run("removes within the caller's workspace", func(t *testing.T) {
+		users := newMemberFake()
+		svc, _ := NewMemberService(users)
+		if err := svc.Remove(ctx, ownerPrincipal(), 2); err != nil {
+			t.Fatal(err)
+		}
+		if users.lastRemove.workspaceID != 7 || users.lastRemove.userID != 2 {
+			t.Errorf("store got %+v, want workspace 7 user 2", users.lastRemove)
+		}
+	})
+	t.Run("an owner may remove themselves; the store keeps the last owner", func(t *testing.T) {
+		users := newMemberFake()
+		svc, _ := NewMemberService(users)
+		if err := svc.Remove(ctx, ownerPrincipal(), 1); err != nil || users.lastRemove.userID != 1 {
+			t.Fatalf("self-removal err = %v, store user = %d; want it passed to the store", err, users.lastRemove.userID)
+		}
+		users.removeErr = domain.ErrLastOwner
+		if err := svc.Remove(ctx, ownerPrincipal(), 1); !errors.Is(err, domain.ErrLastOwner) {
+			t.Errorf("err = %v, want ErrLastOwner", err)
+		}
+	})
+	t.Run("rejects a non-positive id before the store", func(t *testing.T) {
+		users := newMemberFake()
+		svc, _ := NewMemberService(users)
+		if err := svc.Remove(ctx, ownerPrincipal(), 0); !errors.Is(err, domain.ErrInvalidInput) || users.removeCalls != 0 {
+			t.Errorf("err = %v, calls = %d; want ErrInvalidInput and no store call", err, users.removeCalls)
+		}
+	})
+	t.Run("passes not-found through", func(t *testing.T) {
+		users := newMemberFake()
+		users.removeErr = domain.ErrUserNotFound
+		svc, _ := NewMemberService(users)
+		if err := svc.Remove(ctx, ownerPrincipal(), 99); !errors.Is(err, domain.ErrUserNotFound) {
+			t.Errorf("err = %v, want ErrUserNotFound", err)
+		}
+	})
 }

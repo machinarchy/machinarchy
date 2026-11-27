@@ -191,6 +191,8 @@ var contractTests = []struct {
 	{"audit records intents and outcomes", testAuditScope},
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
+	{"member removal", testMemberRemoval},
+	{"concurrent owner removal keeps an owner", testConcurrentOwnerRemoval},
 	{"audit trail", testAuditTrail},
 	{"audit events are append-only", testAuditAppendOnly},
 	{"audit detects a modified event", testAuditDetectsModification},
