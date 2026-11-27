@@ -85,12 +85,13 @@ func writeConfig(t *testing.T, server, token string) string {
 // and simple KEY=VALUE selectors server-side, like the real API, and pages
 // pageSize hosts at a time when pageSize is set.
 type fakeClient struct {
-	hosts    []api.Host
-	envs     []api.Environment
-	profiles []api.AccessProfile
-	ops      map[string]*api.Operation
-	err      error
-	pageSize int
+	checkReason string
+	hosts       []api.Host
+	envs        []api.Environment
+	profiles    []api.AccessProfile
+	ops         map[string]*api.Operation
+	err         error
+	pageSize    int
 
 	submitted []api.OperationInput
 	outputs   map[string]string // "op/host" -> the full stream, served in 6-byte steps
@@ -166,6 +167,19 @@ func (f *fakeClient) TrustHostKeys(_ context.Context, id string, generation uint
 			f.hosts[i].Metadata.Generation++
 			f.trusted = append(f.trusted, id+"="+strings.Join(fingerprints, ","))
 			return &f.hosts[i], nil
+		}
+	}
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
+}
+
+func (f *fakeClient) CheckHost(_ context.Context, id string) (*api.HostCheck, error) {
+	for _, host := range f.hosts {
+		if host.Metadata.ID == id {
+			check := api.HostCheck{HostID: id, Ready: true, Reachable: true, Reason: "SSHVerified"}
+			if f.checkReason != "" {
+				check.Ready, check.Reason = false, f.checkReason
+			}
+			return &check, nil
 		}
 	}
 	return nil, &api.Error{Status: 404, Message: "resource not found"}
@@ -282,6 +296,10 @@ func (f *fakeClient) TargetOutput(_ context.Context, operationID, hostID, stream
 		From: from, Next: int64(end), Bytes: int64(len(text)), Live: end < len(text), State: "Running"}, nil
 }
 
+func (f *fakeClient) CreateHostsBatch(context.Context, []api.HostInput, bool) (*api.HostBatchResult, error) {
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
+}
+
 func (f *fakeClient) CancelOperation(_ context.Context, id string) (*api.Operation, error) {
 	return &api.Operation{ID: id, Status: api.OperationStatus{State: "CancelRequested"}}, nil
 }
@@ -334,6 +352,8 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"run":            nil,
 		"config":         {"path", "show"},
 		"tokens":         {"create", "revoke"},
+		"members":        {"add", "invite", "invites", "link", "remove", "revoke", "role"},
+		"audit":          {"export", "prune", "verify"},
 		"logout":         nil,
 		"whoami":         nil,
 		"switch":         nil,
@@ -342,7 +362,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"version":        nil,
 		"login":          nil,
 		"access":         {"add", "remove", "show"},
-		"hosts":          {"add", "enroll", "move", "remove", "revoke-agent", "show", "tag", "trust"},
+		"hosts":          {"add", "check", "enroll", "import", "move", "remove", "revoke-agent", "show", "tag", "trust"},
 	}
 
 	var top []string

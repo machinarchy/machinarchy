@@ -92,3 +92,27 @@ func (s *memberService) SetRole(ctx context.Context, principal domain.Principal,
 	)
 	return target, nil
 }
+
+func (s *memberService) Remove(ctx context.Context, principal domain.Principal, userID int) error {
+	if ctx == nil {
+		return errors.New("member remove context is required")
+	}
+	if err := authorizeMemberAdmin(principal); err != nil {
+		return err
+	}
+	if userID <= 0 {
+		return fmt.Errorf("%w: user ID must be positive", domain.ErrInvalidInput)
+	}
+	// The store keeps at least one owner atomically with the delete, which also
+	// covers an owner removing themselves.
+	if err := s.users.RemoveWorkspaceMember(ctx, principal.WorkspaceID, userID); err != nil {
+		return err
+	}
+	slog.Info("audit",
+		"event", "member.removed",
+		"actor_user_id", principal.UserID,
+		"workspace_id", principal.WorkspaceID,
+		"target_user_id", userID,
+	)
+	return nil
+}

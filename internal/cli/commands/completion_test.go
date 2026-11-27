@@ -29,7 +29,7 @@ func TestCompletionOffersNamesFromTheServer(t *testing.T) {
 	hosts := hostsGroupServer(t)
 	config := writeConfig(t, hosts.URL, "tok")
 
-	for _, command := range []string{"show", "tag", "move", "trust", "enroll", "revoke-agent", "remove"} {
+	for _, command := range []string{"show", "tag", "move", "trust", "check", "enroll", "revoke-agent", "remove"} {
 		got := completions(t, config, "hosts", command, "web")
 		if strings.Join(got, ",") != "web-01,web-02" {
 			t.Errorf("hosts %s: %v", command, got)

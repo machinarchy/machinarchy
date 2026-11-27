@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
@@ -59,4 +61,29 @@ func (s *auditService) Verify(ctx context.Context, principal domain.Principal) (
 		return nil, fmt.Errorf("verify audit chain: %w", err)
 	}
 	return result, nil
+}
+
+func (s *auditService) Prune(ctx context.Context, principal domain.Principal, req domain.AuditPruneRequest) (*domain.AuditCheckpoint, error) {
+	if ctx == nil {
+		return nil, errors.New("audit prune context is required")
+	}
+	if err := authorizeAuditRead(principal); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateAuditPrune(req); err != nil {
+		return nil, err
+	}
+	req.ArchiveHeadHash = strings.ToLower(req.ArchiveHeadHash)
+	actor := domain.AuditActor{UserID: principal.UserID, Source: "api"}
+	if prior, ok := domain.AuditActorFrom(ctx); ok {
+		actor = prior
+	}
+	checkpoint, err := s.store.PruneAudit(domain.WithAuditActor(ctx, actor), principal.WorkspaceID, req, time.Now())
+	if errors.Is(err, domain.ErrInvalidInput) || errors.Is(err, domain.ErrAuditArchiveMismatch) {
+		return nil, err // the message tells the owner what to fix
+	}
+	if err != nil {
+		return nil, fmt.Errorf("prune audit trail: %w", err)
+	}
+	return checkpoint, nil
 }

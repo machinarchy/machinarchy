@@ -207,6 +207,55 @@ func (s *Store) UpdateWorkspaceMemberRole(ctx context.Context, workspaceID, user
 	return nil
 }
 
+// RemoveWorkspaceMember deletes a membership and, through the foreign key, the
+// member's API tokens. Removing the last owner fails with domain.ErrLastOwner;
+// the check and the delete are one statement.
+func (s *Store) RemoveWorkspaceMember(ctx context.Context, workspaceID, userID int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin remove member transaction: %w", err)
+	}
+	defer sqlx.Rollback(tx, s.logger, "remove member")
+	if s.dialect == sqlx.PostgreSQL {
+		// Same per-workspace lock as role changes: a removal and a demotion
+		// must not both see another owner.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, memberLockClass, workspaceID); err != nil {
+			return fmt.Errorf("lock workspace members: %w", err)
+		}
+	}
+	var previous string
+	err = tx.QueryRowContext(ctx, s.bind(`SELECT role FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?`),
+		workspaceID, userID).Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read workspace membership: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, s.bind(`DELETE FROM workspace_memberships
+		WHERE workspace_id = ? AND user_id = ?
+		AND (role <> 'owner'
+			OR (SELECT COUNT(*) FROM workspace_memberships WHERE workspace_id = ? AND role = 'owner') > 1)`),
+		workspaceID, userID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("delete workspace member: %w", err)
+	}
+	if err := sqlx.RowsAffected(result, domain.ErrLastOwner); err != nil {
+		return err
+	}
+	if err := s.appendAudit(ctx, tx, domain.AuditEvent{
+		WorkspaceID: workspaceID, Action: domain.AuditMemberRemoved,
+		TargetType: domain.AuditTargetUser, TargetID: fmt.Sprint(userID),
+		Details: map[string]string{"previous_role": previous},
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit remove member transaction: %w", err)
+	}
+	return nil
+}
+
 // memberLockClass namespaces the advisory lock for role changes ("ME").
 const memberLockClass = 0x4D45
 

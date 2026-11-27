@@ -48,6 +48,26 @@ type authServer struct {
 	nextID    int
 	redirect  string // when set, every request is answered with a redirect there
 	hostCalls int
+	members   []fakeMember // nil until a test calls seedMembers
+	invites   []fakeInvite
+	audit     []map[string]any
+	prunes    []string // bodies of POST /audit/prune requests
+	noMail    bool     // /members/invitations POST answers 501
+	// inviteTokens maps a valid invitation token to its role; accounts maps a
+	// username created by accepting one to its password.
+	inviteTokens map[string]string
+	accounts     map[string]string
+}
+
+type fakeInvite struct {
+	ID          int
+	Email, Role string
+}
+
+type fakeMember struct {
+	ID       int
+	Username string
+	Role     string
 }
 
 type issued struct {
@@ -145,6 +165,8 @@ func (s *authServer) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, `{"status":"ok"}`)
 	case r.URL.Path == "/api/auth/login" && r.Method == http.MethodPost:
 		s.login(w, body, reply)
+	case r.URL.Path == "/api/auth/invitations/accept" && r.Method == http.MethodPost:
+		s.acceptInvitation(body, reply)
 	case r.URL.Path == "/api/auth/logout" && r.Method == http.MethodPost:
 		s.mu.Lock()
 		delete(s.sessions, secret)
@@ -172,9 +194,65 @@ func (s *authServer) login(w http.ResponseWriter, body []byte, reply func(int, s
 		s.sessions[secret] = true
 		s.mu.Unlock()
 		reply(200, fmt.Sprintf(`{"token":%q,"user":{"id":1,"username":"maxim","email":%q}}`, secret, testEmail))
+	case s.accountPassword(identifier) != "" && s.accountPassword(identifier) == request["password"]:
+		s.mu.Lock()
+		secret := fmt.Sprintf("sess-%d", len(s.sessions)+1)
+		s.sessions[secret] = true
+		s.mu.Unlock()
+		reply(200, fmt.Sprintf(`{"token":%q,"user":{"id":7,"username":%q}}`, secret, identifier))
 	default:
 		reply(401, `{"error":"Invalid credentials"}`)
 	}
+}
+
+func (s *authServer) accountPassword(username string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.accounts[username]
+}
+
+// addInviteToken makes token a valid, unused invitation for role.
+func (s *authServer) addInviteToken(token, role string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inviteTokens == nil {
+		s.inviteTokens = map[string]string{}
+	}
+	s.inviteTokens[token] = role
+}
+
+// acceptInvitation fakes the public accept route: an unknown or used token is
+// 404, a taken username 409 (the token stays valid), otherwise the account is
+// created and the token is spent.
+func (s *authServer) acceptInvitation(body []byte, reply func(int, string)) {
+	var request struct{ Token, Username, Password string }
+	_ = json.Unmarshal(body, &request)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	role, ok := s.inviteTokens[request.Token]
+	if !ok {
+		reply(404, `{"error":"invitation is invalid or expired"}`)
+
+		return
+	}
+	if _, taken := s.accounts[request.Username]; taken || request.Username == "maxim" {
+		reply(409, `{"error":"username or email is already registered"}`)
+
+		return
+	}
+	if len(request.Password) < 12 {
+		reply(400, `{"error":"invalid input: password must be between 12 and 72 bytes"}`)
+
+		return
+	}
+	if s.accounts == nil {
+		s.accounts = map[string]string{}
+	}
+	s.accounts[request.Username] = request.Password
+	delete(s.inviteTokens, request.Token)
+	reply(201, fmt.Sprintf(`{"id":7,"username":%q,"role":%q}`, request.Username, role))
 }
 
 // identify says who a credential is: "session", "token" or "" for none.
@@ -201,7 +279,7 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	}
 	// Only a login session may manage sessions and tokens.
 	humanOnly := strings.HasPrefix(r.URL.Path, "/api/v1/sessions") || strings.HasPrefix(r.URL.Path, "/api/v1/tokens") ||
-		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
+		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/members") || strings.HasPrefix(r.URL.Path, "/api/v1/audit") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
 	if humanOnly && kind != "session" {
 		reply(403, `{"error":"a user session is required"}`)
 
@@ -226,6 +304,10 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 		s.listTokens(reply)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/tokens/") && r.Method == http.MethodDelete:
 		s.revokeToken(strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/"), reply)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/members"):
+		s.membersRoute(r, body, reply)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+		s.auditRoute(r, body, reply)
 	case r.URL.Path == "/api/v1/managed/hosts":
 		s.mu.Lock()
 		s.hostCalls++
@@ -235,6 +317,110 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	default:
 		reply(404, `{"error":"no route"}`)
 	}
+}
+
+// seedMembers gives the server a workspace with these members.
+func (s *authServer) seedMembers(members ...fakeMember) {
+	s.mu.Lock()
+	s.members = members
+	s.mu.Unlock()
+}
+
+func (s *authServer) memberList() []fakeMember {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]fakeMember(nil), s.members...)
+}
+
+// membersRoute fakes /api/v1/members: list, role change and removal, keeping at
+// least one owner like the real server.
+func (s *authServer) membersRoute(r *http.Request, body []byte, reply func(int, string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owners := 0
+	for _, m := range s.members {
+		if m.Role == "owner" {
+			owners++
+		}
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/members"), "/")
+	if rest == "invitations" || strings.HasPrefix(rest, "invitations/") {
+		s.invitationsRoute(r, body, strings.TrimPrefix(strings.TrimPrefix(rest, "invitations"), "/"), reply)
+
+		return
+	}
+	if rest == "" && r.Method == http.MethodPost {
+		var request struct{ Username, Email, Role string }
+		_ = json.Unmarshal(body, &request)
+		for _, m := range s.members {
+			if m.Username == request.Username {
+				reply(409, `{"error":"username or email is already registered"}`)
+
+				return
+			}
+		}
+		id := 100 + len(s.members)
+		s.members = append(s.members, fakeMember{ID: id, Username: request.Username, Role: request.Role})
+		token := fmt.Sprintf("added-token-%d", id)
+		if s.inviteTokens == nil {
+			s.inviteTokens = map[string]string{}
+		}
+		s.inviteTokens[token] = request.Role
+		reply(201, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"token":%q,"expiresAt":%q}`, id, request.Username, request.Role, token, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)))
+
+		return
+	}
+	if rest == "" && r.Method == http.MethodGet {
+		var items []string
+		for _, m := range s.members {
+			items = append(items, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"createdAt":%q}`, m.ID, m.Username, m.Role, time.Now().UTC().Format(time.RFC3339)))
+		}
+		reply(200, "["+strings.Join(items, ",")+"]")
+
+		return
+	}
+	idText, action, _ := strings.Cut(rest, "/")
+	id, _ := strconv.Atoi(idText)
+	for i, m := range s.members {
+		if m.ID != id {
+			continue
+		}
+		switch {
+		case action == "role" && r.Method == http.MethodPut:
+			var request struct{ Role string }
+			_ = json.Unmarshal(body, &request)
+			if m.Role == "owner" && request.Role != "owner" && owners < 2 {
+				reply(409, `{"error":"a workspace must keep at least one owner"}`)
+
+				return
+			}
+			s.members[i].Role = request.Role
+			reply(200, fmt.Sprintf(`{"id":%d,"username":%q,"role":%q,"createdAt":%q}`, m.ID, m.Username, request.Role, time.Now().UTC().Format(time.RFC3339)))
+		case action == "link" && r.Method == http.MethodPost:
+			if m.Role == "owner" || s.accounts[m.Username] != "" || m.ID < 100 {
+				reply(409, `{"error":"the account is already active; a new link is only for accounts that have not been activated"}`)
+
+				return
+			}
+			token := fmt.Sprintf("relinked-token-%d", m.ID)
+			s.inviteTokens[token] = m.Role
+			reply(200, fmt.Sprintf(`{"id":%d,"token":%q,"expiresAt":%q}`, m.ID, token, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)))
+		case action == "" && r.Method == http.MethodDelete:
+			if m.Role == "owner" && owners < 2 {
+				reply(409, `{"error":"a workspace must keep at least one owner"}`)
+
+				return
+			}
+			s.members = append(s.members[:i], s.members[i+1:]...)
+			reply(204, "")
+		default:
+			reply(404, `{"error":"no route"}`)
+		}
+
+		return
+	}
+	reply(404, `{"error":"member not found"}`)
 }
 
 func (s *authServer) createToken(body []byte, reply func(int, string)) {
@@ -430,4 +616,47 @@ func base64Lines(data []byte) string {
 	b.WriteString(encoded + "\n")
 
 	return b.String()
+}
+
+// invitationsRoute fakes /api/v1/members/invitations (the caller holds s.mu).
+func (s *authServer) invitationsRoute(r *http.Request, body []byte, rest string, reply func(int, string)) {
+	expires := time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	switch {
+	case rest == "" && r.Method == http.MethodPost:
+		var request struct{ Email, Role string }
+		_ = json.Unmarshal(body, &request)
+		if s.noMail {
+			reply(501, `{"error":"email delivery is not configured on this server"}`)
+
+			return
+		}
+		s.invites = append(s.invites, fakeInvite{ID: len(s.invites) + 1, Email: request.Email, Role: request.Role})
+		reply(202, fmt.Sprintf(`{"email":%q,"role":%q,"expiresAt":%q}`, request.Email, request.Role, expires))
+	case rest == "" && r.Method == http.MethodGet:
+		var items []string
+		for _, i := range s.invites {
+			items = append(items, fmt.Sprintf(`{"id":%d,"email":%q,"role":%q,"invitedBy":"maxim","createdAt":%q,"expiresAt":%q}`, i.ID, i.Email, i.Role, time.Now().UTC().Format(time.RFC3339), expires))
+		}
+		reply(200, "["+strings.Join(items, ",")+"]")
+	case r.Method == http.MethodDelete:
+		id, _ := strconv.Atoi(rest)
+		for i, inv := range s.invites {
+			if inv.ID == id {
+				s.invites = append(s.invites[:i], s.invites[i+1:]...)
+				reply(204, "")
+
+				return
+			}
+		}
+		reply(404, `{"error":"invitation not found"}`)
+	default:
+		reply(404, `{"error":"no route"}`)
+	}
+}
+
+func (s *authServer) inviteList() []fakeInvite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]fakeInvite(nil), s.invites...)
 }

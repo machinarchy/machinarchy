@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
@@ -25,6 +26,8 @@ type ManagedResourceService struct {
 	policy       func() domain.ExecutionPolicy
 	secretReader SecretReferenceReader
 	environments EnvironmentNames
+	checker      HostChecker
+	checking     sync.Map // resource.ID of Hosts with a check in flight
 }
 
 type SecretReferenceReader interface {

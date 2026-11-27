@@ -87,9 +87,42 @@ func (h *Handler) Verify(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
+// Prune removes old events behind a checkpoint.
+// @Summary Prune old audit events behind a checkpoint
+// @Description Requires a human workspace owner session. Removes the events with an id below beforeId, but only when the newest of them is at least 30 days old and the caller proves it holds a verified archive of exactly that range: archiveHeadHash is the hash of the newest archived event and archiveCount the number of events, both taken from an export made with `machinarchy audit export`. The server recomputes both and refuses on any difference or if the chain is broken. A checkpoint records the newest removed hash so verification continues from it, and an audit.pruned event is appended. The server cannot restore pruned events; keep the archive.
+// @Tags Audit
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body domain.AuditPruneRequest true "Range and archive proof"
+// @Success 200 {object} domain.AuditCheckpoint
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Failure 500 {object} httperr.Body
+// @Router /api/v1/audit/prune [post]
+func (h *Handler) Prune(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	var req domain.AuditPruneRequest
+	if err := c.Bind(&req); err != nil {
+		return httperr.Status(c, http.StatusBadRequest, "invalid request body")
+	}
+	checkpoint, err := h.service.Prune(c.Request().Context(), principal, req)
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(http.StatusOK, checkpoint)
+}
+
 // errorMappings turns the audit service's errors into responses; everything
 // else is the shared set in httperr.
-var errorMappings = []httperr.Mapping{}
+var errorMappings = []httperr.Mapping{
+	httperr.Map(domain.ErrAuditArchiveMismatch, http.StatusConflict, ""),
+}
 
 // respondError writes err as an API error and logs unexpected ones.
 func respondError(c echo.Context, err error) error {

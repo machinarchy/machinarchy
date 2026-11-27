@@ -65,10 +65,12 @@ type Client interface {
 	ListHosts(context.Context, HostQuery) (Page[Host], error)
 	GetHost(context.Context, string) (*Host, error)
 	CreateHost(context.Context, HostInput) (*Host, error)
+	CreateHostsBatch(ctx context.Context, hosts []HostInput, validateOnly bool) (*HostBatchResult, error)
 	DeleteHost(context.Context, string, uint64) error
 	MoveHost(ctx context.Context, id string, revision, generation uint64, spec HostSpec, environmentID int) error
 	SetHostLabels(context.Context, string, uint64, map[string]string) (*Host, error)
 	TrustHostKeys(context.Context, string, uint64, []string, bool) (*Host, error)
+	CheckHost(context.Context, string) (*HostCheck, error)
 	ListEnvironments(context.Context) ([]Environment, error)
 	ListAccessProfiles(context.Context, string) (Page[AccessProfile], error)
 	PreviewTargets(context.Context, TargetRule) (*TargetSet, error)

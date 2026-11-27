@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/machinarchy/machinarchy/internal/domain"
 )
@@ -15,6 +17,17 @@ type auditFakeStore struct {
 	gotWorkspace int
 	gotFilter    domain.AuditFilter
 	verifyCalls  int
+	pruneCalls   int
+	gotPrune     domain.AuditPruneRequest
+}
+
+func (f *auditFakeStore) PruneAudit(_ context.Context, workspaceID int, req domain.AuditPruneRequest, _ time.Time) (*domain.AuditCheckpoint, error) {
+	f.pruneCalls++
+	f.gotWorkspace, f.gotPrune = workspaceID, req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.AuditCheckpoint{ID: 1, LastEventID: req.BeforeID - 1, LastHash: req.ArchiveHeadHash, EventsRemoved: req.ArchiveCount}, nil
 }
 
 func (f *auditFakeStore) ListAuditEvents(_ context.Context, workspaceID int, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
@@ -54,7 +67,11 @@ func TestAuditServiceRequiresAHumanOwner(t *testing.T) {
 			if _, err := svc.Verify(context.Background(), principal); !errors.Is(err, domain.ErrPermissionDenied) {
 				t.Errorf("Verify() error = %v, want ErrPermissionDenied", err)
 			}
-			if store.listCalls != 0 || store.verifyCalls != 0 {
+			valid := domain.AuditPruneRequest{BeforeID: 5, ArchiveCount: 4, ArchiveHeadHash: strings.Repeat("a", 64)}
+			if _, err := svc.Prune(context.Background(), principal, valid); !errors.Is(err, domain.ErrPermissionDenied) {
+				t.Errorf("Prune() error = %v, want ErrPermissionDenied", err)
+			}
+			if store.listCalls != 0 || store.verifyCalls != 0 || store.pruneCalls != 0 {
 				t.Error("a denied caller must never reach the store")
 			}
 		})
@@ -100,5 +117,39 @@ func TestAuditServiceRejectsBadFiltersAndPropagatesStoreErrors(t *testing.T) {
 	}
 	if _, err := NewAuditService(nil); err == nil {
 		t.Error("a nil store must be rejected")
+	}
+}
+
+func TestAuditServicePruneValidatesAndScopes(t *testing.T) {
+	owner := domain.Principal{UserID: 1, WorkspaceID: 7, Role: domain.RoleOwner}
+	hash := strings.Repeat("A", 64)
+	for name, req := range map[string]domain.AuditPruneRequest{
+		"no cutoff":     {ArchiveCount: 1, ArchiveHeadHash: hash},
+		"first event":   {BeforeID: 1, ArchiveCount: 1, ArchiveHeadHash: hash},
+		"no count":      {BeforeID: 5, ArchiveHeadHash: hash},
+		"short hash":    {BeforeID: 5, ArchiveCount: 1, ArchiveHeadHash: "abc"},
+		"non-hex hash":  {BeforeID: 5, ArchiveCount: 1, ArchiveHeadHash: strings.Repeat("z", 64)},
+		"negative cuts": {BeforeID: -3, ArchiveCount: 1, ArchiveHeadHash: hash},
+	} {
+		store := &auditFakeStore{}
+		svc, _ := NewAuditService(store)
+		if _, err := svc.Prune(context.Background(), owner, req); !errors.Is(err, domain.ErrInvalidInput) || store.pruneCalls != 0 {
+			t.Errorf("%s: error = %v, store calls = %d; want ErrInvalidInput and no store call", name, err, store.pruneCalls)
+		}
+	}
+
+	store := &auditFakeStore{}
+	svc, _ := NewAuditService(store)
+	if _, err := svc.Prune(context.Background(), owner, domain.AuditPruneRequest{BeforeID: 5, ArchiveCount: 4, ArchiveHeadHash: hash}); err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if store.gotWorkspace != 7 || store.gotPrune.ArchiveHeadHash != strings.ToLower(hash) {
+		t.Errorf("store saw workspace %d request %+v; want the caller's workspace and a lower-case hash", store.gotWorkspace, store.gotPrune)
+	}
+
+	failing := &auditFakeStore{err: domain.ErrAuditArchiveMismatch}
+	svc, _ = NewAuditService(failing)
+	if _, err := svc.Prune(context.Background(), owner, domain.AuditPruneRequest{BeforeID: 5, ArchiveCount: 4, ArchiveHeadHash: hash}); !errors.Is(err, domain.ErrAuditArchiveMismatch) {
+		t.Errorf("mismatch error = %v, want ErrAuditArchiveMismatch", err)
 	}
 }

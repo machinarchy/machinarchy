@@ -87,6 +87,35 @@ func (h *Handler) SetRole(c echo.Context) error {
 	return c.JSON(http.StatusOK, member)
 }
 
+// Remove deletes a member's workspace access.
+// @Summary Remove a workspace member
+// @Description Requires a human workspace owner session. Deletes the membership and the member's API tokens; the account itself is kept. An owner may remove themselves while another owner remains. A workspace must always keep at least one owner. The removal is recorded in the audit trail.
+// @Tags Members
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Success 204 "Removed"
+// @Failure 400 {object} httperr.Body
+// @Failure 401 {object} httperr.Body
+// @Failure 403 {object} httperr.Body
+// @Failure 404 {object} httperr.Body
+// @Failure 409 {object} httperr.Body
+// @Router /api/v1/members/{id} [delete]
+func (h *Handler) Remove(c echo.Context) error {
+	principal, ok := middleware.Principal(c)
+	if !ok {
+		return httperr.Unauthorized(c)
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		return httperr.Status(c, http.StatusBadRequest, "invalid user ID")
+	}
+	if err := h.service.Remove(c.Request().Context(), principal, id); err != nil {
+		return respondError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 var errorMappings = []httperr.Mapping{
 	httperr.Map(domain.ErrInvalidInput, http.StatusBadRequest, "role must be owner, operator, or reader"),
 	httperr.Map(domain.ErrUserNotFound, http.StatusNotFound, "member not found"),

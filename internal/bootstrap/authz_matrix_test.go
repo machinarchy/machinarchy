@@ -42,6 +42,7 @@ var matrix = map[string]access{
 	"GET /healthz/ready":   public,
 	"GET /metrics":         public,
 	"POST /api/auth/login": public, "POST /api/auth/logout": public, "POST /api/auth/signup": public,
+	"POST /api/auth/invitations/accept": public,
 
 	"GET /api/v1/me": authenticated,
 
@@ -53,8 +54,12 @@ var matrix = map[string]access{
 	"PUT /api/v1/environments/{id}": writers, "DELETE /api/v1/environments/{id}": writers,
 
 	"GET /api/v1/tokens": ownerHuman, "POST /api/v1/tokens": ownerHuman, "DELETE /api/v1/tokens/{id}": ownerHuman,
-	"GET /api/v1/members": ownerHuman, "PUT /api/v1/members/{id}/role": ownerHuman,
+	"GET /api/v1/members": ownerHuman, "PUT /api/v1/members/{id}/role": ownerHuman, "DELETE /api/v1/members/{id}": ownerHuman,
+	"GET /api/v1/members/invitations": ownerHuman, "POST /api/v1/members/invitations": ownerHuman,
+	"DELETE /api/v1/members/invitations/{id}": ownerHuman,
+	"POST /api/v1/members":                    ownerHuman, "POST /api/v1/members/{id}/link": ownerHuman,
 	"GET /api/v1/audit/events": ownerHuman, "GET /api/v1/audit/verify": ownerHuman,
+	"POST /api/v1/audit/prune": ownerHuman,
 
 	"GET /api/v1/runtime-config": ownerHuman, "PUT /api/v1/runtime-config": ownerHuman,
 	"GET /api/v1/runtime-config/revisions": ownerHuman, "GET /api/v1/runtime-config/revisions/{revision}": ownerHuman,
@@ -73,8 +78,9 @@ var matrix = map[string]access{
 	"POST /api/v1/agents/signing-keys/next/activate": ownerHuman, "DELETE /api/v1/agents/signing-keys/next": ownerHuman,
 
 	"GET /api/v1/managed/hosts": readers, "GET /api/v1/managed/hosts/{id}": readers,
-	"POST /api/v1/managed/hosts": writers, "PUT /api/v1/managed/hosts/{id}": writers,
+	"POST /api/v1/managed/hosts": writers, "POST /api/v1/managed/hosts/batch": writers, "PUT /api/v1/managed/hosts/{id}": writers,
 	"PATCH /api/v1/managed/hosts/{id}/labels": writers, "DELETE /api/v1/managed/hosts/{id}": writers,
+	"POST /api/v1/managed/hosts/{id}/check": writers,   // opens an outbound SSH connection
 	"POST /api/v1/managed/hosts/{id}/trust": ownerOnly, // trusting keys decides where credentials go (S-02)
 	"GET /api/v1/managed/access-profiles":   readers, "GET /api/v1/managed/access-profiles/{id}": readers,
 	"POST /api/v1/managed/access-profiles": ownerOnly, "PUT /api/v1/managed/access-profiles/{id}": ownerOnly,
@@ -208,6 +214,9 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 	}
 	readerToken, _ := signup("matrixreader")
 	_, operatorID := signup("matrixoperator")
+	// A throwaway member for the owner's DELETE /members/{id}, so the matrix
+	// keeps its operator for the routes that run after it.
+	_, removableID := signup("matrixremovable")
 	c.mustJSON(http.MethodPut, fmt.Sprintf("/api/v1/members/%d/role", operatorID), owner.token, map[string]string{"role": "operator"}, http.StatusOK, nil)
 	c.mustJSON(http.MethodPost, "/api/auth/login", "", map[string]string{"username": "matrixoperator", "password": "matrixoperator-password-123"}, http.StatusOK, &session)
 	operator := principal{name: "operator", token: session.Token, role: domain.RoleOperator}
@@ -292,6 +301,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		"POST /api/v1/environments":               map[string]string{"name": "matrix-new"},
 		"PUT /api/v1/environments/{id}":           map[string]string{"name": "matrix"},
 		"POST /api/v1/managed/hosts":              map[string]any{"name": "matrix-new", "spec": map[string]any{"presence": "Managed"}},
+		"POST /api/v1/managed/hosts/batch":        map[string]any{"hosts": []map[string]any{{"name": "matrix-batch", "spec": map[string]any{"presence": "Managed"}}}},
 		"PATCH /api/v1/managed/hosts/{id}/labels": map[string]any{"labels": map[string]string{"tier": "web"}},
 		"POST /api/v1/managed/hosts/{id}/trust": map[string]any{"generation": 1,
 			"fingerprints": []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
@@ -356,6 +366,9 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 			target := resolve(path)
 			if route == "DELETE /api/v1/managed/hosts/{id}" {
 				target += "?revision=1"
+			}
+			if route == "DELETE /api/v1/members/{id}" {
+				target = fmt.Sprintf("/api/v1/members/%d", removableID)
 			}
 			status, body := c.call(method, target, p.token, bodies[route])
 			denied := status == http.StatusUnauthorized || status == http.StatusForbidden
