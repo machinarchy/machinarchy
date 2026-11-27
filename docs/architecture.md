@@ -56,8 +56,7 @@ SQLite (single node)  or  PostgreSQL (shared)
 
 ## Known limitations
 
-- Planned: agents will reach the controller only through the agent gateway over gRPC, with the broker as an internal swappable `Bus` ([ADR-059](adr/ADR-059-agent-gateway-transport.md), accepted; nothing built).
-- The agent gateway (controller side of `machinarchy-agent`) does not exist; see `AUDIT/04-agent.md` M-1..M-11.
-- `RunSpec.Concurrency` is stored but targets run one at a time.
-- Metrics cover HTTP and the database pool; the control loop and the operation worker have no metrics yet (AUDIT Q-06).
+- Agents reach the controller only through the agent gateway over gRPC, with the broker as an internal swappable `Bus` ([ADR-059](adr/ADR-059-agent-gateway-transport.md)). The gateway lives in `internal/agentgateway` (gRPC service in `internal/agentgateway/server`, enrolment, signing keys, `bus`) and is served from `internal/bootstrap/agentgrpc.go` on its own listener when configured. Only the NATS `Bus` exists; RabbitMQ/Kafka are not built. The agent itself lives in a separate repository; see `AUDIT/04-agent.md` for open items.
+- `RunSpec.Concurrency` bounds parallel targets per Operation (`internal/operationworker/worker.go`, `detached.go`); targets are not otherwise scheduled across workers or replicas.
+- Metrics cover HTTP, the database pool, the control manager (`internal/controlmanager/metrics.go`: reconciles, duration, outbox deliveries, queue depth) and the operation worker (`internal/operationworker/metrics.go`: operations in progress, targets, durations, detached launches/polls).
 - One shared workspace; owners can list, re-role and remove members, but email invitations (`members invite`) and owner-added users (`members add`) are the ways in (ADR-060, one-time tokens, no temporary passwords).

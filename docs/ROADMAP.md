@@ -1,6 +1,6 @@
 # Machinarchy Product and Engineering Roadmap
 
-This roadmap reflects the code in the repository on 2026-10-27. Status refers to shipped behavior, not intent. The immediate product is a self-hosted SSH host inventory and control plane; remote command submission and execution are not currently available.
+This roadmap was last synced with the code on 2026-11-27. Status refers to shipped behavior, not intent. The product is a self-hosted control plane for SSH hosts and `machinarchy-agent` hosts: inventory, bulk import, and command execution as managed Operations (default-off, previewed, audited).
 
 ## Product direction
 
@@ -46,8 +46,8 @@ Preserve the later multi-tenant idea: organizations may eventually have separate
 - The installation uses one shared workspace. Owners can list members and change roles through `/api/v1/members` (never leaving the workspace without an owner); owners can also remove a member (`DELETE /api/v1/members/{id}`, which deletes the member's API tokens); owners can invite people by email (`POST /api/v1/members/invitations`, ADR-060: single-use hashed token, 7 days, reader or operator); the invitee accepts with `machinarchy login SERVER --invite`; owners can also add a person without email (`POST /api/v1/members`, a one-time activation token for a locked account, 24 hours, reissued with `POST /api/v1/members/{id}/link` only while the account has no password); there is still no workspace switching. Role changes and removals are recorded in the audit trail. API tokens provide the automation identities.
 - Public account signup defaults off in production and on in development. When deliberately enabled, each new account receives an isolated workspace.
 - Workspace authorization is covered by SQLite integration tests, but PostgreSQL migration/repository integration and exhaustive HTTP denial-path coverage are still outstanding.
-- Managed hosts, Access Profiles and Operations are listed with keyset pagination. Bulk import (YAML/CSV) does not exist yet. Host names are unique per workspace.
-- Commands run as managed Operations (`POST /api/v1/managed/operations`, CLI `run`) when execution is enabled. The agent lives in a separate repository and is not integrated.
+- Managed hosts, Access Profiles and Operations are listed with keyset pagination. Bulk import exists: `POST` batch registration (max 100, `validate_only`, per-host outcomes) and `machinarchy hosts import FILE` (YAML/CSV, preview before apply). Host names are unique per workspace.
+- Commands run as managed Operations (`POST /api/v1/managed/operations`, CLI `run`) when execution is enabled. The agent lives in a separate repository; the controller side is the agent gateway (gRPC, ADR-059) and agent capabilities run as Operations (ADR-057).
 - The control-manager currently logs reconnection events rather than reconciling host state. Host persistence and event publishing do not share an outbox transaction.
 - The SSH capacity limit is process-local. Multiple API replicas multiply the effective limit. Credential rotation and secret references need explicit designs. An append-only, hash-chained audit trail for inventory and access changes is implemented; denied attempts and an off-database anchor are not; export and owner-run retention (`audit export`, `audit prune`, ADR-061) are. The SSH target address policy and DNS-rebinding-safe dialing (`pkg/netpolicy`) are implemented; port restrictions and re-checking addresses on host update are not.
 - The repository still has sparse test coverage outside the authorization baseline. A shared store contract suite (users, members, hosts, uniqueness, environments, API tokens, migrations) runs on SQLite and, when configured, PostgreSQL, and CI provisions a PostgreSQL service for it. The PostgreSQL half has been written but not yet observed running, so treat it as unproven until the first CI run is green. Fleet benchmarks are outstanding.
@@ -94,7 +94,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Protected API paths carry workspace identity into storage; missing membership blocks JWT requests; API token role is capped by current membership role; token expiry/revocation takes effect on the next request; cross-workspace resource lookups are non-disclosing; legacy rows have one deterministic owner.
 - **Security considerations:** Prevent broken object-level authorization on indirect routes and references; keep API-token secrets out of storage and logs; preserve backup data; do not accept credentials that can grant a role higher than their issuer.
 - **Tests required:** Role/permission tests; SQLite migration and repository isolation tests; API token expiry/revocation tests; HTTP allow/deny tests; PostgreSQL migration and integration tests.
-- **Status:** Core authorization and token lifecycle implemented. A bootstrap-owner flow and owner-only member role management are implemented. Member invitation/removal, a verified PostgreSQL contract-suite run, audit retention and export, pagination, and broader HTTP denial-path tests remain planned.
+- **Status:** Core authorization and token lifecycle implemented. A bootstrap-owner flow and owner-only member role management are implemented. Member invitation/removal (ADR-060), audit export and owner-run retention (ADR-061) and keyset pagination are implemented. A verified PostgreSQL contract-suite run and broader HTTP denial-path tests remain planned.
 
 ### Phase 1 follow-up — Shared installation and global roles
 
@@ -105,7 +105,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Authorized accounts in one installation see the same inventory; each request still enforces the caller's assigned role; self-signup cannot grant operator/admin privileges; environment IDs cannot bypass installation-wide authorization; no existing workspace data is merged without explicit operator selection and backup.
 - **Security considerations:** Keep owner/admin assignment privileged; preserve server-side authorization for every route and storage query; document that environments alone do not isolate access.
 - **Tests required:** Multi-account shared-inventory integration tests; reader/operator/admin allow/deny matrix; signup/provisioning privilege tests; migration tests proving explicit ownership selection and no accidental data loss.
-- **Status:** In progress. Implemented: one shared default workspace, read-only self-registration, a bootstrap owner from configuration (no built-in credential), and owner-only role management with last-owner protection. Not done: a supported, backed-up path to consolidate legacy per-account workspaces into the shared one, invitations and member removal, audit retention and export, and multi-account HTTP integration tests for the shared inventory.
+- **Status:** In progress. Implemented: one shared default workspace, read-only self-registration, a bootstrap owner from configuration (no built-in credential), and owner-only role management with last-owner protection. Invitations, member removal, audit retention and export are now implemented (Phases 2 and 3 of the current plan). Not done: a supported, backed-up path to consolidate legacy per-account workspaces into the shared one, and multi-account HTTP integration tests for the shared inventory.
 
 ### Phase 2 — Bulk onboarding
 
@@ -116,7 +116,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** A malformed or unreachable record does not erase successes unless atomic mode is explicitly selected; repeated imports produce documented outcomes; cancellation stops queued work and reports completed/in-flight items; maximum concurrency and memory are bounded; no command executes during registration.
 - **Security considerations:** Enforce body/file size limits, reject unsafe YAML features, sanitize errors, constrain egress, and audit who imported which records.
 - **Tests required:** Table-driven malformed/duplicate/partial-failure tests, cancellation and concurrency-limit tests, parser fuzzing, and representative 100-host import benchmark.
-- **Status:** In progress. Bounded synchronous batch registration (max 100, partial success, `validate_only`, duplicate detection, bounded workers, sanitized per-record errors) is implemented. Not done: YAML/CSV parsing, audit of who imported what, parser fuzzing, a 100-host benchmark, and resumable asynchronous imports. Host uniqueness is enforced in the database.
+- **Status:** In progress. Bounded synchronous batch registration (max 100, partial success, `validate_only`, duplicate detection, bounded workers, sanitized per-record errors) is implemented. YAML/CSV import (`hosts import`, size limit, parser fuzz target, preview before apply) and per-host chained audit events (who registered which host) are implemented. Not done: a 100-host benchmark and resumable asynchronous imports. Host uniqueness is enforced in the database.
 
 ### Phase 3 — Secure SSH connectivity
 
@@ -138,7 +138,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Preview and execution use the same normalized target selection; concurrency and output limits are enforced; unreachable hosts do not block the fleet; cancellation and retry semantics are explicit; sensitive actions have immutable initiator/target/outcome audit records.
 - **Security considerations:** Prevent command injection, overbroad targeting, privilege escalation, replay, and cross-tenant execution. No automatic execution on host import.
 - **Tests required:** Deterministic selector tests, bounded fan-out tests, partial-failure/cancellation tests, authorization tests, output cap tests, race detector, and 100-host latency/resource benchmarks.
-- **Status:** In progress. Commands run as managed Operations: argv without a shell, a preview-bound targets hash, a separate `runs:execute` permission, default-off execution with a program allow list, a bounded worker pool, cancellation, restart recovery (never replayed), sanitised per-target results and audit events. The CLI `run` command previews, confirms and submits. Not done: parallel fan-out (`concurrency` is stored but targets run one at a time), output retention and export, an approval step, agent-based execution and 100-host benchmarks.
+- **Status:** In progress. Commands run as managed Operations: argv without a shell, a preview-bound targets hash, a separate `runs:execute` permission, default-off execution with a program allow list, a bounded worker pool, cancellation, restart recovery (never replayed), sanitised per-target results and audit events. The CLI `run` command previews, confirms and submits. `concurrency` bounds parallel targets per Operation. Not done: output retention and export, an approval step, and 100-host benchmarks.
 
 ### Phase 5 — Operational maturity
 
@@ -161,7 +161,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 - **Acceptance criteria:** Interactive and non-interactive use has explicit context selection; secrets are read from secure input sources and never echoed; destructive/broad operations show the selected target set; machine output is stable and errors have nonzero exits.
 - **Security considerations:** Protect local token files, avoid secrets in process arguments/history, and apply server-side authorization regardless of CLI behavior.
 - **Tests required:** Command tests with fake API clients, config merge precedence tests, output golden tests, and end-to-end CLI/API smoke tests.
-- **Status:** In progress. Context configuration and host listing exist; registration/import/operation commands do not.
+- **Status:** In progress. Context configuration, host add/list/import, `run`, `members` and `audit` commands exist (see `docs/cli/commands.md`). Tab completion exists. Fleet-wide stable JSON/YAML output is tracked in `docs/cli/spec/`.
 
 ### Phase 7 — Advanced orchestration and optional agents
 
@@ -179,7 +179,7 @@ These are functional references only. Machinarchy remains SSH-first and should a
 | Risk | Mitigation / dependency |
 | --- | --- |
 | Legacy rows become owned by the earliest account during migration | Inventory existing account IDs first, verify a database backup, and confirm that the earliest account is the intended owner. Other existing accounts receive empty private workspaces. If ownership needs correction or the installation moves to a shared workspace, use a reviewed, auditable forward migration with explicit source/target selection; do not merge workspaces or edit production rows ad hoc. |
-| There are no invitations or removals, and the audit trail has no retention or off-database anchor | Keep signup disabled in production; bootstrap a trusted owner, promote members deliberately, use reader/operator tokens for automation, record the audit head hash externally, and add invitation/removal flows plus audit export before multi-user collaboration is promised. |
+| The audit trail has no off-database anchor or denied-attempt events | Keep signup disabled in production; bootstrap a trusted owner, invite or add members deliberately, use reader/operator tokens for automation, and record the audit head hash externally (`audit export`) until ADR-040 is implemented. |
 | SSH target inputs can reach unintended networks | Design explicit egress/address policy and DNS-safe dialing before discovery/import or broad execution. |
 | Per-process SSH limits multiply across replicas | Use fleet-level admission control only if measurements show the local bound is inadequate; until then, document aggregate capacity as replicas × process limit. |
 | Event publication can be lost after host persistence | Add transactional outbox only if reconnection events become required for correctness, not just as speculative infrastructure. |

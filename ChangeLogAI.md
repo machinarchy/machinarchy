@@ -1,5 +1,10 @@
 # ChangeLogAI
 
+## 2026-11-27 — 5.1: documentation sync (branch ai/p5-docs-drift)
+
+- **Docs only:** `docs/architecture.md` known limitations now describe the agent gateway as built (`internal/agentgateway`, gRPC server, `internal/bootstrap/agentgrpc.go`; NATS is the only `Bus`), `RunSpec.Concurrency` as bounding parallel targets (`internal/operationworker/worker.go`, `detached.go`), and control-manager and operation-worker metrics as present. `docs/ROADMAP.md` re-dated and brought in line with shipped members, invitations, audit export/retention, bulk import (`hosts import`), execution and CLI state; the removed "no invitations" risk row is replaced by the real remaining audit gaps. `docs/adr/README.md` marks ADR-059 Implemented.
+- **Checks run:** none applicable (docs only; statements checked against the cited code). Not run: link checker.
+- **Known limitations:** other ROADMAP phase sections (3, 5) were not re-audited line by line; ADR-050 and ADR-031 statuses left unchanged.
 ## 2026-11-27 — 4.2: `hosts import FILE` CLI (branch ai/p4-bulk-host-import)
 
 - **CLI:** `machinarchy hosts import FILE|-` registers up to 100 SSH hosts from YAML (`hosts:` list) or CSV (header row) through the 4.1 batch endpoint. File is capped at 1 MiB, unknown YAML keys/CSV columns are refused, each entry is checked like `hosts add` (name, `HOST[:PORT]`, tags, repeated names), env and access names are resolved before any write, and every problem is reported at once with nothing sent. Preview = server `validateOnly` call, shown per host; apply needs confirmation (`--yes`), `--dry-run` stops after the preview, `--skip-invalid` applies only the hosts that passed (otherwise any non-valid host stops the import). Create-only; exit 8/9 for partial/total failure. No command execution and no key trust; prints the `hosts trust --all-pending` next step.
