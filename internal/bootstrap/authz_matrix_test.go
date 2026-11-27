@@ -59,6 +59,7 @@ var matrix = map[string]access{
 	"DELETE /api/v1/members/invitations/{id}": ownerHuman,
 	"POST /api/v1/members":                    ownerHuman, "POST /api/v1/members/{id}/link": ownerHuman,
 	"GET /api/v1/audit/events": ownerHuman, "GET /api/v1/audit/verify": ownerHuman,
+	"POST /api/v1/audit/prune": ownerHuman,
 
 	"GET /api/v1/runtime-config": ownerHuman, "PUT /api/v1/runtime-config": ownerHuman,
 	"GET /api/v1/runtime-config/revisions": ownerHuman, "GET /api/v1/runtime-config/revisions/{revision}": ownerHuman,

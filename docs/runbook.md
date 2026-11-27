@@ -157,3 +157,5 @@ it records which account and network.
 `GET /api/v1/audit/verify` (owner) checks the hash chain. `valid: false`
 means a stored event was changed or removed: preserve the database for
 investigation and compare with the last recorded `headHash`.
+
+To shrink the trail, an owner runs `machinarchy audit export --output FILE`, keeps the file, then `machinarchy audit prune --before-id N --archive FILE --confirm N` (ADR-061). Nothing is pruned automatically, events younger than 30 days are never removed, and the server cannot restore pruned events. `verify` after a prune reports the checkpoint it started from; record that hash with the archive. After restoring a database backup, an archive made after the backup is the only record of events pruned since.

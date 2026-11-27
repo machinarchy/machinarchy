@@ -51,7 +51,8 @@ type authServer struct {
 	members   []fakeMember // nil until a test calls seedMembers
 	invites   []fakeInvite
 	audit     []map[string]any
-	noMail    bool // /members/invitations POST answers 501
+	prunes    []string // bodies of POST /audit/prune requests
+	noMail    bool     // /members/invitations POST answers 501
 	// inviteTokens maps a valid invitation token to its role; accounts maps a
 	// username created by accepting one to its password.
 	inviteTokens map[string]string
@@ -306,7 +307,7 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	case strings.HasPrefix(r.URL.Path, "/api/v1/members"):
 		s.membersRoute(r, body, reply)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
-		s.auditRoute(r, reply)
+		s.auditRoute(r, body, reply)
 	case r.URL.Path == "/api/v1/managed/hosts":
 		s.mu.Lock()
 		s.hostCalls++

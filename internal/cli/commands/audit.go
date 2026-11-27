@@ -34,13 +34,13 @@ func NewAuditCommand(f *cli.Factory) *cobra.Command {
 		Long: "Shows who changed what in this workspace, newest first. The trail is append-only and hash-chained; 'verify'\n" +
 			"checks the chain and 'export' writes it out as JSON lines together with the head hash. Record the head hash\n" +
 			"outside the server to detect later removal of the newest events. Needs an owner signed in with a password.",
-		Example: "  machinarchy audit\n  machinarchy audit verify\n  machinarchy audit export --output audit.jsonl",
+		Example: "  machinarchy audit\n  machinarchy audit verify\n  machinarchy audit export --output audit.jsonl\n  machinarchy audit prune --before-id 1200 --archive audit.jsonl --confirm 1200",
 		Args:    cobra.NoArgs,
 		RunE:    listAudit(f),
 	}
 	command.Flags().String("action", "", "only events with this action, for example member.role_changed")
 	command.Flags().Int("limit", 50, "how many events to show (at most 500)")
-	command.AddCommand(newAuditVerifyCommand(f), newAuditExportCommand(f))
+	command.AddCommand(newAuditVerifyCommand(f), newAuditExportCommand(f), newAuditPruneCommand(f))
 	markOwner(command)
 
 	return command
@@ -123,6 +123,9 @@ func newAuditVerifyCommand(f *cli.Factory) *cobra.Command {
 				out := command.OutOrStdout()
 				if result.Valid {
 					_, _ = fmt.Fprintf(out, "Audit trail is intact: %d events.\nHead hash: %s\n", result.Events, sanitize.Line(result.HeadHash))
+					if cp := result.Checkpoint; cp != nil {
+						_, _ = fmt.Fprintf(out, "Older events were pruned: checked from the checkpoint at event %d (hash %s).\n", cp.LastEventID, sanitize.Line(cp.LastHash))
+					}
 				} else {
 					_, _ = fmt.Fprintf(out, "Audit trail is BROKEN at event %d: %s\n", result.FirstInvalidID, sanitize.Line(result.Reason))
 				}

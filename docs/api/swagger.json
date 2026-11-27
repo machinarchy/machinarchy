@@ -715,6 +715,75 @@
                 }
             }
         },
+        "/api/v1/audit/prune": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires a human workspace owner session. Removes the events with an id below beforeId, but only when the newest of them is at least 30 days old and the caller proves it holds a verified archive of exactly that range: archiveHeadHash is the hash of the newest archived event and archiveCount the number of events, both taken from an export made with `machinarchy audit export`. The server recomputes both and refuses on any difference or if the chain is broken. A checkpoint records the newest removed hash so verification continues from it, and an audit.pruned event is appended. The server cannot restore pruned events; keep the archive.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Audit"
+                ],
+                "summary": "Prune old audit events behind a checkpoint",
+                "parameters": [
+                    {
+                        "description": "Range and archive proof",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.AuditPruneRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/domain.AuditCheckpoint"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httperr.Body"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/audit/verify": {
             "get": {
                 "security": [
@@ -4288,6 +4357,29 @@
                 }
             }
         },
+        "domain.AuditCheckpoint": {
+            "type": "object",
+            "properties": {
+                "actorUserId": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "eventsRemoved": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "lastEventId": {
+                    "type": "integer"
+                },
+                "lastHash": {
+                    "type": "string"
+                }
+            }
+        },
         "domain.AuditEvent": {
             "type": "object",
             "properties": {
@@ -4338,9 +4430,31 @@
                 }
             }
         },
+        "domain.AuditPruneRequest": {
+            "type": "object",
+            "properties": {
+                "archiveCount": {
+                    "type": "integer"
+                },
+                "archiveHeadHash": {
+                    "type": "string"
+                },
+                "beforeId": {
+                    "type": "integer"
+                }
+            }
+        },
         "domain.AuditVerification": {
             "type": "object",
             "properties": {
+                "checkpoint": {
+                    "description": "Checkpoint is the newest prune checkpoint the walk started from; nil when\nnothing was ever pruned. Events then counts only the retained events.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.AuditCheckpoint"
+                        }
+                    ]
+                },
                 "events": {
                     "type": "integer"
                 },

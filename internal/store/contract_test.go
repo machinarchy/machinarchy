@@ -201,6 +201,11 @@ var contractTests = []struct {
 	{"audit detects a modified event", testAuditDetectsModification},
 	{"audit detects a removed event", testAuditDetectsRemoval},
 	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
+	{"audit prune leaves a verifiable checkpoint", testAuditPrune},
+	{"audit prune is scoped to its workspace", testAuditPruneIsScopedToItsWorkspace},
+	{"audit prune refuses a broken chain", testAuditPruneRefusesABrokenChain},
+	{"audit detects a tampered checkpoint", testAuditDetectsATamperedCheckpoint},
+	{"audit prune racing appends keeps one chain", testAuditPruneRacesAppends},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
@@ -517,8 +522,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 4 {
-		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments and member onboarding", before)
+	if before != 5 {
+		t.Fatalf("applied migrations = %d, want the baseline, the default environment, protected environments, member onboarding and audit checkpoints", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

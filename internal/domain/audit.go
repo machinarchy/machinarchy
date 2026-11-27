@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -25,13 +26,16 @@ const (
 	AuditMemberJoined          = "member.joined"
 	AuditMemberAdded           = "member.added"
 	AuditMemberLinkReissued    = "member.link_reissued"
-	AuditHostCreated           = "host.created"
-	AuditHostUpdated           = "host.updated"
-	AuditHostDeleted           = "host.deleted"
-	AuditHostLabelsPatched     = "host.labels_patched"
-	AuditResourceHostCreated   = "resource_host.created"
-	AuditResourceHostUpdated   = "resource_host.updated"
-	AuditResourceHostDeleted   = "resource_host.deleted"
+	// AuditPruned records an owner removing old events behind a checkpoint
+	// (ADR-061); it is the first event after the checkpoint.
+	AuditPruned              = "audit.pruned"
+	AuditHostCreated         = "host.created"
+	AuditHostUpdated         = "host.updated"
+	AuditHostDeleted         = "host.deleted"
+	AuditHostLabelsPatched   = "host.labels_patched"
+	AuditResourceHostCreated = "resource_host.created"
+	AuditResourceHostUpdated = "resource_host.updated"
+	AuditResourceHostDeleted = "resource_host.deleted"
 	// AuditResourceHostKeyTrusted records pinned SSH host keys and who trusted them.
 	AuditResourceHostKeyTrusted = "resource_host.host_key_trusted"
 	// AuditSessionRevoked records one login session ended before its expiry
@@ -72,6 +76,7 @@ const (
 	AuditOperationUpdated   = "operation.updated"
 
 	AuditTargetUser         = "user"
+	AuditTargetTrail        = "audit_trail"
 	AuditTargetInvitation   = "member_invitation"
 	AuditTargetEnvironment  = "environment"
 	AuditTargetHost         = "host"
@@ -93,6 +98,10 @@ const (
 
 	maxAuditDetails     = 20
 	maxAuditDetailValue = 256
+
+	// MinAuditPruneAge is how old the newest removed event must be, so recent
+	// evidence cannot be pruned.
+	MinAuditPruneAge = 30 * 24 * time.Hour
 
 	// DefaultAuditPageSize and MaxAuditPageSize bound event listings.
 	DefaultAuditPageSize = 100
@@ -171,19 +180,68 @@ type AuditVerification struct {
 	HeadHash       string `json:"headHash"`
 	FirstInvalidID int64  `json:"firstInvalidId,omitempty"`
 	Reason         string `json:"reason,omitempty"`
+	// Checkpoint is the newest prune checkpoint the walk started from; nil when
+	// nothing was ever pruned. Events then counts only the retained events.
+	Checkpoint *AuditCheckpoint `json:"checkpoint,omitempty"`
 }
+
+// AuditCheckpoint records one prune: the newest removed event and its hash. The
+// first retained event must link to LastHash.
+type AuditCheckpoint struct {
+	ID            int64     `json:"id"`
+	LastEventID   int64     `json:"lastEventId"`
+	LastHash      string    `json:"lastHash"`
+	EventsRemoved int       `json:"eventsRemoved"`
+	ActorUserID   int       `json:"actorUserId,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// AuditPruneRequest asks to remove a workspace's events with an ID below
+// BeforeID. The caller proves it holds a verified archive of exactly that range
+// by giving the hash of its newest event and the number of events; the store
+// recomputes both and refuses on any difference.
+type AuditPruneRequest struct {
+	BeforeID        int64  `json:"beforeId"`
+	ArchiveHeadHash string `json:"archiveHeadHash"`
+	ArchiveCount    int    `json:"archiveCount"`
+}
+
+// ErrAuditArchiveMismatch means the archive the caller described is not the
+// range the server would remove, so nothing was removed.
+var ErrAuditArchiveMismatch = errors.New("the archive does not match the events to remove")
 
 // AuditStore reads audit events. Writing happens inside the stores' own
 // transactions so an event can never exist without its change, or the reverse.
 type AuditStore interface {
 	ListAuditEvents(ctx context.Context, workspaceID int, filter AuditFilter) ([]AuditEvent, error)
 	VerifyAuditChain(ctx context.Context, workspaceID int) (*AuditVerification, error)
+	// PruneAudit removes the events below req.BeforeID behind a checkpoint and
+	// records audit.pruned, all in one transaction. now bounds the age check.
+	PruneAudit(ctx context.Context, workspaceID int, req AuditPruneRequest, now time.Time) (*AuditCheckpoint, error)
 }
 
 // AuditService exposes the audit trail to workspace owners.
 type AuditService interface {
 	List(ctx context.Context, principal Principal, filter AuditFilter) ([]AuditEvent, error)
 	Verify(ctx context.Context, principal Principal) (*AuditVerification, error)
+	Prune(ctx context.Context, principal Principal, req AuditPruneRequest) (*AuditCheckpoint, error)
+}
+
+// ValidateAuditPrune checks the shape of a prune request.
+func ValidateAuditPrune(req AuditPruneRequest) error {
+	if req.BeforeID < 2 {
+		return fmt.Errorf("%w: beforeId must be a positive event ID above the first event", ErrInvalidInput)
+	}
+	if req.ArchiveCount < 1 {
+		return fmt.Errorf("%w: archiveCount must be at least 1", ErrInvalidInput)
+	}
+	if len(req.ArchiveHeadHash) != 64 {
+		return fmt.Errorf("%w: archiveHeadHash must be the 64-character hash of the newest archived event", ErrInvalidInput)
+	}
+	if _, err := hex.DecodeString(req.ArchiveHeadHash); err != nil {
+		return fmt.Errorf("%w: archiveHeadHash must be hexadecimal", ErrInvalidInput)
+	}
+	return nil
 }
 
 // NormalizeAuditFilter applies defaults and bounds to a listing request.
@@ -271,7 +329,13 @@ type AuditChainVerifier struct {
 
 // NewAuditChainVerifier starts at the genesis hash.
 func NewAuditChainVerifier() *AuditChainVerifier {
-	return &AuditChainVerifier{prev: AuditGenesisHash, result: AuditVerification{Valid: true, HeadHash: AuditGenesisHash}}
+	return NewAuditChainVerifierFrom(AuditGenesisHash)
+}
+
+// NewAuditChainVerifierFrom starts after a prune checkpoint: the first event
+// must link to prevHash.
+func NewAuditChainVerifierFrom(prevHash string) *AuditChainVerifier {
+	return &AuditChainVerifier{prev: prevHash, result: AuditVerification{Valid: true, HeadHash: prevHash}}
 }
 
 // Add checks the next event and reports whether the chain is still intact.

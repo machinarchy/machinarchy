@@ -1,6 +1,6 @@
 # ADR-061: Audit retention: keep by default, archive then prune behind a signed checkpoint
 
-**Status:** Proposed. Retention defaults chosen by the owner on 2026-11-27 (recommended defaults accepted). The API shape needs owner approval before any code.
+**Status:** Accepted and implemented (step 3.2), 2026-11-27. Retention defaults and the API shape approved by the owner the same day.
 **Date:** 2026-11-27
 **Builds on:** ADR-022 (audit is not pruned until verified archival/export exists), ADR-040 (head hashes belong outside the database), step 3.1 (CLI `audit export`)
 
@@ -20,7 +20,8 @@
 8. **Interface (to approve).**
    - `POST /api/v1/audit/prune` with `{"beforeId": N, "archiveHeadHash": "...", "archiveCount": N}`; returns the checkpoint. Owner session only.
    - `GET /api/v1/audit/verify` also reports the checkpoint it started from.
-   - CLI: `audit prune --before-id N --archive FILE` reads the verified export file, sends its head hash and count, and prints the checkpoint. It requires `--confirm` and is not offered as a default or automated action.
+   - CLI: `audit prune --before-id N --archive FILE` reads the verified export file, sends its head hash and count, and prints the checkpoint. It is not offered as a default or automated action.
+   - Implementation notes: confirmation is typing the `--before-id` value (`--confirm N` in scripts; `--yes` is not enough) rather than a bare flag; `--dry-run` is supported. The delete trigger is replaced (SQLite) or its function swapped (PostgreSQL) so a row can be deleted only when a checkpoint of the same workspace covers its ID; `audit_checkpoints` has update/delete triggers. The prune walks the range under the workspace audit lock (PostgreSQL advisory lock) and appends `audit.pruned` in the same transaction; a very large range holds that lock for the walk. The 30-day minimum is not configurable. The CLI checks only that the archive is an unfiltered, linked export; the server holds the authoritative check.
 
 ## Alternatives considered
 

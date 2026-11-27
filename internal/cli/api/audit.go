@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -14,6 +15,9 @@ type AuditClient interface {
 	// means from the newest.
 	ListAuditEvents(ctx context.Context, action string, beforeID int64, limit int) ([]AuditEvent, error)
 	VerifyAudit(ctx context.Context) (*AuditVerification, error)
+	// PruneAudit removes the events below req.BeforeID once the server has
+	// checked the archive proof; it needs an owner session.
+	PruneAudit(ctx context.Context, req AuditPruneRequest) (*AuditCheckpoint, error)
 }
 
 var _ AuditClient = (*HTTPClient)(nil)
@@ -43,6 +47,25 @@ type AuditVerification struct {
 	HeadHash       string `json:"headHash" yaml:"headHash"`
 	FirstInvalidID int64  `json:"firstInvalidId,omitempty" yaml:"firstInvalidId,omitempty"`
 	Reason         string `json:"reason,omitempty" yaml:"reason,omitempty"`
+	// Checkpoint is set when older events were pruned: the walk starts there.
+	Checkpoint *AuditCheckpoint `json:"checkpoint,omitempty" yaml:"checkpoint,omitempty"`
+}
+
+// AuditCheckpoint records one prune: the newest removed event and its hash.
+type AuditCheckpoint struct {
+	ID            int64     `json:"id" yaml:"id"`
+	LastEventID   int64     `json:"lastEventId" yaml:"lastEventId"`
+	LastHash      string    `json:"lastHash" yaml:"lastHash"`
+	EventsRemoved int       `json:"eventsRemoved" yaml:"eventsRemoved"`
+	ActorUserID   int       `json:"actorUserId,omitempty" yaml:"actorUserId,omitempty"`
+	CreatedAt     time.Time `json:"createdAt" yaml:"createdAt"`
+}
+
+// AuditPruneRequest names the range to remove and proves an archive of it.
+type AuditPruneRequest struct {
+	BeforeID        int64  `json:"beforeId"`
+	ArchiveHeadHash string `json:"archiveHeadHash"`
+	ArchiveCount    int    `json:"archiveCount"`
 }
 
 func (c *HTTPClient) ListAuditEvents(ctx context.Context, action string, beforeID int64, limit int) ([]AuditEvent, error) {
@@ -73,4 +96,13 @@ func (c *HTTPClient) VerifyAudit(ctx context.Context) (*AuditVerification, error
 	}
 
 	return &result, nil
+}
+
+func (c *HTTPClient) PruneAudit(ctx context.Context, req AuditPruneRequest) (*AuditCheckpoint, error) {
+	var checkpoint AuditCheckpoint
+	if err := c.request(ctx, http.MethodPost, "/api/v1/audit/prune", req, &checkpoint); err != nil {
+		return nil, err
+	}
+
+	return &checkpoint, nil
 }

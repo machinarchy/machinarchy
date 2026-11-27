@@ -241,6 +241,21 @@ definitions:
       role:
         $ref: '#/definitions/domain.Role'
     type: object
+  domain.AuditCheckpoint:
+    properties:
+      actorUserId:
+        type: integer
+      createdAt:
+        type: string
+      eventsRemoved:
+        type: integer
+      id:
+        type: integer
+      lastEventId:
+        type: integer
+      lastHash:
+        type: string
+    type: object
   domain.AuditEvent:
     properties:
       action:
@@ -274,8 +289,23 @@ definitions:
       targetType:
         type: string
     type: object
+  domain.AuditPruneRequest:
+    properties:
+      archiveCount:
+        type: integer
+      archiveHeadHash:
+        type: string
+      beforeId:
+        type: integer
+    type: object
   domain.AuditVerification:
     properties:
+      checkpoint:
+        allOf:
+        - $ref: '#/definitions/domain.AuditCheckpoint'
+        description: |-
+          Checkpoint is the newest prune checkpoint the walk started from; nil when
+          nothing was ever pruned. Events then counts only the retained events.
       events:
         type: integer
       firstInvalidId:
@@ -1807,6 +1837,58 @@ paths:
       security:
       - BearerAuth: []
       summary: List audit events
+      tags:
+      - Audit
+  /api/v1/audit/prune:
+    post:
+      consumes:
+      - application/json
+      description: 'Requires a human workspace owner session. Removes the events with
+        an id below beforeId, but only when the newest of them is at least 30 days
+        old and the caller proves it holds a verified archive of exactly that range:
+        archiveHeadHash is the hash of the newest archived event and archiveCount
+        the number of events, both taken from an export made with `machinarchy audit
+        export`. The server recomputes both and refuses on any difference or if the
+        chain is broken. A checkpoint records the newest removed hash so verification
+        continues from it, and an audit.pruned event is appended. The server cannot
+        restore pruned events; keep the archive.'
+      parameters:
+      - description: Range and archive proof
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/domain.AuditPruneRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.AuditCheckpoint'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Prune old audit events behind a checkpoint
       tags:
       - Audit
   /api/v1/audit/verify:

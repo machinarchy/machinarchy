@@ -38,9 +38,38 @@ func (s *authServer) seedAudit(n int, brokenAt int64) {
 	}
 }
 
-func (s *authServer) auditRoute(r *http.Request, reply func(int, string)) {
+func (s *authServer) auditRoute(r *http.Request, raw []byte, reply func(int, string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r.URL.Path == "/api/v1/audit/prune" && r.Method == http.MethodPost {
+		s.prunes = append(s.prunes, string(raw))
+		var req struct {
+			BeforeID        int64  `json:"beforeId"`
+			ArchiveHeadHash string `json:"archiveHeadHash"`
+			ArchiveCount    int    `json:"archiveCount"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		var keep []map[string]any
+		count, lastHash, lastID := 0, "", int64(0)
+		for _, e := range s.audit {
+			if id := e["id"].(int64); id < req.BeforeID {
+				count++
+				lastHash, lastID = e["hash"].(string), id
+			} else {
+				keep = append(keep, e)
+			}
+		}
+		if count != req.ArchiveCount || lastHash != req.ArchiveHeadHash {
+			reply(409, `{"code":"conflict","message":"the archive does not match the events to remove"}`)
+
+			return
+		}
+		s.audit = keep
+		body, _ := json.Marshal(map[string]any{"id": 1, "lastEventId": lastID, "lastHash": lastHash, "eventsRemoved": count, "createdAt": "2026-11-27T10:00:00Z"})
+		reply(200, string(body))
+
+		return
+	}
 	if r.URL.Path == "/api/v1/audit/verify" {
 		valid := true
 		var first int64
@@ -195,9 +224,131 @@ func TestAuditRefusesAnAPIToken(t *testing.T) {
 	server.addToken("mch_pat_ci-0001", "ci", "operator")
 	tokenPath := seed(t, server.URL, cred.Credential{Kind: cred.KindDeviceToken, Secret: "mch_pat_ci-0001", User: "maxim", Name: "ci", Role: "operator", ExpiresAt: future()})
 
-	for _, args := range [][]string{{"audit"}, {"audit", "verify"}, {"audit", "export"}} {
+	for _, args := range [][]string{{"audit"}, {"audit", "verify"}, {"audit", "export"}, {"audit", "prune", "--before-id", "2", "--archive", "x", "--confirm", "2"}} {
 		if got := runAuth(t, authRun{config: tokenPath}, args...); got.code == 0 || strings.Contains(got.stdout, "h2") {
 			t.Fatalf("%v with a token = %+v", args, got)
 		}
+	}
+}
+
+func (s *authServer) prunesSeen() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]string(nil), s.prunes...)
+}
+
+func exportTo(t *testing.T, path string, args ...string) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "audit.jsonl")
+	got := runAuth(t, authRun{config: path}, append([]string{"audit", "export", "--output", file}, args...)...)
+	if got.code != 0 && !strings.Contains(strings.Join(args, " "), "--action") && !strings.Contains(got.stderr, "broken") {
+		t.Fatalf("export = %+v", got)
+	}
+
+	return file
+}
+
+func TestAuditPruneSendsOnlyTheProofAndRemovesTheRange(t *testing.T) {
+	server, path := auditServer(t, 10, 0)
+	archive := exportTo(t, path)
+
+	got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "6", "--archive", archive, "--confirm", "6")
+	if got.code != 0 || !strings.Contains(got.stdout, "Removed 5 events up to event 5") || !strings.Contains(got.stdout, "Checkpoint hash: h5") {
+		t.Fatalf("prune = %+v", got)
+	}
+	sent := server.prunesSeen()
+	if len(sent) != 1 || sent[0] != `{"beforeId":6,"archiveHeadHash":"h5","archiveCount":5}` {
+		t.Fatalf("request = %v; want only the cutoff, head hash and count", sent)
+	}
+	if left := runAuth(t, authRun{config: path}, "audit", "--limit", "50"); strings.Contains(left.stdout, "member.role_changed 5") || !strings.Contains(left.stdout, "10") {
+		t.Fatalf("list after prune = %+v", left)
+	}
+}
+
+func TestAuditPruneNeedsTypedConfirmationAndHonoursDryRun(t *testing.T) {
+	server, path := auditServer(t, 6, 0)
+	archive := exportTo(t, path)
+
+	if got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "4", "--archive", archive, "--yes"); got.code != clierr.ExitUsage {
+		t.Fatalf("--yes must not confirm a prune: %+v", got)
+	}
+	if got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "4", "--archive", archive, "--confirm", "5"); got.code != clierr.ExitUsage {
+		t.Fatalf("a wrong --confirm must be refused: %+v", got)
+	}
+	dry := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "4", "--archive", archive, "--dry-run")
+	if dry.code != 0 || !strings.Contains(dry.stdout, "Would remove 3 events") {
+		t.Fatalf("dry run = %+v", dry)
+	}
+	if sent := server.prunesSeen(); len(sent) != 0 {
+		t.Fatalf("nothing may be sent without confirmation: %v", sent)
+	}
+}
+
+func TestAuditPruneRefusesUnusableArchivesBeforeAnyRequest(t *testing.T) {
+	server, path := auditServer(t, 6, 0)
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		file := filepath.Join(dir, name)
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		return file
+	}
+	full := exportTo(t, path)
+	data, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	noSummary := write("nosummary.jsonl", strings.Join(lines[:len(lines)-1], "\n")+"\n")
+	filtered := exportTo(t, path, "--action", "host.created")
+	notEvents := write("junk.jsonl", "hello\n"+lines[len(lines)-1]+"\n")
+	duplicate := write("dup.jsonl", lines[0]+"\n"+lines[0]+"\n"+lines[len(lines)-1]+"\n")
+	gap := write("gap.jsonl", lines[0]+"\n"+lines[len(lines)-2]+"\n"+lines[len(lines)-1]+"\n") // events 6 and 1 do not link
+
+	for name, archive := range map[string]string{
+		"missing summary": noSummary, "filtered export": filtered, "not events": notEvents,
+		"duplicate event": duplicate, "unlinked events": gap, "missing file": filepath.Join(dir, "none.jsonl"),
+	} {
+		got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "7", "--archive", archive, "--confirm", "7")
+		if got.code != clierr.ExitUsage {
+			t.Errorf("%s: exit = %d (%s), want a usage error", name, got.code, got.stderr)
+		}
+	}
+	for name, args := range map[string][]string{
+		"no archive": {"--before-id", "6"}, "no cutoff": {"--archive", full}, "first event": {"--before-id", "1", "--archive", full},
+	} {
+		got := runAuth(t, authRun{config: path}, append([]string{"audit", "prune", "--confirm", "6"}, args...)...)
+		if got.code != clierr.ExitUsage {
+			t.Errorf("%s: exit = %d, want a usage error", name, got.code)
+		}
+	}
+	if sent := server.prunesSeen(); len(sent) != 0 {
+		t.Fatalf("unusable archives must never reach the server: %v", sent)
+	}
+}
+
+func TestAuditPruneArchiveOfABrokenChainIsRefused(t *testing.T) {
+	server, path := auditServer(t, 6, 3)
+	archive := exportTo(t, path)
+	if got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "5", "--archive", archive, "--confirm", "5"); got.code != clierr.ExitUsage {
+		t.Fatalf("an archive of a broken chain must be refused: %+v", got)
+	}
+	if sent := server.prunesSeen(); len(sent) != 0 {
+		t.Fatalf("request sent: %v", sent)
+	}
+}
+
+func TestAuditPruneServerRefusesAPartialArchive(t *testing.T) {
+	_, path := auditServer(t, 10, 0)
+	partial := exportTo(t, path, "--max", "3") // events 10, 9, 8 only
+	got := runAuth(t, authRun{config: path}, "audit", "prune", "--before-id", "10", "--archive", partial, "--confirm", "10")
+	if got.code == 0 || !strings.Contains(got.stderr, "archive") {
+		t.Fatalf("a partial archive must be refused by the server: %+v", got)
+	}
+	if list := runAuth(t, authRun{config: path}, "audit", "--limit", "50"); !strings.Contains(list.stdout, "member.role_changed") {
+		t.Fatalf("events were removed despite the refusal: %+v", list)
 	}
 }
