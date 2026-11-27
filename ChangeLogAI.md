@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-27 — 3.1: CLI `audit list|verify|export` (branch ai/p3-audit-export)
+
+- **Owner said "go"** after the blocker listed the open shape choices; I took the lowest-risk reading: **no new API or controller change**. The CLI pages through the existing owner-only `GET /api/v1/audit/events` (500 per page, `before_id`) and `GET /api/v1/audit/verify`.
+- **CLI:** new top-level `audit` (16th) in the Everyday group: `audit [--action] [--limit]`, `audit verify` (non-zero exit when broken; prints the head hash), `audit export [--output FILE] [--action] [--max N]`. Export streams JSON lines newest first, checks each event's `prevHash` against the next older event's hash while streaming, and ends with a `{"summary":...}` line (`events`, `headId`, `headHash`, `oldestId`, `chainLinked`, `brokenAtId`, `truncated`). Bounded by `--max` (default 100000); `--output` is created 0600 with O_EXCL (never overwrites) and removed on failure; a broken chain exits non-zero after writing. Filtered exports skip the chain check. Owner-only: an API token is refused locally.
+- **Docs:** `docs/cli/commands.md` (Audit trail section).
+- **Tests:** list/verify, broken chain, paged export across 3 pages with summary, bound and truncation, broken-chain detection and filtered export, private non-overwritten output file, API token refused, command-tree test.
+- **Checks run:** gofmt, `go build ./...`, `go vet ./...`, `golangci-lint run ./...` (0 issues), `go test -race ./...`, `make smoke`, `make vuln` all pass. Not run: Postgres contract, e2e/HA, `make gosec` (tool/Go version mismatch), a real server.
+- **Not done:** server-side streaming export endpoint, retention (3.2), off-database anchor, denied-attempt events; export head hash is whatever the first page returned, so events appended mid-export are not included.
+
 ## 2.4: add a user without email, `members add|link` (2026-11-27, branch ai/p2-members)
 
 - **Controller:** `POST /api/v1/members` (human owner session; username, optional email, role reader or operator) creates the account with a locked password hash (`!locked`, matches no password), its membership and a 24-hour one-time activation token (stored as a SHA-256 hash in `member_onboarding`, kind `add`) in one transaction with a `member.added` audit event; the response carries the token once (`Cache-Control: no-store`). `POST /api/v1/members/{id}/link` replaces the token (`member.link_reissued`) and is refused with 409 unless the account is a still-locked operator or reader of the caller's workspace, so it cannot reset a working account or an owner. The existing public `POST /api/auth/invitations/accept` also redeems activation tokens: the username must be the added one, the password is set only while the hash is still locked, `member.joined` is audited (source `onboarding`); a wrong username changes nothing and keeps the token. `docs/api/swagger.*` regenerated (enum drift reverted by hand).

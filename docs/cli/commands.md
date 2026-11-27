@@ -133,6 +133,17 @@ machinarchy members link carol               # a new token if the first was lost
 
 `USER` is a username or an ID. `members remove` takes a person's access away at once: the membership and the person's API tokens are deleted, while the account is kept (they can still sign in, but see nothing). It is confirmed by typing the name on a terminal or with `--confirm NAME`; `--yes` is deliberately not enough. A workspace always keeps one owner: the server refuses to demote or remove the last owner, and an owner may remove themselves while another owner remains. Role changes and removals are recorded in the audit trail. Managing members needs an owner's login session; an API token is refused locally before anything is sent. `members invite EMAIL` emails a single-use token that expires after 7 days; the person chooses their own username and password with it, and gets exactly the invited role (`reader`, the default, or `operator`; owners are promoted afterwards with `members role`). The server must have mail configured (`MACHINARCHY_SMTP_*`, see operations.md); otherwise the command says so. If the address already has an account nothing is sent and the answer looks the same, so the command does not reveal which addresses are registered. The person invited accepts with `machinarchy login SERVER --invite` (see Sign in) or, without the tool, `POST /api/auth/invitations/accept` (the email shows both). `members add USERNAME [--role reader|operator] [--email ADDRESS]` is for people who cannot be invited by email, or when the server has no mail: it creates the account with no password and prints a one-time token once (valid 24 hours). Give the person the username and the token over a channel you trust; they run `machinarchy login SERVER --invite` and choose their own password (the username must be the one you added). The account cannot sign in before that. If the token is lost, `members link USER` replaces it (the old one stops working); the server refuses this for an account that already has a password, so it can never reset a working account. No password is ever chosen, shown or stored for someone else.
 
+### Audit trail
+
+```sh
+machinarchy audit                           # newest events: id, time, actor, action, target, outcome
+machinarchy audit --action member.role_changed --limit 100
+machinarchy audit verify                    # checks the hash chain; prints the head hash
+machinarchy audit export --output audit.jsonl   # JSON lines plus a final summary line
+```
+
+The trail is append-only and hash-chained; it never holds credentials. `audit verify` exits non-zero when the chain is broken. A valid chain cannot show that the newest events were removed, so keep the printed head hash outside the server and compare it next time. `audit export` writes every event, newest first, one JSON object per line, then a last `{"summary":...}` line with the event count, the `headHash` (the newest event's hash), `chainLinked` (whether each event's `prevHash` matched the one before it) and `truncated`. It stops after `--max` events (default 100000) and says so; `--output` creates a new file readable only by you and refuses to overwrite one. With `--action` the chain check is skipped because a filtered export has gaps by design. All of it needs an owner's login session; an API token is refused locally.
+
 ## Access (how Machinarchy reaches machines)
 
 ```sh

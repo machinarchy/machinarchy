@@ -29,6 +29,7 @@ func DefaultGroups() []cli.CommandGroup {
 				NewEnvsCommand,
 				NewTokensCommand,
 				NewMembersCommand,
+				NewAuditCommand,
 			},
 		},
 		{

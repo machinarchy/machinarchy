@@ -50,6 +50,7 @@ type authServer struct {
 	hostCalls int
 	members   []fakeMember // nil until a test calls seedMembers
 	invites   []fakeInvite
+	audit     []map[string]any
 	noMail    bool // /members/invitations POST answers 501
 	// inviteTokens maps a valid invitation token to its role; accounts maps a
 	// username created by accepting one to its password.
@@ -277,7 +278,7 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 	}
 	// Only a login session may manage sessions and tokens.
 	humanOnly := strings.HasPrefix(r.URL.Path, "/api/v1/sessions") || strings.HasPrefix(r.URL.Path, "/api/v1/tokens") ||
-		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/members") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
+		strings.HasPrefix(r.URL.Path, "/api/v1/secrets") || strings.HasPrefix(r.URL.Path, "/api/v1/members") || strings.HasPrefix(r.URL.Path, "/api/v1/audit") || strings.HasPrefix(r.URL.Path, "/api/v1/runtime-config")
 	if humanOnly && kind != "session" {
 		reply(403, `{"error":"a user session is required"}`)
 
@@ -304,6 +305,8 @@ func (s *authServer) v1(_ http.ResponseWriter, r *http.Request, secret string, b
 		s.revokeToken(strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/"), reply)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/members"):
 		s.membersRoute(r, body, reply)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+		s.auditRoute(r, reply)
 	case r.URL.Path == "/api/v1/managed/hosts":
 		s.mu.Lock()
 		s.hostCalls++
