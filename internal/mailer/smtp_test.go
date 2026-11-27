@@ -3,8 +3,13 @@ package mailer
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
+	"net/mail"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,16 +117,55 @@ func TestSendInvitationDeliversTheMessage(t *testing.T) {
 	if !strings.Contains(srv.from, "<noreply@example.test>") || !strings.Contains(srv.to, "<new@example.test>") {
 		t.Errorf("envelope from=%q to=%q", srv.from, srv.to)
 	}
-	for _, want := range []string{"To: new@example.test", "Subject: You are invited to Machinarchy", "tok_ABC-123",
-		"as operator", "https://m.example.test/api/auth/invitations/accept", "2026-12-04 10:00 UTC"} {
+	for _, want := range []string{"To: new@example.test", "Subject: You are invited to Machinarchy", "multipart/alternative",
+		"Content-Transfer-Encoding: base64", "Content-Type: text/plain", "Content-Type: text/html"} {
 		if !strings.Contains(srv.data, want) {
 			t.Errorf("message lacks %q:\n%s", want, srv.data)
 		}
+	}
+	text, page := decodedParts(t, srv.data)
+	for _, want := range []string{"tok_ABC-123", "operator", "machinarchy login https://m.example.test --invite", "2026-12-04 10:00 UTC"} {
+		if !strings.Contains(text, want) || !strings.Contains(page, want) {
+			t.Errorf("text or html part lacks %q", want)
+		}
+	}
+	if !strings.Contains(page, `<a href="https://m.example.test"`) {
+		t.Errorf("html part has no button:\n%s", page)
 	}
 	// Control characters in the inviter's name cannot add a header or line.
 	if strings.Contains(srv.data, "\r\nBcc:") {
 		t.Errorf("header injection through the inviter name:\n%s", srv.data)
 	}
+}
+
+// decodedParts returns the decoded plain-text and HTML parts of a message.
+func decodedParts(t *testing.T, raw string) (text, page string) {
+	t.Helper()
+	msg, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := multipart.NewReader(msg.Body, params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			break
+		}
+		body, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, part))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(part.Header.Get("Content-Type"), "text/html") {
+			page = string(body)
+		} else {
+			text = string(body)
+		}
+	}
+	return text, page
 }
 
 func TestSendInvitationRefusesUnsafeRecipientsBeforeConnecting(t *testing.T) {

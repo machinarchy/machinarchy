@@ -16,7 +16,7 @@ const ActivationTTL = 24 * time.Hour
 // Invitation limits.
 const (
 	// InvitationTTL is how long an emailed invitation stays valid.
-	InvitationTTL = 7 * 24 * time.Hour
+	InvitationTTL = 8 * time.Hour
 	// MaxPendingInvitations bounds the pending invitations of one workspace.
 	MaxPendingInvitations = 100
 )

@@ -85,7 +85,7 @@ type AcceptResponse struct {
 
 // Invite emails an invitation.
 // @Summary Invite a person by email
-// @Description Requires a human workspace owner session. Emails a single-use token that expires after 7 days. The role must be operator or reader. The answer is the same when the address already has an account (nothing is sent), so it does not reveal registered addresses. Needs mail settings (MACHINARCHY_SMTP_*); without them it answers 501.
+// @Description Requires a human workspace owner session. Emails a single-use token that expires after 8 hours. The role must be operator or reader. The answer is the same when the address already has an account (nothing is sent), so it does not reveal registered addresses. Needs mail settings (MACHINARCHY_SMTP_*); without them it answers 501.
 // @Tags Members
 // @Accept json
 // @Produce json

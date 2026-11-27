@@ -169,7 +169,7 @@ func newMembersInviteCommand(f *cli.Factory) *cobra.Command {
 		Use:   "invite EMAIL",
 		Short: "Invite a person by email",
 		Long: "Emails a one-time invitation token that lets the person choose their own username and password. It works once\n" +
-			"and expires after 7 days. The role is reader (default) or operator; owners are promoted afterwards with\n" +
+			"and expires after 8 hours. The role is reader (default) or operator; owners are promoted afterwards with\n" +
 			"'members role'. The server must have mail configured. If the address already has an account, nothing is sent\n" +
 			"and the answer looks the same.",
 		Example: "  machinarchy members invite new.person@example.com\n  machinarchy members invite new.person@example.com --role operator",

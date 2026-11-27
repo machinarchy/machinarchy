@@ -100,8 +100,8 @@ func TestInviteSendsTokenAndStoresOnlyItsHash(t *testing.T) {
 	if len(token) < 43 || store.created[0].TokenHash == token || store.created[0].TokenHash != HashInvitationToken(token) {
 		t.Fatalf("token %q must be long and stored only as its hash %q", token, store.created[0].TokenHash)
 	}
-	if ttl := time.Until(store.created[0].ExpiresAt); ttl < 6*24*time.Hour || ttl > 7*24*time.Hour {
-		t.Errorf("expiry in %v, want about 7 days", ttl)
+	if ttl := time.Until(store.created[0].ExpiresAt); ttl < 7*time.Hour || ttl > 8*time.Hour {
+		t.Errorf("expiry in %v, want about 8 hours", ttl)
 	}
 	// Tokens differ per invitation.
 	_, _ = svc.Invite(context.Background(), invOwner, domain.InvitationRequest{Email: "b@example.test", Role: domain.RoleReader})

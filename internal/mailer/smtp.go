@@ -1,10 +1,13 @@
-// Package mailer sends the invitation email over SMTP with the standard library.
+// Package mailer sends the invitation email (plain text and HTML, both base64
+// encoded) over SMTP with the standard library.
 package mailer
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,6 +17,7 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	ttemplate "text/template"
 	"time"
 	"unicode"
 
@@ -72,14 +76,31 @@ func plainAddress(value string) (string, error) {
 }
 
 func (m *SMTP) message(to string, invite domain.InvitationMail) ([]byte, error) {
-	var id [12]byte
+	var id, boundary [12]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, fmt.Errorf("message id: %w", err)
+	}
+	if _, err := rand.Read(boundary[:]); err != nil {
+		return nil, fmt.Errorf("message boundary: %w", err)
 	}
 	inviter := cleanText(invite.InvitedBy)
 	if inviter == "" {
 		inviter = "a workspace owner"
 	}
+	view := mailView{
+		Inviter: inviter, Role: string(invite.Role), ServerURL: invite.ServerURL, Token: invite.Token,
+		Command: "machinarchy login " + invite.ServerURL + " --invite",
+		Expires: invite.ExpiresAt.UTC().Format("2006-01-02 15:04 MST"),
+	}
+	var text, page bytes.Buffer
+	if err := textTemplate.Execute(&text, view); err != nil {
+		return nil, fmt.Errorf("render text: %w", err)
+	}
+	if err := htmlTemplate.Execute(&page, view); err != nil {
+		return nil, fmt.Errorf("render html: %w", err)
+	}
+	sep := hex.EncodeToString(boundary[:])
+
 	var b strings.Builder
 	header := func(name, value string) { b.WriteString(name + ": " + value + "\r\n") }
 	header("From", m.from)
@@ -88,31 +109,40 @@ func (m *SMTP) message(to string, invite domain.InvitationMail) ([]byte, error) 
 	header("Date", m.now().UTC().Format(time.RFC1123Z))
 	header("Message-ID", "<"+hex.EncodeToString(id[:])+"@machinarchy>")
 	header("MIME-Version", "1.0")
-	header("Content-Type", "text/plain; charset=utf-8")
+	header("Content-Type", `multipart/alternative; boundary="`+sep+`"`)
 	b.WriteString("\r\n")
-	lines := []string{
-		inviter + " invited you to Machinarchy at " + invite.ServerURL + " as " + string(invite.Role) + ".",
-		"",
-		"Choose your username and password with this one-time token. It works once and expires " +
-			invite.ExpiresAt.UTC().Format("2006-01-02 15:04 MST") + ".",
-		"",
-		"  Token: " + invite.Token,
-		"",
-		"With the Machinarchy command-line tool:",
-		"",
-		"  machinarchy login " + invite.ServerURL + " --invite",
-		"",
-		"It asks for the token, then for the username and password you want. Or, without the tool:",
-		"",
-		"  curl -X POST " + invite.ServerURL + "/api/auth/invitations/accept \\",
-		"    -H 'Content-Type: application/json' \\",
-		"    -d '{\"token\":\"" + invite.Token + "\",\"username\":\"YOUR-NAME\",\"password\":\"AT-LEAST-12-CHARACTERS\"}'",
-		"",
-		"Nobody at Machinarchy will ask you for this token. If you did not expect this invitation, ignore the message.",
+	part := func(contentType string, body []byte) {
+		b.WriteString("--" + sep + "\r\nContent-Type: " + contentType + "; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+		encoded := base64.StdEncoding.EncodeToString(body)
+		for len(encoded) > 76 {
+			b.WriteString(encoded[:76] + "\r\n")
+			encoded = encoded[76:]
+		}
+		b.WriteString(encoded + "\r\n")
 	}
-	b.WriteString(strings.Join(lines, "\r\n") + "\r\n")
+	part("text/plain", text.Bytes())
+	part("text/html", page.Bytes())
+	b.WriteString("--" + sep + "--\r\n")
 	return []byte(b.String()), nil
 }
+
+type mailView struct {
+	Inviter, Role, ServerURL, Token, Command, Expires string
+}
+
+var textTemplate = ttemplate.Must(ttemplate.New("text").Parse(`{{.Inviter}} invited you to Machinarchy as {{.Role}}.
+
+Token (one-time, valid until {{.Expires}}):
+
+  {{.Token}}
+
+Then run:
+
+  {{.Command}}
+
+It asks for the token, then for the username and password you want.
+Nobody at Machinarchy will ask you for this token. If you did not expect this invitation, ignore the message.
+`))
 
 func cleanText(s string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {

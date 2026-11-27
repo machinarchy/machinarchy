@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-27 — Invitation email: HTML with button, base64 transport, 8 hour token (branch ai/p6-ssh-host-check)
+
+- **Mailer:** the invitation is now `multipart/alternative` (plain text + branded HTML in the Machinarchy palette), both parts `Content-Transfer-Encoding: base64`. The HTML has a button (opens the server URL), the one-time token and, below, the `machinarchy login SERVER --invite` command. The `curl` block was dropped to simplify. The token was already URL-safe base64 (256-bit); unchanged. Values are escaped by `html/template`.
+- **Token lifetime:** emailed invitations now expire after 8 hours (was 7 days); owner-added activation tokens stay 24 hours. Docs, swagger text, CLI help and ADR-060 updated.
+- **Limitation:** no web page accepts the invitation (owner decision); the button only opens the server URL, acceptance stays CLI/API.
+- **Checks run:** `go test` for mailer, service, domain, CLI commands, members handler; gofmt; `go vet ./internal/mailer`. Not run: full repo suite, lint, real SMTP delivery or rendering in mail clients.
+
 ## 2026-11-27 — 6.2: on-demand SSH host check (branch ai/p6-ssh-host-check)
 
 - **Owner approved the API shape** (`POST /api/v1/managed/hosts/{id}/check`, no body). Deviation from the spec: agent hosts are not "not applicable"; they answer with their connection state (`AgentConnected`, `AgentDisconnected`, ...). No audit event is written (a check changes nothing); no new rate limiter beyond one running check per host and the SSH capacity limit.
