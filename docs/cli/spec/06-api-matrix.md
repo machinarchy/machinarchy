@@ -25,7 +25,7 @@ Roles: **any** = reader, operator or owner; **runs** = may execute runs (operato
 | `hosts show` | get host | `GET /api/v1/managed/hosts/{id}` | any | yes (metadata, spec, status, conditions, `observedHostKeys`) | - |
 | `hosts show` (recent runs) | list operations by host | `GET /api/v1/managed/operations?host=ID` | any | yes | - |
 | `hosts add` (SSH) | create host | `POST /api/v1/managed/hosts` (`name`, `labels`, `spec.presence`, `spec.accessProfileId`, `spec.accessTarget.endpoint`, `.trust`) | **owner** when binding an access profile (`service/managed_resources.go:50-53`) | yes | C-01 done: optional `environmentId`, default env when absent |
-| (no CLI yet; 4.2 `hosts import`) | batch create hosts | `POST /api/v1/managed/hosts/batch` (`hosts` 1..100, `validateOnly`) | any writer; **owner** per item when binding an access profile | yes (`results[]`: index, name, status, id, error) | 4.1: create-only, partial success, no command/probe/trust |
+| `hosts import` (4.2; called twice: `validateOnly` preview, then apply the passing hosts) | batch create hosts | `POST /api/v1/managed/hosts/batch` (`hosts` 1..100, `validateOnly`) | any writer; **owner** per item when binding an access profile | yes (`results[]`: index, name, status, id, error) | 4.1: create-only, partial success, no command/probe/trust |
 | `hosts add` (credential) | create secret | `POST /api/v1/secrets` | owner session | yes (`purpose` is fixed to `ssh-credential` by the CLI) | - |
 | `hosts add`, `access add` | create access profile | `POST /api/v1/managed/access-profiles` | owner | yes | - |
 | `hosts add` (wait) | get host (poll) | `GET /api/v1/managed/hosts/{id}` | any | yes | - |

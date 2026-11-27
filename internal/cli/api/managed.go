@@ -279,6 +279,40 @@ func (c *HTTPClient) CreateHost(ctx context.Context, input HostInput) (*Host, er
 	return &host, nil
 }
 
+// MaxHostBatch is the server's limit of hosts in one batch request.
+const MaxHostBatch = 100
+
+// HostBatchOutcome is the server's result for one host of a batch.
+type HostBatchOutcome struct {
+	Index  int    `json:"index" yaml:"index"`
+	Name   string `json:"name" yaml:"name"`
+	Status string `json:"status" yaml:"status"`
+	ID     string `json:"id,omitempty" yaml:"id,omitempty"`
+	Error  string `json:"error,omitempty" yaml:"error,omitempty"`
+}
+
+// HostBatchResult is the per-host report of CreateHostsBatch.
+type HostBatchResult struct {
+	ValidateOnly bool               `json:"validateOnly" yaml:"validateOnly"`
+	Created      int                `json:"created" yaml:"created"`
+	Failed       int                `json:"failed" yaml:"failed"`
+	Results      []HostBatchOutcome `json:"results" yaml:"results"`
+}
+
+// CreateHostsBatch registers up to MaxHostBatch hosts in one request. Items
+// are independent and create-only; with validateOnly nothing is written.
+func (c *HTTPClient) CreateHostsBatch(ctx context.Context, hosts []HostInput, validateOnly bool) (*HostBatchResult, error) {
+	body := struct {
+		ValidateOnly bool        `json:"validateOnly,omitempty"`
+		Hosts        []HostInput `json:"hosts"`
+	}{validateOnly, hosts}
+	var result HostBatchResult
+	if err := c.request(ctx, http.MethodPost, managedPath("hosts", "batch"), body, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (c *HTTPClient) DeleteHost(ctx context.Context, id string, revision uint64) error {
 	values := url.Values{"revision": {strconv.FormatUint(revision, 10)}}
 	if confirmed := c.confirmedEnvs(); len(confirmed) > 0 {

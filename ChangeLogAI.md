@@ -1,5 +1,14 @@
 # ChangeLogAI
 
+## 2026-11-27 — 4.2: `hosts import FILE` CLI (branch ai/p4-bulk-host-import)
+
+- **CLI:** `machinarchy hosts import FILE|-` registers up to 100 SSH hosts from YAML (`hosts:` list) or CSV (header row) through the 4.1 batch endpoint. File is capped at 1 MiB, unknown YAML keys/CSV columns are refused, each entry is checked like `hosts add` (name, `HOST[:PORT]`, tags, repeated names), env and access names are resolved before any write, and every problem is reported at once with nothing sent. Preview = server `validateOnly` call, shown per host; apply needs confirmation (`--yes`), `--dry-run` stops after the preview, `--skip-invalid` applies only the hosts that passed (otherwise any non-valid host stops the import). Create-only; exit 8/9 for partial/total failure. No command execution and no key trust; prints the `hosts trust --all-pending` next step.
+- **API client:** `Client.CreateHostsBatch` plus result types (`internal/cli/api`). No new dependency (existing yaml.v3, encoding/csv).
+- **Tests:** parser table and fuzz target `FuzzParseHostImport` (20 s run clean), command tests against an httptest server (apply, dry-run sends only validate-only, confirmation required, invalid stops/skips, bad file sends nothing, stdin), dry-run sweep and command-list updates.
+- **Docs:** `docs/cli/commands.md`, `docs/cli/spec/06-api-matrix.md`.
+- **Checks run:** gofmt, `go vet`, `golangci-lint run ./internal/cli/...` (0 issues), `go test -race ./...` (full repo), fuzz 20 s, `make smoke`. Not run: PostgreSQL contract, gosec, a real-server end-to-end import.
+- **Not done:** progress for large files (limit is 100 per file), resumable/async import, upsert, agent hosts.
+
 ## 2026-11-27 — 4.1: batch host registration API (branch ai/p4-bulk-host-import)
 
 - **Owner approved the API shape** (`POST /api/v1/managed/hosts/batch`, limit 100, create-only). Deviation: no new per-request chained audit event; each created host already writes a chained `resource.host.created` event in its own transaction, and the request adds a `host.batch_registered` slog line (actor, counts, names). Per-request chained event not built.

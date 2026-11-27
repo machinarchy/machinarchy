@@ -282,6 +282,10 @@ func (f *fakeClient) TargetOutput(_ context.Context, operationID, hostID, stream
 		From: from, Next: int64(end), Bytes: int64(len(text)), Live: end < len(text), State: "Running"}, nil
 }
 
+func (f *fakeClient) CreateHostsBatch(context.Context, []api.HostInput, bool) (*api.HostBatchResult, error) {
+	return nil, &api.Error{Status: 404, Message: "resource not found"}
+}
+
 func (f *fakeClient) CancelOperation(_ context.Context, id string) (*api.Operation, error) {
 	return &api.Operation{ID: id, Status: api.OperationStatus{State: "CancelRequested"}}, nil
 }
@@ -344,7 +348,7 @@ func TestCommandTreeKeepsEveryExistingCommand(t *testing.T) {
 		"version":        nil,
 		"login":          nil,
 		"access":         {"add", "remove", "show"},
-		"hosts":          {"add", "enroll", "move", "remove", "revoke-agent", "show", "tag", "trust"},
+		"hosts":          {"add", "enroll", "import", "move", "remove", "revoke-agent", "show", "tag", "trust"},
 	}
 
 	var top []string
