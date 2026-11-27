@@ -64,3 +64,4 @@ All ADRs live in this directory; the two earlier directories (`docs/DECISIONS`, 
 | [ADR-058: Keep Echo; track its fixes instead of migrating](ADR-058-keep-echo.md) | Accepted | D-14: Echo v4.16.6 fixes GO-2026-6875 and GO-2026-6872; no migration to `net/http`. |
 | [ADR-059: Agents reach the controller only through the agent gateway](ADR-059-agent-gateway-transport.md) | Accepted | Gateway-only agent transport (gRPC), internal swappable `Bus`; no broker address or credential exposed. |
 | [ADR-060: Member onboarding: email invitations and owner-added users, no temporary passwords](ADR-060-member-onboarding.md) | Accepted (implemented) | Single-use hashed onboarding tokens; optional SMTP; no temporary passwords. |
+| [ADR-061: Audit retention: keep by default, archive then prune behind a signed checkpoint](ADR-061-audit-retention-and-checkpoints.md) | Proposed | Owner-only explicit prune after verified export; checkpoint anchors `verify`. API shape needs approval. |

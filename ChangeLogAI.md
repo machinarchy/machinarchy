@@ -1,5 +1,12 @@
 # ChangeLogAI
 
+## 2026-11-27 — 3.2: ADR-061 audit retention (docs only, branch ai/p3-audit-export)
+
+- **Owner accepted the recommended defaults:** keep forever unless an owner prunes; explicit owner-only prune (30-day minimum cutoff); archive via `audit export` before delete, verified server-side; checkpoint row so `verify` starts from it; ADR-040 anchor stays open and the limit is documented; no scheduler yet; scope is `audit_events` only.
+- **Added** `docs/adr/ADR-061-audit-retention-and-checkpoints.md` (Proposed) and its index row. Records the current facts it relies on: per-workspace chain, append-only triggers, `verify` walking from the first row.
+- **Not implemented:** nothing in code. The prune endpoint, checkpoint table/migration, trigger exception, CLI `audit prune` and docs/SECURITY.md wording wait for owner approval of the API shape in ADR-061 section 8.
+- **Checks:** docs only; no tests, link checker or builds run.
+
 ## 2026-11-27 — 3.1: CLI `audit list|verify|export` (branch ai/p3-audit-export)
 
 - **Owner said "go"** after the blocker listed the open shape choices; I took the lowest-risk reading: **no new API or controller change**. The CLI pages through the existing owner-only `GET /api/v1/audit/events` (500 per page, `before_id`) and `GET /api/v1/audit/verify`.
