@@ -98,6 +98,30 @@ The Host controller verifies SSH with the bound Access Profile. Read
 - authentication failed: rotate the secret (`machinarchy secret rotate`) and
   update the profile revision.
 
+### Host condition reasons
+
+The `Ready` reason on a Host (`status.conditions`) comes from a fixed set in
+`internal/hostaccess/reconciler.go`. Reasons never carry credentials or
+fingerprints in the message.
+
+| Reason | Meaning | Operator action |
+| --- | --- | --- |
+| `SSHVerified` | SSH connected, the key matched, authentication worked | none |
+| `AccessProfileRequired`, `AccessProfileUnavailable`, `AccessProfileDisabled` | no profile, a missing profile or revision, or a disabled one | bind or enable a profile |
+| `HostKeyTrusting` | `tofu` policy: pinning the keys seen on first contact | none |
+| `HostKeyPendingApproval` | keys scanned, waiting for an owner | `hosts trust NAME` |
+| `HostKeyChanged` | the host presents an untrusted key; nothing was sent | verify out of band, then `hosts trust NAME --replace` |
+| `HostKeyNotTrusted` | `pinned` with no key, or a `ca` host certificate not signed by the CA | set the trusted key or fix the certificate |
+| `HostKeyRejected` | the key check failed without a scan result to approve | rescan, then compare with `hosts trust` |
+| `TargetNotAllowed` | the address policy refused the endpoint | `MACHINARCHY_SSH_ALLOWED_CIDRS` or fix the endpoint |
+| `AuthenticationFailed` | SSH login refused | rotate the secret |
+| `ConnectionRefused`, `ConnectionTimedOut`, `ConnectionFailed` | nothing listening, no answer in time, or another network error | check the host and the network path |
+| `ConnectorAtCapacity`, `AccessUnavailable` | the SSH capacity limit is full, or the endpoint is malformed | retry later, or fix the endpoint |
+| `AgentGatewayDisabled`, `AgentNotEnrolled`, `AgentBindingUnavailable`, `AgentDisconnected`, `AgentConnected` | agent hosts only | see the agent runbook section |
+
+These names are what the controller emits today; treat them as stable only
+once Phase 6 step 6.2 records that promise.
+
 `machinarchy_controlmanager_reconciles_total{outcome="retry"}` rising with a
 growing `queue_depth` means many hosts are failing at once (network outage
 or a broken credential).

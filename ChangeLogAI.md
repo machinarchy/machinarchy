@@ -1,5 +1,11 @@
 # ChangeLogAI
 
+## 2026-11-27 — 6.1: SSH host-key docs sync (branch ai/p6-ssh-host-check)
+
+- **Docs only:** `docs/ROADMAP.md` Phase 3 now lists the shipped host-key workflow (scan, owner trust and replace, key-change audit and metric, fail-closed conditions) and keeps the real gaps (on-demand validation endpoint, credential references/rotation, reason-name stability). `docs/runbook.md` gains a "Host condition reasons" table taken from `internal/hostaccess/reconciler.go`. `docs/SECURITY.md` MITM row no longer says acquisition and rotation are missing.
+- **Checks run:** `go test -race -count=1 ./internal/hostaccess/... ./pkg/sshclient/... ./pkg/netpolicy/...` pass (the ROADMAP said these tests had not been run). Not run: link checker, full suite.
+- **Known limitations:** the reason names are documented as current behavior, not a stability promise; the `HostKeyRejected` action text is inferred from `classify` and not exercised by a test I ran.
+
 ## 2026-11-27 — 5.1: documentation sync (branch ai/p5-docs-drift)
 
 - **Docs only:** `docs/architecture.md` known limitations now describe the agent gateway as built (`internal/agentgateway`, gRPC server, `internal/bootstrap/agentgrpc.go`; NATS is the only `Bus`), `RunSpec.Concurrency` as bounding parallel targets (`internal/operationworker/worker.go`, `detached.go`), and control-manager and operation-worker metrics as present. `docs/ROADMAP.md` re-dated and brought in line with shipped members, invitations, audit export/retention, bulk import (`hosts import`), execution and CLI state; the removed "no invitations" risk row is replaced by the real remaining audit gaps. `docs/adr/README.md` marks ADR-059 Implemented.
