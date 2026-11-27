@@ -294,3 +294,56 @@ func (c *HTTPClient) Logout(ctx context.Context) error {
 func (c *HTTPClient) RevokeSessions(ctx context.Context) error {
 	return c.request(ctx, http.MethodDelete, "/api/v1/sessions", nil, nil)
 }
+
+// Accepted is the account an invitation created.
+type Accepted struct {
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email,omitempty"`
+	Role     string `json:"role"`
+}
+
+// AcceptInvitation redeems an invitation token (POST /api/auth/invitations/accept)
+// and creates the account. The token and the password go only in the request
+// body; no credential exists yet, so it works on an Endpoint.
+func AcceptInvitation(ctx context.Context, e Endpoint, token, username, password string) (*Accepted, error) {
+	client, err := e.httpClient()
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(map[string]string{"token": token, "username": username, "password": password})
+	if err != nil {
+		return nil, err
+	}
+
+	path := "/api/auth/invitations/accept"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(e.URL, "/")+path, bytes.NewReader(encoded))
+	if err != nil {
+		return nil, clierr.Usage(fmt.Errorf("build invitation request: %w", err))
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", defaultUserAgent())
+
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, connectError(e.URL, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read invitation response: %w", err)
+	}
+	if response.StatusCode != http.StatusCreated {
+		return nil, newError(response, http.MethodPost, path, data)
+	}
+
+	var accepted Accepted
+	if err := json.Unmarshal(data, &accepted); err != nil || accepted.Username == "" {
+		return nil, clierr.Detailed(clierr.ExitUnavailable,
+			errors.New("that address did not answer like a Machinarchy server"), invalidResponseHint, "Check the address.")
+	}
+
+	return &accepted, nil
+}

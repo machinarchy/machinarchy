@@ -369,7 +369,17 @@ func (s *Store) appendAudit(ctx context.Context, tx *sql.Tx, event domain.AuditE
 	err = tx.QueryRowContext(ctx, s.bind(`SELECT hash FROM audit_events WHERE workspace_id = ? ORDER BY id DESC LIMIT 1`),
 		event.WorkspaceID).Scan(&prev)
 	if errors.Is(err, sql.ErrNoRows) {
-		prev = domain.AuditGenesisHash
+		// No retained events: the chain continues from the newest prune
+		// checkpoint, or starts at genesis if nothing was ever pruned.
+		checkpoint, cerr := s.latestAuditCheckpoint(ctx, tx, event.WorkspaceID)
+		switch {
+		case cerr != nil:
+			return cerr
+		case checkpoint != nil:
+			prev = checkpoint.LastHash
+		default:
+			prev = domain.AuditGenesisHash
+		}
 	} else if err != nil {
 		return fmt.Errorf("read audit chain head: %w", err)
 	}
@@ -447,23 +457,32 @@ func (s *Store) ListAuditEvents(ctx context.Context, workspaceID int, filter dom
 
 // VerifyAuditChain walks a workspace's chain in pages of 1000.
 func (s *Store) VerifyAuditChain(ctx context.Context, workspaceID int) (*domain.AuditVerification, error) {
+	checkpoint, err := s.latestAuditCheckpoint(ctx, s.db, workspaceID)
+	if err != nil {
+		return nil, err
+	}
 	verifier := domain.NewAuditChainVerifier()
 	var after int64
+	if checkpoint != nil {
+		verifier = domain.NewAuditChainVerifierFrom(checkpoint.LastHash)
+		after = checkpoint.LastEventID
+	}
 	for {
-		done, err := s.verifyPage(ctx, workspaceID, &after, verifier)
+		done, err := s.verifyPage(ctx, s.db, workspaceID, &after, verifier)
 		if err != nil {
 			return nil, err
 		}
 		if done {
 			result := verifier.Result()
+			result.Checkpoint = checkpoint
 			return &result, nil
 		}
 	}
 }
 
-func (s *Store) verifyPage(ctx context.Context, workspaceID int, after *int64, verifier *domain.AuditChainVerifier) (bool, error) {
+func (s *Store) verifyPage(ctx context.Context, q rowQuerier, workspaceID int, after *int64, verifier *domain.AuditChainVerifier) (bool, error) {
 	const pageSize = 1000
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+auditColumns+` FROM audit_events
+	rows, err := q.QueryContext(ctx, s.bind(`SELECT `+auditColumns+` FROM audit_events
 		WHERE workspace_id = ? AND id > ? ORDER BY id LIMIT ?`), workspaceID, *after, pageSize)
 	if err != nil {
 		return false, fmt.Errorf("read audit events for verification: %w", err)

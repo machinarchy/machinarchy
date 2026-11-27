@@ -13,4 +13,5 @@ func RegisterRoutes(v1 *echo.Group, h *Handler) {
 	g := v1.Group("/audit", middleware.RequirePermission(domain.PermissionAuditRead), middleware.RequireHuman())
 	g.GET("/events", h.List)
 	g.GET("/verify", h.Verify)
+	g.POST("/prune", h.Prune)
 }

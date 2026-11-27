@@ -16,6 +16,7 @@ var mutating = [][]string{
 	{"access", "add", "lab", "--how", "agent"},
 	{"access", "remove", "deploy", "--confirm", "deploy"},
 	{"hosts", "add", "web-01", "10.0.0.5"},
+	{"hosts", "import", "fleet.yaml", "--yes"},
 	{"hosts", "remove", "web-01", "--confirm", "web-01"},
 	{"hosts", "tag", "web-01", "tier=web"},
 	{"hosts", "move", "web-01", "--env", "staging"},

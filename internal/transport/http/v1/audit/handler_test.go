@@ -19,6 +19,16 @@ type fakeAudit struct {
 	principal domain.Principal
 	err       error
 	calls     int
+	prune     domain.AuditPruneRequest
+}
+
+func (f *fakeAudit) Prune(_ context.Context, p domain.Principal, req domain.AuditPruneRequest) (*domain.AuditCheckpoint, error) {
+	f.calls++
+	f.principal, f.prune = p, req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.AuditCheckpoint{ID: 1, LastEventID: req.BeforeID - 1, LastHash: req.ArchiveHeadHash, EventsRemoved: req.ArchiveCount}, nil
 }
 
 func (f *fakeAudit) List(_ context.Context, p domain.Principal, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
@@ -76,6 +86,11 @@ func TestAuditRoutesAreOwnerOnlyAndHumanOnly(t *testing.T) {
 					t.Errorf("GET %s status = %d, want 403", path, rec.Code)
 				}
 			}
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/audit/prune", strings.NewReader(`{"beforeId":5}`)))
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("POST /audit/prune status = %d, want 403", rec.Code)
+			}
 			if svc.calls != 0 {
 				t.Error("a rejected caller must never reach the service")
 			}
@@ -131,5 +146,47 @@ func TestAuditErrorMapping(t *testing.T) {
 				t.Errorf("internal details leaked: %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+func post(e *echo.Echo, target, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	e.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPrunePassesTheRequestAndMapsErrors(t *testing.T) {
+	hash := strings.Repeat("c", 64)
+	body := `{"beforeId":9,"archiveHeadHash":"` + hash + `","archiveCount":8}`
+	svc := &fakeAudit{}
+	rec := post(router(svc, owner), "/audit/prune", body)
+	var cp domain.AuditCheckpoint
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &cp) != nil || cp.LastEventID != 8 || cp.LastHash != hash {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if svc.prune.BeforeID != 9 || svc.prune.ArchiveCount != 8 || svc.principal.WorkspaceID != 7 {
+		t.Errorf("service saw %+v for %+v", svc.prune, svc.principal)
+	}
+	for _, tc := range []struct {
+		name   string
+		body   string
+		err    error
+		status int
+	}{
+		{"malformed body", `{`, nil, http.StatusBadRequest},
+		{"invalid", body, domain.ErrInvalidInput, http.StatusBadRequest},
+		{"archive mismatch", body, domain.ErrAuditArchiveMismatch, http.StatusConflict},
+		{"denied", body, domain.ErrPermissionDenied, http.StatusForbidden},
+		{"unexpected", body, errors.New("pq: connection refused"), http.StatusInternalServerError},
+	} {
+		rec := post(router(&fakeAudit{err: tc.err}, owner), "/audit/prune", tc.body)
+		if rec.Code != tc.status {
+			t.Errorf("%s: status = %d, want %d (body %s)", tc.name, rec.Code, tc.status, rec.Body.String())
+		}
+		if tc.status == http.StatusInternalServerError && strings.Contains(rec.Body.String(), "pq") {
+			t.Errorf("internal details leaked: %s", rec.Body.String())
+		}
 	}
 }

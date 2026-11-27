@@ -28,7 +28,9 @@ import (
 // Repositories groups the domain ports required by the v1 HTTP transport.
 // Concrete database adapters are assembled at the process composition root.
 type Repositories struct {
-	Users        domain.UserStore
+	Users domain.UserStore
+	// Invitations is nil where email invitations are not wired.
+	Invitations  domain.InvitationService
 	Environments domain.EnvironmentStore
 	Access       domain.AccessStore
 	Sessions     domain.SessionStore
@@ -84,6 +86,9 @@ func RegisterRoutes(
 	environments.RegisterRoutes(v1, environments.NewHandler(repos.Environments))
 	tokens.RegisterRoutes(v1, tokens.NewHandler(tokenService))
 	members.RegisterRoutes(v1, members.NewHandler(memberService))
+	if repos.Invitations != nil {
+		members.RegisterInvitationRoutes(api, v1, members.NewInvitationHandler(repos.Invitations))
+	}
 	audit.RegisterRoutes(v1, audit.NewHandler(auditService))
 	if repos.Configuration != nil {
 		configuration.RegisterRoutes(v1, configuration.NewHandler(repos.Configuration))

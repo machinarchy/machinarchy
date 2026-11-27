@@ -258,6 +258,33 @@ func (r *Runtime) Close() error {
 	return errors.Join(closeErrors...)
 }
 
+// newHostReconciler builds the SSH Host verifier used by the control manager
+// and by the on-demand host check, each with its own connector and limit.
+func (r *Runtime) newHostReconciler() (*hostaccess.HostReconciler, error) {
+	sshLimit := defaultSSHConcurrency
+	// One SSH call of a reconcile gets the whole reconcile budget
+	// (reconciliation.timeoutSeconds); a fixed 30 s used to cap it.
+	reconcileTimeout := controlmanager.DefaultConfig().ReconcileTimeout
+	if snap, ok := r.configuration.Snapshot(); ok {
+		sshLimit = snap.Revision.Config.SSH.MaxConcurrent
+		reconcileTimeout = time.Duration(snap.Revision.Config.Reconciliation.TimeoutSeconds) * time.Second
+	}
+	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.secrets, r.targetPolicyProvider(netpolicy.Default()), sshLimit,
+		reconcileTimeout, secrets.WorkloadControlManager)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
+	}
+	reconcilerOptions := []hostaccess.Option{hostaccess.WithDefaultHostKeyPolicy(resource.HostKeyPolicy(r.hostKeyPolicy))}
+	if r.agentGateway != nil {
+		reconcilerOptions = append(reconcilerOptions, hostaccess.WithAgentBindings(r.stores.Agents))
+	}
+	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector, reconcilerOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed Host reconciler: %w", err)
+	}
+	return converger, nil
+}
+
 // NewControlManager creates the background event processor over this runtime's
 // host store and event connection.
 func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
@@ -291,26 +318,9 @@ func (r *Runtime) NewControlManager() (*controlmanager.Engine, error) {
 	if snap, ok := r.configuration.Snapshot(); ok {
 		hostResync = time.Duration(snap.Revision.Config.Reconciliation.ManagedHostResyncSeconds) * time.Second
 	}
-	sshLimit := defaultSSHConcurrency
-	// One SSH call of a reconcile gets the whole reconcile budget
-	// (reconciliation.timeoutSeconds); a fixed 30 s used to cap it.
-	reconcileTimeout := controlmanager.DefaultConfig().ReconcileTimeout
-	if snap, ok := r.configuration.Snapshot(); ok {
-		sshLimit = snap.Revision.Config.SSH.MaxConcurrent
-		reconcileTimeout = time.Duration(snap.Revision.Config.Reconciliation.TimeoutSeconds) * time.Second
-	}
-	connector, err := hostaccess.NewSSHConnectorWithPolicyProvider(r.secrets, r.targetPolicyProvider(netpolicy.Default()), sshLimit,
-		reconcileTimeout, secrets.WorkloadControlManager)
+	converger, err := r.newHostReconciler()
 	if err != nil {
-		return nil, fmt.Errorf("construct managed Host SSH connector: %w", err)
-	}
-	reconcilerOptions := []hostaccess.Option{hostaccess.WithDefaultHostKeyPolicy(resource.HostKeyPolicy(r.hostKeyPolicy))}
-	if r.agentGateway != nil {
-		reconcilerOptions = append(reconcilerOptions, hostaccess.WithAgentBindings(r.stores.Agents))
-	}
-	converger, err := hostaccess.NewHostReconciler(r.stores.ResourceProfiles, connector, reconcilerOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("construct managed Host reconciler: %w", err)
+		return nil, err
 	}
 	hostController, err := controlmanager.NewHostControllerWithOperations(r.stores.ResourceHosts, converger, hostResync, r.stores.Operations)
 	if err != nil {
@@ -420,8 +430,18 @@ func (r *Runtime) NewAPIServer(
 		return nil, fmt.Errorf("construct managed resource application service: %w", err)
 	}
 	managedResources.UseEnvironments(r.stores.Environments)
+	hostChecker, err := r.newHostReconciler()
+	if err != nil {
+		return nil, err
+	}
+	managedResources.UseHostChecker(hostChecker)
+	invitations, err := newInvitationService(r.stores, cfg)
+	if err != nil {
+		return nil, err
+	}
 	repositories := httpv1.Repositories{
-		Users: r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
+		Invitations: invitations,
+		Users:       r.stores.Users, Environments: r.stores.Environments, Access: r.stores.Access,
 		Sessions: r.stores.Sessions, SessionKeys: sessionKeys, SessionTTL: sessionTTL,
 		Audit: r.stores.Audit, Configuration: r.configuration, Secrets: r.secrets, OperationData: operationData(r.stores), ManagedResources: managedResources,
 		Agents:    r.stores.Agents,

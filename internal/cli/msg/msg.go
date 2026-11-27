@@ -298,6 +298,31 @@ func init() {
 	register(Message{ID: "token.revoked", Kind: KindSuccess,
 		Primary: "Token {name} revoked."})
 
+	register(Message{ID: "member.role_changed", Kind: KindSuccess,
+		Primary: "{user} is now {role}.",
+		Next:    "machinarchy members"})
+	register(Message{ID: "member.removed", Kind: KindSuccess,
+		Primary: "{user} no longer has access.",
+		Why:     "Their API tokens were deleted. Their account is kept.",
+		Next:    "machinarchy members"})
+
+	register(Message{ID: "auth.invite_accepted", Kind: KindSuccess,
+		Primary: "Account {user} created with the {role} role.",
+		Why:     "Signing in with it now.",
+		Next:    "machinarchy whoami"})
+	register(Message{ID: "member.added", Kind: KindSuccess,
+		Primary: "{user} added as {role}. They cannot sign in until they use the one-time token below (valid until {expires}).",
+		Why:     "The token is shown only once. Give the person the username and the token; they run: machinarchy login SERVER --invite (SERVER is this server's address)",
+		Next:    "machinarchy members"})
+	register(Message{ID: "member.invited", Kind: KindSuccess,
+		Primary: "Invitation sent to {email} as {role}; it expires {expires}.",
+		Why:     "If that address already has an account nothing is sent, and the answer looks the same.",
+		Next:    "machinarchy members invites"})
+	register(Message{ID: "member.invite_revoked", Kind: KindSuccess,
+		Primary: "Invitation {id} revoked.",
+		Why:     "Its token no longer works.",
+		Next:    "machinarchy members invites"})
+
 	// Input and confirmation (docs/cli/spec/02-commands.md section 2).
 	register(Message{ID: "input.required", Kind: KindError,
 		Primary: "{flag} is required when nothing can be asked.",

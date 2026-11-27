@@ -241,6 +241,21 @@ definitions:
       role:
         $ref: '#/definitions/domain.Role'
     type: object
+  domain.AuditCheckpoint:
+    properties:
+      actorUserId:
+        type: integer
+      createdAt:
+        type: string
+      eventsRemoved:
+        type: integer
+      id:
+        type: integer
+      lastEventId:
+        type: integer
+      lastHash:
+        type: string
+    type: object
   domain.AuditEvent:
     properties:
       action:
@@ -274,8 +289,23 @@ definitions:
       targetType:
         type: string
     type: object
+  domain.AuditPruneRequest:
+    properties:
+      archiveCount:
+        type: integer
+      archiveHeadHash:
+        type: string
+      beforeId:
+        type: integer
+    type: object
   domain.AuditVerification:
     properties:
+      checkpoint:
+        allOf:
+        - $ref: '#/definitions/domain.AuditCheckpoint'
+        description: |-
+          Checkpoint is the newest prune checkpoint the walk started from; nil when
+          nothing was ever pruned. Events then counts only the retained events.
       events:
         type: integer
       firstInvalidId:
@@ -312,6 +342,25 @@ definitions:
           Protected environments need a confirmation (ConfirmedEnvironments) for
           host changes and runs; the server enforces it for every client.
         type: boolean
+    type: object
+  domain.Invitation:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      invitedBy:
+        type: string
+      role:
+        allOf:
+        - $ref: '#/definitions/domain.Role'
+        enum:
+        - operator
+        - reader
     type: object
   domain.IssuedAPIToken:
     properties:
@@ -421,6 +470,15 @@ definitions:
       error:
         type: string
     type: object
+  managedresource.hostBatchRequest:
+    properties:
+      hosts:
+        items:
+          $ref: '#/definitions/managedresource.hostRequest'
+        type: array
+      validateOnly:
+        type: boolean
+    type: object
   managedresource.hostRequest:
     properties:
       environmentId:
@@ -528,6 +586,84 @@ definitions:
       replace:
         description: Replace must be set to change keys the Host already trusts.
         type: boolean
+    type: object
+  members.AcceptRequest:
+    properties:
+      password:
+        type: string
+      token:
+        type: string
+      username:
+        type: string
+    type: object
+  members.AcceptResponse:
+    properties:
+      email:
+        type: string
+      id:
+        type: integer
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
+      username:
+        type: string
+    type: object
+  members.AddMemberRequest:
+    properties:
+      email:
+        example: alice@example.com
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        example: reader
+        type: string
+      username:
+        example: alice
+        type: string
+    type: object
+  members.InviteRequest:
+    properties:
+      email:
+        example: new.person@example.com
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        example: operator
+        type: string
+    type: object
+  members.InviteResponse:
+    properties:
+      email:
+        type: string
+      expiresAt:
+        type: string
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
+    type: object
+  members.MemberLinkResponse:
+    properties:
+      expiresAt:
+        type: string
+      id:
+        type: integer
+      role:
+        enum:
+        - operator
+        - reader
+        type: string
+      token:
+        type: string
+      username:
+        type: string
     type: object
   members.SetRoleRequest:
     properties:
@@ -1228,6 +1364,47 @@ definitions:
       workspaceId:
         type: integer
     type: object
+  service.BatchHostOutcome:
+    properties:
+      error:
+        type: string
+      id:
+        type: string
+      index:
+        type: integer
+      name:
+        type: string
+      status:
+        type: string
+    type: object
+  service.BatchHostsResult:
+    properties:
+      created:
+        type: integer
+      failed:
+        type: integer
+      results:
+        items:
+          $ref: '#/definitions/service.BatchHostOutcome'
+        type: array
+      validateOnly:
+        type: boolean
+    type: object
+  service.HostCheck:
+    properties:
+      checkedAt:
+        type: string
+      hostId:
+        type: string
+      message:
+        type: string
+      reachable:
+        type: boolean
+      ready:
+        type: boolean
+      reason:
+        type: string
+    type: object
   tokens.CreateRequest:
     properties:
       expiresInHours:
@@ -1250,6 +1427,44 @@ info:
   title: Machinarchy API
   version: "1.0"
 paths:
+  /api/auth/invitations/accept:
+    post:
+      consumes:
+      - application/json
+      description: Public. For an emailed invitation it creates the account with the
+        invited role; the invitee chooses the username and password. For an activation
+        token from an owner-added user, the username must be the one the owner added
+        and the call sets that account's first password. The token works once. An
+        unknown, expired, revoked or used token gets one generic answer.
+      parameters:
+      - description: Token, username and password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.AcceptRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/members.AcceptResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      summary: Accept an invitation
+      tags:
+      - Auth
   /api/auth/login:
     post:
       consumes:
@@ -1672,6 +1887,58 @@ paths:
       security:
       - BearerAuth: []
       summary: List audit events
+      tags:
+      - Audit
+  /api/v1/audit/prune:
+    post:
+      consumes:
+      - application/json
+      description: 'Requires a human workspace owner session. Removes the events with
+        an id below beforeId, but only when the newest of them is at least 30 days
+        old and the caller proves it holds a verified archive of exactly that range:
+        archiveHeadHash is the hash of the newest archived event and archiveCount
+        the number of events, both taken from an export made with `machinarchy audit
+        export`. The server recomputes both and refuses on any difference or if the
+        chain is broken. A checkpoint records the newest removed hash so verification
+        continues from it, and an audit.pruned event is appended. The server cannot
+        restore pruned events; keep the archive.'
+      parameters:
+      - description: Range and archive proof
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/domain.AuditPruneRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.AuditCheckpoint'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Prune old audit events behind a checkpoint
       tags:
       - Audit
   /api/v1/audit/verify:
@@ -2265,6 +2532,54 @@ paths:
       summary: Replace a managed host spec
       tags:
       - Managed
+  /api/v1/managed/hosts/{id}/check:
+    post:
+      description: |-
+        Workspace operator or owner. Verifies the Host the way the controller does (address policy, pinned host key,
+        authentication) and answers with the Ready reason. It sends no command, trusts no key and changes nothing;
+        a changed or unknown key fails closed (HostKeyChanged, HostKeyPendingApproval, HostKeyNotTrusted).
+      parameters:
+      - description: Host ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.HostCheck'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Check a Host's SSH access now
+      tags:
+      - Managed
   /api/v1/managed/hosts/{id}/labels:
     patch:
       consumes:
@@ -2363,6 +2678,45 @@ paths:
       security:
       - BearerAuth: []
       summary: Trust a host's SSH host keys
+      tags:
+      - Managed
+  /api/v1/managed/hosts/batch:
+    post:
+      consumes:
+      - application/json
+      description: 'Items are independent (partial success) and create-only: an existing
+        name is reported as a conflict. With validateOnly nothing is written. Binding
+        an Access Profile needs the workspace owner, per item. No commands run and
+        no host keys are trusted.'
+      parameters:
+      - description: Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/managedresource.hostBatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.BatchHostsResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Register up to 100 managed hosts at once
       tags:
       - Managed
   /api/v1/managed/operations:
@@ -2713,6 +3067,134 @@ paths:
       summary: List workspace members
       tags:
       - Members
+    post:
+      consumes:
+      - application/json
+      description: 'Requires a human workspace owner session. Creates the account
+        with the given role (operator or reader) and no password; the response carries
+        a one-time activation token, shown once and valid for 24 hours. Give the username
+        and token to the person: they choose their own password with `POST /api/auth/invitations/accept`
+        or `machinarchy login SERVER --invite`. The account cannot sign in until then.'
+      parameters:
+      - description: New member
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.AddMemberRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/members.MemberLinkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Add a user without email
+      tags:
+      - Members
+  /api/v1/members/{id}:
+    delete:
+      description: Requires a human workspace owner session. Deletes the membership
+        and the member's API tokens; the account itself is kept. An owner may remove
+        themselves while another owner remains. A workspace must always keep at least
+        one owner. The removal is recorded in the audit trail.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Removed
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Remove a workspace member
+      tags:
+      - Members
+  /api/v1/members/{id}/link:
+    post:
+      description: Requires a human workspace owner session. Replaces the previous
+        token, which stops working. Refused with 409 when the account already has
+        a password, so a link can never take over a working account. Shown once.
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/members.MemberLinkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Issue a new activation token for a member who has not activated
+      tags:
+      - Members
   /api/v1/members/{id}/role:
     put:
       consumes:
@@ -2763,6 +3245,116 @@ paths:
       security:
       - BearerAuth: []
       summary: Change a member's role
+      tags:
+      - Members
+  /api/v1/members/invitations:
+    get:
+      description: Requires a human workspace owner session. Tokens are never returned.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Invitation'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: List pending invitations
+      tags:
+      - Members
+    post:
+      consumes:
+      - application/json
+      description: Requires a human workspace owner session. Emails a single-use token
+        that expires after 8 hours. The role must be operator or reader. The answer
+        is the same when the address already has an account (nothing is sent), so
+        it does not reveal registered addresses. Needs mail settings (MACHINARCHY_SMTP_*);
+        without them it answers 501.
+      parameters:
+      - description: Invitation
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/members.InviteRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/members.InviteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Invite a person by email
+      tags:
+      - Members
+  /api/v1/members/invitations/{id}:
+    delete:
+      description: Requires a human workspace owner session. The token stops working
+        at once.
+      parameters:
+      - description: Invitation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: Revoked
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httperr.Body'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httperr.Body'
+      security:
+      - BearerAuth: []
+      summary: Revoke a pending invitation
       tags:
       - Members
   /api/v1/runtime-config:

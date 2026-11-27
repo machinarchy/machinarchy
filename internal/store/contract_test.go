@@ -191,11 +191,21 @@ var contractTests = []struct {
 	{"audit records intents and outcomes", testAuditScope},
 	{"member roles", testMemberRoles},
 	{"concurrent demotion keeps an owner", testConcurrentDemotion},
+	{"member removal", testMemberRemoval},
+	{"invitations", testInvitations},
+	{"added members", testAddMember},
+	{"invitation limit and concurrency", testInvitationLimitAndConcurrency},
+	{"concurrent owner removal keeps an owner", testConcurrentOwnerRemoval},
 	{"audit trail", testAuditTrail},
 	{"audit events are append-only", testAuditAppendOnly},
 	{"audit detects a modified event", testAuditDetectsModification},
 	{"audit detects a removed event", testAuditDetectsRemoval},
 	{"concurrent audit appends keep one chain", testAuditConcurrentAppends},
+	{"audit prune leaves a verifiable checkpoint", testAuditPrune},
+	{"audit prune is scoped to its workspace", testAuditPruneIsScopedToItsWorkspace},
+	{"audit prune refuses a broken chain", testAuditPruneRefusesABrokenChain},
+	{"audit detects a tampered checkpoint", testAuditDetectsATamperedCheckpoint},
+	{"audit prune racing appends keeps one chain", testAuditPruneRacesAppends},
 	{"environments", testEnvironments},
 	{"API tokens", testAPITokens},
 	{"migrations are idempotent", testMigrationsIdempotent},
@@ -512,8 +522,8 @@ func testMigrationsIdempotent(t *testing.T, f *fixture) {
 	ctx := context.Background()
 	f.member(t, "alice", domain.RoleOwner)
 	before := countMigrations(t, f)
-	if before != 3 {
-		t.Fatalf("applied migrations = %d, want the baseline, the default environment and protected environments", before)
+	if before != 5 {
+		t.Fatalf("applied migrations = %d, want the baseline, the default environment, protected environments, member onboarding and audit checkpoints", before)
 	}
 	if err := f.stores.Close(); err != nil {
 		t.Fatal(err)

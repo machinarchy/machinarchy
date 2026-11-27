@@ -13,4 +13,5 @@ func RegisterRoutes(v1 *echo.Group, h *Handler) {
 	g := v1.Group("/members", middleware.RequirePermission(domain.PermissionMembersManage), middleware.RequireHuman())
 	g.GET("", h.List)
 	g.PUT("/:id/role", h.SetRole)
+	g.DELETE("/:id", h.Remove)
 }

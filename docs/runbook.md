@@ -98,6 +98,32 @@ The Host controller verifies SSH with the bound Access Profile. Read
 - authentication failed: rotate the secret (`machinarchy secret rotate`) and
   update the profile revision.
 
+### Host condition reasons
+
+The `Ready` reason on a Host (`status.conditions`) comes from a fixed set in
+`internal/hostaccess/reconciler.go`. Reasons never carry credentials or
+fingerprints in the message.
+
+| Reason | Meaning | Operator action |
+| --- | --- | --- |
+| `SSHVerified` | SSH connected, the key matched, authentication worked | none |
+| `AccessProfileRequired`, `AccessProfileUnavailable`, `AccessProfileDisabled` | no profile, a missing profile or revision, or a disabled one | bind or enable a profile |
+| `HostKeyTrusting` | `tofu` policy: pinning the keys seen on first contact | none |
+| `HostKeyPendingApproval` | keys scanned, waiting for an owner | `hosts trust NAME` |
+| `HostKeyChanged` | the host presents an untrusted key; nothing was sent | verify out of band, then `hosts trust NAME --replace` |
+| `HostKeyNotTrusted` | `pinned` with no key, or a `ca` host certificate not signed by the CA | set the trusted key or fix the certificate |
+| `HostKeyRejected` | the key check failed without a scan result to approve | rescan, then compare with `hosts trust` |
+| `TargetNotAllowed` | the address policy refused the endpoint | `MACHINARCHY_SSH_ALLOWED_CIDRS` or fix the endpoint |
+| `AuthenticationFailed` | SSH login refused | rotate the secret |
+| `ConnectionRefused`, `ConnectionTimedOut`, `ConnectionFailed` | nothing listening, no answer in time, or another network error | check the host and the network path |
+| `ConnectorAtCapacity`, `AccessUnavailable` | the SSH capacity limit is full, or the endpoint is malformed | retry later, or fix the endpoint |
+| `AgentGatewayDisabled`, `AgentNotEnrolled`, `AgentBindingUnavailable`, `AgentDisconnected`, `AgentConnected` | agent hosts only | see the agent runbook section |
+
+These names are what the controller emits today and no stability promise is
+made for them yet. `machinarchy hosts check NAME` (or `POST
+/api/v1/managed/hosts/{id}/check`) runs the same verification once, on
+demand, and returns the reason; it sends no command and trusts nothing.
+
 `machinarchy_controlmanager_reconciles_total{outcome="retry"}` rising with a
 growing `queue_depth` means many hosts are failing at once (network outage
 or a broken credential).
@@ -157,3 +183,5 @@ it records which account and network.
 `GET /api/v1/audit/verify` (owner) checks the hash chain. `valid: false`
 means a stored event was changed or removed: preserve the database for
 investigation and compare with the last recorded `headHash`.
+
+To shrink the trail, an owner runs `machinarchy audit export --output FILE`, keeps the file, then `machinarchy audit prune --before-id N --archive FILE --confirm N` (ADR-061). Nothing is pruned automatically, events younger than 30 days are never removed, and the server cannot restore pruned events. `verify` after a prune reports the checkpoint it started from; record that hash with the archive. After restoring a database backup, an archive made after the backup is the only record of events pruned since.
